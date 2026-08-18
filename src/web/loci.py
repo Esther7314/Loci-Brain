@@ -1149,10 +1149,14 @@ async def build_health() -> dict:
 
     # ---- 底料：读桶。读不出来也不能把整份体检打掉，独立项（配置/磁盘）照查 ----
     metas: list[dict] = []
+    n_with_archive = -1
     buckets_ok = True
     try:
         all_buckets = await sh.bucket_mgr.list_all(include_archive=False)
         metas = [(b.get("metadata", {}) or {}) for b in all_buckets]
+        # 2026-08-19：原来那句写「连归档一共 N 条」，可是 N 就是上面这份
+        # **不含归档**的数 —— 名不副实。归档区要另外数一次。
+        n_with_archive = len(await sh.bucket_mgr.list_all(include_archive=True))
     except Exception as e:
         buckets_ok = False
         add("记忆库读取", "error", f"读不出记忆桶：{type(e).__name__}: {e}",
@@ -1177,7 +1181,12 @@ async def build_health() -> dict:
 
     def sec_total():
         homeless = [m for m in visible if not str(m.get("room") or "")]
-        add("记忆总量", "ok", f"{len(visible)} 条活着的（连归档一共 {len(metas)} 条）")
+        # 「活着的」走 _visible，跟 recall / 人名表 / 设置页那行小字同一把尺子 ——
+        # 同一个东西给出两个数，看见的人只会以为其中一个是错的。
+        add("记忆总量", "ok",
+            f"{len(visible)} 条活着的"
+            + (f"（盘上一共 {n_with_archive} 条，含归档和旧版）"
+               if n_with_archive >= 0 else ""))
         if homeless:
             add("没房间的记忆", "warn",
                 f"{len(homeless)} 条没有 room，recall 的房间门筛不到它们",
@@ -1215,24 +1224,24 @@ async def build_health() -> dict:
         if not isinstance(dehy, dict):
             raise TypeError("config.yaml 里的 dehydration 不是一个配置块")
         if str(dehy.get("api_key") or "").strip() or os.environ.get("LOCI_API_KEY", ""):
-            add("摘要/标签（DeepSeek）", "ok", f"配着 {dehy.get('model') or '?'}")
+            add("摘要/标签", "ok", f"配着 {dehy.get('model') or '?'}")
         else:
-            add("摘要/标签（DeepSeek）", "warn",
+            add("摘要/标签", "warn",
                 "没配 key —— 存进去的东西不会自动生成摘要和标签",
                 "在 config.yaml 里配 dehydration.api_key")
-    guard("摘要/标签（DeepSeek）", sec_deepseek, "检查 config.yaml 的 dehydration 段")
+    guard("摘要/标签", sec_deepseek, "检查 config.yaml 的 dehydration 段")
 
     def sec_embedding():
         emb = cfg.get("embedding") or {}
         if not isinstance(emb, dict):
             raise TypeError("config.yaml 里的 embedding 不是一个配置块")
         if _parse_ok(emb.get("enabled")):
-            add("向量（ollama）", "ok", f"开着，模型 {emb.get('model') or '?'}")
+            add("向量", "ok", f"开着，模型 {emb.get('model') or '?'}")
         else:
-            add("向量（ollama）", "warn",
+            add("向量", "warn",
                 "关着 —— query 门只能靠关键词，搜不到「意思相近」的",
                 "在 config.yaml 里开 embedding.enabled")
-    guard("向量（ollama）", sec_embedding, "检查 config.yaml 的 embedding 段")
+    guard("向量", sec_embedding, "检查 config.yaml 的 embedding 段")
 
     # ---- 丢了能不能捞回来 ----
     bd = str(cfg.get("buckets_dir") or "")
@@ -1255,6 +1264,8 @@ async def build_health() -> dict:
 
     # ---- 最近还在长吗 ----
     def sec_fresh():
+        # 空库不算「写入坏了」：新装的人一进来就该看见「还没开始」，不是一片黄。
+        # 有记忆但七天内一条都没有 —— 那才可能是写坏了，那时候才报警。
         fresh = 0
         for m in visible:
             # 2026-08-18 改：这儿原来是 fromisoformat(str(created)[:19]) ——
@@ -1266,9 +1277,14 @@ async def build_health() -> dict:
             ts = _w.parse_stamp(m.get("created"))
             if ts is not None and (now - ts).days < 7:
                 fresh += 1
-        add("最近七天", "ok" if fresh else "warn",
-            f"存了 {fresh} 条" if fresh else "一条都没存 —— 要么最近没聊，要么写入坏了",
-            "" if fresh else "去「日志」看看 grow 有没有报错")
+        if fresh:
+            add("最近七天", "ok", f"存了 {fresh} 条")
+        elif not visible:
+            add("最近七天", "note", "还没存过东西 —— 存第一条之后这儿就有数了")
+        else:
+            add("最近七天", "warn",
+                "一条都没存 —— 要么最近没聊，要么写入坏了",
+                "去「日志」看看 grow 有没有报错")
     need_buckets("最近七天", sec_fresh)
 
     # ---- 该在的东西还在吗 ----
@@ -1281,7 +1297,9 @@ async def build_health() -> dict:
         if len(profile) == 1:
             add("门口那张纸", "ok", "名字页在，且只有一张")
         elif not profile:
-            add("门口那张纸", "warn", "没有名字页 —— 睁眼时档案那格是空的",
+            add("门口那张纸", "note" if not visible else "warn",
+                "还没有名字页 —— 睁眼时档案那格是空的"
+                if not visible else "没有名字页 —— 睁眼时档案那格是空的",
                 f"存一条带 tag {_PROFILE_TAG} 的记忆")
         else:
             add("门口那张纸", "error", f"有 {len(profile)} 张名字页，只该有一张", "合并掉多的")
@@ -1289,31 +1307,65 @@ async def build_health() -> dict:
 
     def sec_pinned():
         pinned = [m for m in visible if m.get("pinned")]
-        add("钉着的准则", "ok" if pinned else "warn",
+        # 一条都没钉是「还没钉」，不是「坏了」：准则本来就是一条条长出来的。
+        add("钉着的准则", "ok" if pinned else "note",
             f"{len(pinned)} 条" if pinned else "一条都没钉 —— 睁眼时准则那格是空的")
     need_buckets("钉着的准则", sec_pinned)
 
     def sec_big():
+        # 2026-08-19 改名 + 降档。两件事都变了：
+        #   ·「大 event」这个入口 8-18 撤了，现在叫**时期**，走 fold(when=...)
+        #   ·「长期」那一格 8-19 从睁眼和面板上一起扔了（后端早就不给了）
+        # 而时期**本来就不强制**（「不强制，有就用」）—— 没有时期不是毛病，
+        # 报成 warn 等于告诉新装的人「你少了个东西」。
         big = [m for m in metas if _BIGEVENT_TAG in _tags_of(m)]
-        add("大 event（长期）", "ok" if big else "warn",
-            f"{len(big)} 条活着的" if big
-            else "没有 —— 睁眼时「我们在做什么」那格只能拿标签凑")
-    need_buckets("大 event（长期）", sec_big)
+        add("时期", "ok" if big else "note",
+            f"{len(big)} 个" if big else "还没给哪段日子起过名（不强制，有就用）")
+    need_buckets("时期", sec_big)
 
     # ---- 挂空的链 ----
-    def sec_orphan():
+    async def sec_orphan():
+        """from 指不到了 —— **得分两种，它们不是一回事**（2026-08-19 拆的）。
+
+        原来这一项把两种混成一句「N 条记忆的来源指向了不存在的桶 ——
+        多半是那条源被硬删过」。她问「体检到底对不对」，一查：26 条里
+        **24 条的来源好好地躺在归档区**（`trace(delete=True)` 是软删，
+        拿 id 直查永远捞得回），只有 2 条是真找不到。
+        也就是说数是对的、话是错的，而且错的方向最坏 ——
+        把一件正常的事说成「被硬删过」，会让人去找一个根本没发生的事故。
+        """
         live_ids = {str(m.get("id") or "") for m in metas}
-        orphan = 0
+        try:
+            allb = await sh.bucket_mgr.list_all(include_archive=True)
+            all_ids = {str((b.get("metadata") or {}).get("id") or "") for b in allb}
+        except Exception:                            # noqa: BLE001
+            all_ids = live_ids                       # 读不到归档就退回老口径
+        sunk = gone = 0
         for m in metas:
-            for src in _split_ids(read_from(m)):   # from 优先、triggered_by 兼容
-                if src not in live_ids:
-                    orphan += 1
-        if orphan:
-            add("断掉的 from 链", "warn", f"{orphan} 条记忆的来源指向了不存在的桶",
-                "多半是那条源被硬删过；星空里它们会少一根线")
-        else:
+            for src in _split_ids(read_from(m)):     # from 优先、triggered_by 兼容
+                if src in live_ids:
+                    continue
+                if src in all_ids:
+                    sunk += 1
+                else:
+                    gone += 1
+        if gone:
+            add("断掉的 from 链", "warn",
+                f"{gone} 条记忆的来源哪儿都找不到了",
+                "这才是真断了：多半那条源被物理删过。星空里它们少一根线")
+        elif not sunk:
             add("from 链", "ok", "每条 from 都指得到")
-    need_buckets("from 链", sec_orphan)
+        if sunk:
+            add("来源沉进归档区", "note",
+                f"{sunk} 条记忆的来源已经归档 —— 没断，拿 id 直查捞得回",
+                "" if gone else "")
+    if not buckets_ok:
+        add("from 链", "error", "读不到记忆库，这一项没法查", "先解决上面「记忆库读取」那条")
+    else:
+        try:
+            await sec_orphan()
+        except Exception as e:                       # noqa: BLE001
+            add("from 链", "error", f"这一项自己出错了：{type(e).__name__}: {e}", "")
 
     # ---- 盘上的梦 ----
     # 2026-08-17：night_fall 退役，改数新引擎的梦文件。**空着是正常的**——

@@ -1183,7 +1183,10 @@ async function loadDiag(){
   try{
     const d = await api("/api/loci/health");   // 我们自己的体检，不是上游那套发布合规检查
     const checks = Array.isArray(d.checks) ? d.checks : [];
-    const bad = checks.filter(c => String(c.status||"").toLowerCase() !== "ok");
+    // note 不算「要看一下」：那一档是「你还没开始」/「这东西不强制」，不是坏了。
+    // 报警报多了，真警报会跟着一起被无视。
+    const isBad = c => !["ok","note"].includes(String(c.status||"").toLowerCase());
+    const bad = checks.filter(isBad);
     const head = el("div","frow");
     head.style.marginBottom = "10px";
     head.appendChild(el("span", bad.length ? "tiny err" : "tiny muted",
@@ -1206,8 +1209,9 @@ async function loadDiag(){
       r.style.alignItems = "flex-start";
       const dot = el("span","dot");
       dot.style.marginTop = "7px";
-      dot.style.background = st === "ok" ? "var(--ink-3)"
+      dot.style.background = (st === "ok" || st === "note") ? "var(--ink-3)"
                            : st === "warn" ? "var(--accent)" : "var(--danger)";
+      if (st === "note") dot.style.opacity = ".45";
       r.appendChild(dot);
       const mid = el("span","lab");
       mid.style.whiteSpace = "normal";
@@ -1222,7 +1226,7 @@ async function loadDiag(){
       }
       // 不 ok 的那条底下直接给一个进日志的口：体检是结论，日志是证据，
       // 不该让人自己去想「那我现在该去哪儿看」（她 8-18 夜定的从属关系）。
-      if (st !== "ok"){
+      if (isBad(c)){
         const lk = el("button","mini","看日志");
         lk.style.marginTop = "6px";
         lk.onclick = (ev) => { ev.stopPropagation(); openLogs(); };
