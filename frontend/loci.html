@@ -313,6 +313,17 @@ input[type=range]::-moz-range-thumb{width:20px;height:20px;border:none;border-ra
   transition:opacity .3s,max-height .3s}
 .heavy-row.gone{opacity:0;max-height:0;overflow:hidden;margin:0}
 .heavy-row .rem{margin-bottom:0;flex:1;min-width:0}
+/* 2026-08-19 她指的那个塌了的卡：.rem 是横排 flex，而左边那格 .d 是 flex:none，
+   「挂了 11 天，上次问过你 2026-08-18」一长，右边正文就被挤成一个字宽、竖着流下来
+   （只有短的那条「挂了 8 天」看着正常——差别就在左格有多长）。
+   她定的改法：**挂了几天 / 上次问过你 / 没定期限那句警告，三样一起提到上面**，
+   正文自己占一整行。元信息再长也挤不到正文了。 */
+.rem.stack{flex-direction:column;align-items:stretch;gap:7px}
+.rem.stack .meta{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;
+  font-family:var(--mono);font-size:var(--fs-xs);color:var(--ink-3)}
+.rem.stack.now .meta{color:var(--on-accent);opacity:.85}
+.rem.stack .meta .warn{color:var(--ink-2)}
+.rem.stack .body{width:100%;min-width:0;line-height:1.55}
 .rem.q{border-left:3px solid var(--accent)}
 .heavy-acts{display:flex;flex-direction:column;gap:4px;flex:none}
 .heavy-acts .mini{padding:4px 10px;font-size:var(--fs-xs)}
@@ -337,7 +348,11 @@ input[type=range]::-moz-range-thumb{width:20px;height:20px;border:none;border-ra
 #drawer.on{transform:translate(-50%,-50%) scale(1);opacity:1;pointer-events:auto}
 .dr-top{display:flex;align-items:center;gap:12px;padding:18px 22px;
   border-bottom:1px solid var(--line);flex:none}
-.dr-top .x{margin-left:auto;font-size:24px;color:var(--ink-3);line-height:1;padding:0 4px}
+.dr-top strong{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 「编辑」2026-08-19 从正文底下挪到了这儿（她指的位置）：改一条的入口该跟关闭
+   在同一个高度上，不用先滚到底才找得到。 */
+.dr-top #drEdit{flex:none}
+.dr-top .x{font-size:24px;color:var(--ink-3);line-height:1;padding:0 4px}
 .dr-body{overflow-y:auto;padding:20px 22px 28px;flex:1}
 .kv{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:16px}
 .kv span{font-size:var(--fs-xs);font-family:var(--mono);background:transparent;
@@ -452,11 +467,16 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
 
       <div class="gate-split"></div>
 
-      <!-- F2：模糊搜（query 门：软打分带分数）/ 搜场景（tag 门：包含匹配、那一类全部、不打折） -->
+      <!-- 2026-08-19 改：原来这儿的「搜场景」走的是 **tag 门**（包含匹配、不打分），
+           而工具面真正的场景视图是 `view="scene"`（按共享场景词把命中的记忆聚成簇，
+           看这件事怎么一路过来的）—— 两件不同的事共用了一个名字，
+           而且面板从来没发过 view 这个参数，**真正的场景视图在这一页一直没有入口**。
+           她 8-18 夜定：只留模糊搜和场景搜，场景搜就是接 view=scene。
+           标签要搜就点上面那排 chips，不占这个位置。 -->
       <div class="frow" style="margin-bottom:12px">
         <span class="seg" id="qMode">
           <button class="segb on" data-mode="fuzzy">模糊搜</button>
-          <button class="segb" data-mode="scene">搜场景</button>
+          <button class="segb" data-mode="scene">场景搜</button>
         </span>
         <input type="text" class="search" id="q" placeholder="突然想起什么事…">
         <button class="btn" id="go">找</button>
@@ -575,7 +595,6 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
       <div class="frow" style="margin-bottom:12px">
         <span id="logLevels"></span>
         <button class="btn ghost" id="logGo">刷新</button>
-        <button class="btn ghost" id="errClear">清错误计数</button>
       </div>
       <pre class="card-txt" id="logOut" style="max-height:320px;overflow:auto">…</pre>
       <div class="tiny muted" id="logFile" style="margin-top:8px"></div>
@@ -612,6 +631,7 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
 <aside id="drawer">
   <div class="dr-top">
     <strong id="drTitle">原文</strong>
+    <button class="mini" id="drEdit" hidden>编辑</button>
     <button class="x" id="drX">×</button>
   </div>
   <div class="dr-body" id="drBody"></div>
@@ -778,12 +798,9 @@ async function loadLogs(){
   }catch(e){ out.textContent = "✗ " + e.message; }
 }
 $("#logGo").onclick = loadLogs;
-$("#errClear").onclick = async () => {
-  try{
-    await fetch("/api/errors/clear", {method:"POST", credentials:"same-origin"});
-    loadLogs();
-  }catch(e){ alert("没成：" + e.message); }
-};
+// 「清错误计数」2026-08-19 删了：它打的 /api/errors/clear 跟 web/system.py 一起
+// 在 E2 脱壳那天被砍了，而那个错误计数器本来就是上游的概念，我们这套没有。
+// 留一个点了没反应的按钮，比没有更糟。
 
 /* ---- 体检 ---- */
 function flat(obj, prefix, into){
@@ -993,6 +1010,9 @@ document.querySelectorAll("nav.tabs button").forEach(b => {
 async function openBucket(id){
   $("#scrim").classList.add("on"); $("#drawer").classList.add("on");
   $("#drTitle").textContent = id;
+  // 每次开抽屉先把顶上那个「编辑」收起来：上一条能改不代表这一条能改
+  // （mind 和归档桶都不给改），留着就是一个点了没反应的按钮。
+  const dE = $("#drEdit"); dE.hidden = true; dE.onclick = null;
   $("#drBody").innerHTML = '<div class="spin">拿原文…</div>';
   try{
     const b = await api("/api/loci/bucket/" + encodeURIComponent(id));
@@ -1041,8 +1061,8 @@ async function openBucket(id){
     // /api/loci/event/correct，原文一个字不会被这个抽屉动到。
     if (b.can_edit){
       const editWrap = el("div"); editWrap.style.marginTop = "20px";
-      const editBtn = el("button","mini","改这条");
-      editWrap.appendChild(editBtn);
+      const editBtn = $("#drEdit");          // 8-19：入口挪到抽屉顶栏了
+      editBtn.hidden = false;
       const form = el("div"); form.style.display = "none"; form.style.marginTop = "10px";
       const ta = document.createElement("textarea");
       ta.value = b.content; ta.rows = 6; ta.style.width = "100%";
@@ -1056,9 +1076,8 @@ async function openBucket(id){
       form.appendChild(hint);
       const submitRow = el("div"); submitRow.style.marginTop = "10px";
       const submit = el("button","mini","存这条修正");
-      const cancel = el("button","mini","算了");
-      cancel.style.marginLeft = "8px";
-      cancel.onclick = () => { form.style.display = "none"; editBtn.style.display = ""; };
+      // 「算了」2026-08-19 删了（她定的）：右上角那个 × 本来就是取消，
+      // 两个意思一样的出口摆在一起，只会让人多想一下该点哪个。
       submit.onclick = async () => {
         if (!ta.value.trim() || ta.value === b.content){
           alert("正文没变，没什么好存的"); return;
@@ -1069,14 +1088,14 @@ async function openBucket(id){
           form.style.display = "none";
           const ok = el("div","tiny", "✓ 存成了新的一条（" + res.new_id.slice(0,6) + "），原文没动");
           editWrap.appendChild(ok);
-          editBtn.style.display = "none";
+          editBtn.hidden = true;
         }catch(e){ alert("没成：" + e.message); }
         finally{ submit.disabled = false; submit.textContent = "存这条修正"; }
       };
-      submitRow.appendChild(submit); submitRow.appendChild(cancel);
+      submitRow.appendChild(submit);
       form.appendChild(submitRow);
       editWrap.appendChild(form);
-      editBtn.onclick = () => { form.style.display = ""; editBtn.style.display = "none"; };
+      editBtn.onclick = () => { form.style.display = ""; editBtn.hidden = true; };
       box.appendChild(editWrap);
     }
     $("#drBody").innerHTML = ""; $("#drBody").appendChild(box);
@@ -1092,7 +1111,7 @@ addEventListener("keydown", e => { if (e.key === "Escape") closeDrawer(); });
    一 · 大池子
    ============================================================ */
 const WHENS = ["今天","昨天","本周","上周","本月","上月","今年","48h","7d"];
-let F = {when:"", room:"", tag:"", query:""};
+let F = {when:"", room:"", tag:"", query:"", view:""};   // view 8-19 补上——工具面有、面板一直没发过
 
 function renderWhenChips(){
   const box = $("#whenChips"); box.innerHTML = "";
@@ -1250,20 +1269,24 @@ async function run(){
     draw();
   }catch(e){ fail(out, e); }
 }
-/* F2：模糊搜（query 门）/ 搜场景（tag 门）——界面合一，底层不合并 */
+/* 模糊搜（query 门，按时间＋分数排：找那件事）/
+   场景搜（query + view=scene，按共享场景词聚成簇：这件事怎么一路过来的）。
+   两个都走 query 门，差别只在 view —— 跟工具面 recall 的参数账逐字一样。 */
 let qMode = "fuzzy";
 function setQMode(m){
   qMode = m;
   document.querySelectorAll("#qMode .segb").forEach(b =>
     b.classList.toggle("on", b.dataset.mode === m));
-  $("#q").placeholder = m === "scene" ? "搜画面里的东西：床、机场、拼豆…" : "突然想起什么事…";
+  $("#q").placeholder = m === "scene" ? "这件事怎么一路过来的…" : "突然想起什么事…";
 }
 document.querySelectorAll("#qMode .segb").forEach(b =>
   b.onclick = () => { setQMode(b.dataset.mode); if ($("#q").value.trim()) $("#go").click(); });
 $("#go").onclick = () => {
   const v = $("#q").value.trim();
-  if (qMode === "scene"){ F.tag = v; F.query = ""; markTags(); }
-  else { F.query = v; }
+  F.query = v;
+  // 空着的时候不给 view：后端那边 view 没有 query 会直接回一句「簇是按命中的记忆聚的」，
+  // 那是给工具面看的解释，摆在页面上等于一句报错。
+  F.view = (qMode === "scene" && v) ? "scene" : "";
   run();
 };
 $("#q").addEventListener("keydown", e => { if (e.key === "Enter") $("#go").click(); });
@@ -1274,7 +1297,7 @@ $("#dGo").onclick = () => {
   renderWhenChips(); run();
 };
 $("#clr").onclick = () => {
-  F = {when:"", room:"", tag:"", query:""};
+  F = {when:"", room:"", tag:"", query:"", view:""};
   $("#q").value = ""; $("#d0").value = ""; $("#d1").value = "";
   $("#floor").value = 35; $("#floorVal").textContent = "35";   // 线也跟着回默认
   setQMode("fuzzy");
@@ -1509,7 +1532,8 @@ async function loadProf(){
     const d = await api("/api/loci/profile");
     out.innerHTML = "";
 
-    // 顺序是她定的：档案 · 中期 · 长期 · 准则 · 我和她的判断
+    // 顺序是她定的：档案 · (提醒) · 压在心头 · 中期 · 忽然想起 · 准则 · 我和她的判断
+    // ——跟 breath() 睁眼那一屏逐块对齐（8-19 扔掉「长期」之后两边又对上了）
     // （提醒只在真有临近的日子时插在档案后面，跟 AI 睁眼那一屏一致）
     const c1 = card("档案", d.facts_warning || "名字两面");
     if (d.facts_warning) c1.querySelector(".n").classList.add("err");
@@ -1544,15 +1568,18 @@ async function loadProf(){
       const c = card("压在心头", "挂着还没了结的");
       d.heavy.forEach(h => {
         const row = el("div","heavy-row");
-        const b = el("button","rem " + h.loud + (h.is_question ? " q" : ""));
-        const asked = h.is_question
-          ? (h.last_asked ? "，上次问过她 " + h.last_asked.slice(0,10)
-                          : "，从来没问过她")
-          : "";
-        b.appendChild(el("span","d",
-          (h.is_question ? "❓ " : "") + "挂了 " + h.held + " 天" + asked));
-        b.appendChild(el("span",null, h.label + (h.is_question ? " —— 这条还算数吗？" : "")));
-        if (h.clock_note) b.appendChild(el("div","tiny muted", "⚠️ " + h.clock_note));
+        const b = el("button","rem stack " + h.loud + (h.is_question ? " q" : ""));
+        // 顶上一行：挂了几天 · 上次问过你 · 没定期限那句（她 8-18 定的摆法）
+        const meta = el("div","meta");
+        meta.appendChild(el("span",null,
+          (h.is_question ? "❓ " : "") + "挂了 " + h.held + " 天"));
+        if (h.is_question) meta.appendChild(el("span",null,
+          h.last_asked ? "上次问过你 " + h.last_asked.slice(0,10) : "从来没问过你"));
+        if (h.clock_note) meta.appendChild(el("span","warn", "⚠️ " + h.clock_note));
+        b.appendChild(meta);
+        // 正文：自己占一整行，元信息再长也挤不着它
+        b.appendChild(el("div","body",
+          h.label + (h.is_question ? " —— 这条还算数吗？" : "")));
         b.onclick = () => openBucket(h.id);
         row.appendChild(b);
 
@@ -1594,10 +1621,10 @@ async function loadProf(){
 
     if (d.mid) card("中期","这三天").appendChild(el("pre","card-txt", d.mid));
 
-    if (d.big_events.length){
-      const c = card("长期","我们在做什么");
-      d.big_events.forEach(b0 => c.appendChild(line("◈ " + b0.line, b0.short, b0.id)));
-    }
+    // 「长期」2026-08-19 扔了（她定的）。判据不是「这块不好看」，是**后端睁眼那一屏
+    // 早就没有它了** —— 现在是 档案 → 压在心头 → 中期 → 忽然想起。前端还画着一格
+    // 后端不再给的东西，这一页就不再是「他睁眼看到的那一屏」了。
+    // （d.big_events 后端照旧返回，只是这一页不再摆它。）
 
     // 忽然想起 —— 睁眼六样里唯一「不是我要的、自己冒出来的」那样。
     // 不排序不加权（build_recollect 里就是 random.sample）：**没来由正是它像脑子的地方**，

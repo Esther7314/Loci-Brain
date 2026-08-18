@@ -111,20 +111,20 @@ def _三类钟(meta: dict, created, now: datetime) -> tuple[str, str, str]:
         try:
             when_date = _w.parse_date(m.group(1))
         except ValueError:
-            return "旧数据待复核", "far", "when 格式无法识别（不是日期也不是时长记号），未按新填法归类"
+            return "旧数据待复核", "far", "没定期限 —— when 的格式认不出来，它不会自己催你"
         # 老数据雷区（真库实证 1e12906/87f84e）：when 跟 created 是同一天，
         # 十有八九是历史上随手把"今天"填进 when 的占位，不是真期限。
         # 结构上判不清"真的当天到期"和"误填占位"，保守一侧：
         # 宁漏催不误催（她 8-13「不想把记忆丢给系统去操作」的精神，统筹 8-18 裁决接受）。
         if created and when_date.date() == created.date():
-            return "旧数据待复核", "far", "when 与创建日同天，未按新填法归类"
+            return "旧数据待复核", "far", "没定期限 —— 存的那天顺手填成了 when，它不会自己催你"
         # 到这里说明这条 want 已经过期还没了结（没过期的会被 reminders 分支截走，
         # 不会进 heavy 池）。过期锚点换成"过期了多少天"，曲线复用现成的
         # `_压得多大声`——最小改动，她觉得"迟到"该有独立曲线再拆（统筹 8-18 裁决）。
         overdue = max(0, (now.date() - when_date.date()).days)
         return "有期限", _压得多大声(overdue), ""
 
-    return "旧数据待复核", "far", "when 格式无法识别（不是日期也不是时长记号），未按新填法归类"
+    return "旧数据待复核", "far", "没定期限 —— when 的格式认不出来，它不会自己催你"
 
 
 def _f_weight(x) -> float:
