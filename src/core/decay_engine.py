@@ -427,7 +427,7 @@ class DecayEngine:
 
         # --- 顺手把 bm25 热了（2026-08-06 试用时抓到的）：懒重建原本等第一次
         # search 才触发，重启后的首搜拿着**空索引**打分——两维制下 bm25 占 37.5%，
-        # 首搜分数直接矮一截（小丑牌 74 → 37 实测）。decay 首轮在 boot 后几秒就跑，
+        # 首搜分数直接矮一截（实测有的条目 74 → 37）。decay 首轮在 boot 后几秒就跑，
         # buckets 已经在手上，借它提前建好。---
         try:
             if (getattr(self.bucket_mgr, "_bm25", None) is not None

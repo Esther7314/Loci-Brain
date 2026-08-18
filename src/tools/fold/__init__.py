@@ -145,7 +145,7 @@ async def dispatch(text: str = "", room: str = "", v=-1, a=-1,
         return ('盖一组事件不存在——日子用 when 画圈，看一条线用 recall(query)。\n'
                 '  那几天在做一件什么事 → fold(when="2026-08-13..2026-08-16", '
                 'room="EVENT/SELF", text=我写的那句)\n'
-                '  「这些事是一条线」→ recall(query="洛阳") 本来就是线的查看器\n'
+                '  「这些事是一条线」→ recall(query="青岛") 本来就是线的查看器\n'
                 '（八个字：**Event 用时间，mind 用快照**。事件的一组没有「上一版」也不该'
                 '被压住；一条事件记错了要盖掉，那是 cover 单条，那个口子留着。）')
 

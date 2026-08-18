@@ -32,6 +32,9 @@ RUN pip install --no-cache-dir -r requirements.lock.txt
 COPY src/ ./src/
 COPY frontend/ ./frontend/
 COPY config.default.yaml VERSION entrypoint.sh ./
+# 搬家脚本要跟着镜像走 —— README 里那条命令是 `docker compose exec` 跑的，
+# 不在镜像里的话那句话就是假的。
+COPY scripts/ ./scripts/
 RUN chmod +x entrypoint.sh
 
 VOLUME ["/app/buckets"]

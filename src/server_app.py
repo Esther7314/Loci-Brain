@@ -460,7 +460,7 @@ class NgrokHeaderMiddleware:
 class SecurityHeadersMiddleware:
     """Apply browser hardening headers to success and error responses."""
 
-    # 🔴 2026-08-08：允许 Lento Home（3010）把这个页面嵌进「地下室」那一格。
+    # 允许同机上的别的自建前端把这个页面嵌进去（改成你自己的地址）。
     #
     #    她要的：「点击 basement 的那一格 **放上那个星空那个 dashboard**」。
     #    原来是 `frame-ancestors 'none'` + `X-Frame-Options: DENY` —— 谁都不许嵌，
@@ -475,7 +475,6 @@ class SecurityHeadersMiddleware:
         "'self'",
         "http://localhost:3010",
         "http://127.0.0.1:3010",
-        "http://192.168.1.5:3010",      # 她手机开 Home 用的那个
     ])
 
     _HEADERS = (

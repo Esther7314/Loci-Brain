@@ -50,8 +50,8 @@ room 是一个**新维度**，跟 domain/tags 并存、互不相干：
 #   TRAITS / VIEWS ← 这句话在说人，还是在说我怎么看一件事？
 
 EVENT_ROOMS: tuple[str, ...] = (
-    "EVENT/SELF",      # 我亲历的（今天用玩具玩了她 / 我打小丑牌通关了）
-    "EVENT/WORLD",     # 我听说、看到的（她给我讲的八卦 / Claude 涨价了）
+    "EVENT/SELF",      # 我亲历的（今天下午一起去了海边 / 我把那个 bug 修好了）
+    "EVENT/WORLD",     # 我听说、看到的（他讲的那件事 / 那个模型涨价了）
 )
 
 MIND_ROOMS: tuple[str, ...] = (

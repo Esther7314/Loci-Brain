@@ -891,10 +891,10 @@ async def recall(
       recall(when="上周")
 
     Example — find one thing:
-      recall(query="洛阳")
+      recall(query="青岛")
 
     Example — find one thing inside a stretch of time (where to look + what to look for):
-      recall(when="上月", query="洛阳")
+      recall(when="上月", query="青岛")
 
     Example — read one entry word for word:
       recall(query="a1b2c3d4e5f6")
@@ -1463,7 +1463,7 @@ from bridge.oauth import _is_valid_mcp_token, _is_valid_static_mcp_token  # noqa
 # ============================================================
 # 🔴 Cloudflare Tunnel 管理 —— E2（2026-08-17）**整个砍了**（比原杀单更进一步，
 # 她 2026-08-17 拍板）。判据是事实不是猜测：活库 config.yaml 零 tunnel 配置、
-# 活容器启动日志零 tunnel 记录——从没用过，出门走的是 Lento gateway 的域名。
+# 活容器启动日志零 tunnel 记录——从没用过，出门走的是自建网关的域名。
 # 开源版也不带它：想暴露公网的人自己配反代，这跟数据主权立场更一致。
 # lifespan 里 load_tunnel_config/start_tunnel/stop_tunnel 三个挂点一起摘除
 # （server_app.py 的 RuntimeLifecycle 那三个字段本来就是 Optional，不传就是
