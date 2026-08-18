@@ -607,9 +607,7 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
     <div class="card" data-tidy="who" hidden>
       <h2 class="h">人名表 <span class="n" id="whoStat">数着…</span></h2>
       <p class="tiny muted" style="margin:-6px 0 14px">
-        库里出现过的人，按出现次数排。别名表是手工维护的，而手工维护的前提是
-        「你得先知道有东西要改」—— 这一屏就是那一步。
-        <b>我只负责摆出来，改哪个是你点的那一下。</b>
+        库里出现过的人，按出现次数排。
       </p>
       <div id="whoOut"><div class="spin">数着…</div></div>
     </div>
@@ -720,33 +718,13 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
           </div>
           <div class="tiny muted" style="margin-top:6px">
             存新记忆时「这条是不是刚存过」的线。调低 → 更容易被判成重复、拦下来；
-            调高 → 重复的更容易两条都留着。<b>这条是服务端的，存下来对所有人生效。</b>
-          </div>
-        </div>
-      </div>
-      <div class="fline">
-        <span class="lb">开页默认</span>
-        <div class="fbody">
-          <div class="slider-row">
-            <span class="th-val" id="cfgSimVal">88</span>
-            <input type="range" id="cfgSim" min="75" max="99" step="1" value="88">
-            <span class="tiny muted">相似度那页开页停在哪</span>
-          </div>
-          <div class="slider-row" style="margin-top:8px">
-            <span class="th-val" id="cfgFloorVal">35</span>
-            <input type="range" id="cfgFloor" min="0" max="70" step="1" value="35">
-            <span class="tiny muted">记忆页那根关联度线开页停在哪</span>
-          </div>
-          <div class="frow" style="margin-top:8px">
-            <button class="btn ghost" id="cfgLocalDef">恢复默认</button>
-            <span class="tiny muted">这两个是**这台机器上**的默认值（页面上那两根滑块是当场拖着看的，
-              这儿定的是「以后开页从哪儿起」）。</span>
+            调高 → 重复的更容易两条都留着。
           </div>
         </div>
       </div>
       <div class="frow" style="margin-top:6px">
-        <button class="btn" id="cfgSave">存下来</button>
-        <span class="tiny muted" id="cfgSaveMsg">存下来 = 写进 config.yaml，重启也还在。</span>
+        <button class="btn" id="cfgSave">保存</button>
+        <span class="tiny muted" id="cfgSaveMsg"></span>
       </div>
     </div>
 
@@ -758,7 +736,6 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
         <div class="fbody">
           <div class="frow">
             <input type="file" id="impFile" accept=".json,.txt,.csv,.md,.jsonl">
-            <button class="btn ghost" id="impPre">先看一眼</button>
             <button class="btn" id="impGo">开始导入</button>
             <button class="btn ghost" id="impPause" hidden>暂停</button>
           </div>
@@ -968,18 +945,12 @@ $("#gateForm").addEventListener("submit", async e => {
 });
 
 /* ---- 设置：改密码 / 登出 ---- */
-/* ---- 这台机器上的默认值 ----
-   页面上那两根滑块是「我现在拖着看看」，这儿存的是「以后开页从哪儿起」。
-   两个不是一个东西（她 8-18 夜说的：我知道页面上的滑块是临时的）。
-   放 localStorage 而不是服务端：它就该是**这台机器**的习惯，
-   手机上和电脑上想停在不同的数完全合理。 */
+/* 两根滑块的默认值。2026-08-19：本来在设置页做了一组「开页默认」（存 localStorage），
+   她看完说这个其实不需要 —— 她真正想要的是**做梦/发呆那种触发阈值**，那个以后再加。
+   所以这儿收回成两个常量，设置页那一块删了，localStorage 那套也一起删干净：
+   留着一个没有入口的持久化，下一个人只会以为是自己没找到。 */
 const LOCAL_DEF = {sim: 88, floor: 35};
-function localDef(k){
-  try{ const v = parseInt(localStorage.getItem("loci-def-" + k));
-       if (!isNaN(v)) return v; }catch(e){}
-  return LOCAL_DEF[k];
-}
-function setLocalDef(k, v){ try{ localStorage.setItem("loci-def-" + k, String(v)); }catch(e){} }
+function localDef(k){ return LOCAL_DEF[k]; }
 
 async function loadSet(){
   try{
@@ -994,8 +965,6 @@ async function loadSet(){
   let _t = "auto";
   try{ _t = localStorage.getItem("loci-theme") || "auto"; }catch(e){}
   applyTheme(_t);
-  $("#cfgSim").value = localDef("sim"); $("#cfgSimVal").textContent = localDef("sim");
-  $("#cfgFloor").value = localDef("floor"); $("#cfgFloorVal").textContent = localDef("floor");
   loadSetup(); loadCfg(); loadDiag();
 }
 
@@ -1084,19 +1053,9 @@ $("#cfgEOn").onclick = () => {
 };
 $("#cfgMT").addEventListener("input", () => { $("#cfgMTVal").textContent = $("#cfgMT").value; });
 $("#cfgMTDef").onclick = () => { $("#cfgMT").value = 75; $("#cfgMTVal").textContent = "75"; };
-$("#cfgSim").addEventListener("input", () => { $("#cfgSimVal").textContent = $("#cfgSim").value; });
-$("#cfgFloor").addEventListener("input", () => { $("#cfgFloorVal").textContent = $("#cfgFloor").value; });
-$("#cfgLocalDef").onclick = () => {
-  $("#cfgSim").value = LOCAL_DEF.sim; $("#cfgSimVal").textContent = LOCAL_DEF.sim;
-  $("#cfgFloor").value = LOCAL_DEF.floor; $("#cfgFloorVal").textContent = LOCAL_DEF.floor;
-  setLocalDef("sim", LOCAL_DEF.sim); setLocalDef("floor", LOCAL_DEF.floor);
-  toast("开页默认回到 88 / 35 了");
-};
 $("#cfgSave").onclick = async () => {
   const btn = $("#cfgSave"); btn.disabled = true;
   const msg = $("#cfgSaveMsg"); msg.className = "tiny muted"; msg.textContent = "存着…";
-  setLocalDef("sim", parseInt($("#cfgSim").value));
-  setLocalDef("floor", parseInt($("#cfgFloor").value));
   const body = {
     persist: true,
     merge_threshold: parseInt($("#cfgMT").value),
@@ -1112,9 +1071,9 @@ $("#cfgSave").onclick = async () => {
       headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)});
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
-    msg.textContent = "存下来了" + ((j.updated||[]).length ? "：" + j.updated.join("、") : "");
+    msg.textContent = "保存了" + ((j.updated||[]).length ? "：" + j.updated.join("、") : "");
     $("#cfgDKey").value = ""; $("#cfgEKey").value = "";
-    toast("引擎配置存下来了，写进 config.yaml 了");
+    toast("保存了 —— 写进 config.yaml，重启也还在");
     loadCfg(); loadSetup();
   }catch(e){ msg.className = "tiny err"; msg.textContent = "没成：" + e.message; }
   finally{ btn.disabled = false; }
@@ -1280,16 +1239,8 @@ async function impSend(path){
   if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
   return j;
 }
-$("#impPre").onclick = async () => {
-  impSay("看一眼…");
-  try{
-    const j = await impSend("/api/import/preflight");
-    if (!j) return;
-    $("#impStat").hidden = false;
-    $("#impStat").textContent = JSON.stringify(j, null, 2);
-    impSay("这只是预览，一条都没写进去。");
-  }catch(e){ impSay("✗ " + e.message, 1); }
-};
+// 「先看一眼」那个按钮 2026-08-19 她让删了（东西太多）。
+// 路由 /api/import/preflight 留着 —— 它是纯读的，将来想要预览随时接回来。
 $("#impGo").onclick = async () => {
   if (!confirm("开始导入？会往记忆库里真的写东西。\n建议先「备份」一份，再「先看一眼」确认解析对了。")) return;
   impSay("传上去了，开始跑…");
