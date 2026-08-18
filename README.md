@@ -69,8 +69,8 @@ event 和 mind 各存各的，**mind 不是 event 的附件** —— 存了十�
 ## 三、怎么部署
 
 ```bash
-git clone https://github.com/<你的账号>/loci-brain.git
-cd loci-brain
+git clone https://github.com/Esther7314/Loci-Brain.git
+cd Loci-Brain
 cp .env.example .env      # 填两样东西（见下）
 cp config/aliases.example.yaml buckets/aliases.yaml
 docker compose up -d
