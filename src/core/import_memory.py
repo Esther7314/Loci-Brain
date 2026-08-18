@@ -68,6 +68,10 @@ _CHUNK_ERR_PREVIEW = 200       # 单 chunk 错误信息截断长度
 # 判断要不要截断——旧的固定 12000 字符对英文/中英混合内容而言远小于块本身的
 # token 预算，会把块后半段正文在不留任何痕迹的情况下悄悄丢给 LLM 看不到。
 _EXTRACT_TOKEN_CEILING = int(_CHUNK_TARGET_TOKENS * _CHUNK_OVERSIZE_RATIO)
+# 🔴 2026-08-19：原来这是个写死的 2048，跟用户 config 里的 dehydration.max_tokens
+#    毫无关系。一段稍长的对话，模型输出到一半就被截断 → JSON 断在半截 →
+#    解析失败 → 那一块**一条记忆都没导进来**，而 status 还写着 completed。
+#    现在当**下限**用：配置里给多少用多少，但不低于这个数。
 _EXTRACT_MAX_TOKENS = 2048
 _EXTRACT_TEMPERATURE = 0.0     # 提取需确定性
 _PARSE_ERR_PREVIEW = 200       # JSON 解析失败时日志预览
@@ -279,6 +283,14 @@ def _parse_chatgpt_json(data: list | dict) -> list[dict]:
     return turns
 
 
+# 「谁说的」那一行的开头。全小写比对（中文 .lower() 是空操作，不影响）。
+# ⚠️ 只放**明确表示说话人**的词。别为了多认几种把「注」「说明」这类塞进来 ——
+# 认错一行会把一整段话记到另一个人头上。
+_USER_MARKS = frozenset(["human", "user", "你", "我", "用户", "me"])
+_AI_MARKS = frozenset(["assistant", "claude", "ai", "gpt", "bot", "deepseek",
+                       "助手", "机器人"])
+
+
 def _parse_markdown(text: str) -> list[dict]:
     """Parse Markdown/plain text → [{role, content, timestamp}, ...]"""
     # Try to detect conversation patterns
@@ -287,21 +299,37 @@ def _parse_markdown(text: str) -> list[dict]:
     current_role = "user"
     current_content: list[str] = []
 
+    def _role_of(stripped: str):
+        """这一行是不是「谁说的」那种开头？是就返回（角色, 冒号后面的话）。
+
+        🔴 2026-08-19 修的两处，中文对话原来整个解析不了：
+          ① **全角冒号「：」根本不认**。原来只切 ASCII 的冒号，
+             而中文写「用户：」十有八九用的是全角 —— 于是整份导出被当成一坨，
+             切不出轮次，导进去就是一大块没头没尾的东西。
+          ② 「用户」不在名单里（原来只有 human/user/你/我）。
+        判据跟别处一样：**认得出来的要认全，认不出的就别装认得。**
+        """
+        for sep in (":", "："):
+            if sep not in stripped:
+                continue
+            head, body = stripped.split(sep, 1)
+            head = head.strip().lower()
+            if head in _USER_MARKS:
+                return "user", body.strip()
+            if head in _AI_MARKS:
+                return "assistant", body.strip()
+        return None, ""
+
     for line in lines:
         stripped = line.strip()
-        # Detect role switches
-        if stripped.lower().startswith(("human:", "user:", "你:", "我:")):
+        role, body = _role_of(stripped)
+        if role:
             if current_content:
-                turns.append({"role": current_role, "content": "\n".join(current_content).strip(), "timestamp": ""})
-            current_role = "user"
-            content_after = stripped.split(":", 1)[1].strip() if ":" in stripped else ""
-            current_content = [content_after] if content_after else []
-        elif stripped.lower().startswith(("assistant:", "claude:", "ai:", "gpt:", "bot:", "deepseek:")):
-            if current_content:
-                turns.append({"role": current_role, "content": "\n".join(current_content).strip(), "timestamp": ""})
-            current_role = "assistant"
-            content_after = stripped.split(":", 1)[1].strip() if ":" in stripped else ""
-            current_content = [content_after] if content_after else []
+                turns.append({"role": current_role,
+                              "content": "\n".join(current_content).strip(),
+                              "timestamp": ""})
+            current_role = role
+            current_content = [body] if body else []
         else:
             current_content.append(line)
 
@@ -1026,7 +1054,8 @@ class ImportEngine:
         raw = await self.dehydrator._chat(
             prompt,
             data_record,
-            max_tokens=_EXTRACT_MAX_TOKENS,
+            max_tokens=max(_EXTRACT_MAX_TOKENS,
+                           int(self.config.get("dehydration", {}).get("max_tokens") or 0)),
             temperature=_EXTRACT_TEMPERATURE,
         )
 
@@ -1035,14 +1064,26 @@ class ImportEngine:
 
         return self._parse_extraction(raw)
 
-    @staticmethod
-    def _parse_extraction(raw: str) -> list[dict]:
-        """Parse and validate LLM extraction result."""
+    def _parse_extraction(self, raw: str) -> list[dict]:
+        """Parse and validate LLM extraction result.
+
+        🔴 2026-08-19：解析失败原来**只写日志**，state.errors 一个字都不记 ——
+           于是面板上看到的是「completed · errors [] · 创建 0 条」。
+           一次成功的、什么都没干的导入，是这套系统里最难查的那种失败。
+           现在往 errors 里记一条，前端那块 pre 直接就能看见。
+        """
         try:
             cleaned = _strip_md_fence(raw)
             items = json.loads(cleaned)
         except (json.JSONDecodeError, IndexError, ValueError):
             logger.warning(f"Import extraction JSON parse failed: {raw[:_PARSE_ERR_PREVIEW]}")
+            msg = ("这一块的模型输出解析不了（多半是被 max_tokens 截断了）："
+                   + str(raw[:120]).replace(chr(10), " "))
+            try:
+                if len(self.state.data["errors"]) < _STATE_ERR_LOG_MAX:
+                    self.state.data["errors"].append(msg)
+            except Exception:                        # noqa: BLE001
+                pass
             return []
 
         if not isinstance(items, list):

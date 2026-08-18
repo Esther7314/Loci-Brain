@@ -9,9 +9,10 @@ GitHub 同步/一键装 ollama/隧道管理/搜索/桶浏览/导入导出/webhoo
 v3 debug/旧 dashboard，一个字都不剩；四组还活着但不是「面板」的东西
 （MCP 远程 OAuth 校验、/mcp 请求体护栏、本地 ollama 子进程常驻）挪去了 `bridge/`。
 
-**现在只剩两个模块**：
+**现在有三个模块**：
 - `config_api`：E1 留 4 删 7 之后的引擎设置（`/api/config` GET+POST ·
   `/api/test/dehydration` · `/api/test/embedding` · `/api/models`）。
+- `import_api`：导入的四条路由（preflight/upload/status/pause），2026-08-19 补回来。
 - `loci`：我们自己的新面板本体（房间四间、breath/recall 预览、档案、
   发呆、密码设置……），`web/` 下唯一全新写的模块。
 
@@ -26,12 +27,16 @@ v3 debug/旧 dashboard，一个字都不剩；四组还活着但不是「面板�
 
 from . import _shared
 from . import config_api
+from . import import_api
 from . import loci
 
 
 _WEB_MODULES = (
     ("web.config_api", config_api.register),
     ("web.loci", loci.register),
+    # 2026-08-19 补回来的：导入那四条路由。引擎 core/import_memory.py 一直活着，
+    # 是 E2 砍上游模块时把它的门一起砍了，面板上三个按钮点下去打的是 404。
+    ("web.import_api", import_api.register),
 )
 
 
