@@ -1,36 +1,53 @@
 // ============================================================
 // gateway/server.js —— Loci 的 mini gateway（2026-08-19）
 //
-// **它只干一件事**：你的客户端把聊天请求发给它，它转发给真正的模型，
-// 转发之前顺手问一次 Loci「现在有没有该让 AI 知道的东西」——
-// 有就在消息里插一行系统提示，没有就一个字不动。
+// **它干的事**：你的客户端把聊天请求发给它，它转发给真正的模型，
+// 转发之前拍两下 Loci，把该让 AI 知道的东西加进这一轮的消息里。
 //
-// 🔴 三条边界（跟模块那份同源，别在改的时候丢掉）：
-//   · **失败不挡聊天**。问 Loci 超时、Loci 没起、返回不是 JSON —— 全部照常转发，
-//     只在日志里记一行。宁可这次没插上，也不能让人的对话卡住。
-//   · **只读多、写极少**。它调 Loci 两个普通 REST 口：GET /api/loci/poke（纯读）、
-//     POST /api/loci/dream/wake（降级信号，幂等）。⛔ 不碰 MCP 工具面。
-//   · **不改内容，只加一行**。插进去的是一条 system 消息，说的是「有几条相关记忆」
-//     这种**数量**，不是记忆正文 —— 要不要去看，判断权留给 AI 自己。
+// 两下，位置不一样，别搞混：
+//   · 戳戳送达（戳戳送达.js）   梦 / 发呆，贴在稳定前缀区
+//   · 相关记忆提醒（自动贴.js） **贴真尾巴** —— 最新 user 之后、整个 messages 的最末
+//
+// 🔴 提醒为什么要最后贴：位置得「离模型开口最近」。
+//    所以 算相关记忆提醒() 自己不碰 messages，只把 patch 算出来还给你，
+//    等别的都插完、请求体组好了，最后一步才 贴到真尾巴()。顺序反了位置就错了。
+//
+// ⛔ **这个外壳不替 AI 调 breath()。** 自动贴.js 里还有一个「开窗第一轮把 breath
+//    整段贴进 system」的函数（`贴一次`），它是她自己那套网关的做法，这儿**故意不接**：
+//    「开口之前先 breath()」是 **AI 自己该伸的那只手**，写在系统提示里
+//    （docs/系统提示-中文.md）。网关替它贴进去，它就不再是"自己想起来要睁眼"，
+//    而是"被人喂了一份摘要"——那是两种完全不同的东西。
+//    你要是就想要网关代劳，那个函数在模块里现成的，自己接一行就是。
+//
+// 🔴 三条边界（跟两个模块同源，改的时候别丢）：
+//   · **失败不挡聊天**。任何一下拍空了——超时、Loci 没起、返回不是 JSON——
+//     都照常转发，只记一行日志。宁可这次没贴上，也不能让人的对话卡住。
+//   · **只读多，写极少**。碰的是 breath / recall（读）和 poke / dream.wake
+//     （只读口 + 幂等信号）。⛔ 不改任何记忆。
+//   · **不报正文，只报有什么**。B 插进去的是「有几条相关记忆」这种**数量**，
+//     判断权留给 AI 自己。
 //
 // 零依赖：只用 Node 自带的 http / fetch（Node 18+）。
 //
 // 跑：
 //     LOCI_UPSTREAM=https://api.deepseek.com/v1 node gateway/server.js
-// 然后把客户端的 base_url 指到 http://127.0.0.1:3100/v1 就行，
-// API key 照常由客户端带（这儿只是原样转发，**不存也不看**）。
+// 然后把客户端的 base_url 指到 http://127.0.0.1:3100/v1。
+// API key 照常由客户端带 —— 这一层原样转发，**不存也不看**。
 // ============================================================
 
 const http = require("http");
+const path = require("path");
 const { Readable } = require("stream");
-const 桥 = require("./戳戳送达.js");
+const 自动贴 = require("./自动贴.js");
+const 戳戳 = require("./戳戳送达.js");
 
 const 端口 = Number(process.env.PORT || 3100);
-// 真正的模型在哪。必须是 OpenAI 兼容的地址（末尾带不带 /v1 都认）。
 const 上游 = (process.env.LOCI_UPSTREAM || "").replace(/\/+$/, "");
-// Loci 在哪（跟模块用同一个环境变量，一处配置两边都对）
-const LOCI = process.env.LOCI_MCP || 桥.默认地址;
-const 闲时阈值分钟 = Number(process.env.POKE_IDLE_MINUTES || 桥.默认闲时阈值分钟);
+const LOCI = process.env.LOCI_MCP || 戳戳.默认地址;
+const 闲时阈值分钟 = Number(process.env.POKE_IDLE_MINUTES || 戳戳.默认闲时阈值分钟);
+const 最低分 = Number(process.env.RELEVANCE_MIN_SCORE || 自动贴.默认最低分);
+const 数据根 = process.env.LOCI_GATEWAY_DATA || path.join(__dirname, "data");
+const 日志档 = path.join(数据根, "logs", "memory-actions.jsonl");
 
 if (!上游) {
   console.error("没配 LOCI_UPSTREAM —— 我不知道该把请求转给谁。");
@@ -47,7 +64,6 @@ function 读body(req) {
   });
 }
 
-/** 这个请求是不是「一次聊天」。只有聊天才值得问 Loci。 */
 function 是聊天(req, 体) {
   return req.method === "POST"
     && /\/chat\/completions$/.test(req.url.split("?")[0])
@@ -60,22 +76,36 @@ const 服务 = http.createServer(async (req, res) => {
   let 体 = null;
   try { 体 = 原始.length ? JSON.parse(原始.toString("utf8")) : null; } catch { 体 = null; }
 
-  let 注入 = null;
+  const 说 = [];
   if (是聊天(req, 体)) {
+    const 公共 = {
+      messages: 体.messages,
+      requestId: String(req.headers["x-request-id"] || 起),
+      logPath: 日志档,
+      地址: LOCI,
+    };
+
+    // ---- D：戳戳送达。梦 / 发呆，贴在跟 A 同一处前缀。 ----
     try {
-      // 🔴 就是这一下。贴一次() 会**就地**改 体.messages（插一条 system），
-      //    也可能什么都不做（不够闲 / Loci 那边没东西）。
-      注入 = await 桥.贴一次({
-        messages: 体.messages,
-        requestId: req.headers["x-request-id"] || String(起),
-        地址: LOCI,
+      const d = await 戳戳.贴一次({
+        ...公共,
+        statePath: path.join(数据根, "state", "poke-window.json"),
         闲时阈值分钟,
       });
-    } catch (错) {
-      // 失败不挡聊天 —— 这是这个网关最重要的一条性质
-      注入 = { error: String(错?.message || 错) };
-    }
-  }
+      说.push(d.patchInjected ? `戳戳(梦=${d.hasDream} 发呆=${d.musePending})`
+        : d.calledLoci ? "戳戳无" : "戳戳没问(不够闲)");
+    } catch (错) { 说.push("戳戳炸:" + (错?.message || 错)); }
+
+    // ---- B：相关记忆提醒。**最后一步，贴真尾巴** ----
+    // 触发才跑（强档=关键词命中，弱档=本地判据）。没触发一次 recall 都不调。
+    try {
+      const b = await 自动贴.算相关记忆提醒({ ...公共, 最低分 });
+      if (b && b.patch) {
+        自动贴.贴到真尾巴(体.messages, b.patch);
+        说.push("提醒(贴了真尾巴)");
+      } else 说.push("提醒无");
+    } catch (错) { 说.push("提醒炸:" + (错?.message || 错)); }
+  } else 说.push("不是聊天，直接转发");
 
   const 转发体 = 体 ? Buffer.from(JSON.stringify(体)) : 原始;
   const 头 = { ...req.headers };
@@ -102,20 +132,13 @@ const 服务 = http.createServer(async (req, res) => {
   if (回.body) Readable.fromWeb(回.body).pipe(res);
   else res.end();
 
-  // 日志一行。插没插、为什么没插，看这一行就够了。
-  const 说 = 注入
-    ? (注入.error ? `问 Loci 失败：${注入.error}`
-      : 注入.patchInjected ? `插了一行（梦=${注入.hasDream} 发呆=${注入.musePending}）`
-      : 注入.calledLoci ? "问过了，没东西可插"
-      : `没问（不够闲，闲了 ${注入.idleMinutes ?? "?"} 分钟 < ${闲时阈值分钟}）`)
-    : "不是聊天，直接转发";
-  console.log(`[gateway] ${req.method} ${req.url} → ${回.status}  ${Date.now() - 起}ms  ${说}`);
+  console.log(`[gateway] ${req.method} ${req.url} → ${回.status}  ${Date.now() - 起}ms  ${说.join(" · ")}`);
 });
 
 服务.listen(端口, () => {
   console.log(`[gateway] 起来了 http://127.0.0.1:${端口}`);
-  console.log(`[gateway] 上游      ${上游}`);
-  console.log(`[gateway] Loci      ${桥._internal.httpBase(LOCI)}`);
-  console.log(`[gateway] 闲时阈值   ${闲时阈值分钟} 分钟（她这么久没说话，下一句才问 Loci）`);
+  console.log(`[gateway] 上游        ${上游}`);
+  console.log(`[gateway] Loci        ${戳戳._internal.httpBase(LOCI)}`);
+  console.log(`[gateway] 相关度最低分 ${最低分}  ·  闲时阈值 ${闲时阈值分钟} 分钟`);
   console.log(`[gateway] 把客户端的 base_url 指到 http://127.0.0.1:${端口}/v1`);
 });

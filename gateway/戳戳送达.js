@@ -75,8 +75,7 @@ const 默认日志档 = path.join(数据根, "logs", "memory-actions.jsonl");
 // 这儿的默认值只是这个模块自己被单独调用/测试时的兜底。
 const 默认闲时阈值分钟 = 210;
 
-// 诊断/测试认这个字面量——跟 MARKER（自动贴.js）、[Lento recent memory view]
-// （近期记忆视图.js）是姐妹标记。
+// 诊断/测试认这个字面量 —— 跟 自动贴.js 的 [Loci memory context] 是姐妹标记。
 const MARKER = "[Loci poke]";
 
 function 读JSON(文件, 缺省 = {}) {
