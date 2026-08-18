@@ -12,3 +12,6 @@ __pycache__/
 *.tmp
 *.new
 *.head
+
+# 网关跑起来之后自己生成的状态和日志（里面是真的记忆内容）
+gateway/data/
