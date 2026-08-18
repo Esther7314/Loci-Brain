@@ -7,3 +7,8 @@ __pycache__/
 *.pyc
 *.log
 .venv/
+
+# 补丁脚本的中间产物，别提交
+*.tmp
+*.new
+*.head
