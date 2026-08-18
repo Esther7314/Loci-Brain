@@ -984,6 +984,135 @@ async def build_poke(query: str = "", when: str = "", room: str = "",
     return {"dreams": dreams, "muse_pending": muse_pending, "recall_scores": scores}
 
 
+async def build_setup() -> dict:
+    """设置页开头那一屏：**把静默的东西变成看得见的。**
+
+    判据来自 2026-08-18 那一整天（她定的）：那天踩到的失败**全是静默的** ——
+        没填打标 key   → 记忆存进去了，但没有标签和摘要      不报错
+        没配 embedding → 搜索少一条腿                      不报错
+        没配名字       → 你俩的名字混进标签、淹掉搜索        不报错
+        没拷别名表     → 「Es」和「小思」永远是两个人        不报错
+        容器设了 TZ    → 新记忆全变成「未来」，翻不到        不报错
+    五个全踩了，每一个都是靠烟测或者她本人才发现的。
+    所以这一屏最该做的事不是让人填表，是**告诉他不填会怎么样**。
+
+    🔴 每一行三件事：是什么 · 现在什么状态 · **不对的话会怎么样**。
+       第三列是关键：新手不知道「没配 AI_NAME」意味着什么。写「⚠️ 未设置」他会跳过，
+       写「你俩的名字会混进标签」他才懂。
+    📌 这一屏其实写给两个读者：一个是人，一个是**他的 AI**（他把这几行截图丢给
+       自己的 AI，AI 立刻知道该改什么）。所以话要说成人话，不是 KEY_NAME unset。
+    """
+    import os as _os
+    from tools import _subjects as subj
+
+    rows: list[dict] = []
+
+    def row(key, label, ok, now, why, fix="", note=False):
+        """note=True：这是**一句必须说清楚的事实**，不是「你配错了」。
+
+        分开的理由：不分开的话「面板没有锁」会永远挂在那儿写「1 项要看一下」，
+        而她 8-05 就拍过「家里内网不鉴权」—— 一个已经做过的决定天天报警，
+        报的就不是警了，是噪音，然后真的警报也跟着一起被无视。
+        """
+        rows.append({"key": key, "label": label, "ok": bool(ok), "note": bool(note),
+                     "now": now, "why": why, "fix": fix})
+
+    cfg = sh.config or {}
+    dehy = cfg.get("dehydration", {}) or {}
+    emb = cfg.get("embedding", {}) or {}
+
+    # ① 打标模型
+    d_key = str(dehy.get("api_key") or "")
+    d_model = str(dehy.get("model") or "")
+    d_base = str(dehy.get("base_url") or "")
+    row("dehydration", "打标模型", bool(d_key and d_model),
+        (d_model + "（" + (d_base or "默认地址") + "）") if d_key and d_model else "没配",
+        "存得进去，但没有标签、没有摘要、也抽不出人名 —— 而且一声不响。"
+        "搜索靠标签和摘要，所以等于存了一堆搜不到的东西。")
+
+    # ② 向量（搜索的第二条腿）
+    e_on = str(emb.get("enabled", "")).strip().lower() in ("1", "true", "yes", "on")
+    e_key = str(emb.get("api_key") or "")
+    e_model = str(emb.get("model") or "")
+    e_base = str(emb.get("base_url") or "")
+    e_ok = e_on and bool(e_model) and (bool(e_key) or "localhost" in e_base or "ollama" in e_base)
+    row("embedding", "向量", e_ok,
+        (e_model + "（" + (e_base or "默认地址") + "）") if e_ok else
+        ("开着但没配全" if e_on else "关着"),
+        "搜索少一条腿：只剩字面匹配。换个说法搜同一件事就搜不到了 —— "
+        "而它不会告诉你「这次没用上向量」。")
+
+    # ③ 你和他的名字
+    ai_name = _os.environ.get("AI_NAME", "").strip()
+    owner = _os.environ.get("LOCI_OWNER_NAME", "").strip()
+    row("names", "你和他的名字", bool(ai_name and owner),
+        ((ai_name or "没配") + " / " + (owner or "没配")),
+        "这两个名字要挡在标签外面。没配的话，你俩的名字会被当成普通词抽进标签 —— "
+        "而几乎每条记忆都有你们，于是这两个词淹掉整个搜索。",
+        "改的是容器的环境变量 AI_NAME / LOCI_OWNER_NAME")
+
+    # ④ 别名表
+    apath = subj._alias_path()
+    a_exists = _os.path.isfile(apath)
+    table = subj.load_alias_table()
+    row("aliases", "别名表", a_exists,
+        (apath + "（" + str(len(table)) + " 条写法）") if a_exists else ("还没有：" + apath),
+        "同一个人的几种写法会被当成几个人。「Es」和「小思」各算一个，"
+        "按人找记忆就永远只找到一半。",
+        "面板「整理 → 人名表」上点一下就是往这张表里写")
+
+    # ⑤ 容器时区 —— 8-18 最狠的那个坑
+    tz = _os.environ.get("TZ", "").strip()
+    row("tz", "容器时区", not tz,
+        ("没设（对的）" if not tz else "设成了 " + tz + " ⚠️"),
+        "盘上的 created 存的是容器本地时间、读的时候按 UTC 解。容器不是 UTC 的话，"
+        "新记忆会被戳成「未来」，从时间视图里整个消失 —— 不报错，"
+        "而且是「今天存的东西今天翻不到」这种最吓人的样子。"
+        "要改显示时区用 LOCI_TZ，不是 TZ。",
+        "别在 compose 里给这个容器设 TZ")
+
+    # ⑥ 面板的锁 —— E2 之后面板 /api/* 不再鉴权，那道门再也不会弹
+    row("panel_lock", "面板的锁", False,
+        "没有锁",
+        "任何能访问到这个地址的人，都能看你全部记忆。"
+        "这台机器监听 0.0.0.0，所以同一个 WiFi 里的设备都算。"
+        "（这是 8-05 拍的「家里内网不鉴权」；开源版这儿要有个开关。）"
+        "设置页里那个「改密码」管的是 MCP 授权页，不是这一屏的门。",
+        note=True)
+
+    # ---- 只读事实：不是「配得对不对」，是「东西在哪」 ----
+    ver = ""
+    try:
+        vp = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "VERSION")
+        with open(vp, "r", encoding="utf-8") as f:
+            ver = f.read().strip()
+    except OSError:
+        ver = ""
+    # 条数走 _visible —— 跟 recall / rooms / 人名表同一把尺子。
+    # 不这么筛的话这儿是 990、人名表那屏是 941，同一个东西两个数，
+    # 而看见两个数的人只会以为其中一个是错的。
+    try:
+        from tools.recall.core import _visible as _vis
+        allb = await sh.bucket_mgr.list_all(include_archive=False)
+        n_buckets = sum(1 for b in allb if _vis(b.get("metadata", {}) or {}))
+    except Exception:                                # noqa: BLE001
+        n_buckets = -1
+    return {
+        "rows": rows,
+        # 说明行不算「要看一下」（不然一个已经做过的决定天天报警）
+        "bad": sum(1 for r in rows if not r["ok"] and not r["note"]),
+        "facts": {
+            "buckets_dir": str(cfg.get("buckets_dir") or os.environ.get("LOCI_BUCKETS_DIR") or ""),
+            "log_file": os.environ.get("LOCI_LOG_FILE", ""),
+            "alias_table": apath,
+            "version": ver,
+            "buckets": n_buckets,
+            "in_docker": bool(sh.in_docker()) if hasattr(sh, "in_docker") else None,
+            "tz_display": os.environ.get("LOCI_TZ", "").strip() or "Asia/Shanghai",
+        },
+    }
+
+
 async def build_health() -> dict:
     """**我们自己的体检。**
 
@@ -1801,6 +1930,20 @@ def register(mcp) -> None:
             return JSONResponse(await build_subjects())
         except Exception as e:                       # noqa: BLE001
             logger.warning(f"[loci] subjects 失败: {e}")
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    @mcp.custom_route("/api/loci/setup", methods=["GET"])
+    async def api_loci_setup(request: Request) -> Response:
+        """设置页开头那一屏（五行状态 + 只读事实）。**纯读。**
+
+        2026-08-19 新开。为什么要它：8-18 那天踩到的五个失败全是静默的，
+        每一个都不报错。这个口的活儿不是「让人填表」，是「把静默的变成看得见的」。
+        """
+        from starlette.responses import JSONResponse
+        try:
+            return JSONResponse(await build_setup())
+        except Exception as e:                       # noqa: BLE001
+            logger.warning(f"[loci] setup 失败: {e}")
             return JSONResponse({"error": str(e)}, status_code=500)
 
     @mcp.custom_route("/api/loci/subjects/action", methods=["POST"])

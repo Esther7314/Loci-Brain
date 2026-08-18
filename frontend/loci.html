@@ -148,7 +148,25 @@ section.page.on > [hidden]{display:none}
 .who-row .flag{font-family:var(--mono);font-size:var(--fs-xs);
   padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--ink-2)}
 .who-row .flag.warn{border-color:var(--accent);color:var(--ink)}
+/* 卡标题右边那个「展开/收起」：h2.h 是 flex，float 在 flex 里不生效
+   （第一版写了 float:right，按钮直接掉到下一行）。改用 margin-left:auto：
+   宽屏跟标题同一行贴右边；窄屏因为 h2.h .n 是 flex:1 1 100%（副标题独占一行），
+   按钮会落到下一行——那时它靠右，看着也是刻意的。 */
 .who-bar{height:4px;border-radius:2px;background:var(--accent);opacity:.5;flex:none}
+/* 设置页「状态」那几行：一行三件事——是什么 · 现在什么状态 · 不对的话会怎么样。
+   第三列只在不 ok 的时候出现（没人需要被告知一切正常的后果）。 */
+#setRows[hidden]{display:none}          /* 又是坑 #1，先把这条写死 */
+.set-row{padding:11px 0;border-bottom:1px solid var(--line)}
+.set-row:last-child{border-bottom:0}
+.set-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.set-head .mk{font-family:var(--mono);flex:none}
+.set-head .lb2{font-weight:600;font-size:var(--fs-sm)}
+.set-head .now{font-family:var(--mono);font-size:var(--fs-xs);color:var(--ink-3);
+  min-width:0;word-break:break-all}
+.set-row .why{font-size:var(--fs-xs);color:var(--ink-2);line-height:1.7;margin-top:5px}
+.set-row .fix{font-family:var(--mono);font-size:var(--fs-xs);color:var(--ink-3);margin-top:4px}
+.set-row.warn{border-left:3px solid var(--accent);padding-left:11px}
+#logBox[hidden]{display:none}
 section.page.on{display:flex;flex-direction:column;gap:var(--gap)}
 
 /* 卡片：比底更白、大圆角、无边框无阴影 */
@@ -529,7 +547,7 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
         <div class="slider-row" style="flex:1">
           <span class="th-val" id="floorVal">35</span>
           <input type="range" id="floor" min="0" max="70" step="1" value="35">
-          <button class="btn ghost" id="floorDef">回到 35</button>
+          <button class="btn ghost" id="floorDef">回到默认</button>
         </div>
       </div>
       <div class="tiny muted" id="floorNote" style="display:none;margin:-4px 0 10px"></div>
@@ -578,7 +596,7 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
       <div class="slider-row">
         <span class="th-val" id="thVal">88</span>
         <input type="range" id="th" min="75" max="99" step="1" value="88">
-        <button class="btn ghost" id="thDef">回到 88</button>
+        <button class="btn ghost" id="thDef">回到默认</button>
       </div>
       <div id="simStat" class="tiny muted" style="margin:10px 0 12px"></div>
       <canvas id="hist"></canvas>
@@ -601,24 +619,37 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
   <section class="page" id="p-prof">
     <div id="profOut"><div class="card spin">拿门口那张纸…</div></div>
   </section>
-</div>
 
   <!-- ============ 设置 ============ -->
+  <!-- 六组，顺序是她 2026-08-18 夜定的：**不按配置类别排，按「新手会卡在哪儿」排**。
+       ①账号打头是因为「打开设置第一眼是我的账号」才是正常人的顺序（她的直觉）；
+       ②状态紧跟着，全好的时候塌成一行、有问题自己张开——她天天看见的是一行小字，
+       新手一进来就是一片黄。
+       不用 chip：这六块是**不同的东西**，是一路往下翻着看的，不是二选一。 -->
   <section class="page" id="p-set">
 
-    <!-- 一 · 账号 -->
+    <!-- ① 账号 -->
     <div class="card">
       <h2 class="h">账号</h2>
-      <div id="pwState" class="tiny muted" style="margin-bottom:14px">…</div>
-      <div class="frow">
-        <input type="password" id="pw1" class="search" placeholder="新密码（至少 6 位）"
-               autocomplete="new-password">
-        <input type="password" id="pw2" class="search" placeholder="再打一遍"
-               autocomplete="new-password">
-        <button class="btn" id="pwGo">改密码</button>
+      <div class="fline">
+        <span class="lb">名字</span>
+        <div class="fbody"><div class="tiny" id="setNames">…</div></div>
       </div>
-      <div id="pwMsg" class="tiny" style="margin-top:10px"></div>
-      <div class="fline" style="margin-top:16px">
+      <div class="fline">
+        <span class="lb">密码</span>
+        <div class="fbody">
+          <div id="pwState" class="tiny muted" style="margin-bottom:10px">…</div>
+          <div class="frow">
+            <input type="password" id="pw1" class="search" placeholder="新密码（至少 6 位）"
+                   autocomplete="new-password">
+            <input type="password" id="pw2" class="search" placeholder="再打一遍"
+                   autocomplete="new-password">
+            <button class="btn" id="pwGo">改密码</button>
+          </div>
+          <div id="pwMsg" class="tiny" style="margin-top:10px"></div>
+        </div>
+      </div>
+      <div class="fline">
         <span class="lb">外观</span>
         <div class="fbody"><div class="theme-row" id="themeRow"></div></div>
       </div>
@@ -628,14 +659,96 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
       </div>
     </div>
 
-    <!-- 二 · 数据 -->
+    <!-- ② 状态 -->
     <div class="card">
-      <h2 class="h">数据 <span class="n">备份 · 导入</span></h2>
-      <div class="frow">
-        <button class="btn" id="expGo">导出全部记忆</button>
-        <span class="tiny muted">下载一份到本地。搬家、换机器、或者只是想留一份。</span>
+      <h2 class="h">状态 <span class="n" id="setStat">看一眼…</span>
+        <button class="mini" id="setToggle" style="margin-left:auto" hidden>展开</button>
+      </h2>
+      <div id="setRows"><div class="spin">看一眼…</div></div>
+    </div>
+
+    <!-- ③ 引擎 -->
+    <div class="card">
+      <h2 class="h">引擎 <span class="n">这台机器怎么跑</span></h2>
+      <div class="fline">
+        <span class="lb">打标模型</span>
+        <div class="fbody">
+          <div class="frow">
+            <input type="text" id="cfgDModel" class="search" placeholder="模型名，例如 deepseek-chat">
+            <input type="text" id="cfgDBase" class="search" placeholder="base_url">
+          </div>
+          <div class="frow" style="margin-top:8px">
+            <input type="password" id="cfgDKey" class="search" placeholder="api key（留空 = 不改）"
+                   autocomplete="off">
+            <button class="btn ghost" id="cfgDTest">测通</button>
+          </div>
+          <div class="tiny muted" id="cfgDMsg" style="margin-top:8px">
+            没有它：记忆存得进去，但没有标签、没有摘要、也抽不出人名——而且不报错。
+          </div>
+        </div>
       </div>
-      <div class="fline" style="margin-top:16px">
+      <div class="fline">
+        <span class="lb">向量</span>
+        <div class="fbody">
+          <div class="frow">
+            <button class="sw" id="cfgEOn">开</button>
+            <input type="text" id="cfgEModel" class="search" placeholder="模型名，例如 bge-m3">
+            <input type="text" id="cfgEBase" class="search" placeholder="base_url">
+          </div>
+          <div class="frow" style="margin-top:8px">
+            <input type="password" id="cfgEKey" class="search" placeholder="api key（本地跑的话留空）"
+                   autocomplete="off">
+            <button class="btn ghost" id="cfgETest">测通</button>
+          </div>
+          <div class="tiny muted" id="cfgEMsg" style="margin-top:8px">
+            没有它：搜索少一条腿，只剩字面匹配——换个说法搜同一件事就搜不到了。
+          </div>
+        </div>
+      </div>
+      <div class="fline">
+        <span class="lb">判重阈值</span>
+        <div class="fbody">
+          <div class="slider-row">
+            <span class="th-val" id="cfgMTVal">75</span>
+            <input type="range" id="cfgMT" min="60" max="95" step="1" value="75">
+            <button class="btn ghost" id="cfgMTDef">回到 75</button>
+          </div>
+          <div class="tiny muted" style="margin-top:6px">
+            存新记忆时「这条是不是刚存过」的线。调低 → 更容易被判成重复、拦下来；
+            调高 → 重复的更容易两条都留着。<b>这条是服务端的，存下来对所有人生效。</b>
+          </div>
+        </div>
+      </div>
+      <div class="fline">
+        <span class="lb">开页默认</span>
+        <div class="fbody">
+          <div class="slider-row">
+            <span class="th-val" id="cfgSimVal">88</span>
+            <input type="range" id="cfgSim" min="75" max="99" step="1" value="88">
+            <span class="tiny muted">相似度那页开页停在哪</span>
+          </div>
+          <div class="slider-row" style="margin-top:8px">
+            <span class="th-val" id="cfgFloorVal">35</span>
+            <input type="range" id="cfgFloor" min="0" max="70" step="1" value="35">
+            <span class="tiny muted">记忆页那根关联度线开页停在哪</span>
+          </div>
+          <div class="frow" style="margin-top:8px">
+            <button class="btn ghost" id="cfgLocalDef">恢复默认</button>
+            <span class="tiny muted">这两个是**这台机器上**的默认值（页面上那两根滑块是当场拖着看的，
+              这儿定的是「以后开页从哪儿起」）。</span>
+          </div>
+        </div>
+      </div>
+      <div class="frow" style="margin-top:6px">
+        <button class="btn" id="cfgSave">存下来</button>
+        <span class="tiny muted" id="cfgSaveMsg">存下来 = 写进 config.yaml，重启也还在。</span>
+      </div>
+    </div>
+
+    <!-- ④ 数据（导入在上、导出在下——她圈的顺序） -->
+    <div class="card">
+      <h2 class="h">数据 <span class="n">导入 · 备份</span></h2>
+      <div class="fline">
         <span class="lb">导入</span>
         <div class="fbody">
           <div class="frow">
@@ -648,23 +761,42 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
           <pre class="card-txt" id="impStat" hidden></pre>
         </div>
       </div>
+      <div class="fline">
+        <span class="lb">导出</span>
+        <div class="fbody">
+          <div class="frow">
+            <button class="btn" id="expGo">导出全部记忆</button>
+            <span class="tiny muted">下载一份到本地。搬家、换机器、或者只是想留一份。</span>
+          </div>
+        </div>
+      </div>
     </div>
 
-    <!-- 三 · 出问题的时候 -->
+    <!-- ⑤ 体检 -->
     <div class="card">
-      <h2 class="h">日志 <span class="n">出问题先看这儿</span></h2>
-      <div class="frow" style="margin-bottom:12px">
-        <span id="logLevels"></span>
-        <button class="btn ghost" id="logGo">刷新</button>
-      </div>
-      <pre class="card-txt" id="logOut" style="max-height:320px;overflow:auto">…</pre>
-      <div class="tiny muted" id="logFile" style="margin-top:8px"></div>
-      <div class="fline" style="margin-top:16px">
-        <span class="lb">体检</span>
-        <div class="fbody"><div id="diagOut" class="muted">…</div></div>
+      <h2 class="h">体检 <span class="n">这套记忆活得好不好</span></h2>
+      <div id="diagOut" class="muted">…</div>
+    </div>
+
+    <!-- ⑥ 日志（默认折起来：出问题才看，平时占屏幕） -->
+    <div class="card">
+      <h2 class="h">日志 <span class="n">出问题先看这儿</span>
+        <button class="mini" id="logToggle" style="margin-left:auto">展开</button>
+      </h2>
+      <div id="logBox" hidden>
+        <div class="frow" style="margin-bottom:12px">
+          <span id="logLevels"></span>
+          <button class="btn ghost" id="logGo">刷新</button>
+        </div>
+        <pre class="card-txt" id="logOut" style="max-height:320px;overflow:auto">…</pre>
+        <div class="tiny muted" id="logFile" style="margin-top:8px"></div>
       </div>
     </div>
+
+    <div class="tiny muted" id="setFacts" style="padding:2px 0 10px;line-height:1.9"></div>
   </section>
+</div><!-- /.wrap —— 2026-08-19：设置页原来在 .wrap 外面，
+       所以它的卡片比别的页宽、左右边距也不一样。搬进来对齐。 -->
 
 <div id="gate" hidden>
   <form class="card" id="gateForm">
@@ -830,20 +962,178 @@ $("#gateForm").addEventListener("submit", async e => {
 });
 
 /* ---- 设置：改密码 / 登出 ---- */
+/* ---- 这台机器上的默认值 ----
+   页面上那两根滑块是「我现在拖着看看」，这儿存的是「以后开页从哪儿起」。
+   两个不是一个东西（她 8-18 夜说的：我知道页面上的滑块是临时的）。
+   放 localStorage 而不是服务端：它就该是**这台机器**的习惯，
+   手机上和电脑上想停在不同的数完全合理。 */
+const LOCAL_DEF = {sim: 88, floor: 35};
+function localDef(k){
+  try{ const v = parseInt(localStorage.getItem("loci-def-" + k));
+       if (!isNaN(v)) return v; }catch(e){}
+  return LOCAL_DEF[k];
+}
+function setLocalDef(k, v){ try{ localStorage.setItem("loci-def-" + k, String(v)); }catch(e){} }
+
 async function loadSet(){
   try{
     const st = await api("/api/loci/auth/state");
-    $("#pwState").textContent = st.env_locked
+    $("#pwState").textContent = (st.env_locked
       ? "⚠️ 现在的密码来自 docker-compose 的环境变量。环境变量在的时候它优先——"
         + "所以在这儿存一个新的之后，还要去删掉那一行、重启容器，新密码才真正接管。"
       : (st.has_file_password
           ? "密码存在 Loci 自己这儿了。" + (st.question ? "忘了能用安全问题找回：" + st.question : "")
-          : "还没有自己的密码。在下面设一个。");
+          : "还没有自己的密码。在下面设一个。"))
+      + " —— 这把密码管的是 MCP 授权页，不是这一屏的门（这一屏现在没有门，见下面「状态」）。";
   }catch(e){ $("#pwState").textContent = "读不到状态：" + e.message; }
   let _t = "auto";
   try{ _t = localStorage.getItem("loci-theme") || "auto"; }catch(e){}
   applyTheme(_t);
-  loadLogs(); loadDiag();
+  $("#cfgSim").value = localDef("sim"); $("#cfgSimVal").textContent = localDef("sim");
+  $("#cfgFloor").value = localDef("floor"); $("#cfgFloorVal").textContent = localDef("floor");
+  loadSetup(); loadCfg(); loadDiag();
+}
+
+/* ---- 状态：把静默的变成看得见的 ----
+   每行三件事：是什么 · 现在什么状态 · **不对的话会怎么样**。
+   第三列是关键：写「未设置」他会跳过，写「你俩的名字会混进标签」他才懂。
+   全好的时候整块塌起来——她天天看见的该是一行小字，不是五行体检报告。 */
+let setupOpen = false;
+async function loadSetup(){
+  const box = $("#setRows");
+  try{
+    const d = await api("/api/loci/setup");
+    const bad = d.rows.filter(r => !r.ok && !r.note).length;
+    $("#setStat").textContent = bad
+      ? bad + " 项要看一下"
+      : "一切正常 · " + d.rows.filter(r => r.ok).length + " 项都配好了";
+    setupOpen = bad > 0;
+    const tg = $("#setToggle");
+    tg.hidden = false;
+    const draw = () => {
+      tg.textContent = setupOpen ? "收起" : "展开";
+      box.hidden = !setupOpen;
+    };
+    tg.onclick = () => { setupOpen = !setupOpen; draw(); };
+    box.innerHTML = "";
+    d.rows.forEach(r => {
+      const row = el("div","set-row" + (r.ok ? "" : (r.note ? " note" : " warn")));
+      const head = el("div","set-head");
+      head.appendChild(el("span","mk", r.ok ? "✓" : (r.note ? "·" : "⚠")));
+      head.appendChild(el("span","lb2", r.label));
+      head.appendChild(el("span","now", r.now));
+      row.appendChild(head);
+      if (!r.ok){
+        row.appendChild(el("div","why", r.why));
+        if (r.fix) row.appendChild(el("div","fix", "改哪儿：" + r.fix));
+      }
+      box.appendChild(row);
+    });
+    draw();
+    const f = d.facts || {};
+    $("#setFacts").textContent =
+      [ "版本 " + (f.version || "?"),
+        (f.buckets >= 0 ? f.buckets + " 条记忆" : ""),
+        "记忆目录 " + (f.buckets_dir || "?"),
+        "别名表 " + (f.alias_table || "?"),
+        "显示时区 " + (f.tz_display || "?"),
+        (f.in_docker ? "跑在容器里" : "")
+      ].filter(Boolean).join(" · ");
+  }catch(e){ fail(box, e); }
+}
+
+/* ---- 引擎 ---- */
+let cfgEOn = false;
+async function loadCfg(){
+  try{
+    const c = await api("/api/config");
+    const d = c.dehydration || {}, e = c.embedding || {};
+    $("#cfgDModel").value = d.model || "";
+    $("#cfgDBase").value = d.base_url || "";
+    $("#cfgDKey").placeholder = d.api_key_masked
+      ? "已配 " + d.api_key_masked + "（留空 = 不改）" : "api key（还没配）";
+    $("#cfgEModel").value = e.model || "";
+    $("#cfgEBase").value = e.base_url || "";
+    cfgEOn = !!e.enabled;
+    $("#cfgEOn").classList.toggle("on", cfgEOn);
+    $("#cfgEOn").textContent = cfgEOn ? "开着" : "关着";
+    const mt = c.merge_threshold != null ? c.merge_threshold : 75;
+    $("#cfgMT").value = mt; $("#cfgMTVal").textContent = mt;
+    // 名字：只读。它们是容器的环境变量，不是 config.yaml 里的东西 ——
+    // 在这儿放个能编辑的框，等于骗人（存了也不生效）。所以只显示 + 说清改哪儿。
+    $("#setNames").textContent = (c.ai_name || "没配") + " / " + (c.owner_name || "没配")
+      + "（他 / 你。改的是容器的环境变量 AI_NAME 和 LOCI_OWNER_NAME，改完要重启）";
+  }catch(err){ $("#cfgSaveMsg").textContent = "读不到现在的配置：" + err.message; }
+}
+$("#cfgEOn").onclick = () => {
+  cfgEOn = !cfgEOn;
+  $("#cfgEOn").classList.toggle("on", cfgEOn);
+  $("#cfgEOn").textContent = cfgEOn ? "开着" : "关着";
+};
+$("#cfgMT").addEventListener("input", () => { $("#cfgMTVal").textContent = $("#cfgMT").value; });
+$("#cfgMTDef").onclick = () => { $("#cfgMT").value = 75; $("#cfgMTVal").textContent = "75"; };
+$("#cfgSim").addEventListener("input", () => { $("#cfgSimVal").textContent = $("#cfgSim").value; });
+$("#cfgFloor").addEventListener("input", () => { $("#cfgFloorVal").textContent = $("#cfgFloor").value; });
+$("#cfgLocalDef").onclick = () => {
+  $("#cfgSim").value = LOCAL_DEF.sim; $("#cfgSimVal").textContent = LOCAL_DEF.sim;
+  $("#cfgFloor").value = LOCAL_DEF.floor; $("#cfgFloorVal").textContent = LOCAL_DEF.floor;
+  setLocalDef("sim", LOCAL_DEF.sim); setLocalDef("floor", LOCAL_DEF.floor);
+  toast("开页默认回到 88 / 35 了");
+};
+$("#cfgSave").onclick = async () => {
+  const btn = $("#cfgSave"); btn.disabled = true;
+  const msg = $("#cfgSaveMsg"); msg.className = "tiny muted"; msg.textContent = "存着…";
+  setLocalDef("sim", parseInt($("#cfgSim").value));
+  setLocalDef("floor", parseInt($("#cfgFloor").value));
+  const body = {
+    persist: true,
+    merge_threshold: parseInt($("#cfgMT").value),
+    dehydration: {model: $("#cfgDModel").value.trim(),
+                  base_url: $("#cfgDBase").value.trim()},
+    embedding: {enabled: cfgEOn, model: $("#cfgEModel").value.trim(),
+                base_url: $("#cfgEBase").value.trim()}
+  };
+  if ($("#cfgDKey").value.trim()) body.dehydration.api_key = $("#cfgDKey").value.trim();
+  if ($("#cfgEKey").value.trim()) body.embedding.api_key = $("#cfgEKey").value.trim();
+  try{
+    const r = await fetch("/api/config", {method:"POST", credentials:"same-origin",
+      headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+    msg.textContent = "存下来了" + ((j.updated||[]).length ? "：" + j.updated.join("、") : "");
+    $("#cfgDKey").value = ""; $("#cfgEKey").value = "";
+    toast("引擎配置存下来了，写进 config.yaml 了");
+    loadCfg(); loadSetup();
+  }catch(e){ msg.className = "tiny err"; msg.textContent = "没成：" + e.message; }
+  finally{ btn.disabled = false; }
+};
+async function cfgTest(which, box){
+  const m = $(box); m.className = "tiny muted"; m.textContent = "试着连…";
+  try{
+    const r = await fetch("/api/test/" + which, {method:"POST", credentials:"same-origin",
+      headers:{"Content-Type":"application/json"}, body:"{}"});
+    const j = await r.json().catch(() => ({}));
+    const good = r.ok && j.ok !== false;
+    m.className = good ? "tiny" : "tiny err";
+    m.textContent = (good ? "通了" : "没通")
+      + (j.message || j.error || j.detail ? "：" + (j.message || j.error || j.detail) : "")
+      + (j.latency_ms ? "（" + j.latency_ms + "ms）" : "");
+  }catch(e){ m.className = "tiny err"; m.textContent = "没通：" + e.message; }
+}
+$("#cfgDTest").onclick = () => cfgTest("dehydration", "#cfgDMsg");
+$("#cfgETest").onclick = () => cfgTest("embedding", "#cfgEMsg");
+
+/* ---- 日志：默认折起来（出问题才看，平时白占屏幕） ---- */
+let logOpen = false;
+$("#logToggle").onclick = () => {
+  logOpen = !logOpen;
+  $("#logBox").hidden = !logOpen;
+  $("#logToggle").textContent = logOpen ? "收起" : "展开";
+  if (logOpen) loadLogs();
+};
+function openLogs(){
+  if (!logOpen) $("#logToggle").click();
+  $("#logBox").scrollIntoView({behavior:"smooth", block:"center"});
 }
 
 /* ---- 日志 ---- */
@@ -929,6 +1219,14 @@ async function loadDiag(){
       if (c.action){
         const a = el("div","tiny err", "→ " + c.action);
         a.style.marginTop = "2px"; mid.appendChild(a);
+      }
+      // 不 ok 的那条底下直接给一个进日志的口：体检是结论，日志是证据，
+      // 不该让人自己去想「那我现在该去哪儿看」（她 8-18 夜定的从属关系）。
+      if (st !== "ok"){
+        const lk = el("button","mini","看日志");
+        lk.style.marginTop = "6px";
+        lk.onclick = (ev) => { ev.stopPropagation(); openLogs(); };
+        mid.appendChild(lk);
       }
       r.appendChild(mid);
       r.appendChild(el("span","rm", st));
@@ -1184,6 +1482,11 @@ addEventListener("keydown", e => { if (e.key === "Escape") closeDrawer(); });
    ============================================================ */
 const WHENS = ["今天","昨天","本周","上周","本月","上月","今年","48h","7d"];
 let F = {when:"", room:"", tag:"", query:"", view:""};   // view 8-19 补上——工具面有、面板一直没发过
+// 开页从「这台机器的默认」起（设置页 → 引擎 → 开页默认那两根滑块定的）。
+// 页面上这根是当场拖着看的，那儿定的是「以后开页从哪儿起」——两个不是一个东西。
+$("#floor").value = localDef("floor");
+$("#floorVal").textContent = localDef("floor");
+F.floor = localDef("floor");
 
 function renderWhenChips(){
   const box = $("#whenChips"); box.innerHTML = "";
@@ -1371,7 +1674,8 @@ $("#dGo").onclick = () => {
 $("#clr").onclick = () => {
   F = {when:"", room:"", tag:"", query:"", view:""};
   $("#q").value = ""; $("#d0").value = ""; $("#d1").value = "";
-  $("#floor").value = 35; $("#floorVal").textContent = "35";   // 线也跟着回默认
+  const _fd = localDef("floor");
+  $("#floor").value = _fd; $("#floorVal").textContent = String(_fd);   // 线也跟着回默认
   setQMode("fuzzy");
   renderWhenChips(); markRooms(); markTags(); run();
 };
@@ -1383,8 +1687,9 @@ $("#floor").addEventListener("change", () => {
   F.floor = $("#floor").value; run();
 });
 $("#floorDef").onclick = () => {
-  $("#floor").value = 35; $("#floorVal").textContent = "35";
-  F.floor = 35; run();
+  const v = localDef("floor");
+  $("#floor").value = v; $("#floorVal").textContent = String(v);
+  F.floor = v; run();
 };
 renderWhenChips(); loadRooms(); run();
 
@@ -1585,7 +1890,10 @@ async function loadWho(){
   }catch(e){ fail(out, e); }
 }
 
+let _simInit = 0;
 async function loadSim(){
+  if (!_simInit){ _simInit = 1;
+    $("#th").value = localDef("sim"); $("#thVal").textContent = String(localDef("sim")); }
   const out = $("#simOut");
   out.innerHTML = '<div class="card spin">全库两两比一遍…（第一次几秒钟）</div>';
   try{
@@ -1720,7 +2028,7 @@ $("#th").addEventListener("input", () => {
   if (SIM) { SIM.threshold = Number($("#th").value); drawHist(SIM.hist, Number($("#th").value)); }
 });
 $("#th").addEventListener("change", loadSim);
-$("#thDef").onclick = () => { $("#th").value = 88; loadSim(); };
+$("#thDef").onclick = () => { $("#th").value = localDef("sim"); loadSim(); };
 
 /* ============================================================
    四 · 档案（门口那张纸的网页版）
