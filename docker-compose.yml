@@ -1,0 +1,38 @@
+# Loci Brain —— 起法：cp .env.example .env，填好，然后 docker compose up -d
+#
+# 记忆全在 ./buckets 里（宿主机上，你自己的盘）。容器只是个跑代码的壳，
+# 删了重建不会丢东西。
+
+services:
+  loci-brain:
+    image: loci-brain:latest
+    # 想自己 build 就把上面注释掉，用这行：
+    # build: .
+    container_name: loci-brain
+    restart: unless-stopped
+    ports:
+      # 🔴 默认只开在本机。要让局域网/公网够得到，自己改成 "18002:8000" ——
+      #    但先想清楚：这个服务**没有鉴权**，开出去等于把记忆摊在路边。
+      - "127.0.0.1:18002:8000"
+    env_file:
+      - .env
+    environment:
+      - LOCI_CONFIG_PATH=/app/buckets/config.yaml
+      - LOCI_TRANSPORT=streamable-http
+      - LOCI_MCP_REQUIRE_AUTH=false
+    volumes:
+      - ./buckets:/app/buckets
+    depends_on:
+      - ollama
+
+  # 本地向量模型。已经有自己的 embedding 服务就把这块删掉，
+  # 把 .env 里的 LOCI_EMBED_BASE_URL 指过去就行。
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    volumes:
+      - ollama-models:/root/.ollama
+
+volumes:
+  ollama-models:

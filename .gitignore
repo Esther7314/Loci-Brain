@@ -1,0 +1,9 @@
+# 🔴 记忆本体绝不进仓库
+buckets/
+!buckets/.gitkeep
+
+.env
+__pycache__/
+*.pyc
+*.log
+.venv/

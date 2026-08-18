@@ -1,0 +1,2259 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Loci · 记忆宫殿</title>
+<link rel="icon" href="/static/favicon.svg">
+<style>
+/* ==========================================================
+   Loci · 样式表 v4（2026-08-03 夜，照她挑的「White 白岩」重做）
+
+   她今晚挑的七张参考共同点只有一个：**近乎无色**。
+   而她给的那八个色是一套有饱和度的暖棕 —— 这就是她一直说「奇怪」的真因：
+   我在用彩色方案凑一个无色的感觉。八个色不废，是主次全反过来：
+
+     · 强调不再是 6 号陶褐，改用她的 **1 号 #403B36**（暖黑）
+       —— 白岩量出来的强调色是 #282824，她的 1 号几乎是同一个东西，还更暖
+     · 底提亮到纸白级；**卡片比底更白**（白岩是 93% 底 / 97% 卡）
+     · 6 号陶褐降级：**只活在夜里**（暗色主题 + 星空），白天一点都不出现
+     · 4 号杏几乎不用
+
+   两套主题（她要黑色但不要那个酸绿）：
+     白天 = 纸白 + 深炭，近乎无色
+     夜里 = 纯黑 + 陶褐暖光，跟星空同一套
+   ========================================================== */
+
+:root{
+  /* 她的八个色，原样留着当来源 */
+  --c1:#403B36; --c2:#8C6C51; --c3:#BF9774; --c4:#F1C3A7;
+  --c5:#F1F0F3; --c6:#BF9774; --c7:#E8E8E9; --c8:#E0CAB7;
+
+  /* ---- 白天：White 白岩 ---- */
+  --paper:#F0EEE9;       /* 底：纸 */
+  --card:#FAF8F5;        /* 卡片：比纸更白（她定的「看得见一点」= 差 ~6%） */
+  --card-2:#F4F1EC;      /* 卡片里的次级块 */
+  --ink:#403B36;         /* 主字 + 强调（她的 1 号） */
+  --ink-2:#8C6C51;       /* 次级（她的 2 号） */
+  --ink-3:#A9A29A;       /* 极淡 */
+  --line:#E4E0D9;        /* 细线 */
+  --slot:#E7E3DC;        /* 分段控件的槽 */
+  --on-ink:#FAF8F5;      /* 深色块上的字 */
+  --accent:#403B36;      /* 白天没有彩色强调 —— 强调就是深炭 */
+  --on-accent:#FAF8F5;
+  --danger:#9C5B3D;
+
+  /* 星空的夜色（两个主题下都一样，它本来就是夜） */
+  --night:#332B24; --night-2:#1B1613;
+  --warm:#E0C48C; --cool:#8E9BA6;
+
+  --r:18px;              /* 白岩的圆角偏大 */
+  --r-s:12px;
+  --gap:18px;
+  --pad:20px;
+
+  --fs-xl:26px; --fs-lg:17px; --fs-md:15px;
+  --fs-sm:13px; --fs-xs:11.5px; --fs-mo:12px;
+
+  --font:-apple-system,BlinkMacSystemFont,"SF Pro SC","SF Pro Text","PingFang SC",
+         "Helvetica Neue","Microsoft YaHei","微软雅黑",sans-serif;
+  --font-brand:"Helvetica Neue","Avenir Next",-apple-system,BlinkMacSystemFont,
+               "Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,"PingFang SC",monospace;
+}
+
+/* ---- 夜里：纯黑 + 陶褐（她：要黑色主题，但不要那个酸绿） ---- */
+:root[data-theme="dark"]{
+  --paper:#181715;
+  --card:#221F1C;
+  --card-2:#2B2724;
+  --ink:#F0EEE9;
+  --ink-2:#A99A8A;
+  --ink-3:#6E655C;
+  --line:#332F2B;
+  --slot:#2B2724;
+  --on-ink:#181715;
+  --accent:#BF9774;      /* 陶褐在这儿当主角 —— 她那八个色里最「她」的那个 */
+  --on-accent:#181715;
+  --danger:#C58060;
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:var(--paper);color:var(--ink);font-family:var(--font);
+  font-size:var(--fs-sm);line-height:1.65;-webkit-font-smoothing:antialiased;
+  transition:background .25s,color .25s;
+}
+button,input,select{font-family:inherit;font-size:inherit;color:inherit}
+button{cursor:pointer;border:none;background:none}
+a{color:var(--ink);text-decoration:none}
+
+/* ---------- 骨架 ---------- */
+.wrap{max-width:1120px;margin:0 auto;padding:28px 20px 90px}
+header.top{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:24px}
+.brand{font-family:var(--font-brand);font-size:19px;font-weight:600;
+  letter-spacing:.24em;color:var(--ink)}
+.brand em{font-style:normal;font-weight:300;margin-left:.6em;color:var(--ink-3)}
+
+/* 页签 = 分段控件（白岩那个「去程清单 / 回程清单」的做法）：
+   一个浅槽，选中的那一格是更白的胶囊。没有彩色。 */
+nav.tabs{display:flex;gap:2px;margin-left:auto;padding:3px;
+  background:var(--slot);border-radius:999px}
+nav.tabs button{
+  padding:7px 16px;border-radius:999px;color:var(--ink-2);background:transparent;
+  transition:.18s;font-size:var(--fs-sm);white-space:nowrap;
+}
+nav.tabs button:hover{color:var(--ink)}
+nav.tabs button.on{background:var(--card);color:var(--ink);font-weight:600;
+  box-shadow:0 1px 3px rgba(0,0,0,.07)}
+
+section.page{display:none}
+section.page.on{display:flex;flex-direction:column;gap:var(--gap)}
+
+/* 卡片：比底更白、大圆角、无边框无阴影 */
+.card{background:var(--card);border-radius:var(--r);padding:var(--pad)}
+.card + .card{margin-top:var(--gap)}
+
+h2.h{font-size:var(--fs-xs);font-weight:600;color:var(--ink-2);letter-spacing:.14em;
+  margin-bottom:16px;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+h2.h .n{color:var(--ink-3);font-weight:400;letter-spacing:.02em;flex:1 1 100%}
+@media(min-width:640px){h2.h .n{flex:0 1 auto}}
+.muted{color:var(--ink-2)}
+.tiny{font-size:var(--fs-xs)}
+.mono{font-family:var(--mono)}
+.spin{color:var(--ink-3);padding:30px 0;text-align:center}
+.err{color:var(--danger)}
+
+/* ---------- 筛子 ---------- */
+.fline{display:flex;gap:14px;padding:14px 0;border-top:1px solid var(--line)}
+/* F1：「翻 / 找」分家的那道线——她定的：跟上面 .fline 的分割线一样就行，别通栏别加粗 */
+.gate-split{border-top:1px solid var(--line);margin:14px 0}
+/* F2：模糊搜 / 搜场景 分段开关——圆角跟 chips 一样圆圆的（她点的） */
+.seg{display:inline-flex;background:var(--slot);border-radius:999px;padding:3px;flex:none}
+.segb{border:0;background:transparent;color:var(--ink-2);font-size:var(--fs-sm);
+  padding:7px 14px;border-radius:999px;cursor:pointer;font-family:var(--font)}
+.segb.on{background:var(--card);color:var(--ink);font-weight:600;
+  box-shadow:0 1px 2px rgba(0,0,0,.08)}
+/* F4：遗忘三档的小徽章（她要能看见引擎干得对不对；文字皮里一个字不提） */
+.decay-b{flex:none;font-size:var(--fs-xs);color:var(--ink-3);border:1px solid var(--line);
+  border-radius:6px;padding:1px 5px;margin-left:4px}
+.decay-b.sunk{color:var(--danger);border-color:var(--danger)}
+/* F3：星座列表（=大 event，一件一件往上叠，最新在上）。左边那条细竖线是她画的 */
+.const-item{border-left:2px solid var(--accent);padding-left:12px;margin:0 0 14px}
+.const-item.ongoing{border-left-color:var(--accent)}
+.const-item.over{border-left-color:var(--line)}
+.fline .lb{font-size:var(--fs-xs);font-family:var(--mono);color:var(--ink-3);
+  flex:none;width:46px;padding-top:7px;letter-spacing:.06em}
+.fbody{flex:1;min-width:0;display:flex;flex-direction:column;gap:8px}
+.chips{display:flex;flex-wrap:wrap;gap:7px}
+.dates{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dates input[type=date]{padding:6px 12px;font-size:var(--fs-xs)}
+.rrow{display:flex;flex-wrap:wrap;gap:7px;align-items:center}
+.rrow .kind{font-size:var(--fs-xs);font-family:var(--mono);color:var(--ink-3);
+  flex:none;width:40px;letter-spacing:.06em}
+
+/* 未选中 = 一圈细线，没有底色；选中 = 深炭实心 + 纸白字。全站唯一的实色块 */
+.chip,.room,.pg,.sw{
+  padding:6px 14px;border-radius:999px;background:transparent;color:var(--ink-2);
+  font-size:var(--fs-sm);transition:.14s;border:1px solid var(--line);white-space:nowrap;
+}
+.chip:hover,.room:hover,.pg:hover:not(:disabled){border-color:var(--ink-3);color:var(--ink)}
+.chip.on,.room.on,.pg.on{
+  background:var(--accent);color:var(--on-accent);border-color:var(--accent);font-weight:500;
+}
+.chip .n,.room .cnt{font-size:var(--fs-xs);opacity:.5;margin-left:5px}
+
+input[type=text],input[type=date],input[type=password]{
+  padding:10px 16px;border-radius:999px;border:1px solid var(--line);
+  background:var(--paper);color:var(--ink);font-size:var(--fs-sm);min-width:0;
+}
+input::placeholder{color:var(--ink-3)}
+input[type=text]:focus,input[type=date]:focus,input[type=password]:focus{
+  outline:none;border-color:var(--ink-2)}
+input[type=file]{font-size:var(--fs-xs);color:var(--ink-2);max-width:100%}
+input[type=file]::file-selector-button{padding:6px 14px;border-radius:999px;
+  border:1px solid var(--line);background:transparent;color:var(--ink-2);
+  font-family:inherit;font-size:var(--fs-xs);margin-right:10px;cursor:pointer}
+input[type=file]::file-selector-button:hover{border-color:var(--ink-3);color:var(--ink)}
+.search{flex:1;min-width:160px}
+.frow{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.frow .lb{font-size:var(--fs-xs);color:var(--ink-3);min-width:34px}
+
+.btn{padding:10px 22px;border-radius:999px;background:var(--accent);color:var(--on-accent);
+  font-size:var(--fs-sm);font-weight:500;transition:.14s}
+.btn:hover{opacity:.85}
+.btn.ghost{background:transparent;color:var(--ink-2);border:1px solid var(--line)}
+.btn.ghost:hover{border-color:var(--ink-3);color:var(--ink)}
+.mini{padding:5px 13px;border-radius:999px;font-size:var(--fs-xs);
+  background:transparent;color:var(--ink-3);border:1px solid var(--line);transition:.14s}
+.mini:hover{border-color:var(--ink-3);color:var(--ink)}
+/* 唯一会动数据的按钮，默认就带上警示色的边和字，不跟别的按钮长一样 */
+.mini.warn{color:var(--danger);border-color:var(--danger);opacity:.75}
+.mini.warn:hover{background:var(--danger);color:var(--on-accent);
+  border-color:var(--danger);opacity:1}
+
+/* ---------- 结果两段式 ---------- */
+.card-txt{
+  background:var(--paper);color:var(--ink);border-radius:var(--r-s);padding:16px 18px;
+  font-family:var(--mono);font-size:var(--fs-mo);line-height:1.8;white-space:pre-wrap;
+  overflow-x:auto;
+}
+.list{display:flex;flex-direction:column}
+.row{
+  display:flex;align-items:baseline;gap:12px;padding:12px 2px;
+  transition:.12s;text-align:left;width:100%;border-bottom:1px solid var(--line);
+  font-size:var(--fs-sm);
+}
+.row:last-child{border-bottom:none}
+.row:hover{background:var(--card-2)}
+/* feel 的 id 是 feel_20260803…_V001 整串（后端故意不截，截了没法直查），
+   固定宽装不下就会压到正文上。这里只管显示：截断 + 省略号，完整的挂在 title 上。 */
+.row .id{font-family:var(--mono);font-size:var(--fs-xs);color:var(--ink-3);flex:none;
+  width:56px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .lab{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  color:var(--ink)}
+.row .rm{font-size:var(--fs-xs);color:var(--ink-3);flex:none}
+.row .dt{font-family:var(--mono);font-size:var(--fs-xs);color:var(--ink-3);flex:none;
+  width:44px;text-align:right}
+.row .dot{width:6px;height:6px;border-radius:50%;flex:none}
+@media(max-width:640px){.row .rm{display:none}}
+
+.pager{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:16px;
+  padding-top:14px;border-top:1px solid var(--line)}
+.pg{min-width:34px;padding:5px 10px;font-size:var(--fs-xs);
+  font-variant-numeric:tabular-nums;text-align:center}
+.pg:disabled{opacity:.3;cursor:default}
+.pg-gap{color:var(--ink-3);font-size:var(--fs-xs);padding:0 2px}
+
+/* ---------- 星空 ★ 整块可搬进 Lento 当 Home 的夜空。
+     陶褐在这儿当主角 —— 她定的：它只活在夜里 ---------- */
+.sky-wrap{position:relative;border-radius:var(--r);overflow:hidden;
+  background:radial-gradient(120% 90% at 50% 0%,#3D332B 0%,var(--night) 45%,var(--night-2) 100%)}
+#sky{display:block;width:100%;height:min(72vh,660px);cursor:grab;touch-action:none}
+#sky.drag{cursor:grabbing}
+.sky-ctl{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+.sky-stat{font-size:var(--fs-xs);color:var(--ink-3);font-family:var(--mono);margin-left:auto}
+.cname{position:absolute;transform:translate(-50%,-50%);pointer-events:none;z-index:2;
+  font-size:var(--fs-xs);letter-spacing:.16em;color:rgba(224,196,140,.72);white-space:nowrap;
+  text-shadow:0 0 12px rgba(224,196,140,.5),0 1px 5px rgba(0,0,0,.8);transition:opacity .3s}
+#tip{position:absolute;pointer-events:none;padding:9px 14px;border-radius:12px;
+  font-size:var(--fs-xs);color:rgba(255,246,235,.92);max-width:300px;line-height:1.5;
+  opacity:0;transition:opacity .15s;z-index:5;
+  background:rgba(255,244,232,0.05);
+  backdrop-filter:blur(40px) saturate(1.6) brightness(1.1);
+  -webkit-backdrop-filter:blur(40px) saturate(1.6) brightness(1.1);
+  border:1px solid rgba(255,238,220,0.14);border-top-color:rgba(255,240,224,0.3)}
+#tip .m{font-family:var(--mono);font-size:var(--fs-xs);color:rgba(226,203,177,.6);
+  display:block;margin-top:4px}
+#skyLoad{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  flex-direction:column;z-index:4;background:rgba(27,22,19,.92);transition:opacity .5s}
+#skyLoad.gone{opacity:0;pointer-events:none}
+#skyLoad canvas{position:absolute;inset:0;width:100%;height:100%}
+#skyLoad p{position:relative;margin-top:120px;font-size:var(--fs-xs);letter-spacing:.12em;
+  color:rgba(214,190,163,.55);animation:loadPulse 3s ease-in-out infinite}
+@keyframes loadPulse{0%,100%{opacity:.42}50%{opacity:.85}}
+
+/* ---------- 相似度 ---------- */
+.slider-row{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+input[type=range]{-webkit-appearance:none;appearance:none;flex:1;min-width:220px;height:3px;
+  border-radius:2px;background:var(--line);outline:none}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:20px;height:20px;
+  border-radius:50%;background:var(--ink);cursor:pointer}
+input[type=range]::-moz-range-thumb{width:20px;height:20px;border:none;border-radius:50%;
+  background:var(--ink);cursor:pointer}
+.th-val{font-family:var(--mono);font-size:var(--fs-lg);font-weight:600;min-width:42px;
+  font-variant-numeric:tabular-nums;color:var(--ink)}
+#hist{display:block;width:100%;height:118px;border-radius:var(--r-s);background:var(--paper)}
+.pair{background:var(--paper);border-radius:var(--r);padding:18px;margin-bottom:var(--gap)}
+.pair:last-child{margin-bottom:0}
+.pair-head{display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap}
+.score{font-family:var(--mono);font-weight:600;font-size:var(--fs-lg);color:var(--ink)}
+.badge{font-size:var(--fs-xs);padding:3px 11px;border-radius:999px;
+  background:transparent;color:var(--ink-3);border:1px solid var(--line)}
+.sides{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:720px){.sides{grid-template-columns:1fr;gap:18px}}
+.side{background:var(--card);border-radius:var(--r-s);padding:14px 16px}
+.side .meta{font-size:var(--fs-xs);color:var(--ink-3);font-family:var(--mono);
+  margin-bottom:8px;display:flex;gap:10px;flex-wrap:wrap}
+.side .txt{font-size:var(--fs-sm);line-height:1.65;max-height:150px;
+  overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;
+  padding-right:5px}
+.side .txt::-webkit-scrollbar{width:3px}
+.side .txt::-webkit-scrollbar-thumb{background:var(--line);border-radius:2px}
+.side .acts{margin-top:12px;display:flex;gap:8px}
+.pair.gone{opacity:0;transform:translateY(-6px);max-height:0;padding-top:0;padding-bottom:0;
+  margin-bottom:0;overflow:hidden;
+  transition:opacity .22s,transform .22s,max-height .32s .06s,
+             padding .32s .06s,margin .32s .06s}
+.pair{max-height:2400px}
+
+/* ---------- breath ---------- */
+/* 门口那张纸：一条左侧竖线（图1 那个 CARD 的做法） */
+.paper{background:transparent;border-left:2px solid var(--ink);border-radius:0;
+  padding:4px 0 4px 18px;white-space:pre-wrap;line-height:1.85;font-size:var(--fs-sm)}
+.rule{padding:12px 2px;background:transparent;text-align:left;width:100%;transition:.13s;
+  border-bottom:1px solid var(--line)}
+.rule:last-child{border-bottom:none}
+.rule:hover{background:var(--card-2)}
+.rule .rtxt{font-size:var(--fs-sm);line-height:1.55;color:var(--ink);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rule .rid{font-family:var(--mono);font-size:var(--fs-xs);color:var(--ink-3);margin-top:4px}
+.rem{display:flex;align-items:center;gap:12px;padding:12px 15px;border-radius:var(--r-s);
+  margin-bottom:7px;text-align:left;width:100%;font-size:var(--fs-sm);
+  border:1px solid var(--line)}
+.rem.now{background:var(--accent);color:var(--on-accent);font-weight:600;
+  border-color:var(--accent)}
+.rem.soon{background:var(--card-2)}
+.rem.near,.rem.far{background:transparent;color:var(--ink-2)}
+.rem .d{font-family:var(--mono);font-size:var(--fs-xs);flex:none}
+/* 施工 6：压在心头一行 = .rem（陈述/问句）+ .heavy-acts（结案按钮），
+   问句那条（.rem.q）用左边一道强调条跟其余"照旧陈列"的条目区分开。 */
+.heavy-row{display:flex;align-items:stretch;gap:8px;margin-bottom:7px;
+  transition:opacity .3s,max-height .3s}
+.heavy-row.gone{opacity:0;max-height:0;overflow:hidden;margin:0}
+.heavy-row .rem{margin-bottom:0;flex:1;min-width:0}
+.rem.q{border-left:3px solid var(--accent)}
+.heavy-acts{display:flex;flex-direction:column;gap:4px;flex:none}
+.heavy-acts .mini{padding:4px 10px;font-size:var(--fs-xs)}
+
+/* ---------- 弹窗 ---------- */
+#gate{position:fixed;inset:0;z-index:70;background:var(--paper);
+  display:flex;align-items:center;justify-content:center;padding:20px}
+/* ⚠️ 必须有这条：上面那个 #gate{display:flex} 是 ID 选择器，优先级压过浏览器
+   给 [hidden] 的 display:none —— 少了它，JS 里 gate.hidden=true 完全没用，
+   登录明明成功了，门还糊在屏幕上下不去（8-03 夜真把她关在外面过）。 */
+#gate[hidden]{display:none}
+#gate .card{width:min(360px,100%)}
+#scrim{position:fixed;inset:0;background:rgba(24,23,21,.42);opacity:0;pointer-events:none;
+  transition:opacity .2s;z-index:40;backdrop-filter:blur(3px)}
+#scrim.on{opacity:1;pointer-events:auto}
+#drawer{position:fixed;left:50%;top:50%;z-index:41;
+  width:min(620px,calc(100vw - 32px));max-height:min(78vh,760px);
+  background:var(--card);border-radius:var(--r);
+  transform:translate(-50%,-50%) scale(.94);opacity:0;pointer-events:none;
+  transition:transform .22s cubic-bezier(.34,1.2,.5,1),opacity .18s;
+  display:flex;flex-direction:column;box-shadow:0 24px 70px rgba(24,23,21,.22)}
+#drawer.on{transform:translate(-50%,-50%) scale(1);opacity:1;pointer-events:auto}
+.dr-top{display:flex;align-items:center;gap:12px;padding:18px 22px;
+  border-bottom:1px solid var(--line);flex:none}
+.dr-top .x{margin-left:auto;font-size:24px;color:var(--ink-3);line-height:1;padding:0 4px}
+.dr-body{overflow-y:auto;padding:20px 22px 28px;flex:1}
+.kv{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:16px}
+.kv span{font-size:var(--fs-xs);font-family:var(--mono);background:transparent;
+  padding:3px 11px;border-radius:999px;color:var(--ink-3);border:1px solid var(--line)}
+.kv span.hot{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
+.body-txt{white-space:pre-wrap;line-height:1.85;font-size:var(--fs-md)}
+
+/* 主题开关 */
+.theme-row{display:flex;gap:8px;align-items:center}
+
+/* ==========================================================
+   动画 —— 克制那种。白岩这个风格不该有花活：
+   只做「东西是怎么来的」和「碰到它有没有反应」，不做弹跳不做滑动。
+   全部尊重系统的「减少动态效果」开关（在最下面关掉）。
+   ========================================================== */
+@keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+
+/* 换页：整页轻轻浮上来一次 */
+section.page.on{animation:fadeUp .26s cubic-bezier(.2,.7,.3,1) both}
+/* 卡片错开一点点，像纸一张张落下（只错前六张，再多就成了表演） */
+section.page.on > *{animation:fadeUp .3s cubic-bezier(.2,.7,.3,1) both}
+section.page.on > *:nth-child(1){animation-delay:.02s}
+section.page.on > *:nth-child(2){animation-delay:.06s}
+section.page.on > *:nth-child(3){animation-delay:.10s}
+section.page.on > *:nth-child(4){animation-delay:.14s}
+section.page.on > *:nth-child(5){animation-delay:.18s}
+section.page.on > *:nth-child(n+6){animation-delay:.20s}
+
+/* 列表行、对子：出现时淡入，不做位移（几百行一起位移会晕） */
+.row,.pair,.rule{animation:fadeIn .22s ease both}
+
+/* 碰得到的东西：都给一个统一的反应速度 */
+.chip,.room,.pg,.sw,.btn,.mini,.row,.rule,nav.tabs button,.rem{
+  transition:background-color .16s ease,border-color .16s ease,
+             color .16s ease,opacity .16s ease,transform .16s ease}
+.btn:active,.mini:active,.chip:active,.room:active,.pg:active{transform:scale(.97)}
+.rule:active,.row:active{transform:scale(.995)}
+
+/* 分段控件那颗白胶囊：切页签时的主角，单独给个缓动 */
+nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
+                           color .2s ease,box-shadow .2s ease}
+
+/* 她的系统要是开了「减少动态效果」，全部闭嘴 */
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{
+    animation-duration:.01ms !important;animation-iteration-count:1 !important;
+    transition-duration:.01ms !important;scroll-behavior:auto !important}
+}
+
+/* ---------- 手机 ---------- */
+@media(max-width:560px){
+  .wrap{padding:18px 14px 70px}
+  :root{--gap:14px;--pad:17px;--r:16px}
+  .brand{font-size:var(--fs-lg);letter-spacing:.2em}
+  nav.tabs{margin-left:0;width:100%;gap:1px;padding:3px}
+  nav.tabs button{flex:1;padding:7px 2px;font-size:var(--fs-xs);text-align:center}
+  .sky-ctl{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
+  .sky-ctl::-webkit-scrollbar{display:none}
+  .sw{flex:none}
+  .sky-stat{margin-left:6px;flex:none}
+  #sky{height:min(62vh,520px)}
+  .card-txt{padding:14px 13px}
+  .row{gap:9px;padding:12px 0}
+  .row .id{width:50px}
+  .th-val{min-width:36px}
+  #drawer{width:calc(100vw - 20px);max-height:84vh}
+  .side .txt{max-height:170px}
+}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header class="top">
+    <div class="brand">LOCI<em>BRAIN</em></div>
+    <nav class="tabs">
+      <button data-tab="pool" class="on">记忆</button>
+      <button data-tab="prof">呼吸</button>
+      <button data-tab="sky">星空</button>
+      <button data-tab="sim">相似度</button>
+      <button data-tab="set">设置</button>
+    </nav>
+  </header>
+
+  <!-- ============ 记忆 ============ -->
+  <section class="page on" id="p-pool">
+    <!-- F1（2026-08-06 机制②）：「翻」和「找」分家——
+         上面是**范围**（room/when/tag，在看）；一道线；下面是**目标**（扔词，在找）。
+         她 8-06 傍晚验收：说明文字全砍（「我又不是看不懂」），线用普通细线别通栏。 -->
+    <div class="card">
+      <div class="fline" style="border-top:0;padding-top:0">
+        <span class="lb">room</span>
+        <div class="fbody" id="roomRows"><span class="muted tiny">开门…</span></div>
+      </div>
+
+      <div class="fline">
+        <span class="lb">when</span>
+        <div class="fbody">
+          <span id="whenChips" class="chips"></span>
+          <span class="dates">
+            <input type="date" id="d0"><span class="muted tiny">→</span><input type="date" id="d1">
+            <button class="btn ghost" id="dGo">按这段</button>
+          </span>
+        </div>
+      </div>
+
+      <div class="fline">
+        <span class="lb">tag</span>
+        <div class="fbody"><span id="tagChips" class="chips muted tiny">…</span></div>
+      </div>
+
+      <div class="gate-split"></div>
+
+      <!-- F2：模糊搜（query 门：软打分带分数）/ 搜场景（tag 门：包含匹配、那一类全部、不打折） -->
+      <div class="frow" style="margin-bottom:12px">
+        <span class="seg" id="qMode">
+          <button class="segb on" data-mode="fuzzy">模糊搜</button>
+          <button class="segb" data-mode="scene">搜场景</button>
+        </span>
+        <input type="text" class="search" id="q" placeholder="突然想起什么事…">
+        <button class="btn" id="go">找</button>
+        <button class="btn ghost" id="clr">全清</button>
+      </div>
+
+      <!-- 关联度线：只有「模糊搜」的时候才有意义（不扔词没有分数；搜场景不打分）。 -->
+      <div class="fline" id="floorRow" style="display:none">
+        <span class="lb">关联度</span>
+        <div class="slider-row" style="flex:1">
+          <span class="th-val" id="floorVal">35</span>
+          <input type="range" id="floor" min="0" max="70" step="1" value="35">
+          <button class="btn ghost" id="floorDef">回到 35</button>
+        </div>
+      </div>
+      <div class="tiny muted" id="floorNote" style="display:none;margin:-4px 0 10px"></div>
+    </div>
+
+    <div id="poolOut"></div>
+  </section>
+
+  <!-- ============ 星空 ============ -->
+  <section class="page" id="p-sky">
+    <div class="sky-wrap" id="skyWrap">
+      <canvas id="sky"></canvas>
+      <div id="tip"></div>
+      <div id="skyLabels"></div>
+      <div id="skyLoad"><canvas></canvas><p>正在把星星铺开…</p></div>
+    </div>
+    <!-- 开关挪到天的下面（她定的：别压在星空上） -->
+    <div class="sky-ctl">
+      <button class="sw on" id="swSpin">自转</button>
+      <button class="sw on" id="swConst">星座</button>
+      <button class="sw" id="swReset">回正</button>
+      <button class="sw" id="swSound">声音</button>
+      <span class="sky-stat" id="skyStat">铺开中…</span>
+    </div>
+    <!-- F3 定稿（她 8-06 傍晚拍的）：大 event 时间轴和星座**是同一个东西**，
+         合进下面星座那张卡（「星座多好听啊！非要叫主线。」）。 -->
+    <div class="card" id="skyNote"></div>
+  </section>
+
+  <!-- ============ 相似度 ============ -->
+  <section class="page" id="p-sim">
+    <div class="card">
+      <h2 class="h">相似度</h2>
+      <p class="tiny muted" style="margin:-6px 0 12px">这条线是你画的——线以上的算「疑似同一件」，捞出来给你裁。我只负责把分布摆出来。</p>
+      <div class="slider-row">
+        <span class="th-val" id="thVal">88</span>
+        <input type="range" id="th" min="75" max="99" step="1" value="88">
+        <button class="btn ghost" id="thDef">回到 88</button>
+      </div>
+      <div id="simStat" class="tiny muted" style="margin:10px 0 12px"></div>
+      <canvas id="hist"></canvas>
+      <div class="tiny muted" style="margin-top:8px" id="histNote"></div>
+    </div>
+    <div id="simOut"></div>
+  </section>
+
+  <!-- ============ 档案 ============ -->
+  <section class="page" id="p-prof">
+    <div id="profOut"><div class="card spin">拿门口那张纸…</div></div>
+  </section>
+</div>
+
+  <!-- ============ 设置 ============ -->
+  <section class="page" id="p-set">
+
+    <!-- 一 · 账号 -->
+    <div class="card">
+      <h2 class="h">账号</h2>
+      <div id="pwState" class="tiny muted" style="margin-bottom:14px">…</div>
+      <div class="frow">
+        <input type="password" id="pw1" class="search" placeholder="新密码（至少 6 位）"
+               autocomplete="new-password">
+        <input type="password" id="pw2" class="search" placeholder="再打一遍"
+               autocomplete="new-password">
+        <button class="btn" id="pwGo">改密码</button>
+      </div>
+      <div id="pwMsg" class="tiny" style="margin-top:10px"></div>
+      <div class="fline" style="margin-top:16px">
+        <span class="lb">外观</span>
+        <div class="fbody"><div class="theme-row" id="themeRow"></div></div>
+      </div>
+      <div class="fline">
+        <span class="lb">会话</span>
+        <div class="fbody"><div><button class="btn ghost" id="logout">登出</button></div></div>
+      </div>
+    </div>
+
+    <!-- 二 · 数据 -->
+    <div class="card">
+      <h2 class="h">数据 <span class="n">备份 · 导入</span></h2>
+      <div class="frow">
+        <button class="btn" id="expGo">导出全部记忆</button>
+        <span class="tiny muted">下载一份到本地。搬家、换机器、或者只是想留一份。</span>
+      </div>
+      <div class="fline" style="margin-top:16px">
+        <span class="lb">导入</span>
+        <div class="fbody">
+          <div class="frow">
+            <input type="file" id="impFile" accept=".json,.txt,.csv,.md,.jsonl">
+            <button class="btn ghost" id="impPre">先看一眼</button>
+            <button class="btn" id="impGo">开始导入</button>
+            <button class="btn ghost" id="impPause" hidden>暂停</button>
+          </div>
+          <div id="impMsg" class="tiny"></div>
+          <pre class="card-txt" id="impStat" hidden></pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- 三 · 出问题的时候 -->
+    <div class="card">
+      <h2 class="h">日志 <span class="n">出问题先看这儿</span></h2>
+      <div class="frow" style="margin-bottom:12px">
+        <span id="logLevels"></span>
+        <button class="btn ghost" id="logGo">刷新</button>
+        <button class="btn ghost" id="errClear">清错误计数</button>
+      </div>
+      <pre class="card-txt" id="logOut" style="max-height:320px;overflow:auto">…</pre>
+      <div class="tiny muted" id="logFile" style="margin-top:8px"></div>
+      <div class="fline" style="margin-top:16px">
+        <span class="lb">体检</span>
+        <div class="fbody"><div id="diagOut" class="muted">…</div></div>
+      </div>
+    </div>
+  </section>
+
+<div id="gate" hidden>
+  <form class="card" id="gateForm">
+    <div class="brand" style="margin-bottom:4px">LOCI<em>BRAIN</em></div>
+    <p class="tiny muted" style="margin-bottom:14px">请输入密码</p>
+    <input type="password" id="gatePw" class="search" placeholder="密码"
+           autocomplete="current-password" style="width:100%">
+    <button class="btn" type="submit" style="width:100%;margin-top:10px">登录</button>
+    <div id="gateMsg" class="tiny err" style="margin-top:10px"></div>
+    <button type="button" class="tiny muted" id="gateForgot"
+            style="margin-top:14px;text-decoration:underline">忘记密码</button>
+    <div id="gateRecover" hidden style="margin-top:14px">
+      <p class="tiny muted" id="rcQ" style="margin-bottom:8px"></p>
+      <input type="text" id="rcA" class="search" placeholder="答案" style="width:100%">
+      <input type="password" id="rcP" class="search" placeholder="设一个新密码（至少 6 位）"
+             autocomplete="new-password" style="width:100%;margin-top:8px">
+      <button type="button" class="btn ghost" id="rcGo"
+              style="width:100%;margin-top:8px">用安全问题重置</button>
+      <div id="rcMsg" class="tiny" style="margin-top:8px"></div>
+    </div>
+    <p class="tiny muted" id="gateHint" style="margin-top:14px"></p>
+  </form>
+</div>
+<div id="scrim"></div>
+<aside id="drawer">
+  <div class="dr-top">
+    <strong id="drTitle">原文</strong>
+    <button class="x" id="drX">×</button>
+  </div>
+  <div class="dr-body" id="drBody"></div>
+</aside>
+
+<script>
+"use strict";
+/* ============================================================
+   小工具
+   ============================================================ */
+const $ = s => document.querySelector(s);
+const el = (t, cls, txt) => { const e = document.createElement(t);
+  if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
+const esc = s => String(s == null ? "" : s);
+/* 记忆正文是我们自己写的 markdown，**粗体** 得渲染出来，不然星号裸在那儿
+   （她 8-03 夜在手机上截到的：准则显示成 `**【行为准则·说「我」】**`）。
+   只认 ** 一种，而且**建 DOM 节点、不拼 innerHTML**——正文是数据，不能当 HTML 执行。 */
+function mdInto(node, text){
+  const parts = String(text == null ? "" : text).split(/(\*\*[^*\n]+\*\*)/g);
+  parts.forEach(part => {
+    if (!part) return;
+    if (part.length > 4 && part.startsWith("**") && part.endsWith("**")){
+      const b = document.createElement("strong");
+      b.textContent = part.slice(2, -2);
+      node.appendChild(b);
+    } else node.appendChild(document.createTextNode(part));
+  });
+  return node;
+}
+
+async function api(path){
+  const r = await fetch(path, {credentials:"same-origin"});
+  if (r.status === 401){ openGate(); throw new Error("请先登录"); }
+  const j = await r.json().catch(() => ({error:"返回的不是 JSON"}));
+  if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+  return j;
+}
+/* 施工 6：三个新写口（结案 / 问过她 / event 改错）共用同一套 POST 皮，
+   跟 judge() 里手写的那份是同一套 fetch 参数，抽出来免得写三遍。 */
+async function apiPost(path, body){
+  const r = await fetch(path, {
+    method:"POST", credentials:"same-origin",
+    headers:{"Content-Type":"application/json"},
+    body: JSON.stringify(body || {}),
+  });
+  if (r.status === 401){ openGate(); throw new Error("请先登录"); }
+  const j = await r.json().catch(() => ({error:"返回的不是 JSON"}));
+  if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+  return j;
+}
+function fail(box, e){
+  box.innerHTML = "";
+  const c = el("div","card"); c.appendChild(el("div","err", "✗ " + e.message));
+  box.appendChild(c);
+}
+/* V 冷暖：低 V 走灰蓝、高 V 走沙陶。夜也是暖的，别跳出这座宫殿。 */
+function vColor(v, alpha){
+  const t = Math.max(0, Math.min(1, v));
+  const c = [142,155,166], w = [232,196,160];
+  const rgb = c.map((x,i) => Math.round(x + (w[i]-x)*t));
+  return `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${alpha})`;
+}
+
+/* ============================================================
+   进门 —— 她要的「完全脱离他们的面板」。密码由浏览器直接发给后端，
+   走的是现成的 /auth/login（会话、限流、加密全是它那一套，这里不另造）。
+   ============================================================ */
+function openGate(){
+  const g = $("#gate");
+  if (!g.hidden) return;
+  g.hidden = false;
+  fetch("/api/loci/auth/state", {credentials:"same-origin"})
+    .then(r => r.json())
+    .then(st => {
+      $("#gateHint").textContent = st.env_locked
+        ? "忘了的话：密码在 docker-compose.v2.yml 那行环境变量里。进来之后可以在「设置」里换成自己的。"
+        : (st.question ? "忘了可以用安全问题找回：" + st.question : "");
+    }).catch(() => {});
+  setTimeout(() => $("#gatePw").focus(), 60);
+}
+/* 忘记密码 —— 走系统自带的安全问题急救（之前只有后端有，前端没入口） */
+$("#gateForgot").onclick = async () => {
+  const box = $("#gateRecover");
+  box.hidden = !box.hidden;
+  if (box.hidden) return;
+  try{
+    const r = await fetch("/auth/recovery-question", {credentials:"same-origin"});
+    const j = await r.json();
+    $("#rcQ").textContent = j.question ? "安全问题：" + j.question : "还没设过安全问题，这条路走不通。";
+  }catch(e){ $("#rcQ").textContent = "读不到安全问题：" + e.message; }
+};
+$("#rcGo").onclick = async () => {
+  const m = $("#rcMsg"); m.className = "tiny err"; m.textContent = "";
+  const pw = $("#rcP").value.trim();
+  if (pw.length < 6){ m.textContent = "新密码至少 6 位。"; return; }
+  try{
+    const r = await fetch("/auth/recover", {
+      method:"POST", credentials:"same-origin",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({answer: $("#rcA").value, new_password: pw}),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+    m.className = "tiny muted";
+    m.textContent = "✓ 改好了。用新密码登录。";
+    $("#rcA").value = $("#rcP").value = "";
+  }catch(e){ m.textContent = "✗ " + e.message; }
+};
+
+$("#gateForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const msg = $("#gateMsg"); msg.textContent = "";
+  try{
+    const r = await fetch("/auth/login", {
+      method:"POST", credentials:"same-origin",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({password: $("#gatePw").value}),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+    $("#gate").hidden = true; $("#gatePw").value = "";
+    loaded = {}; loadRooms(); run();
+  }catch(err){ msg.textContent = "✗ " + err.message; }
+});
+
+/* ---- 设置：改密码 / 登出 ---- */
+async function loadSet(){
+  try{
+    const st = await api("/api/loci/auth/state");
+    $("#pwState").textContent = st.env_locked
+      ? "⚠️ 现在的密码来自 docker-compose 的环境变量。环境变量在的时候它优先——"
+        + "所以在这儿存一个新的之后，还要去删掉那一行、重启容器，新密码才真正接管。"
+      : (st.has_file_password
+          ? "密码存在 Loci 自己这儿了。" + (st.question ? "忘了能用安全问题找回：" + st.question : "")
+          : "还没有自己的密码。在下面设一个。");
+  }catch(e){ $("#pwState").textContent = "读不到状态：" + e.message; }
+  let _t = "auto";
+  try{ _t = localStorage.getItem("loci-theme") || "auto"; }catch(e){}
+  applyTheme(_t);
+  loadLogs(); loadDiag();
+}
+
+/* ---- 日志 ---- */
+let LOG_LEVEL = "WARNING";
+function renderLogLevels(){
+  const box = $("#logLevels"); box.innerHTML = "";
+  ["ERROR","WARNING","INFO","ALL"].forEach(v => {
+    const b = el("button","chip" + (LOG_LEVEL === v ? " on" : ""), v);
+    b.onclick = () => { LOG_LEVEL = v; renderLogLevels(); loadLogs(); };
+    box.appendChild(b);
+  });
+}
+async function loadLogs(){
+  renderLogLevels();
+  const out = $("#logOut");
+  out.textContent = "读…";
+  try{
+    const d = await api("/api/logs?level=" + LOG_LEVEL + "&limit=200");
+    out.textContent = (d.lines || []).length
+      ? d.lines.join("\n")
+      : (d.note || "这个级别下没有东西。");
+    $("#logFile").textContent = d.log_file ? "文件：" + d.log_file : "";
+    out.scrollTop = out.scrollHeight;
+  }catch(e){ out.textContent = "✗ " + e.message; }
+}
+$("#logGo").onclick = loadLogs;
+$("#errClear").onclick = async () => {
+  try{
+    await fetch("/api/errors/clear", {method:"POST", credentials:"same-origin"});
+    loadLogs();
+  }catch(e){ alert("没成：" + e.message); }
+};
+
+/* ---- 体检 ---- */
+function flat(obj, prefix, into){
+  Object.entries(obj || {}).forEach(([k, v]) => {
+    const key = prefix ? prefix + "." + k : k;
+    if (v && typeof v === "object" && !Array.isArray(v)) flat(v, key, into);
+    else into.push([key, Array.isArray(v) ? v.join(", ") : String(v)]);
+  });
+  return into;
+}
+/* 体检：/api/system/diagnostics 吐的是 {ok, summary, checks:[...]}，
+   checks 是 47 项的**数组**，每项 {id,label,status,message,details,action}。
+   之前拿展平函数硬来，数组被 join 成一坨 [object Object] —— 她截图里那块空白就是这么来的。
+   默认只列出不 ok 的；全好的时候折起来，别拿 47 行没问题的东西占屏幕。 */
+let DIAG_ALL = false;
+async function loadDiag(){
+  const box = $("#diagOut"); box.innerHTML = "";
+  try{
+    const d = await api("/api/loci/health");   // 我们自己的体检，不是上游那套发布合规检查
+    const checks = Array.isArray(d.checks) ? d.checks : [];
+    const bad = checks.filter(c => String(c.status||"").toLowerCase() !== "ok");
+    const head = el("div","frow");
+    head.style.marginBottom = "10px";
+    head.appendChild(el("span", bad.length ? "tiny err" : "tiny muted",
+      bad.length ? `${bad.length} 项要看一下（共 ${checks.length} 项）`
+                 : `${checks.length} 项全好`));
+    const tog = el("button","mini", DIAG_ALL ? "只看有问题的" : "全都看");
+    tog.onclick = () => { DIAG_ALL = !DIAG_ALL; loadDiag(); };
+    head.appendChild(tog);
+    box.appendChild(head);
+
+    const show = DIAG_ALL ? checks : bad;
+    if (!show.length){
+      box.appendChild(el("div","tiny muted","没有异常。"));
+      return;
+    }
+    const list = el("div","list");
+    show.forEach(c => {
+      const st = String(c.status||"").toLowerCase();
+      const r = el("div","row");
+      r.style.alignItems = "flex-start";
+      const dot = el("span","dot");
+      dot.style.marginTop = "7px";
+      dot.style.background = st === "ok" ? "var(--ink-3)"
+                           : st === "warn" ? "var(--accent)" : "var(--danger)";
+      r.appendChild(dot);
+      const mid = el("span","lab");
+      mid.style.whiteSpace = "normal";
+      mid.appendChild(el("div", null, c.label || c.id || ""));
+      if (c.message){
+        const m = el("div","tiny muted", c.message);
+        m.style.marginTop = "2px"; mid.appendChild(m);
+      }
+      if (c.action){
+        const a = el("div","tiny err", "→ " + c.action);
+        a.style.marginTop = "2px"; mid.appendChild(a);
+      }
+      r.appendChild(mid);
+      r.appendChild(el("span","rm", st));
+      list.appendChild(r);
+    });
+    box.appendChild(list);
+  }catch(e){ box.textContent = "✗ " + e.message; }
+}
+
+/* ---- 备份 ---- */
+$("#expGo").onclick = async () => {
+  try{
+    const r = await fetch("/api/export", {credentials:"same-origin"});
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const blob = await r.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "loci-" + new Date().toISOString().slice(0,10) + ".json";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  }catch(e){ alert("导不出来：" + e.message); }
+};
+
+/* ---- 导入 ---- */
+let impTimer = null;
+function impSay(t, bad){
+  const m = $("#impMsg"); m.className = "tiny " + (bad ? "err" : "muted"); m.textContent = t;
+}
+async function impSend(path){
+  const f = $("#impFile").files[0];
+  if (!f){ impSay("先选个文件。", 1); return null; }
+  const fd = new FormData(); fd.append("file", f);
+  const r = await fetch(path, {method:"POST", credentials:"same-origin", body:fd});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+  return j;
+}
+$("#impPre").onclick = async () => {
+  impSay("看一眼…");
+  try{
+    const j = await impSend("/api/import/preflight");
+    if (!j) return;
+    $("#impStat").hidden = false;
+    $("#impStat").textContent = JSON.stringify(j, null, 2);
+    impSay("这只是预览，一条都没写进去。");
+  }catch(e){ impSay("✗ " + e.message, 1); }
+};
+$("#impGo").onclick = async () => {
+  if (!confirm("开始导入？会往记忆库里真的写东西。\n建议先「备份」一份，再「先看一眼」确认解析对了。")) return;
+  impSay("传上去了，开始跑…");
+  try{
+    const j = await impSend("/api/import/upload");
+    if (!j) return;
+    $("#impStat").hidden = false;
+    $("#impPause").hidden = false;
+    impPoll();
+  }catch(e){ impSay("✗ " + e.message, 1); }
+};
+$("#impPause").onclick = async () => {
+  try{ await fetch("/api/import/pause", {method:"POST", credentials:"same-origin"}); }
+  catch(e){}
+};
+async function impPoll(){
+  clearInterval(impTimer);
+  impTimer = setInterval(async () => {
+    try{
+      const st = await api("/api/import/status");
+      $("#impStat").textContent = JSON.stringify(st, null, 2);
+      if (st && st.is_running === false){
+        clearInterval(impTimer);
+        $("#impPause").hidden = true;
+        impSay("跑完了。去「记忆」页看看新进来的东西。");
+      }
+    }catch(e){ clearInterval(impTimer); impSay("✗ " + e.message, 1); }
+  }, 1500);
+}
+
+$("#pwGo").onclick = async () => {
+  const a = $("#pw1").value, b = $("#pw2").value, msg = $("#pwMsg");
+  msg.className = "tiny err";
+  if (a !== b){ msg.textContent = "两次打的不一样。"; return; }
+  if (a.trim().length < 6){ msg.textContent = "至少 6 位。"; return; }
+  try{
+    const r = await fetch("/api/loci/auth/set-password", {
+      method:"POST", credentials:"same-origin",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({password: a}),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+    $("#pw1").value = $("#pw2").value = "";
+    msg.className = "tiny muted";
+    msg.textContent = "✓ 存好了。" + (j.next || "");
+    loadSet();
+  }catch(e){ msg.textContent = "✗ " + e.message; }
+};
+$("#logout").onclick = async () => {
+  await fetch("/auth/logout", {method:"POST", credentials:"same-origin"}).catch(()=>{});
+  location.reload();
+};
+
+/* ---- 主题：白天纸白 / 夜里纯黑+陶褐（她定的，酸绿不要） ---- */
+const THEMES = [["auto","跟随系统"],["light","白岩"],["dark","黑"]];
+const SYS_DARK = matchMedia("(prefers-color-scheme: dark)");
+function applyTheme(t){
+  const dark = t === "dark" || (t === "auto" && SYS_DARK.matches);
+  if (dark) document.documentElement.setAttribute("data-theme","dark");
+  else document.documentElement.removeAttribute("data-theme");
+  try{ localStorage.setItem("loci-theme", t); }catch(e){}
+  const box = $("#themeRow");
+  if (box){
+    box.innerHTML = "";
+    THEMES.forEach(([v, label]) => {
+      const b = el("button","chip" + (t === v ? " on" : ""), label);
+      b.onclick = () => applyTheme(v);
+      box.appendChild(b);
+    });
+  }
+}
+(function(){
+  let t = "auto";
+  try{ t = localStorage.getItem("loci-theme") || "auto"; }catch(e){}
+  applyTheme(t);
+  // 系统在白天/夜里之间切了，跟着走（只在「跟随系统」时）
+  SYS_DARK.addEventListener("change", () => {
+    let cur = "auto";
+    try{ cur = localStorage.getItem("loci-theme") || "auto"; }catch(e){}
+    if (cur === "auto") applyTheme("auto");
+  });
+})();
+
+/* ---- tab ---- */
+const PAGES = {pool:"p-pool", sky:"p-sky", sim:"p-sim", prof:"p-prof", set:"p-set"};
+let loaded = {};
+document.querySelectorAll("nav.tabs button").forEach(b => {
+  b.onclick = () => {
+    document.querySelectorAll("nav.tabs button").forEach(x => x.classList.remove("on"));
+    b.classList.add("on");
+    const tab = b.dataset.tab;
+    Object.values(PAGES).forEach(id => $("#"+id).classList.remove("on"));
+    $("#"+PAGES[tab]).classList.add("on");
+    if (!loaded[tab]) { loaded[tab] = 1;
+      ({sky:loadSky, sim:loadSim, prof:loadProf, set:loadSet}[tab]||(()=>{}))(); }
+    if (tab === "sky") sky.resize();
+  };
+});
+
+/* ============================================================
+   原文抽屉：点哪儿都能进来看逐字原文
+   ============================================================ */
+async function openBucket(id){
+  $("#scrim").classList.add("on"); $("#drawer").classList.add("on");
+  $("#drTitle").textContent = id;
+  $("#drBody").innerHTML = '<div class="spin">拿原文…</div>';
+  try{
+    const b = await api("/api/loci/bucket/" + encodeURIComponent(id));
+    $("#drTitle").textContent = b.name || b.short;
+    const box = el("div");
+    const kv = el("div","kv");
+    const add = (t, hot) => { if(!t) return; const s = el("span", hot?"hot":null, t); kv.appendChild(s); };
+    add(b.room_cn); add(b.short);
+    if (b.when) add("when " + b.when);
+    add("存于 " + (b.created||"").slice(0,10));
+    if (b.valence != null) add("V" + Number(b.valence).toFixed(2));
+    if (b.arousal != null) add("A" + Number(b.arousal).toFixed(2));
+    if (b.importance != null) add("重 " + b.importance);
+    if (b.pinned) add("📌 钉着", 1);
+    if (b.status) add("状态 " + b.status);
+    if (b.archived) add("⚠️ 在归档区", 1);
+    if (b.superseded_by) add("⚠️ 已被换版（这是旧版）", 1);
+    (b.tags||[]).filter(t => !t.startsWith("__")).forEach(t => add(t));
+    box.appendChild(kv);
+    if (b.summary){
+      const s = el("div","muted tiny"); s.style.marginBottom = "12px";
+      s.textContent = "摘要：" + b.summary; box.appendChild(s);
+    }
+    box.appendChild(mdInto(el("div","body-txt"), b.content));
+    const links = [];
+    // 二改 E 件：后端 /api/loci/bucket/{id} 早就把这个键改叫 `from`
+    // 了（老名字 triggered_by 只在落盘层兼容读），这儿还读老键名，
+    // 于是"从这儿来"这栏永远静默是空的——跟 freq_i/freq_you 同一种病：
+    // 不报错、不崩，就是那份数据永远显示不出来。
+    (b.from||[]).forEach(x => links.push(["从这儿来", x]));
+    (b.supersedes||[]).forEach(x => links.push(["换掉了", x]));
+    if (b.superseded_by) links.push(["新版在", b.superseded_by]);
+    if (links.length){
+      const h = el("h2","h","连着的"); h.style.marginTop = "20px"; box.appendChild(h);
+      links.forEach(([lab, tid]) => {
+        const r = el("button","row");
+        r.appendChild(el("span","rm", lab));
+        r.appendChild(el("span","id mono", tid.slice(0,6)));
+        r.onclick = () => openBucket(tid);
+        box.appendChild(r);
+      });
+    }
+    // 施工 6 · C 件（§8.2）：她只能改 event（mind 那儿 b.can_edit 永远是 false，
+    // 这不是省事不画，是流程本身就不给这个入口——mind 是我的判断，只能我自己改）。
+    // 改错**不覆盖原文**：另存一条修正、from 指回这条，这儿点了之后一路走
+    // /api/loci/event/correct，原文一个字不会被这个抽屉动到。
+    if (b.can_edit){
+      const editWrap = el("div"); editWrap.style.marginTop = "20px";
+      const editBtn = el("button","mini","改这条");
+      editWrap.appendChild(editBtn);
+      const form = el("div"); form.style.display = "none"; form.style.marginTop = "10px";
+      const ta = document.createElement("textarea");
+      ta.value = b.content; ta.rows = 6; ta.style.width = "100%";
+      ta.style.font = "inherit"; ta.style.padding = "10px";
+      ta.style.borderRadius = "var(--r-s)"; ta.style.border = "1px solid var(--line)";
+      ta.style.background = "var(--paper)"; ta.style.color = "var(--ink)";
+      form.appendChild(ta);
+      const hint = el("div","tiny muted");
+      hint.style.marginTop = "6px";
+      hint.textContent = "原文不会被改——这会另存一条修正，{{AI_NAME}}看到了会自己判断认不认";
+      form.appendChild(hint);
+      const submitRow = el("div"); submitRow.style.marginTop = "10px";
+      const submit = el("button","mini","存这条修正");
+      const cancel = el("button","mini","算了");
+      cancel.style.marginLeft = "8px";
+      cancel.onclick = () => { form.style.display = "none"; editBtn.style.display = ""; };
+      submit.onclick = async () => {
+        if (!ta.value.trim() || ta.value === b.content){
+          alert("正文没变，没什么好存的"); return;
+        }
+        submit.disabled = true; submit.textContent = "存着…";
+        try{
+          const res = await apiPost("/api/loci/event/correct", {id, text: ta.value});
+          form.style.display = "none";
+          const ok = el("div","tiny", "✓ 存成了新的一条（" + res.new_id.slice(0,6) + "），原文没动");
+          editWrap.appendChild(ok);
+          editBtn.style.display = "none";
+        }catch(e){ alert("没成：" + e.message); }
+        finally{ submit.disabled = false; submit.textContent = "存这条修正"; }
+      };
+      submitRow.appendChild(submit); submitRow.appendChild(cancel);
+      form.appendChild(submitRow);
+      editWrap.appendChild(form);
+      editBtn.onclick = () => { form.style.display = ""; editBtn.style.display = "none"; };
+      box.appendChild(editWrap);
+    }
+    $("#drBody").innerHTML = ""; $("#drBody").appendChild(box);
+  }catch(e){
+    $("#drBody").innerHTML = ""; $("#drBody").appendChild(el("div","err", "✗ " + e.message));
+  }
+}
+function closeDrawer(){ $("#scrim").classList.remove("on"); $("#drawer").classList.remove("on"); }
+$("#drX").onclick = closeDrawer; $("#scrim").onclick = closeDrawer;
+addEventListener("keydown", e => { if (e.key === "Escape") closeDrawer(); });
+
+/* ============================================================
+   一 · 大池子
+   ============================================================ */
+const WHENS = ["今天","昨天","本周","上周","本月","上月","今年","48h","7d"];
+let F = {when:"", room:"", tag:"", query:""};
+
+function renderWhenChips(){
+  const box = $("#whenChips"); box.innerHTML = "";
+  WHENS.forEach(w => {
+    const c = el("button","chip" + (F.when === w ? " on" : ""), w);
+    c.onclick = () => { F.when = (F.when === w ? "" : w); $("#d0").value = $("#d1").value = "";
+                        renderWhenChips(); run(); };
+    box.appendChild(c);
+  });
+}
+async function loadRooms(){
+  const box = $("#roomRows");
+  try{
+    const d = await api("/api/loci/rooms");
+    box.innerHTML = "";
+    // E1（2026-08-17）：房间十间改四间，门也从 I/YOU 换成 EVENT/MIND——
+    // 后端 build_rooms() 8-16 就已经在返回 {doors:{EVENT:[...2条], MIND:[...2条]}}，
+    // 这段是纯显示欠账：原来这里读的是老的 d.doors.I / d.doors.YOU（十间时代
+    // 「我/她」两扇门各五间），新结构里这两个键根本不存在，`[...d.doors.I, ...]`
+    // 展开 undefined 会直接炸。「关于谁」不再由房间承担，搬去了 subjects，
+    // 所以「整边一起看：我/她」那一块也跟着房间一起砍了，不是漏写。
+    [["event","事", d.doors.EVENT], ["mind","想", d.doors.MIND]].forEach(([kind, cn, list]) => {
+      const row = el("div","rrow");
+      row.appendChild(el("span","kind", kind));
+      (list || []).forEach(r => {
+        const b = el("button","room" + (F.room === r.room ? " on" : ""));
+        b.dataset.room = r.room;
+        b.title = r.room;
+        b.appendChild(document.createTextNode(r.cn));
+        b.appendChild(el("span","cnt", r.n || "0"));
+        if (!r.n) b.style.opacity = ".45";
+        b.onclick = () => { F.room = (F.room === r.room ? "" : r.room); markRooms(); run(); };
+        row.appendChild(b);
+      });
+      if (d.homeless && kind === "mind"){
+        const w = el("span","tiny muted");
+        w.style.marginLeft = "6px";
+        w.textContent = "⚠️ " + d.homeless + " 条没房间";
+        row.appendChild(w);
+      }
+      box.appendChild(row);
+    });
+
+    const tb = $("#tagChips"); tb.innerHTML = "";
+    d.top_tags.forEach(t => {
+      const c = el("button","chip" + (F.tag === t.tag ? " on" : ""));
+      c.appendChild(document.createTextNode(t.tag));
+      c.appendChild(el("span","n", t.n));
+      c.dataset.tag = t.tag;
+      // F2：点 chip = 填进「搜场景」（tag 门：包含匹配、那一类全部、不打折）
+      c.onclick = () => {
+        F.tag = (F.tag === t.tag ? "" : t.tag);
+        setQMode("scene");
+        $("#q").value = F.tag;
+        markTags(); run();
+      };
+      tb.appendChild(c);
+    });
+  }catch(e){ fail(box, e); }
+}
+function markRooms(){
+  document.querySelectorAll(".room").forEach(b =>
+    b.classList.toggle("on", b.dataset.room === F.room));
+}
+function markTags(){
+  document.querySelectorAll("#tagChips .chip").forEach(c =>
+    c.classList.toggle("on", c.dataset.tag === F.tag));
+}
+
+async function run(){
+  const out = $("#poolOut");
+  if (!F.when && !F.room && !F.tag && !F.query){
+    out.innerHTML = "";
+    const c = el("div","card muted");
+    c.textContent = "至少开一个门：点一间房、拍个时间、按个标签，或者扔个词进来。";
+    out.appendChild(c); return;
+  }
+  out.innerHTML = '<div class="card spin">找…</div>';
+  const qs = new URLSearchParams(F).toString();
+  try{
+    const d = await api("/api/loci/recall?" + qs);
+    out.innerHTML = "";
+    // 关联度线只在「找」的时候露面（浏览没有分数，摆一根线在那儿是骗人的）
+    const searching = !!F.query;
+    $("#floorRow").style.display = searching ? "" : "none";
+    $("#floorNote").style.display = searching ? "" : "none";
+    if (searching){
+      $("#floorNote").textContent = d.below
+        ? `线 ${d.floor}：${d.below} 条挡在线下没进那张卡（拖低了它们会回来）。`
+        : `线 ${d.floor}：这次没有被挡下的。`;
+    }
+    if (!d.total){
+      const c = el("div","card muted");
+      c.textContent = "这儿没有东西。门再开大一点试试。"; out.appendChild(c); return;
+    }
+    // 上面：给 AI 的那张卡（跟它睁眼看到的是同一份统计）
+    const c1 = el("div","card");
+    c1.appendChild(el("h2","h","给{{AI_NAME}}的那张卡"));
+    c1.appendChild(el("pre","card-txt", d.card));
+    out.appendChild(c1);
+    // 下面：给人看的详细列表 —— 分页（她定的：几百条不能让人一路划到底）
+    const c2 = el("div","card");
+    const h = el("h2","h","逐条");
+    const hn = el("span","n");
+    h.appendChild(hn);
+    c2.appendChild(h);
+    const list = el("div","list");
+    const pager = el("div","pager");
+    c2.appendChild(list); c2.appendChild(pager);
+    out.appendChild(c2);
+
+    const PER = 25;
+    const pages = Math.max(1, Math.ceil(d.entries.length / PER));
+    let page = 1;
+    function draw(){
+      hn.textContent = d.total + " 条 · 新→旧 · 点开看原文"
+        + (pages > 1 ? `　第 ${page}/${pages} 页` : "");
+      list.innerHTML = "";
+      d.entries.slice((page-1)*PER, page*PER).forEach(e => {
+        const r = el("button","row");
+        const dot = el("span","dot");
+        dot.style.background = vColor(e.v, .55 + .45 * Math.min(1, e.importance/10));
+        r.appendChild(dot);
+        const idEl = el("span","id", e.short); idEl.title = e.id;
+      r.appendChild(idEl);
+        r.appendChild(el("span","lab", e.label));
+        // F4：遗忘状态她要能看见（判断引擎干得对不对）。淡出/沉底才有徽章，活着不标。
+        if (e.decay === "faded") r.appendChild(el("span","decay-b","淡出"));
+        if (e.decay === "sunk")  r.appendChild(el("span","decay-b sunk","沉底"));
+        r.appendChild(el("span","rm", e.room_cn));
+        r.appendChild(el("span","dt", e.date.slice(5)));
+        r.onclick = () => openBucket(e.id);
+        list.appendChild(r);
+      });
+      pager.innerHTML = "";
+      if (pages < 2) return;
+      const go = (n, label, on) => {
+        const b = el("button","pg" + (on ? " on" : ""), label);
+        b.disabled = on || n < 1 || n > pages;
+        b.onclick = () => { page = n; draw(); c2.scrollIntoView({block:"start", behavior:"smooth"}); };
+        pager.appendChild(b);
+      };
+      go(page-1, "‹");
+      // 页码多了只出头尾和当前附近，别铺一长条数字
+      const nums = new Set([1, pages, page, page-1, page+1]);
+      if (pages <= 7) for (let i=1;i<=pages;i++) nums.add(i);
+      let last = 0;
+      [...nums].filter(n => n>=1 && n<=pages).sort((a,b)=>a-b).forEach(n => {
+        if (n - last > 1) pager.appendChild(el("span","pg-gap","…"));
+        go(n, String(n), n === page);
+        last = n;
+      });
+      go(page+1, "›");
+    }
+    draw();
+  }catch(e){ fail(out, e); }
+}
+/* F2：模糊搜（query 门）/ 搜场景（tag 门）——界面合一，底层不合并 */
+let qMode = "fuzzy";
+function setQMode(m){
+  qMode = m;
+  document.querySelectorAll("#qMode .segb").forEach(b =>
+    b.classList.toggle("on", b.dataset.mode === m));
+  $("#q").placeholder = m === "scene" ? "搜画面里的东西：床、机场、拼豆…" : "突然想起什么事…";
+}
+document.querySelectorAll("#qMode .segb").forEach(b =>
+  b.onclick = () => { setQMode(b.dataset.mode); if ($("#q").value.trim()) $("#go").click(); });
+$("#go").onclick = () => {
+  const v = $("#q").value.trim();
+  if (qMode === "scene"){ F.tag = v; F.query = ""; markTags(); }
+  else { F.query = v; }
+  run();
+};
+$("#q").addEventListener("keydown", e => { if (e.key === "Enter") $("#go").click(); });
+$("#dGo").onclick = () => {
+  const a = $("#d0").value, b = $("#d1").value;
+  if (!a && !b) return;
+  F.when = (a && b) ? (a + ".." + b) : (a || b);
+  renderWhenChips(); run();
+};
+$("#clr").onclick = () => {
+  F = {when:"", room:"", tag:"", query:""};
+  $("#q").value = ""; $("#d0").value = ""; $("#d1").value = "";
+  $("#floor").value = 35; $("#floorVal").textContent = "35";   // 线也跟着回默认
+  setQMode("fuzzy");
+  renderWhenChips(); markRooms(); markTags(); run();
+};
+/* 关联度线：拖的时候只改数字（不打后端），松手才重查 —— 跟相似度那页一个手感 */
+$("#floor").addEventListener("input", () => {
+  $("#floorVal").textContent = $("#floor").value;
+});
+$("#floor").addEventListener("change", () => {
+  F.floor = $("#floor").value; run();
+});
+$("#floorDef").onclick = () => {
+  $("#floor").value = 35; $("#floorVal").textContent = "35";
+  F.floor = 35; run();
+};
+renderWhenChips(); loadRooms(); run();
+
+/* ============================================================
+   二 · 星空 —— 只留一个桥。真身在页面末尾那个 <script type="module">
+   （three.js 要 ESM，跟这个普通 script 分开跑）。
+   ============================================================ */
+const sky = { resize(){ window.LociSky && window.LociSky.resize(); } };
+function loadSky(){
+  // 模块可能还没解析完（module 默认 defer），排队等它
+  if (window.LociSky) window.LociSky.open();
+  else addEventListener("locisky:ready", () => window.LociSky.open(), {once:true});
+}
+window.openBucket = openBucket;   // 星空模块点星要用
+window.vColor = vColor;
+window.lociEl = el;
+window.lociFail = fail;
+window.lociApi = api;
+/* ===== 星空桥接结束 ===== */
+
+/* ============================================================
+   三 · 相似度检查
+   ============================================================ */
+let SIM = null, judged = {};
+function drawHist(hist, th){
+  const cv = $("#hist"), dpr = Math.min(2, devicePixelRatio||1);
+  const W = cv.clientWidth, H = cv.clientHeight;
+  cv.width = W*dpr; cv.height = H*dpr;
+  const c = cv.getContext("2d"); c.setTransform(dpr,0,0,dpr,0,0);
+  c.clearRect(0,0,W,H);
+  // 颜色从 CSS 变量拿，换主题跟着变（原来写死的，黑主题下会看不见）
+  const v = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const AXIS = 18;   // 底下那行分数刻度占的高
+  const CAP  = 16;   // 顶上给数字留的高 —— 少了这个，最高那根柱子的数字会被画布切掉
+  const from = 12, bars = hist.slice(from);   // 只画 60 分往上
+  const max = Math.max(1, ...bars);
+  const bw = W / bars.length;
+  const usable = Math.max(10, H - AXIS - CAP);
+  bars.forEach((n, i) => {
+    const lo = (from+i)*5;
+    // 对数刻度：不然 60~65 那一格把 90+ 的十几对压成看不见
+    const h = n ? Math.max(2, (Math.log(n+1)/Math.log(max+1)) * usable) : 0;
+    c.fillStyle = lo >= th ? v("--accent") : v("--line");
+    c.fillRect(i*bw+1.5, H-AXIS-h, bw-3, h);
+    if (n){
+      c.fillStyle = v("--ink-2");
+      c.font = "10px ui-monospace,monospace";
+      c.textAlign = "center"; c.textBaseline = "bottom";
+      c.fillText(n, i*bw+bw/2, H-AXIS-h-3);
+    }
+    c.fillStyle = v("--ink-3");
+    c.font = "10px ui-monospace,monospace";
+    c.textAlign = "center"; c.textBaseline = "alphabetic";
+    c.fillText(lo, i*bw+bw/2, H-5);
+  });
+  const x = ((th/5) - from) * bw;
+  c.strokeStyle = v("--ink"); c.lineWidth = 2;
+  c.beginPath(); c.moveTo(x, 2); c.lineTo(x, H-AXIS); c.stroke();
+}
+async function loadSim(){
+  const out = $("#simOut");
+  out.innerHTML = '<div class="card spin">全库两两比一遍…（第一次几秒钟）</div>';
+  try{
+    SIM = await api("/api/loci/similar?threshold=" + $("#th").value);
+    renderSim();
+  }catch(e){ fail(out, e); }
+}
+function renderSim(){
+  const d = SIM, th = Number($("#th").value);
+  $("#thVal").textContent = th;
+  $("#simStat").innerHTML = "";
+  $("#simStat").textContent =
+    `${d.n} 条记忆 · ${d.total_pairs.toLocaleString()} 个对子比过了 · ` +
+    `≥ ${th} 分的有 ${d.matched} 对` + (d.truncated ? `（只列前 ${d.pairs.length} 对）` : "");
+  drawHist(d.hist, th);
+  $("#histNote").textContent =
+    "纵轴是对数的（不然 60 分那一格会把 90 分的十几对压成看不见）。" +
+    "情绪种子那十三颗根和归档区没算进来——它们本来就该长得像，算进来是误伤。";
+  const out = $("#simOut"); out.innerHTML = "";
+  if (!d.pairs.length){
+    const c = el("div","card muted");
+    c.textContent = "这条线上面没有对子了。往左拉一点看看。";
+    out.appendChild(c); return;
+  }
+  const wrap = el("div","card");
+  const h = el("h2","h","重复项裁定");
+  h.appendChild(el("span","n","「沉一个」= 软删进归档，id 直查永远捞得回，不是抹掉"));
+  wrap.appendChild(h);
+  // 分页 —— 跟记忆页同一套（她 8-03 夜发现相似度这边漏了）
+  const live = d.pairs.filter(p => !judged[p.a.id + "|" + p.b.id]);
+  const PER = 8;
+  const pages = Math.max(1, Math.ceil(live.length / PER));
+  const list = el("div"); wrap.appendChild(list);
+  const pager = el("div","pager"); wrap.appendChild(pager);
+  let page = 1;
+  function draw(){
+    list.innerHTML = "";
+    live.slice((page-1)*PER, page*PER).forEach(p => list.appendChild(pairCard(p)));
+    pager.innerHTML = "";
+    h.querySelector(".n").textContent =
+      "「沉一个」= 软删进归档，id 直查永远捞得回，不是抹掉"
+      + (pages > 1 ? `　第 ${page}/${pages} 页` : "");
+    if (pages < 2) return;
+    const go = (n, label, on) => {
+      const b = el("button","pg" + (on ? " on" : ""), label);
+      b.disabled = on || n < 1 || n > pages;
+      b.onclick = () => { page = n; draw(); wrap.scrollIntoView({block:"start", behavior:"smooth"}); };
+      pager.appendChild(b);
+    };
+    go(page-1, "‹");
+    const nums = new Set([1, pages, page, page-1, page+1]);
+    if (pages <= 7) for (let i=1;i<=pages;i++) nums.add(i);
+    let last = 0;
+    [...nums].filter(n => n>=1 && n<=pages).sort((a,b)=>a-b).forEach(n => {
+      if (n - last > 1) pager.appendChild(el("span","pg-gap","…"));
+      go(n, String(n), n === page);
+      last = n;
+    });
+    go(page+1, "›");
+  }
+  draw();
+  out.appendChild(wrap);
+  afterJudge();
+}
+/* 裁完一组它就走了；全裁完这一屏该说句话，不然剩个空卡片很怪 */
+function afterJudge(){
+  const wrap = $("#simOut .card");
+  if (!wrap || wrap.querySelector(".pair")) return;
+  if (wrap.querySelector(".pager .pg")) return;   // 还有别的页，别急着说裁完了
+  const done = el("div","muted");
+  done.style.padding = "6px 0";
+  done.textContent = "这条线上面裁完了。往左拉滑块看更多，或者就这样。";
+  wrap.appendChild(done);
+}
+function pairCard(p){
+  const box = el("div","pair");
+  const key = p.a.id + "|" + p.b.id;
+  const head = el("div","pair-head");
+  head.appendChild(el("span","score", p.score.toFixed(1)));
+  if (p.tagged) head.appendChild(el("span","badge","线上也标了疑似同件"));
+  if (p.a.created !== p.b.created)
+    head.appendChild(el("span","badge tiny", p.a.created + " ↔ " + p.b.created));
+  else head.appendChild(el("span","badge tiny","同一天存的"));
+  const keep = el("button","mini","都留");
+  keep.onclick = async () => { await judge("keep", null, box, key, p); };
+  head.appendChild(keep);
+  box.appendChild(head);
+
+  const sides = el("div","sides");
+  [p.a, p.b].forEach(s => {
+    const c = el("div","side");
+    const m = el("div","meta");
+    m.appendChild(el("span",null,s.short));
+    m.appendChild(el("span",null,s.created));
+    m.appendChild(el("span",null,"重" + s.importance));
+    m.appendChild(el("span",null,s.len + " 字"));
+    c.appendChild(m);
+    c.appendChild(el("div","txt", s.preview));
+    const acts = el("div","acts");
+    const sink = el("button","mini warn","沉这条");
+    sink.onclick = async () => {
+      if (!confirm("把 " + s.short + " 沉进归档？\n（软删，id 直查还捞得回）")) return;
+      await judge("sink", s.id, box, key, p);
+    };
+    acts.appendChild(sink);
+    c.appendChild(acts);
+    sides.appendChild(c);
+  });
+  box.appendChild(sides);
+  return box;
+}
+// a/b 是这一对的两端 —— 服务端拿它俩核对「这一对真的存在」，
+// 不再只凭一个 id 就删（2026-08-04 codex 复核 #2：原来给任意 id 都会照删）。
+async function judge(action, id, box, key, p){
+  try{
+    const r = await fetch("/api/loci/similar/action", {
+      method:"POST", credentials:"same-origin",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({action, id, a: p.a.id, b: p.b.id}),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || "HTTP " + r.status);
+    judged[key] = action;
+    box.classList.add("gone");
+    setTimeout(() => { box.remove(); afterJudge(); }, 380);
+  }catch(e){ alert("没成：" + e.message); }
+}
+$("#th").addEventListener("input", () => {
+  $("#thVal").textContent = $("#th").value;
+  if (SIM) { SIM.threshold = Number($("#th").value); drawHist(SIM.hist, Number($("#th").value)); }
+});
+$("#th").addEventListener("change", loadSim);
+$("#thDef").onclick = () => { $("#th").value = 88; loadSim(); };
+
+/* ============================================================
+   四 · 档案（门口那张纸的网页版）
+   ============================================================ */
+async function loadProf(){
+  const out = $("#profOut");
+  const card = (title, note) => {
+    const c = el("div","card");
+    const h = el("h2","h", title);
+    if (note) h.appendChild(el("span","n", note));
+    c.appendChild(h);
+    out.appendChild(c);
+    return c;
+  };
+  // 一条一行（她说准则看着多——多的是行数不是条数），点开看全文
+  const line = (txt, sub, id) => {
+    const b = el("button","rule");
+    b.appendChild(mdInto(el("div","rtxt"), String(txt).split(String.fromCharCode(10))[0]));
+    if (sub) b.appendChild(el("div","rid", sub));
+    b.onclick = () => openBucket(id);
+    return b;
+  };
+  try{
+    const d = await api("/api/loci/profile");
+    out.innerHTML = "";
+
+    // 顺序是她定的：档案 · 中期 · 长期 · 准则 · 我和她的判断
+    // （提醒只在真有临近的日子时插在档案后面，跟 AI 睁眼那一屏一致）
+    const c1 = card("档案", d.facts_warning || "名字两面");
+    if (d.facts_warning) c1.querySelector(".n").classList.add("err");
+    if (!d.facts.length) c1.appendChild(el("div","muted","（事实格空着）"));
+    else d.facts.forEach(f => {
+      c1.appendChild(mdInto(el("div","paper"), f.content));
+      const b = el("button","tiny muted","来处 " + f.short);
+      b.style.marginTop = "8px"; b.onclick = () => openBucket(f.id);
+      c1.appendChild(b);
+    });
+
+    if (d.reminders.length){
+      const c = card("提醒", "越近越大声");
+      d.reminders.forEach(r => {
+        const b = el("button","rem " + r.loud);
+        b.appendChild(el("span","d",
+          r.days === 0 ? "就是今天！" :
+          r.days <= 3 ? "还有 " + r.days + " 天" :
+          r.days <= 14 ? r.days + " 天后" : "记着 · " + r.days + " 天后"));
+        b.appendChild(el("span",null, r.label));
+        b.onclick = () => openBucket(r.id);
+        c.appendChild(b);
+      });
+    }
+
+    // 🫀 压在心头（她 2026-08-08 要的「我也能看到」）：挨着提醒摆——
+    // 提醒是「快到日子了」，这块是「一直压着」。越挂越大声，跟提醒的越近越大声对称。
+    // 施工 6 · A/B/C 件：三类钟只换 loud 怎么算（后端算好直接读 h.loud）；
+    // 只有最久那条（h.is_question）陈述换问句，其余照旧陈列；
+    // 每条都给结案按钮——她本来就是知道「这事了了没」的人，不该等我问。
+    if ((d.heavy||[]).length){
+      const c = card("压在心头", "挂着还没了结的");
+      d.heavy.forEach(h => {
+        const row = el("div","heavy-row");
+        const b = el("button","rem " + h.loud + (h.is_question ? " q" : ""));
+        const asked = h.is_question
+          ? (h.last_asked ? "，上次问过她 " + h.last_asked.slice(0,10)
+                          : "，从来没问过她")
+          : "";
+        b.appendChild(el("span","d",
+          (h.is_question ? "❓ " : "") + "挂了 " + h.held + " 天" + asked));
+        b.appendChild(el("span",null, h.label + (h.is_question ? " —— 这条还算数吗？" : "")));
+        if (h.clock_note) b.appendChild(el("div","tiny muted", "⚠️ " + h.clock_note));
+        b.onclick = () => openBucket(h.id);
+        row.appendChild(b);
+
+        // 结案按钮：走 /api/loci/want/resolve，记"她结的案"。
+        const acts = el("div","heavy-acts");
+        const mkBtn = (label, status) => {
+          const bt = el("button","mini", label);
+          bt.onclick = async (ev) => {
+            ev.stopPropagation();
+            bt.disabled = true;
+            try{
+              await apiPost("/api/loci/want/resolve", {id: h.id, status});
+              row.classList.add("gone");
+              setTimeout(() => { row.remove(); }, 300);
+            }catch(e){ alert("没成：" + e.message); bt.disabled = false; }
+          };
+          return bt;
+        };
+        acts.appendChild(mkBtn("放下了", "resolved"));
+        acts.appendChild(mkBtn("不做了", "abandoned"));
+        row.appendChild(acts);
+        c.appendChild(row);
+
+        // 问句真的画出来给她看这一刻，盖一次"上次问过她"的戳（只对最久那条盖，
+        // 一次页面加载只盖一次——不是每次重渲染都盖，fire-and-forget 不挡渲染）。
+        if (h.is_question) apiPost("/api/loci/want/asked", {id: h.id}).catch(() => {});
+      });
+    }
+
+    // 施工 6 · C 件（§8）：她改过的 event——这儿只是给她自己回看，
+    // 真正的"通知我"走 breath()（core.profile.她改过()，同一份数据）。
+    if ((d.edited||[]).length){
+      const c = card("你改过", "还没被{{AI_NAME}}看过/收下的修正");
+      d.edited.forEach(e0 => {
+        const b = line(e0.label, e0.short + (e0.corrects ? " · 改的是 " + e0.corrects.slice(0,6) : ""), e0.id);
+        c.appendChild(b);
+      });
+    }
+
+    if (d.mid) card("中期","这三天").appendChild(el("pre","card-txt", d.mid));
+
+    if (d.big_events.length){
+      const c = card("长期","我们在做什么");
+      d.big_events.forEach(b0 => c.appendChild(line("◈ " + b0.line, b0.short, b0.id)));
+    }
+
+    // 忽然想起 —— 睁眼六样里唯一「不是我要的、自己冒出来的」那样。
+    // 不排序不加权（build_recollect 里就是 random.sample）：**没来由正是它像脑子的地方**，
+    // 一旦按重要度/时间排，它就退回成一个「最近热门」列表了。
+    if (d.recollect && d.recollect.length){
+      const c = card("忽然想起", "没来由 · 从 " + d.recollect_pool + " 件事里");
+      const again = el("button","mini","再来一个");
+      again.style.marginTop = "12px";
+      const draw = list => {
+        [...c.querySelectorAll(".rule")].forEach(x => x.remove());
+        list.forEach(r => c.appendChild(
+          line(r.label, r.short + " · " + r.room_cn + " · " + r.created, r.id)));
+        c.appendChild(again);          // appendChild 会把它挪到最后，不用先摘
+      };
+      again.onclick = async () => {
+        again.disabled = true;
+        again.textContent = "想想…";
+        try{ draw((await api("/api/loci/recollect")).recollect || []); }
+        catch(e){ again.textContent = "没想起来"; }
+        finally{ again.disabled = false;
+                 setTimeout(() => { again.textContent = "再来一个"; }, 600); }
+      };
+      draw(d.recollect);
+    }
+
+    if (d.rules.length){
+      const c = card("准则", d.rules.length + " 条 · 点开看全文和来处");
+      d.rules.forEach(r => c.appendChild(
+        line(r.content, r.short + " · " + r.room_cn, r.id)));
+    }
+
+  }catch(e){ fail(out, e); }
+}
+</script>
+
+<script type="importmap">
+{ "imports": {
+    "three": "/loci/vendor/three.module.js",
+    "three/addons/": "/loci/vendor/addons/"
+} }
+</script>
+
+<script type="module">
+/* ============================================================
+   ★★★ 星空真身 —— 整块可搬进 Lento 当 Home 的夜空。
+   对外只要三样：一个 <canvas id="sky">、/api/loci/graph 那份 JSON、
+   window.openBucket(id)。除此之外不碰页面上任何东西。
+   ============================================================ */
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+const cv = document.getElementById('sky');
+const tipEl = document.getElementById('tip');
+const labelBox = document.getElementById('skyLabels');
+const loadEl = document.getElementById('skyLoad');
+
+/* ---- 铺开时那圈会呼吸的粒子（quintic 缓入，学它的 loading）---- */
+(function loading(){
+  const c = loadEl.querySelector('canvas'), x = c.getContext('2d');
+  let t = 0, alive = true;
+  const P = Array.from({length:64}, (_,i) => ({a: i/64*Math.PI*2, r: 1, s: .6+Math.random()*.8}));
+  (function f(){
+    if (!alive) return;
+    const W = c.width = c.clientWidth, H = c.height = c.clientHeight;
+    x.clearRect(0,0,W,H);
+    t += 0.012;
+    const q = 1 - Math.pow(1 - (t % 1), 5);            // quintic ease
+    const R = 34 + 30 * Math.sin(t * 0.8);
+    P.forEach(p => {
+      const px = W/2 + Math.cos(p.a + t*0.5) * R * (0.4 + 0.6*q) * p.s;
+      const py = H/2 - 40 + Math.sin(p.a + t*0.5) * R * (0.4 + 0.6*q) * p.s;
+      const g = x.createRadialGradient(px,py,0,px,py,7);
+      g.addColorStop(0, `rgba(240,214,182,${0.5*q})`);
+      g.addColorStop(1, 'rgba(240,214,182,0)');
+      x.fillStyle = g; x.beginPath(); x.arc(px,py,7,0,6.2832); x.fill();
+    });
+    requestAnimationFrame(f);
+  })();
+  window.__skyLoadStop = () => { alive = false; };
+})();
+
+const scene = new THREE.Scene();
+let W = cv.clientWidth || 900, H = cv.clientHeight || 600;
+const camera = new THREE.PerspectiveCamera(58, W/H, 0.5, 4000);
+camera.position.set(0, 46, 420);
+const renderer = new THREE.WebGLRenderer({canvas: cv, antialias: true});
+renderer.setPixelRatio(Math.min(2, devicePixelRatio || 1));
+renderer.setSize(W, H, false);
+renderer.setClearColor(0x1B1613, 1);
+/* ⚠️ 走 EffectComposer 时输出色彩空间必须设成线性，否则 sRGB 会被编码两次：
+   一次在合成器最后那道 pass 里、一次在 canvas 的绘制缓冲上。夜底 27 会被抬到 91，
+   整片天变成灰板、星星全糊在里面。8-03 夜实测过四种接法，只有这个跟
+   renderer.render() 的基准完全对得上（平均 29/23/20、峰值 212）。 */
+renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
+
+const controls = new OrbitControls(camera, cv);
+controls.enableDamping = true; controls.dampingFactor = 0.07;
+controls.minDistance = 60; controls.maxDistance = 2600;
+
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+/* 真辉光。她喜欢的就是这个——亮的地方会往外烧开。 */
+const bloom = new UnrealBloomPass(new THREE.Vector2(W,H), 0.55, 0.32, 0.52);
+composer.addPass(bloom);
+
+/* ---- 星的贴图：一团中间实、边上化开的光 ---- */
+function starTexture(){
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const x = c.getContext('2d');
+  const g = x.createRadialGradient(32,32,0,32,32,32);
+  // 真星星是「极小极亮的一点 + 一圈很淡的晕」。核只占半径的 7%，
+  // 之后急剧衰减 —— 原来内圈 22% 是 0.92 的白，等于一个大平盘，糊就糊在这儿
+  g.addColorStop(0,   'rgba(255,255,255,1)');
+  g.addColorStop(.07, 'rgba(255,255,255,1)');
+  g.addColorStop(.16, 'rgba(255,255,255,.45)');
+  g.addColorStop(.34, 'rgba(255,255,255,.11)');
+  g.addColorStop(.62, 'rgba(255,255,255,.03)');
+  g.addColorStop(1,   'rgba(255,255,255,0)');
+  x.fillStyle = g; x.fillRect(0,0,64,64);
+  return new THREE.CanvasTexture(c);
+}
+const TEX = starTexture();
+
+/* ---- 底噪：远处的银河尘（跟记忆无关，纯粹为了天不是空的）---- */
+(function dust(){
+  const n = 2600, pos = new Float32Array(n*3), col = new Float32Array(n*3);
+  const cl = Array.from({length:9}, () => ({
+    x:(Math.random()-.5)*1500, y:(Math.random()-.5)*1500, z:(Math.random()-.5)*1500,
+    s:60 + Math.random()*380, w:.4 + Math.random()*2.4}));
+  const tw = cl.reduce((s,c)=>s+c.w,0);
+  for (let i=0;i<n;i++){
+    let x,y,z;
+    if (Math.random() < .76){
+      let r = Math.random()*tw, ch = cl[0];
+      for (const c of cl){ r -= c.w; if (r <= 0){ ch = c; break; } }
+      const d = Math.pow(Math.random(),1.6);
+      x = ch.x+(Math.random()-.5)*2*ch.s*d;
+      y = ch.y+(Math.random()-.5)*2*ch.s*d;
+      z = ch.z+(Math.random()-.5)*2*ch.s*d;
+    } else {
+      x=(Math.random()-.5)*1900; y=(Math.random()-.5)*1900; z=(Math.random()-.5)*1900;
+    }
+    pos[i*3]=x; pos[i*3+1]=y; pos[i*3+2]=z;
+    const tier = Math.random();
+    const b = tier<.04 ? .42+Math.random()*.26 : tier<.24 ? .13+Math.random()*.13
+                                                          : .03+Math.random()*.07;
+    col[i*3]=b*1.0; col[i*3+1]=b*.86; col[i*3+2]=b*.68;   // 暖尘，不是蓝的
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos,3));
+  g.setAttribute('color', new THREE.BufferAttribute(col,3));
+  scene.add(new THREE.Points(g, new THREE.PointsMaterial({
+    size:2.0, map:TEX, vertexColors:true, sizeAttenuation:true,
+    transparent:true, depthWrite:false, blending:THREE.AdditiveBlending})));
+})();
+
+/* ---- V 冷暖 → 颜色 ----
+   直接拿 V 当 0~1 会全是一个色：655 条里大半 V∈[.55,.8]，铺出来一片同样的暖。
+   所以按**这批数据真实的分位**拉开——冷的还是冷、暖的还是暖，只是把中间那段撑满，
+   看得出差别。V 本身一个字没改（点开原文看到的还是原来的数）。 */
+let V_LO = 0.35, V_HI = 0.85;
+function calibrateV(nodes){
+  const v = nodes.map(n => n.v).sort((a,b) => a-b);
+  if (v.length < 8) return;
+  V_LO = v[Math.floor(v.length * 0.08)];
+  V_HI = v[Math.floor(v.length * 0.92)];
+  if (V_HI - V_LO < 0.06){ V_LO -= 0.03; V_HI += 0.03; }
+}
+function starColor(d){
+  if (d.pinned) return new THREE.Color(0xEBD08E);        // 钉着的：金（偏黄不偏橙）
+  const t = Math.max(0, Math.min(1, (d.v - V_LO) / (V_HI - V_LO)));
+  const c = new THREE.Color(0x7E93A8), w = new THREE.Color(0xE0C48C);
+  return c.clone().lerp(w, t);
+}
+function logMap(imp, lo, hi){
+  const i = Math.max(1, Math.min(10, imp || 5));
+  return lo + (Math.log(i)/Math.log(10)) * (hi - lo);
+}
+
+let NODES = [], IDX = new Map(), SPR = [], REAL = [], WEAK = [], CONSTS = [];
+let weakLines = null, realLines = null, constLines = [], labels = [];
+let show = {edge:false, weak:false, cons:true, spin:true, sound:false};
+let selected = null, hovered = null;
+const _v3 = new THREE.Vector3(), _q = new THREE.Quaternion();
+
+/* ---- 3D 力导向：先算完再交给自转。O(n²) 用网格近似，654 颗一秒出头 ---- */
+function layout3d(iters){
+  const n = NODES.length; if (!n) return;
+  const R = 52, springs = [];
+  REAL.forEach(e => { const a=IDX.get(e.from), b=IDX.get(e.to);
+                      if (a!=null && b!=null) springs.push([a,b,0.055]); });
+  WEAK.forEach(e => { const a=IDX.get(e.from), b=IDX.get(e.to);
+                      if (a!=null && b!=null) springs.push([a,b,0.010]); });
+  for (let it=0; it<iters; it++){
+    const cool = 1 - it/iters;
+    const grid = new Map();
+    for (let i=0;i<n;i++){
+      const p = NODES[i];
+      const k = ((p.x/R)|0)+','+((p.y/R)|0)+','+((p.z/R)|0);
+      (grid.get(k) || grid.set(k,[]).get(k)).push(i);
+    }
+    for (let i=0;i<n;i++){
+      const a = NODES[i];
+      const gx=(a.x/R)|0, gy=(a.y/R)|0, gz=(a.z/R)|0;
+      for (let dx=-1;dx<=1;dx++) for (let dy=-1;dy<=1;dy++) for (let dz=-1;dz<=1;dz++){
+        const cell = grid.get((gx+dx)+','+(gy+dy)+','+(gz+dz)); if (!cell) continue;
+        for (const j of cell){
+          if (j <= i) continue;
+          const b = NODES[j];
+          let ddx=a.x-b.x, ddy=a.y-b.y, ddz=a.z-b.z;
+          let d2 = ddx*ddx+ddy*ddy+ddz*ddz;
+          if (d2 > R*R) continue;
+          if (d2 < 1e-4){ ddx=Math.random()-.5; ddy=Math.random()-.5; ddz=Math.random()-.5; d2=.25; }
+          const d = Math.sqrt(d2), f = (R-d)/d * .5 * cool;
+          a.vx+=ddx*f; a.vy+=ddy*f; a.vz+=ddz*f;
+          b.vx-=ddx*f; b.vy-=ddy*f; b.vz-=ddz*f;
+        }
+      }
+    }
+    for (const [i,j,s] of springs){
+      const a=NODES[i], b=NODES[j];
+      const dx=b.x-a.x, dy=b.y-a.y, dz=b.z-a.z;
+      const d = Math.hypot(dx,dy,dz)||1, f = (d-62)/d * s * cool;
+      a.vx+=dx*f; a.vy+=dy*f; a.vz+=dz*f;
+      b.vx-=dx*f; b.vy-=dy*f; b.vz-=dz*f;
+    }
+    for (const p of NODES){
+      p.vx -= p.x*.0022*cool; p.vy -= p.y*.0022*cool; p.vz -= p.z*.0022*cool;
+      p.x+=p.vx; p.y+=p.vy; p.z+=p.vz;
+      p.vx*=.8; p.vy*=.8; p.vz*=.8;
+    }
+  }
+}
+
+function buildScene(data){
+  NODES = data.nodes.map(d => {
+    const r = 170 + Math.random()*210, th = Math.random()*Math.PI*2;
+    const ph = Math.acos(2*Math.random()-1);
+    return Object.assign({}, d, {
+      x: r*Math.sin(ph)*Math.cos(th), y: r*Math.sin(ph)*Math.sin(th), z: r*Math.cos(ph),
+      vx:0, vy:0, vz:0, phase: Math.random()*6.283,
+      axis: new THREE.Vector3(Math.sin(.1+Math.random()*.16),
+                              Math.cos(.1+Math.random()*.16),
+                              Math.sin(Math.random()*6.283)).normalize(),
+      spin: 0.00006 + Math.random()*0.00012,
+    });
+  });
+  IDX = new Map(NODES.map((n,i)=>[n.id,i]));
+  REAL = data.edges; WEAK = data.weak_edges; CONSTS = data.constellations;
+
+  calibrateV(NODES);
+  layout3d(260);
+
+  // 星：Sprite + 加色混合。叠在一起的光晕会烧成一片，这就是它好看的一半
+  SPR = NODES.map(d => {
+    const col = starColor(d);
+    const bright = d.pinned ? logMap(d.importance, 1.1, 2.2) : logMap(d.importance, .26, 1.05);
+    const mat = new THREE.SpriteMaterial({
+      map: TEX, color: col.clone().multiplyScalar(bright),
+      transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
+    });
+    const s = new THREE.Sprite(mat);
+    s.scale.setScalar(logMap(d.importance, 2.4, 7.2) * (d.pinned ? 1.25 : 1));
+    s.position.set(d.x, d.y, d.z);
+    s.userData = {d, base: s.scale.x, col: col.clone().multiplyScalar(bright)};
+    scene.add(s);
+    return s;
+  });
+
+  // 弱边：一整条 LineSegments，暗到几乎看不见（2600 多根，分开画会卡）
+  const wp = [];
+  WEAK.forEach(e => {
+    const a = NODES[IDX.get(e.from)], b = NODES[IDX.get(e.to)];
+    if (a && b) wp.push(a.x,a.y,a.z, b.x,b.y,b.z);
+  });
+  const wg = new THREE.BufferGeometry();
+  wg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(wp), 3));
+  weakLines = new THREE.LineSegments(wg, new THREE.LineBasicMaterial({
+    color: 0xC8A884, transparent: true, opacity: .05,
+    blending: THREE.AdditiveBlending, depthWrite: false}));
+  weakLines.visible = false; weakLines.frustumCulled = false; scene.add(weakLines);
+
+  // 真边：默认藏起来。点中一颗星，线才从它身上长出去（学它的，也正好治我们的稀）
+  const rp = [];
+  REAL.forEach(e => {
+    const a = NODES[IDX.get(e.from)], b = NODES[IDX.get(e.to)];
+    if (a && b) rp.push(a.x,a.y,a.z, b.x,b.y,b.z);
+  });
+  const rg = new THREE.BufferGeometry();
+  rg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(rp), 3));
+  realLines = new THREE.LineSegments(rg, new THREE.LineBasicMaterial({
+    color: 0xE8C4A0, transparent: true, opacity: .34,
+    blending: THREE.AdditiveBlending, depthWrite: false}));
+  realLines.visible = false; realLines.frustumCulled = false; scene.add(realLines);
+
+  // 星座：把一群星按时间串起来，加一个投影到屏幕上的名字
+  CONSTS.forEach(c => {
+    const pts = c.members.map(m => NODES[IDX.get(m)]).filter(Boolean)
+                 .sort((a,b) => a.ts < b.ts ? -1 : 1);
+    if (pts.length < 2) return;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pts.length*3), 3));
+    const line = new THREE.Line(g, new THREE.LineBasicMaterial({
+      color: 0xE8C4A0, transparent: true, opacity: .085,
+      blending: THREE.AdditiveBlending, depthWrite: false}));
+    line.frustumCulled = false; scene.add(line);
+    const lb = document.createElement('div');
+    lb.className = 'cname'; lb.textContent = c.name;
+    labelBox.appendChild(lb);
+    constLines.push({line, geo:g, pts, name:c.name, lb});
+  });
+  labels = constLines;
+}
+
+/* ---- 选中一颗星：连着它的线长出去、连着的星亮起来 ---- */
+let grow = 0;
+function select(d){
+  selected = d;
+  grow = 0;
+  SPR.forEach(s => { s.material.color.copy(s.userData.col); });
+  if (!d) return;
+  const near = new Set();
+  REAL.forEach(e => { if (e.from === d.id) near.add(e.to); if (e.to === d.id) near.add(e.from); });
+  SPR.forEach(s => {
+    if (near.has(s.userData.d.id)) s.material.color.copy(s.userData.col).multiplyScalar(2.4);
+  });
+}
+function growGeo(){
+  if (!selected) return null;
+  const me = NODES[IDX.get(selected.id)];
+  const pts = [];
+  REAL.forEach(e => {
+    const other = e.from === selected.id ? e.to : (e.to === selected.id ? e.from : null);
+    if (!other) return;
+    const o = NODES[IDX.get(other)]; if (!o) return;
+    pts.push(me.x, me.y, me.z,
+             me.x + (o.x-me.x)*grow, me.y + (o.y-me.y)*grow, me.z + (o.z-me.z)*grow);
+  });
+  return pts;
+}
+let growLines = null;
+
+/* ---- 🌠 流星 = 井里的一个梦浮上来（划过一次就没了）---- */
+let meteorCount = 0, meteor = null, nextMeteor = 0;
+function fireMeteor(){
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+  const m = new THREE.Line(g, new THREE.LineBasicMaterial({
+    color: 0xFFF0DC, transparent: true, opacity: .9,
+    blending: THREE.AdditiveBlending, depthWrite: false}));
+  m.frustumCulled = false; scene.add(m);
+  const head = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: TEX, color: 0xFFF3E2, transparent: true,
+    blending: THREE.AdditiveBlending, depthWrite: false}));
+  head.scale.setScalar(11); scene.add(head);
+  const from = new THREE.Vector3((Math.random()-.5)*900, 320+Math.random()*160,
+                                 (Math.random()-.5)*600);
+  const dir = new THREE.Vector3((Math.random()-.5)*1.4, -1, (Math.random()-.5)*1.0).normalize();
+  meteor = {line:m, geo:g, head, from, dir, t:0};
+}
+
+/* ---- 主循环 ---- */
+const ray = new THREE.Raycaster();
+ray.params.Sprite = {};
+const mouse = new THREE.Vector2(-9,-9);
+let clock = 0;
+
+function frame(){
+  requestAnimationFrame(frame);
+  clock += 1/60;
+  controls.update();
+
+  if (show.spin){
+    for (let i=0;i<NODES.length;i++){
+      const n = NODES[i];
+      _v3.set(n.x,n.y,n.z);
+      _q.setFromAxisAngle(n.axis, n.spin);
+      _v3.applyQuaternion(_q);
+      n.x=_v3.x; n.y=_v3.y; n.z=_v3.z;
+      SPR[i].position.set(n.x,n.y,n.z);
+    }
+  }
+  // 24h 内的微闪 · 钉着的慢呼吸
+  for (let i=0;i<SPR.length;i++){
+    const s = SPR[i], d = s.userData.d;
+    let k = 1;
+    if (d.fresh)  k *= .82 + .28*Math.sin(clock*3.4 + d.phase);
+    if (d.pinned) k *= .92 + .12*Math.sin(clock*0.85 + d.phase);
+    if (hovered === d) k *= 1.45;
+    if (k !== 1 || d.fresh || d.pinned || hovered === d) s.scale.setScalar(s.userData.base*k);
+  }
+  // 选中的线往外长
+  if (selected){
+    grow = Math.min(1, grow + 0.045);
+    const pts = growGeo();
+    if (pts && pts.length){
+      if (!growLines){
+        const g = new THREE.BufferGeometry();
+        growLines = new THREE.LineSegments(g, new THREE.LineBasicMaterial({
+          color: 0xFFD9A8, transparent: true, opacity: .85,
+          blending: THREE.AdditiveBlending, depthWrite: false}));
+        growLines.frustumCulled = false; scene.add(growLines);
+      }
+      growLines.geometry.setAttribute('position',
+        new THREE.BufferAttribute(new Float32Array(pts), 3));
+      growLines.visible = true;
+    } else if (growLines) growLines.visible = false;
+  } else if (growLines) growLines.visible = false;
+
+  // 星座线随自转更新 + 名字投影到屏幕
+  if (show.cons) for (const c of constLines){
+    const arr = c.geo.attributes.position.array;
+    let cx=0, cy=0, cz=0;
+    c.pts.forEach((p,i) => { arr[i*3]=p.x; arr[i*3+1]=p.y; arr[i*3+2]=p.z;
+                             cx+=p.x; cy+=p.y; cz+=p.z; });
+    c.geo.attributes.position.needsUpdate = true;
+    _v3.set(cx/c.pts.length, cy/c.pts.length + 26, cz/c.pts.length).project(camera);
+    const vis = _v3.z < 1;
+    c.lb.style.opacity = vis ? 1 : 0;
+    c.lb.style.left = ((_v3.x*.5+.5) * cv.clientWidth) + 'px';
+    c.lb.style.top  = ((-_v3.y*.5+.5) * cv.clientHeight) + 'px';
+  }
+
+  // 流星
+  if (meteorCount > 0){
+    if (!meteor && clock*1000 > nextMeteor) fireMeteor();
+    if (meteor){
+      meteor.t += 0.016;
+      const head = meteor.from.clone().addScaledVector(meteor.dir, meteor.t*760);
+      const tail = head.clone().addScaledVector(meteor.dir, -95);
+      const a = meteor.geo.attributes.position.array;
+      a[0]=head.x; a[1]=head.y; a[2]=head.z; a[3]=tail.x; a[4]=tail.y; a[5]=tail.z;
+      meteor.geo.attributes.position.needsUpdate = true;
+      meteor.head.position.copy(head);
+      const fade = Math.max(0, 1 - meteor.t/1.15);
+      meteor.line.material.opacity = fade * .9;
+      meteor.head.material.opacity = fade;
+      if (meteor.t > 1.15){
+        scene.remove(meteor.line); scene.remove(meteor.head);
+        meteor = null; nextMeteor = clock*1000 + 9000 + Math.random()*13000;
+      }
+    }
+  }
+  composer.render();
+}
+
+/* ---- 鼠标：悬停出玻璃条，点开抽屉 ---- */
+function pick(ev){
+  const r = cv.getBoundingClientRect();
+  mouse.x = ((ev.clientX-r.left)/r.width)*2-1;
+  mouse.y = -((ev.clientY-r.top)/r.height)*2+1;
+  ray.setFromCamera(mouse, camera);
+  const hit = ray.intersectObjects(SPR, false)[0];
+  return hit ? hit.object.userData.d : null;
+}
+cv.addEventListener('pointermove', ev => {
+  const d = pick(ev); hovered = d;
+  if (d){
+    tipEl.innerHTML = '';
+    tipEl.appendChild(document.createTextNode(d.label));
+    const m = document.createElement('span'); m.className = 'm';
+    m.textContent = `${d.room_cn} · ${d.date} · V${d.v.toFixed(2)} · 重${d.importance} · ${d.short}`;
+    tipEl.appendChild(m);
+    const r = cv.getBoundingClientRect();
+    tipEl.style.left = Math.max(6, Math.min(ev.clientX-r.left+14, r.width-310)) + 'px';
+    tipEl.style.top = (ev.clientY-r.top+16) + 'px';
+    tipEl.style.opacity = 1; cv.style.cursor = 'pointer';
+  } else { tipEl.style.opacity = 0; cv.style.cursor = 'grab'; }
+});
+cv.addEventListener('pointerleave', () => { tipEl.style.opacity = 0; hovered = null; });
+let downAt = null;
+cv.addEventListener('pointerdown', ev => downAt = {x:ev.clientX, y:ev.clientY});
+cv.addEventListener('pointerup', ev => {
+  if (!downAt) return;
+  const moved = Math.hypot(ev.clientX-downAt.x, ev.clientY-downAt.y);
+  downAt = null;
+  if (moved > 5) return;
+  const d = pick(ev);
+  select(d);
+  if (d && window.openBucket) window.openBucket(d.id);
+});
+
+function resize(){
+  W = cv.clientWidth || W; H = cv.clientHeight || H;
+  camera.aspect = W/H; camera.updateProjectionMatrix();
+  renderer.setSize(W, H, false);
+  composer.setSize(W, H);
+  bloom.setSize(W, H);
+}
+addEventListener('resize', resize);
+
+/* ---- 开门 ---- */
+let opened = false;
+async function open(){
+  if (opened) return; opened = true;
+  resize();
+  const noteBox = document.getElementById('skyNote');
+  try{
+    const d = await window.lociApi('/api/loci/graph');
+    buildScene(d);
+    meteorCount = d.meteors;
+    nextMeteor = 4000;
+    document.getElementById('skyStat').textContent =
+      `${d.counts.nodes} 颗 · 真边 ${d.counts.edges} · 暗线 ${d.counts.weak}`;
+    if (window.__skyLoadStop) window.__skyLoadStop();
+    loadEl.classList.add('gone');
+    composer.render();      // 首帧同步渲染：页面在后台时 rAF 是停的，别留一片黑
+    frame();
+    renderNote(noteBox, d);
+  }catch(e){
+    loadEl.classList.add('gone');
+    document.getElementById('skyStat').textContent = '开不了';
+    window.lociFail(noteBox, e);
+  }
+}
+function renderNote(box, d){
+  const el = window.lociEl;
+  box.innerHTML = '';
+  // 她 8-06 傍晚定稿：大 event 时间轴和星座是同一个东西，就叫星座。
+  // 一件一件往上叠（最新的在上面），每座左边一条细竖线，副行写范围。
+  box.appendChild(el('h2','h','星座'));
+  if (!d.constellations.length){
+    box.appendChild(el('div','muted','还没有星座。存一条大 event 就多一座。'));
+    return;
+  }
+  d.constellations.forEach(c => {
+    const wrap = el('div','const-item ' + (c.ongoing ? 'ongoing' : 'over'));
+    const b = el('button','rule');
+    b.appendChild(el('div','rtxt', `「${c.name}」· ${c.members.length} 颗星`
+                     + (c.ongoing ? ' · 还在进行中' : '')));
+    const sub = el('div','rid');
+    sub.textContent = c.query_text
+      ? (c.short + ' · ' + c.query_text)
+      : (c.short + ' · ⚠️ 这条大 event 没写清范围，星座是空的');
+    if (!c.query_text) sub.classList.add('err');
+    b.appendChild(sub);
+    b.onclick = () => window.openBucket(c.id);
+    wrap.appendChild(b);
+    box.appendChild(wrap);
+  });
+  const tip = el('div','tiny muted');
+  tip.style.marginTop = '10px';
+  tip.textContent = '一座星座 = 一条大 event 照亮的那片天：起止就在它的 when 里，'
+    + '正文里可以再写一行「过滤：tag=xxx」收窄到哪一类。点一座看那句话。'
+    // 2026-08-17 night_fall 退役：不再是「井里潜伏、共振才浮」，
+    // 而是「盘上还剩几个，时间到了自己就没了」。
+    + (d.meteors ? `　🌠 盘上还剩 ${d.meteors} 个梦，时间到了自己会没。` : '');
+  box.appendChild(tip);
+}
+
+/* ---- 开关 ---- */
+const sw = (id, key, after) => {
+  const b = document.getElementById(id);
+  b.onclick = () => { show[key] = !show[key]; b.classList.toggle('on', show[key]);
+                      if (after) after(show[key]); };
+};
+sw('swConst','cons', v => {
+  constLines.forEach(c => { c.line.visible = v; c.lb.style.display = v ? '' : 'none'; });
+});
+sw('swSpin','spin');
+/* ---- 声音 ----
+   不用音频文件：Web Audio 现合成。一层很低的持续音 + 偶尔一颗铃。
+   铃的音高来自**真的那颗星**的 V（冷的音低、暖的音高），落在五声音阶上，
+   所以它跟这片天是同一份数据长出来的，不是随便配的背景乐。
+   浏览器不许自动播放，必须她点一下才响 —— 正好，它本来就该是可选的。 */
+let AC = null, master = null, drone = null, bellTimer = null;
+const PENT = [0,2,4,7,9];        // 五声音阶：随便撞都不难听
+function noteHz(step){ return 220 * Math.pow(2, step/12); }
+function startSound(){
+  if (AC) return;
+  AC = new (window.AudioContext || window.webkitAudioContext)();
+  master = AC.createGain();
+  master.gain.value = 0;
+  master.connect(AC.destination);
+  master.gain.linearRampToValueAtTime(0.20, AC.currentTime + 4);   // 慢慢淡进来
+
+  // 白噪音底（她 8-04 要的）：白噪 → 低通滤到只剩「风声」那一段 →
+  // 再挂一个极慢的 LFO 推着截止频率走，听起来像远处有风在动，不是死的嘶声
+  {
+    const LEN = 4;                                   // 4 秒一段，循环播放
+    const buf = AC.createBuffer(1, AC.sampleRate * LEN, AC.sampleRate);
+    const ch = buf.getChannelData(0);
+    let last = 0;
+    for (let i = 0; i < ch.length; i++){
+      // 粉噪比白噪耳朵舒服（白噪高频太扎）：一阶低通把它压成粉的
+      const white = Math.random() * 2 - 1;
+      last = (last + 0.02 * white) / 1.02;
+      ch[i] = last * 3.5;
+    }
+    const src = AC.createBufferSource();
+    src.buffer = buf; src.loop = true;
+    const lp = AC.createBiquadFilter();
+    lp.type = "lowpass"; lp.frequency.value = 620; lp.Q.value = 0.4;
+    const ng = AC.createGain(); ng.gain.value = 0.30;
+    const sweep = AC.createOscillator(); sweep.frequency.value = 0.021;
+    const sg = AC.createGain(); sg.gain.value = 240;   // 截止频率在 380~860 之间慢慢晃
+    sweep.connect(sg); sg.connect(lp.frequency); sweep.start();
+    src.connect(lp); lp.connect(ng); ng.connect(master); src.start();
+  }
+
+  // 再压一层几乎听不见的低音垫（两个略微失谐的正弦，会自己缓慢起伏）
+  drone = AC.createGain(); drone.gain.value = 0.34; drone.connect(master);
+  [55, 55.3, 82.5].forEach((f, i) => {
+    const o = AC.createOscillator(); o.type = "sine"; o.frequency.value = f;
+    const g = AC.createGain(); g.gain.value = i === 2 ? 0.10 : 0.18;
+    const lfo = AC.createOscillator(); lfo.frequency.value = 0.03 + i * 0.017;
+    const lg = AC.createGain(); lg.gain.value = 0.06;
+    lfo.connect(lg); lg.connect(g.gain); lfo.start();
+    o.connect(g); g.connect(drone); o.start();
+  });
+
+  const ring = () => {
+    if (!AC) return;
+    // 从天上随便挑一颗真星，用它的 V 定音高
+    const star = NODES.length ? NODES[(Math.random() * NODES.length) | 0] : null;
+    const v = star ? Math.max(0, Math.min(1, star.v)) : Math.random();
+    const step = PENT[(v * PENT.length) | 0 % PENT.length] + 12 * (v > .66 ? 2 : v > .33 ? 1 : 0);
+    const t = AC.currentTime, o = AC.createOscillator(), g = AC.createGain();
+    o.type = "sine"; o.frequency.value = noteHz(step);
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(0.22, t + 0.02);      // 敲一下
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 4.5); // 长长地散掉
+    o.connect(g); g.connect(master); o.start(t); o.stop(t + 5);
+    bellTimer = setTimeout(ring, 3500 + Math.random() * 6500);
+  };
+  bellTimer = setTimeout(ring, 1200);
+}
+function stopSound(){
+  if (!AC) return;
+  clearTimeout(bellTimer); bellTimer = null;
+  const ac = AC; AC = null;
+  master.gain.linearRampToValueAtTime(0, ac.currentTime + 1.2);
+  setTimeout(() => ac.close().catch(()=>{}), 1600);
+}
+sw('swSound','sound', on => { on ? startSound() : stopSound(); });
+// 切走别的页签就闭嘴（她在看别的东西，不该还有声音）
+document.querySelectorAll('nav.tabs button').forEach(b => b.addEventListener('click', () => {
+  if (b.dataset.tab !== 'sky' && AC){
+    stopSound();
+    show.sound = false;
+    document.getElementById('swSound').classList.remove('on');
+  }
+}));
+
+document.getElementById('swReset').onclick = () => {
+  controls.reset(); camera.position.set(0,46,420); controls.update(); select(null);
+};
+
+
+window.LociSky = {open, resize, renderOnce: () => composer.render(),
+                  _dbg: {THREE, scene, camera, renderer, composer, bloom,
+                         get nodes(){return NODES}, get sprites(){return SPR}}};
+dispatchEvent(new Event('locisky:ready'));
+</script>
+</body>
+</html>
