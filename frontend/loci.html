@@ -633,11 +633,15 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
       <h2 class="h">账号</h2>
       <div class="fline">
         <span class="lb">名字</span>
-        <div class="fbody"><div class="tiny" id="setNames">…</div></div>
+        <div class="fbody">
+          <div class="tiny" id="setNames">…</div>
+          <div class="tiny muted" id="setNamesHint"></div>
+        </div>
       </div>
       <div class="fline">
         <span class="lb">密码</span>
         <div class="fbody">
+          <div id="pwWhat" class="tiny">…</div>
           <div id="pwState" class="tiny muted" style="margin-bottom:10px">…</div>
           <div class="frow">
             <input type="password" id="pw1" class="search" placeholder="新密码（至少 6 位）"
@@ -661,8 +665,9 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
 
     <!-- ② 状态 -->
     <div class="card">
-      <h2 class="h">状态 <span class="n" id="setStat">看一眼…</span>
+      <h2 class="h">状态
         <button class="mini" id="setToggle" style="margin-left:auto" hidden>展开</button>
+        <span class="n" id="setStat">看一眼…</span>
       </h2>
       <div id="setRows"><div class="spin">看一眼…</div></div>
     </div>
@@ -780,8 +785,9 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
 
     <!-- ⑥ 日志（默认折起来：出问题才看，平时占屏幕） -->
     <div class="card">
-      <h2 class="h">日志 <span class="n">出问题先看这儿</span>
+      <h2 class="h">日志
         <button class="mini" id="logToggle" style="margin-left:auto">展开</button>
+        <span class="n">出问题先看这儿</span>
       </h2>
       <div id="logBox" hidden>
         <div class="frow" style="margin-bottom:12px">
@@ -978,13 +984,12 @@ function setLocalDef(k, v){ try{ localStorage.setItem("loci-def-" + k, String(v)
 async function loadSet(){
   try{
     const st = await api("/api/loci/auth/state");
-    $("#pwState").textContent = (st.env_locked
-      ? "⚠️ 现在的密码来自 docker-compose 的环境变量。环境变量在的时候它优先——"
-        + "所以在这儿存一个新的之后，还要去删掉那一行、重启容器，新密码才真正接管。"
+    $("#pwState").textContent = st.env_locked
+      ? "现在的密码来自 docker-compose 的环境变量，它优先。要换成自己的，存完还得删掉那一行、重启。"
       : (st.has_file_password
-          ? "密码存在 Loci 自己这儿了。" + (st.question ? "忘了能用安全问题找回：" + st.question : "")
-          : "还没有自己的密码。在下面设一个。"))
-      + " —— 这把密码管的是 MCP 授权页，不是这一屏的门（这一屏现在没有门，见下面「状态」）。";
+          ? (st.question ? "存在 Loci 自己这儿。忘了能用安全问题找回：" + st.question
+                         : "存在 Loci 自己这儿。")
+          : "还没设过。");
   }catch(e){ $("#pwState").textContent = "读不到状态：" + e.message; }
   let _t = "auto";
   try{ _t = localStorage.getItem("loci-theme") || "auto"; }catch(e){}
@@ -1061,8 +1066,15 @@ async function loadCfg(){
     $("#cfgMT").value = mt; $("#cfgMTVal").textContent = mt;
     // 名字：只读。它们是容器的环境变量，不是 config.yaml 里的东西 ——
     // 在这儿放个能编辑的框，等于骗人（存了也不生效）。所以只显示 + 说清改哪儿。
-    $("#setNames").textContent = (c.ai_name || "没配") + " / " + (c.owner_name || "没配")
-      + "（他 / 你。改的是容器的环境变量 AI_NAME 和 LOCI_OWNER_NAME，改完要重启）";
+    $("#setNames").textContent = (c.ai_name || "没配") + " / " + (c.owner_name || "没配");
+    $("#setNamesHint").textContent = "改容器环境变量 AI_NAME / LOCI_OWNER_NAME，改完重启";
+    // 密码这一行：说清它到底管什么，别的都删掉。
+    // E2 之后面板 /api/* 不再鉴权，这把密码只剩 MCP 授权页一个用处；
+    // 而 MCP 鉴权关着的时候，那个页面也不启用 —— 那就是**一处都没用上**。
+    const mcpOn = !!c.mcp_require_auth_effective;
+    $("#pwWhat").textContent = mcpOn
+      ? "给 MCP 远程连接的授权页用的。不是这一屏的门。"
+      : "给 MCP 远程连接的授权页用的。你这台机器 MCP 鉴权关着，所以它现在没用上。";
   }catch(err){ $("#cfgSaveMsg").textContent = "读不到现在的配置：" + err.message; }
 }
 $("#cfgEOn").onclick = () => {
