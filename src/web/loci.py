@@ -428,9 +428,13 @@ async def build_subjects() -> dict:
     from tools.recall.core import _visible
     from tools import _subjects as subj
     all_buckets = await sh.bucket_mgr.list_all(include_archive=False)
+    table = subj.load_alias_table()           # {别名小写: 规范名}
+    blocked = subj.load_not_person()          # 被标成「这不是人」的（小写）
     counts: Counter = Counter()
+    variants: dict[str, set] = {}             # 规范名 → 盘上实际出现过的写法
     last: dict[str, datetime] = {}
     last_bucket: dict[str, str] = {}
+    blocked_hits: Counter = Counter()
     total = 0
     with_subj = 0
     for b in all_buckets:
@@ -438,36 +442,53 @@ async def build_subjects() -> dict:
         if not _visible(meta):
             continue
         total += 1
-        names = [str(x).strip() for x in (meta.get("subjects") or []) if str(x).strip()]
-        if names:
+        raws = [str(x).strip() for x in (meta.get("subjects") or []) if str(x).strip()]
+        if raws:
             with_subj += 1
         ts = _node_ts(meta)
         bid = str(meta.get("id") or "")
-        for n in dict.fromkeys(names):        # 同一条里重复的名字只算一次
-            counts[n] += 1
-            if ts is not None and (n not in last or ts > last[n]):
-                last[n] = ts
-                last_bucket[n] = bid
-    table = subj.load_alias_table()           # {别名小写: 规范名}
+        seen = set()
+        for raw in raws:
+            low = raw.lower()
+            if low in blocked:
+                blocked_hits[raw] += 1
+                continue
+            # 🔴 这儿故意不走 subj.canonical()：它对代词也返回空串，
+            # 那会把「代词漏进 subjects」这件事悄悄吞掉。而那正是要看见的东西。
+            canon = table.get(low, raw)
+            if canon in seen:                 # 同一条里两种写法归到一个人，只算一次
+                continue
+            seen.add(canon)
+            counts[canon] += 1
+            if canon != raw:
+                variants.setdefault(canon, set()).add(raw)
+            if ts is not None and (canon not in last or ts > last[canon]):
+                last[canon] = ts
+                last_bucket[canon] = bid
     names_out = []
-    for n, c in counts.most_common():
-        ts = last.get(n)
+    for nm, c in counts.most_common():
+        ts = last.get(nm)
         names_out.append({
-            "name": n,
+            "name": nm,
             "n": c,
             "last": ts.strftime("%Y-%m-%d") if ts else "",
-            "last_bucket": last_bucket.get(n, ""),
-            # 已经在表里的：归到哪个规范名下（名字自己就是规范名时也算）
-            "canonical": table.get(n.lower(), ""),
-            # 代词不该当主体（闸在写入端）——真出现了就是漏了，标出来
-            "pronoun": subj.is_pronoun(n),
+            "last_bucket": last_bucket.get(nm, ""),
+            # 空 = 还不在别名表里（新出现的人）
+            "canonical": table.get(nm.lower(), ""),
+            # 盘上还留着的老写法（合并只管以后，历史不改）
+            "variants": sorted(variants.get(nm, ())),
+            # 代词不该当主体（闸在写入端）——真出现了就是那道闸漏了，标出来
+            "pronoun": subj.is_pronoun(nm),
         })
     return {
         "total": total,                       # 看得见的条数
         "with_subjects": with_subj,           # 其中抽到了人的
-        "distinct": len(counts),              # 不同的名字几个
+        "distinct": len(counts),              # 不同的名字几个（已按表并过）
         "names": names_out,                   # 按次数降序
         "alias_table_size": len(table),
+        # 被标成「这不是人」的：不摆进上面那张表，但也不能凭空消失 ——
+        # 悄悄没了的东西没人能反悔。
+        "blocked": [{"name": k, "n": v} for k, v in blocked_hits.most_common()],
     }
 
 
@@ -1781,6 +1802,56 @@ def register(mcp) -> None:
         except Exception as e:                       # noqa: BLE001
             logger.warning(f"[loci] subjects 失败: {e}")
             return JSONResponse({"error": str(e)}, status_code=500)
+
+    @mcp.custom_route("/api/loci/subjects/action", methods=["POST"])
+    async def api_loci_subjects_action(request: Request) -> Response:
+        """人名表上那三个动作。**这是个写口** —— 写的是 buckets/aliases.yaml。
+
+        判据跟 muse/fold 同一条：**系统只负责摆出来，改哪个是人点的那一下。**
+        所以这儿没有任何自动触发路径，也不接受「帮我全部整理一遍」这种批量请求：
+        一次调用改一个名字。
+
+        三个动作落到两个操作上（合并和改名是同一件事：把一个写法归到一个规范名下）：
+          not_person  这不是人 → 记进 __不是人__ 黑名单，以后不再抽它。
+                      🔴 历史那些条**一个字节都不动**（她 2026-08-19 定的 A 方案）：
+                         改历史 metadata 是往她的记忆里写字，而「当时模型这么抽的」
+                         本身是个事实；黑名单已经够了，而且随时能反悔。
+          merge       这两个是一个人 → name 归到 target 底下
+          rename      给他个正式名字 → 同上（target 是新的规范名）
+
+        ⚠️ 都只管**以后**：老条目盘上还是老名字（这张表没有迁移脚本）。
+           面板那一屏按表把它们并起来看，所以点完当场就少一行。
+        """
+        from starlette.responses import JSONResponse
+        from tools import _subjects as subj
+        try:
+            body = await _write_body(request)
+        except PermissionError as e:
+            return JSONResponse({"error": str(e)}, status_code=403)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        action = str(body.get("action") or "").strip()
+        name = body.get("name")
+        target = body.get("target")
+        try:
+            if action == "not_person":
+                changed = subj.mark_not_person(name)
+                note = ("记下了，以后不再抽它（历史那几条没动）" if changed
+                        else "它已经在黑名单里了")
+            elif action in ("merge", "rename"):
+                changed = subj.add_alias(target, name)
+                note = ("写进别名表了 —— 只管以后，老条目盘上还是老名字" if changed
+                        else "这条已经在表里了")
+            else:
+                return JSONResponse(
+                    {"error": "action 只有三个：not_person / merge / rename"},
+                    status_code=400)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        except Exception as e:                       # noqa: BLE001
+            logger.warning(f"[loci] subjects/action 失败: {e}")
+            return JSONResponse({"error": str(e)}, status_code=500)
+        return JSONResponse({"ok": True, "changed": bool(changed), "note": note})
 
     @mcp.custom_route("/api/logs", methods=["GET"])
     async def api_logs(request: Request) -> Response:

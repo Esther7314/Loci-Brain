@@ -109,6 +109,46 @@ nav.tabs button.on{background:var(--card);color:var(--ink);font-weight:600;
   box-shadow:0 1px 3px rgba(0,0,0,.07)}
 
 section.page{display:none}
+/* 整理页那两块靠 hidden 切。⚠️ 必须写死这一条：坑 #1 说过 ID/类选择器能压过
+   浏览器给 [hidden] 的 display:none，少了它「切过去」就等于「两块都在」。
+   也不能把两块各自套进一个 div —— section.page.on 是靠**直接子元素**给 gap 的，
+   套一层缝就没了（坑 #5，她说了三遍才被量出来的那个 0px）。 */
+section.page.on > [hidden]{display:none}
+/* 人名表一行：名字 · 多少条 · 最近一次 · 牌子 · 动作。
+   元信息在名字右边横排，动作靠右——名字长了不挤动作，动作多了不挤名字。 */
+/* 两栏 grid 而不是一路 flex-wrap：左边（名字/条数/牌子）自己内部换行，
+   动作永远待在右边同一行。纯 flex-wrap 的话，名字一长或者多一个牌子，
+   按钮就被顶到下一行去孤零零挂着（第一版真这样，小刀批那行就是）。 */
+.who-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;
+  gap:10px 14px;padding:13px 2px;border-bottom:1px solid var(--line)}
+.who-row .main{display:flex;align-items:center;gap:8px 12px;flex-wrap:wrap;min-width:0}
+.who-row .nm{font-size:var(--fs-md);font-weight:600;min-width:0;word-break:break-all}
+.who-row .meta{display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+  font-family:var(--mono);font-size:var(--fs-xs);color:var(--ink-3)}
+.who-row .acts{display:flex;gap:6px;flex:none;justify-content:flex-end}
+.who-row .who-panel{grid-column:1/-1;display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  padding:10px 0 2px}
+/* ⚠️ 又是坑 #1：上面那条类选择器的 display:flex 压过浏览器给 [hidden] 的
+   display:none —— 少了这一行，JS 里 panel.hidden=true 完全没用，面板关不上。
+   8-03 夜是 #gate 上栽的（她被关在门外二十分钟），8-19 我在这儿原样栽了第二次。
+   教训还是那句：**验了「能打开」不等于验了「能关上」。** */
+.who-row .who-panel[hidden]{display:none}
+.who-row .who-panel select,.who-row .who-panel input{padding:6px 10px;font-size:var(--fs-xs)}
+.who-row .who-panel .tiny{flex-basis:100%}
+.mini.hot{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
+/* 小浮条：写口成功了得说一声，但不值得弹对话框（对话框要人点一下才走，
+   而这几个动作是连着点好几下的活）。3 秒自己淡掉。 */
+#toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(8px);
+  z-index:90;max-width:min(520px,calc(100vw - 32px));
+  padding:11px 18px;border-radius:999px;font-size:var(--fs-sm);
+  background:var(--card);border:1px solid var(--line);
+  box-shadow:0 10px 34px rgba(24,23,21,.18);
+  opacity:0;pointer-events:none;transition:opacity .2s,transform .2s}
+#toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
+.who-row .flag{font-family:var(--mono);font-size:var(--fs-xs);
+  padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--ink-2)}
+.who-row .flag.warn{border-color:var(--accent);color:var(--ink)}
+.who-bar{height:4px;border-radius:2px;background:var(--accent);opacity:.5;flex:none}
 section.page.on{display:flex;flex-direction:column;gap:var(--gap)}
 
 /* 卡片：比底更白、大圆角、无边框无阴影 */
@@ -433,7 +473,7 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
       <button data-tab="pool" class="on">记忆</button>
       <button data-tab="prof">呼吸</button>
       <button data-tab="sky">星空</button>
-      <button data-tab="sim">相似度</button>
+      <button data-tab="sim">整理</button>
       <button data-tab="set">设置</button>
     </nav>
   </header>
@@ -521,7 +561,18 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
 
   <!-- ============ 相似度 ============ -->
   <section class="page" id="p-sim">
+    <!-- 整理 = 「系统摆出来，人点那一下」的两件事住一起（跟 muse/fold 同一条判据）。
+         chip 一点换下面那整块，不跳路由不刷新。
+         阈值旋钮不在这页——那是「这台机器怎么跑」，8-18 夜她定了归设置页。 -->
     <div class="card">
+      <h2 class="h">整理 <span class="n">系统摆出来，你点那一下</span></h2>
+      <div class="chips" id="tidyMode" style="margin-top:2px">
+        <button class="chip on" data-t="dup">重复的</button>
+        <button class="chip" data-t="who">都有谁</button>
+      </div>
+    </div>
+
+    <div class="card" data-tidy="dup">
       <h2 class="h">相似度</h2>
       <p class="tiny muted" style="margin:-6px 0 12px">这条线是你画的——线以上的算「疑似同一件」，捞出来给你裁。我只负责把分布摆出来。</p>
       <div class="slider-row">
@@ -533,7 +584,17 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
       <canvas id="hist"></canvas>
       <div class="tiny muted" style="margin-top:8px" id="histNote"></div>
     </div>
-    <div id="simOut"></div>
+    <div id="simOut" data-tidy="dup"></div>
+
+    <div class="card" data-tidy="who" hidden>
+      <h2 class="h">都有谁 <span class="n" id="whoStat">数着…</span></h2>
+      <p class="tiny muted" style="margin:-6px 0 14px">
+        库里出现过的人，按出现次数排。别名表是手工维护的，而手工维护的前提是
+        「你得先知道有东西要改」—— 这一屏就是那一步。
+        <b>我只负责摆出来，改哪个是你点的那一下。</b>
+      </p>
+      <div id="whoOut"><div class="spin">数着…</div></div>
+    </div>
   </section>
 
   <!-- ============ 档案 ============ -->
@@ -628,6 +689,8 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
   </form>
 </div>
 <div id="scrim"></div>
+<div id="toast"></div>
+
 <aside id="drawer">
   <div class="dr-top">
     <strong id="drTitle">原文</strong>
@@ -682,6 +745,15 @@ async function apiPost(path, body){
   if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
   return j;
 }
+let _toastT = null;
+function toast(msg){
+  const t = $("#toast");
+  t.textContent = msg;
+  t.classList.add("on");
+  clearTimeout(_toastT);
+  _toastT = setTimeout(() => t.classList.remove("on"), 3200);
+}
+
 function fail(box, e){
   box.innerHTML = "";
   const c = el("div","card"); c.appendChild(el("div","err", "✗ " + e.message));
@@ -1372,6 +1444,148 @@ function drawHist(hist, th){
   c.strokeStyle = v("--ink"); c.lineWidth = 2;
   c.beginPath(); c.moveTo(x, 2); c.lineTo(x, H-AXIS); c.stroke();
 }
+/* ---- 整理页：两块 chip 切换 ---- */
+let tidyTab = "dup";
+let whoLoaded = 0;
+function setTidy(t){
+  tidyTab = t;
+  document.querySelectorAll("#tidyMode .chip").forEach(c =>
+    c.classList.toggle("on", c.dataset.t === t));
+  document.querySelectorAll("[data-tidy]").forEach(el0 =>
+    el0.hidden = (el0.dataset.tidy !== t));
+  if (t === "who" && !whoLoaded){ whoLoaded = 1; loadWho(); }
+}
+document.querySelectorAll("#tidyMode .chip").forEach(c =>
+  c.onclick = () => setTidy(c.dataset.t));
+
+/* ---- 都有谁（人名表）----
+   数据来自 GET /api/loci/subjects（只读口，只数数）。
+   三个动作走 POST /api/loci/subjects/action（写 aliases.yaml）。
+   🔴 判据：**系统只负责摆出来，改哪个是你点的那一下。** 没有任何自动整理。
+   条形是按次数的相对长度——次数差三个数量级的时候，光看数字看不出谁是主角。 */
+async function loadWho(){
+  const out = $("#whoOut");
+  out.innerHTML = '<div class="spin">数着…</div>';
+  try{
+    const d = await api("/api/loci/subjects");
+    $("#whoStat").textContent =
+      d.distinct + " 个名字 · " + d.with_subjects + "/" + d.total + " 条抽到了人";
+    out.innerHTML = "";
+    if (!d.names.length){
+      out.appendChild(el("div","muted tiny","一个名字都没抽到——去设置页「日志」看看打标模型通不通。"));
+      return;
+    }
+    const top = d.names[0].n || 1;
+    const allNames = d.names.map(x => x.name);
+
+    d.names.forEach(x => {
+      const r = el("div","who-row");
+      const main = el("div","main");
+      main.appendChild(el("span","nm", x.name));
+      const bar = el("span","who-bar");
+      bar.style.width = Math.max(6, Math.round(46 * x.n / top)) + "px";
+      main.appendChild(bar);
+      const meta = el("div","meta");
+      meta.appendChild(el("span",null, x.n + " 条"));
+      if (x.last) meta.appendChild(el("span",null, "最近 " + x.last));
+      // 盘上还留着的老写法：合并只管以后，这行是「历史上它还叫过什么」
+      if ((x.variants||[]).length)
+        meta.appendChild(el("span",null, "盘上还写着 " + x.variants.join("、")));
+      main.appendChild(meta);
+      // 牌子：只在「有话要说」的时候出现，正常的那些行保持干净
+      if (x.pronoun) main.appendChild(el("span","flag warn","代词漏进来了"));
+      else if (!x.canonical) main.appendChild(el("span","flag","不在别名表里"));
+      r.appendChild(main);
+
+      const acts = el("div","acts");
+      const panel = el("div","who-panel");   // 需要填东西的动作在这儿展开（占满一行）
+      panel.hidden = true;
+
+      const send = async (body, btn) => {
+        btn.disabled = true;
+        try{
+          const res = await apiPost("/api/loci/subjects/action", body);
+          whoLoaded = 0; await loadWho();          // 重新数一遍：并没并上当场就看得见
+          if (res.note) toast(res.note);
+        }catch(e){ alert("没成：" + e.message); btn.disabled = false; }
+      };
+
+      // ① 这不是人 —— 两下才发（写口不该一下就走，但也不值得弹个对话框）
+      const notP = el("button","mini","这不是人");
+      let armed = false;
+      notP.onclick = () => {
+        if (!armed){ armed = true; notP.textContent = "真不是人？"; notP.classList.add("hot");
+                     setTimeout(() => { armed = false; notP.textContent = "这不是人";
+                                        notP.classList.remove("hot"); }, 4000); return; }
+        send({action:"not_person", name:x.name}, notP);
+      };
+      acts.appendChild(notP);
+
+      // ② 跟谁是一个人 —— 从现有的名字里挑一个当规范名
+      if (allNames.length > 1){
+        const mg = el("button","mini","跟谁是一个人");
+        mg.onclick = () => {
+          panel.hidden = !panel.hidden;
+          if (panel.hidden) return;
+          panel.innerHTML = "";
+          const sel = document.createElement("select");
+          sel.className = "search";
+          allNames.filter(nm => nm !== x.name).forEach(nm => {
+            const o = document.createElement("option"); o.value = nm; o.textContent = nm;
+            sel.appendChild(o);
+          });
+          panel.appendChild(el("span","tiny muted", "把「" + x.name + "」归到："));
+          panel.appendChild(sel);
+          const ok = el("button","mini","就它");
+          ok.onclick = () => send({action:"merge", name:x.name, target:sel.value}, ok);
+          panel.appendChild(ok);
+          panel.appendChild(el("div","tiny muted",
+            "只管以后：老条目盘上还是「" + x.name + "」，这一屏按表并起来给你看。"));
+        };
+        acts.appendChild(mg);
+      }
+
+      // ③ 给他个正式名字
+      const rn = el("button","mini","正式名字");
+      rn.onclick = () => {
+        panel.hidden = !panel.hidden;
+        if (panel.hidden) return;
+        panel.innerHTML = "";
+        const inp = document.createElement("input");
+        inp.type = "text"; inp.className = "search"; inp.placeholder = "你平时怎么叫他";
+        panel.appendChild(el("span","tiny muted", "「" + x.name + "」的正式名字："));
+        panel.appendChild(inp);
+        const ok = el("button","mini","就这个");
+        ok.onclick = () => {
+          const v = inp.value.trim();
+          if (!v){ alert("名字是空的"); return; }
+          send({action:"rename", name:x.name, target:v}, ok);
+        };
+        panel.appendChild(ok);
+        inp.addEventListener("keydown", e => { if (e.key === "Enter") ok.click(); });
+        inp.focus();
+      };
+      acts.appendChild(rn);
+
+      r.appendChild(acts);
+      r.appendChild(panel);
+      out.appendChild(r);
+    });
+
+    // 被标成「这不是人」的：不摆进上面那张表，但也不能凭空消失——
+    // 悄悄没了的东西没人能反悔。
+    if ((d.blocked||[]).length){
+      const b = el("div","tiny muted");
+      b.style.marginTop = "16px";
+      b.textContent = "你标过「不是人」的：" +
+        d.blocked.map(z => z.name + "（" + z.n + " 条）").join("、") +
+        " —— 历史那些条一个字没动，只是不再摆出来、以后也不再抽它。" +
+        "想反悔就去 buckets/aliases.yaml 把 __不是人__ 底下那一行删掉。";
+      out.appendChild(b);
+    }
+  }catch(e){ fail(out, e); }
+}
+
 async function loadSim(){
   const out = $("#simOut");
   out.innerHTML = '<div class="card spin">全库两两比一遍…（第一次几秒钟）</div>';
