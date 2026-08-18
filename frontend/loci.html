@@ -565,16 +565,16 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
          chip 一点换下面那整块，不跳路由不刷新。
          阈值旋钮不在这页——那是「这台机器怎么跑」，8-18 夜她定了归设置页。 -->
     <div class="card">
-      <h2 class="h">整理 <span class="n">系统摆出来，你点那一下</span></h2>
+      <h2 class="h">整理</h2>
       <div class="chips" id="tidyMode" style="margin-top:2px">
-        <button class="chip on" data-t="dup">重复的</button>
-        <button class="chip" data-t="who">都有谁</button>
+        <button class="chip on" data-t="dup">相似度</button>
+        <button class="chip" data-t="who">人名表</button>
       </div>
     </div>
 
     <div class="card" data-tidy="dup">
       <h2 class="h">相似度</h2>
-      <p class="tiny muted" style="margin:-6px 0 12px">这条线是你画的——线以上的算「疑似同一件」，捞出来给你裁。我只负责把分布摆出来。</p>
+      <p class="tiny muted" style="margin:-6px 0 12px">线以上的算「疑似同一件」，捞出来你来判断。</p>
       <div class="slider-row">
         <span class="th-val" id="thVal">88</span>
         <input type="range" id="th" min="75" max="99" step="1" value="88">
@@ -587,7 +587,7 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
     <div id="simOut" data-tidy="dup"></div>
 
     <div class="card" data-tidy="who" hidden>
-      <h2 class="h">都有谁 <span class="n" id="whoStat">数着…</span></h2>
+      <h2 class="h">人名表 <span class="n" id="whoStat">数着…</span></h2>
       <p class="tiny muted" style="margin:-6px 0 14px">
         库里出现过的人，按出现次数排。别名表是手工维护的，而手工维护的前提是
         「你得先知道有东西要改」—— 这一屏就是那一步。
@@ -1506,19 +1506,23 @@ async function loadWho(){
         try{
           const res = await apiPost("/api/loci/subjects/action", body);
           whoLoaded = 0; await loadWho();          // 重新数一遍：并没并上当场就看得见
-          if (res.note) toast(res.note);
+          toast((body.action === "not_person"
+                 ? "「" + body.name + "」记成不是人了，从这一屏收起来"
+                 : "「" + body.name + "」归到「" + body.target + "」底下了")
+                + (res.note ? " —— " + res.note : ""));
         }catch(e){ alert("没成：" + e.message); btn.disabled = false; }
       };
 
-      // ① 这不是人 —— 两下才发（写口不该一下就走，但也不值得弹个对话框）
+      // ① 这不是人 —— 一下就走。
+      // 🔴 2026-08-19 改回来的：本来我加了「两下才发」，第一下把字变成「真不是人？」。
+      //    结果她点了一下就以为生效了 —— 日志里根本没有那个请求。
+      //    「按钮的字变了」看起来就是「已经做了」，而不是「再点一次」。
+      //    她本来的想法是「点了就隐藏」，中间加一道她没要的关卡，
+      //    只会造出「以为点了其实没点」这种最难查的失败。
+      //    这个动作本身是可逆的（把 aliases.yaml 里那一行删掉就回来了），
+      //    可逆的动作不配一道确认。做完弹小浮条说清楚做了什么，那才是该给的东西。
       const notP = el("button","mini","这不是人");
-      let armed = false;
-      notP.onclick = () => {
-        if (!armed){ armed = true; notP.textContent = "真不是人？"; notP.classList.add("hot");
-                     setTimeout(() => { armed = false; notP.textContent = "这不是人";
-                                        notP.classList.remove("hot"); }, 4000); return; }
-        send({action:"not_person", name:x.name}, notP);
-      };
+      notP.onclick = () => send({action:"not_person", name:x.name}, notP);
       acts.appendChild(notP);
 
       // ② 跟谁是一个人 —— 从现有的名字里挑一个当规范名
@@ -1572,17 +1576,12 @@ async function loadWho(){
       out.appendChild(r);
     });
 
-    // 被标成「这不是人」的：不摆进上面那张表，但也不能凭空消失——
-    // 悄悄没了的东西没人能反悔。
-    if ((d.blocked||[]).length){
-      const b = el("div","tiny muted");
-      b.style.marginTop = "16px";
-      b.textContent = "你标过「不是人」的：" +
-        d.blocked.map(z => z.name + "（" + z.n + " 条）").join("、") +
-        " —— 历史那些条一个字没动，只是不再摆出来、以后也不再抽它。" +
-        "想反悔就去 buckets/aliases.yaml 把 __不是人__ 底下那一行删掉。";
-      out.appendChild(b);
-    }
+    // 标成「不是人」的**一个字都不在这一屏上出现**（她 8-19 定的）：
+    // 「隐藏」就是隐藏，把它们再列一遍等于没隐藏，还让人以为那也是个人。
+    // 怎么反悔不写在这儿，写在 aliases.yaml 那个块上面的注释里 ——
+    // 要反悔的人本来就得去开那个文件。
+    // （口还是照旧返回 blocked，只是这一屏不摆它：将来真需要一个「回收站」，
+    //  数据现成的，加一屏就是了。）
   }catch(e){ fail(out, e); }
 }
 
@@ -1602,9 +1601,11 @@ function renderSim(){
     `${d.n} 条记忆 · ${d.total_pairs.toLocaleString()} 个对子比过了 · ` +
     `≥ ${th} 分的有 ${d.matched} 对` + (d.truncated ? `（只列前 ${d.pairs.length} 对）` : "");
   drawHist(d.hist, th);
+  // 「情绪种子那十三颗根」8-19 从这句里删了：seed 8-17 就退役了，
+  // 留在页面上只会让人去找一个已经不存在的东西。归档区那半句留着——它还在。
   $("#histNote").textContent =
     "纵轴是对数的（不然 60 分那一格会把 90 分的十几对压成看不见）。" +
-    "情绪种子那十三颗根和归档区没算进来——它们本来就该长得像，算进来是误伤。";
+    "归档区没算进来——已经沉过一次的，别再问一遍。";
   const out = $("#simOut"); out.innerHTML = "";
   if (!d.pairs.length){
     const c = el("div","card muted");

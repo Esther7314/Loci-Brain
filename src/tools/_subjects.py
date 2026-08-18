@@ -263,8 +263,12 @@ def _list_items_under(lines: list, i: int) -> tuple:
     return last, items
 
 
-def _insert_under(text: str, key: str, value: str) -> tuple:
-    """把 value 插到 key 那个列表末尾。返回（新全文，动了没）。key 不存在就新建一块。"""
+def _insert_under(text: str, key: str, value: str, comment: str = "") -> tuple:
+    """把 value 插到 key 那个列表末尾。返回（新全文，动了没）。key 不存在就新建一块。
+
+    comment 只在**新建那一块**的时候写在它上面 —— 已经存在的块不动，
+    免得每加一个名字就多一遍同样的话。
+    """
     lines = text.splitlines()
     ki = None
     for idx, ln in enumerate(lines):
@@ -274,7 +278,10 @@ def _insert_under(text: str, key: str, value: str) -> tuple:
             ki = idx
             break
     if ki is None:
-        block = [_yaml_scalar(key) + ":", "  - " + _yaml_scalar(value), ""]
+        block = []
+        if comment:
+            block += ["# " + ln for ln in comment.split(_NL)]
+        block += [_yaml_scalar(key) + ":", "  - " + _yaml_scalar(value), ""]
         return text.rstrip(_NL) + _NL + _NL + _NL.join(block), True
     last, items = _list_items_under(lines, ki)
     low = [x.lower() for x in items]
@@ -330,7 +337,17 @@ def mark_not_person(name) -> bool:
     而且随时能反悔——把那一行从表里删掉就回来了。
     """
     name = _check_name(name, "名字")
-    new, changed = _insert_under(_read_table_text(), _NOT_PERSON_KEY, name)
+    # 这段注释只在**第一次**建这个块的时候写进去。面板上那一屏一个字都不提
+    # 被标掉的名字（她 8-19 定的：隐藏就是隐藏，再列一遍等于没隐藏），
+    # 所以「怎么反悔」必须写在这儿 —— 要反悔的人本来就得开这个文件。
+    why = _NL.join([
+        "下面这些不是别名，是「这几个词根本不是人」——",
+        "面板「人名表」那一屏上点「这不是人」写进来的。",
+        "它们不再摆出来、以后也不再抽；历史那些条一个字节都没动。",
+        "想反悔：把对应那一行删掉就回来了。",
+    ])
+    new, changed = _insert_under(_read_table_text(), _NOT_PERSON_KEY, name,
+                                 comment=why)
     if changed:
         _write_table(new)
     return changed
