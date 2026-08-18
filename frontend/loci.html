@@ -632,7 +632,11 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
       <div class="fline">
         <span class="lb">名字</span>
         <div class="fbody">
-          <div class="tiny" id="setNames">…</div>
+          <div class="frow">
+            <input type="text" id="cfgAiName" class="search" placeholder="他叫什么">
+            <input type="text" id="cfgOwnerName" class="search" placeholder="你叫什么">
+            <button class="btn" id="cfgNameGo">保存</button>
+          </div>
           <div class="tiny muted" id="setNamesHint"></div>
         </div>
       </div>
@@ -649,6 +653,15 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
             <button class="btn" id="pwGo">改密码</button>
           </div>
           <div id="pwMsg" class="tiny" style="margin-top:10px"></div>
+        </div>
+      </div>
+      <div class="fline">
+        <span class="lb">锁</span>
+        <div class="fbody">
+          <div class="frow">
+            <button class="sw" id="cfgLock">关着</button>
+            <span class="tiny muted" id="cfgLockNote"></span>
+          </div>
         </div>
       </div>
       <div class="fline">
@@ -893,9 +906,14 @@ function openGate(){
   fetch("/api/loci/auth/state", {credentials:"same-origin"})
     .then(r => r.json())
     .then(st => {
+      // 没设过安全问题的人（开源版默认就是这样）忘了密码就没路了 ——
+      // 所以这儿必须给出自救的办法。这是自托管，机器就在他自己手上，
+      // 删掉那个文件重新设一把是完全正当的一条路。
       $("#gateHint").textContent = st.env_locked
-        ? "忘了的话：密码在 docker-compose.v2.yml 那行环境变量里。进来之后可以在「设置」里换成自己的。"
-        : (st.question ? "忘了可以用安全问题找回：" + st.question : "");
+        ? "忘了的话：密码在 docker-compose 那行环境变量里。进来之后可以在「设置」里换成自己的。"
+        : (st.question
+            ? "忘了可以用安全问题找回：" + st.question
+            : "忘了的话：删掉数据目录里的 .dashboard_auth.json，刷新页面就能重新设一把。");
     }).catch(() => {});
   setTimeout(() => $("#gatePw").focus(), 60);
 }
@@ -1031,12 +1049,15 @@ async function loadCfg(){
     cfgEOn = !!e.enabled;
     $("#cfgEOn").classList.toggle("on", cfgEOn);
     $("#cfgEOn").textContent = cfgEOn ? "开着" : "关着";
+    drawLock(c);
     const mt = c.merge_threshold != null ? c.merge_threshold : 75;
     $("#cfgMT").value = mt; $("#cfgMTVal").textContent = mt;
     // 名字：只读。它们是容器的环境变量，不是 config.yaml 里的东西 ——
     // 在这儿放个能编辑的框，等于骗人（存了也不生效）。所以只显示 + 说清改哪儿。
-    $("#setNames").textContent = (c.ai_name || "没配") + " / " + (c.owner_name || "没配");
-    $("#setNamesHint").textContent = "改容器环境变量 AI_NAME / LOCI_OWNER_NAME，改完重启";
+    $("#cfgAiName").value = c.ai_name === "AI" ? "" : (c.ai_name || "");
+    $("#cfgOwnerName").value = c.owner_name || "";
+    $("#setNamesHint").textContent =
+      "这两个名字会被挡在标签外面。不填的话，你俩的名字会被当成普通词抽进标签，把搜索淹掉。";
     // 密码这一行：说清它到底管什么，别的都删掉。
     // E2 之后面板 /api/* 不再鉴权，这把密码只剩 MCP 授权页一个用处；
     // 而 MCP 鉴权关着的时候，那个页面也不启用 —— 那就是**一处都没用上**。
@@ -1078,6 +1099,51 @@ $("#cfgSave").onclick = async () => {
   }catch(e){ msg.className = "tiny err"; msg.textContent = "没成：" + e.message; }
   finally{ btn.disabled = false; }
 };
+/* 面板的锁。两件事要说清楚，因为它们不是一回事：
+   开关（panel_auth）= 你想不想锁；到底锁没锁（panel_locked）= 还得有密码。
+   没密码的时候开关开着也锁不住 —— 那条硬线在后端（锁一个没钥匙的门
+   只会把主人关在外面，8-03 夜真发生过）。所以这儿要把两个状态分开显示。 */
+function drawLock(c){
+  const on = !!c.panel_auth, locked = !!c.panel_locked;
+  const b = $("#cfgLock");
+  b.classList.toggle("on", on);
+  b.textContent = on ? "开着" : "关着";
+  $("#cfgLockNote").textContent = locked
+    ? "现在是锁着的：打开这一页要先输密码。"
+    : (on ? "开关开着，但还没设密码 —— 所以现在没锁。在上面设一把，立刻生效。"
+          : "现在没有锁：任何能访问到这个地址的人都能看你全部记忆。");
+}
+$("#cfgLock").onclick = async () => {
+  const b = $("#cfgLock"); b.disabled = true;
+  const want = !b.classList.contains("on");
+  try{
+    const r = await fetch("/api/config", {method:"POST", credentials:"same-origin",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({persist:true, panel_auth: want})});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+    toast(want ? "锁打开了" : "锁关掉了");
+    loadCfg(); loadSetup();
+  }catch(e){ alert("没成：" + e.message); }
+  finally{ b.disabled = false; }
+};
+
+$("#cfgNameGo").onclick = async () => {
+  const btn = $("#cfgNameGo"); btn.disabled = true;
+  try{
+    const r = await fetch("/api/config", {method:"POST", credentials:"same-origin",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({persist: true,
+        ai_name: $("#cfgAiName").value.trim(),
+        owner_name: $("#cfgOwnerName").value.trim()})});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+    toast("名字保存了");
+    loadCfg(); loadSetup();
+  }catch(e){ alert("没成：" + e.message); }
+  finally{ btn.disabled = false; }
+};
+
 async function cfgTest(which, box){
   const m = $(box); m.className = "tiny muted"; m.textContent = "试着连…";
   try{

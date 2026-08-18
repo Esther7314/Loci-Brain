@@ -100,6 +100,15 @@ def _mask_mcp_token(token: str) -> str | None:
     return f"{token[:4]}...{token[-4:]}"
 
 
+def _panel_locked() -> bool:
+    """现在这一屏到底锁没锁（开关 + 有没有密码，两个都要）。"""
+    try:
+        from . import panel_auth
+        return bool(panel_auth.gate_needed())
+    except Exception:      # noqa: BLE001
+        return False
+
+
 def register(mcp) -> None:
     # MCP auth is bound into middleware and OAuth route visibility at process
     # startup. Keep the effective value separate from the desired persisted
@@ -184,6 +193,9 @@ def register(mcp) -> None:
                 "feel_max_tokens": int(sh.config.get("surfacing", {}).get("feel_max_tokens") or 6000),
             },
             "merge_threshold": sh.config.get("merge_threshold", 75),
+            # 面板的锁：开关本身 + **现在到底锁没锁**（没设密码时开关开着也锁不住）
+            "panel_auth": _parse_bool(sh.config.get("panel_auth", True), default=True),
+            "panel_locked": _panel_locked(),
             "transport": desired["transport"],
             "transport_effective": runtime_transport,
             "buckets_dir": sh.config.get("buckets_dir", ""),
@@ -412,6 +424,24 @@ def register(mcp) -> None:
                         status_code=400,
                     )
 
+        # --- 面板的锁（2026-08-19）---
+        # 热生效：gate_needed() 每次请求现读 sh.config，所以改完立刻生效、不用重启。
+        # 🔴 只在**已经有密码**的时候才真的锁得住（panel_auth.gate_needed 里那条硬线），
+        #    所以这儿不需要额外校验：打开开关但没设密码 = 门还是开着的，不会把人关外面。
+        if "panel_auth" in body:
+            sh.config["panel_auth"] = _parse_bool(body["panel_auth"])
+            updated.append("panel_auth")
+
+        # --- 两个名字（2026-08-19）---
+        # 面板上能填了，所以这儿得收得下。热更 sh.config 之外**必须落 config.yaml**
+        # （persist=True）：名字是 get_ai_name() 每次现读 config 文件拿的，
+        # 只改内存的话下次读还是老的。
+        for _k, _cap in (("ai_name", 40), ("owner_name", 40)):
+            if _k in body:
+                _v = str(body.get(_k) or "").strip()[:_cap]
+                sh.config[_k] = _v
+                updated.append(_k)
+
         # --- Merge threshold ---
         if "merge_threshold" in body:
             try:
@@ -479,6 +509,13 @@ def register(mcp) -> None:
                         sc_emb["enabled"] = embedding_enabled
                     if embedding_backend is not None:
                         sc_emb["backend"] = embedding_backend
+
+                if "panel_auth" in body:
+                    save_config["panel_auth"] = _parse_bool(body["panel_auth"])
+
+                for _k in ("ai_name", "owner_name"):
+                    if _k in body:
+                        save_config[_k] = str(body.get(_k) or "").strip()[:40]
 
                 if "merge_threshold" in body:
                     try:

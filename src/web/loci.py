@@ -1072,11 +1072,30 @@ async def build_setup() -> dict:
         "别在 compose 里给这个容器设 TZ")
 
     # ⑥ 面板的锁 —— E2 之后面板 /api/* 不再鉴权，那道门再也不会弹
-    row("panel_lock", "面板的锁", False,
-        "没有锁",
-        "同一个网里的任何设备都能打开这一页，看全部记忆。"
-        "（8-05 拍的「家里内网不鉴权」；开源版这儿要有个开关。）",
-        note=True)
+    locked = False
+    try:
+        from . import panel_auth as _pa
+        locked = bool(_pa.gate_needed())
+    except Exception:                                # noqa: BLE001
+        locked = False
+    has_pw = False
+    try:
+        has_pw = sh._load_password_hash() is not None
+    except Exception:                                # noqa: BLE001
+        has_pw = False
+    sw_on = str(cfg.get("panel_auth", True)).strip().lower() not in (
+        "0", "false", "no", "off", "none", "")
+    if locked:
+        row("panel_lock", "面板的锁", True, "锁着（要输密码）",
+            "", note=True)
+    elif sw_on and not has_pw:
+        row("panel_lock", "面板的锁", False, "开关开着，但还没设密码 —— 所以现在没锁",
+            "锁一个还没有钥匙的门只会把你自己关在外面，所以没密码的时候这道门不生效。"
+            "去上面「账号」设一把密码，锁立刻就生效了。")
+    else:
+        row("panel_lock", "面板的锁", False, "没有锁",
+            "任何能访问到这个地址的人都能看你全部记忆 —— 这台机器监听 0.0.0.0，"
+            "同一个网里的设备都算。要锁上：上面「账号」里那个开关。")
 
     # ---- 只读事实：不是「配得对不对」，是「东西在哪」 ----
     ver = ""

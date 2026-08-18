@@ -907,14 +907,52 @@ def get_version() -> str:
     return "0.0.0+unknown"
 
 
+_NAME_CACHE = {"mtime": -1.0, "data": {}}
+
+
+def _persisted_names() -> dict:
+    """config.yaml 里存的两个名字（带 mtime 缓存，这东西几个月才改一次）。
+
+    2026-08-19 加的。为什么名字要能落进 config.yaml：原来它们**只能**来自
+    容器的环境变量，于是面板上那一栏只能是只读的 —— 而对刚装上的人来说，
+    「去改 docker-compose 再重启」是第一步就撞上的一堵墙。
+    顺序是 **config 优先、环境变量兜底**：面板上填了就得算数，
+    不然那个输入框就是在骗人（存了不生效是最坏的一种）。
+    """
+    path = os.environ.get("LOCI_CONFIG_PATH", "").strip()
+    if not path:
+        return {}
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return {}
+    if _NAME_CACHE["mtime"] == mtime:
+        return _NAME_CACHE["data"]
+    data = {}
+    try:
+        import yaml
+        with open(path, "r", encoding="utf-8") as f:
+            raw = yaml.safe_load(f) or {}
+        if isinstance(raw, dict):
+            for k in ("ai_name", "owner_name"):
+                v = str(raw.get(k) or "").strip()
+                if v:
+                    data[k] = v
+    except Exception:      # noqa: BLE001 - 配置读不动不该让名字这种小事把服务打掉
+        data = {}
+    _NAME_CACHE["mtime"], _NAME_CACHE["data"] = mtime, data
+    return data
+
+
 def get_ai_name() -> str:
     """AI 一方的显示名 / display name for the AI side.
 
-    取自环境变量 `AI_NAME`，未设置或为空时回退到 "AI"。面向用户的文本
-    （prompt / UI / 错误信息）、letter 署名都用它，避免硬编码具体模型名。
-    Read from the `AI_NAME` env var; falls back to "AI" when unset/empty.
+    顺序：config.yaml 的 `ai_name` → 环境变量 `AI_NAME` → "AI"。
+    面向用户的文本（prompt / UI / 错误信息）、letter 署名都用它。
     """
-    return os.environ.get("AI_NAME", "").strip() or "AI"
+    return (_persisted_names().get("ai_name")
+            or os.environ.get("AI_NAME", "").strip()
+            or "AI")
 
 
 def get_owner_name() -> str:
@@ -923,10 +961,12 @@ def get_owner_name() -> str:
     多人共用一套 OB 时，每个人跑一个独立实例（独立数据目录 + 端口），实例通过
     环境变量 `LOCI_OWNER_NAME` 标明「这份记忆是谁的」，供 Dashboard 顶部归属徽标
     显示。未设置时回退空串（前端配合 owner_count 决定是否显示）。
-    只从进程环境读取，绝不写入共享的 .env——否则同码多实例会互相串名。
-    Read from the `LOCI_OWNER_NAME` env var; empty when unset.
+    顺序：config.yaml 的 `owner_name` → 环境变量 `LOCI_OWNER_NAME` → 空串。
+    ⚠️ 绝不写共享的 .env——同码多实例会互相串名；config.yaml 是**每个实例
+       自己数据目录里**的那一份，所以它安全。
     """
-    return os.environ.get("LOCI_OWNER_NAME", "").strip()
+    return (_persisted_names().get("owner_name")
+            or os.environ.get("LOCI_OWNER_NAME", "").strip())
 
 
 def get_owner_count() -> int:

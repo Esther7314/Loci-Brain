@@ -29,9 +29,12 @@ from . import _shared
 from . import config_api
 from . import import_api
 from . import loci
+from . import panel_auth
 
 
 _WEB_MODULES = (
+    # 门要第一个注册：它那四条路由自己在白名单里，不会被自己锁住。
+    ("web.panel_auth", panel_auth.register),
     ("web.config_api", config_api.register),
     ("web.loci", loci.register),
     # 2026-08-19 补回来的：导入那四条路由。引擎 core/import_memory.py 一直活着，
@@ -40,11 +43,54 @@ _WEB_MODULES = (
 )
 
 
+class _Gated:
+    """把 `mcp` 包一层，让**每一条 web 路由**自动带上面板那道门。
+
+    为什么在注册这一层包，而不是去每个路由里加一句：
+    二十多个路由，靠人记得加，早晚漏掉一个 —— 而漏掉的那一个不会报错，
+    它只是**悄悄不设防**。这种错今晚已经见过太多次了。
+    在这儿包一次，新加的路由自动就在门里面，除非显式写进白名单。
+
+    白名单只有两类（见 panel_auth.PUBLIC_PATHS）：门本身要用的、
+    以及调用方不是浏览器的（桥是另一个进程，它没有 cookie）。
+    """
+
+    def __init__(self, mcp):
+        self._mcp = mcp
+
+    def __getattr__(self, name):
+        return getattr(self._mcp, name)
+
+    def custom_route(self, path, methods=None, **kw):
+        inner = self._mcp.custom_route(path, methods=methods, **kw)
+        if panel_auth.is_public(path):
+            return inner
+
+        def deco(fn):
+            import functools
+            from starlette.responses import JSONResponse
+
+            @functools.wraps(fn)
+            async def guarded(request):
+                if panel_auth.gate_needed() and not panel_auth.has_session(request):
+                    # 401 是**约定好的信号**：前端拿到它就弹门（页面里那句
+                    # `if (r.status === 401){ openGate(); }` 一直都在，
+                    # 只是 E2 之后再没有东西会回 401 了）。
+                    return JSONResponse({"error": "请先登录"}, status_code=401)
+                return await fn(request)
+
+            return inner(guarded)
+
+        return deco
+
+
 def register_all(mcp) -> None:
     """注册所有已迁移到 web/ 的路由模块。后续每迁一个模块加一行。"""
+    gated = _Gated(mcp)
+
     def _register():
         for _name, register in _WEB_MODULES:
-            register(mcp)
+            register(gated)
 
     return _shared.run_v3_web_operation(
         "register_all",

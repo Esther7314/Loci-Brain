@@ -23,6 +23,7 @@ import_memory.py — 历史对话导入引擎
 
 import asyncio
 import os
+import re
 import json
 import hashlib
 import logging
@@ -289,6 +290,34 @@ def _parse_chatgpt_json(data: list | dict) -> list[dict]:
 _USER_MARKS = frozenset(["human", "user", "你", "我", "用户", "me"])
 _AI_MARKS = frozenset(["assistant", "claude", "ai", "gpt", "bot", "deepseek",
                        "助手", "机器人"])
+
+
+_DATE_RE = re.compile(r"(\d{4})[-/](\d{2})[-/](\d{2})")
+
+
+def _when_date(ts) -> str:
+    """把导出文件里那个时间戳收成 YYYY-MM-DD；认不出来就返回空串。
+
+    认不出来**必须返回空**，不能瞎猜一个：when 空着只是「没写哪天」，
+    而猜错一个日期是往她的时间轴里塞假货 —— 后者永远更糟。
+    """
+    s = str(ts or "").strip()
+    if not s:
+        return ""
+    m = _DATE_RE.search(s)
+    if m:
+        return m.group(1) + "-" + m.group(2) + "-" + m.group(3)
+    # 纯数字 = unix 时间戳（ChatGPT 那份就是），秒和毫秒都认
+    if s.replace(".", "").isdigit():
+        try:
+            v = float(s)
+            if v > 1e11:
+                v /= 1000.0
+            from datetime import datetime as _dt
+            return _dt.fromtimestamp(v).strftime("%Y-%m-%d")
+        except (ValueError, OSError, OverflowError):
+            return ""
+    return ""
 
 
 def _parse_markdown(text: str) -> list[dict]:
@@ -931,6 +960,21 @@ class ImportEngine:
                 valence=item.get("valence", _DEFAULT_VALENCE),
                 arousal=item.get("arousal", _DEFAULT_AROUSAL),
                 name=item.get("name") or None,
+                # 🔴 2026-08-19：原来这儿**不传 when** —— 于是导进来的记忆
+                # 落盘时间是「导入那天」，原文里的日期整个丢掉。
+                # 后果很具体：把一年的历史导进来，几百条全堆在「今天」，
+                # 时间视图、中期那张卡、recall(when=...) 一起废，而且不报错。
+                # 解析器本来就认得时间（chunk 一路带着 timestamp_start），
+                # 缺的只是这一行。纯日期 = 本地日历（tools/_when 的口径）。
+                when=item.get("_when", ""),
+                # 🔴 2026-08-19：原来也不给房间 —— 导进来的记忆 room 是空的，
+                # 在房间门里一条都翻不出来（体检那项「没房间的记忆」会跟着变红）。
+                # 为什么一律 EVENT/SELF、不按内容猜：
+                #   「这条是事件还是认知」是语义判断，规则猜不准；而猜错的代价是
+                #   把一条认知记成一件事 —— 读的时候不报错，只是一直不对劲。
+                #   从自己的对话历史里搬过来的东西，绝大多数就是「我在场的事」，
+                #   所以落一间最稳的，分得更细是之后拿 regrow 一条条改的事。
+                room="EVENT/SELF",
             )
 
         if requested_importance >= _HIGH_IMP_THRESHOLD:
@@ -965,8 +1009,13 @@ class ImportEngine:
             return
 
         # --- Store each extracted memory ---
+        # 这一块是哪天的：用块的起始时间。一块里可能横跨几天，取起始是保守的 ——
+        # 宁可算早一点，也别把几个月前的话记成今天。
+        chunk_when = _when_date(chunk.get("timestamp_start"))
         for item in items:
             try:
+                if chunk_when:
+                    item["_when"] = chunk_when
                 should_preserve = preserve_raw or item.get("preserve_raw", False)
 
                 if should_preserve:
