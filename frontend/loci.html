@@ -643,7 +643,6 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
       <div class="fline">
         <span class="lb">密码</span>
         <div class="fbody">
-          <div id="pwWhat" class="tiny">…</div>
           <div id="pwState" class="tiny muted" style="margin-bottom:10px">…</div>
           <div class="frow">
             <input type="password" id="pw1" class="search" placeholder="新密码（至少 6 位）"
@@ -973,12 +972,12 @@ function localDef(k){ return LOCAL_DEF[k]; }
 async function loadSet(){
   try{
     const st = await api("/api/loci/auth/state");
+    // 2026-08-19：这一行原来那段长解释下架了。锁装回来之后它就是面板的密码，
+    // 不需要再解释「这把密码到底管什么」；安全问题那条路也没做进设置流程，
+    // 写出来只会让人去找一个不存在的输入框。留三样：设没设过、两个框、一个按钮。
     $("#pwState").textContent = st.env_locked
-      ? "现在的密码来自 docker-compose 的环境变量，它优先。要换成自己的，存完还得删掉那一行、重启。"
-      : (st.has_file_password
-          ? (st.question ? "存在 Loci 自己这儿。忘了能用安全问题找回：" + st.question
-                         : "存在 Loci 自己这儿。")
-          : "还没设过。");
+      ? "现在的密码来自环境变量，它优先。要换成自己的，存完还得删掉那一行、重启。"
+      : (st.has_file_password ? "设过了。" : "还没设过 —— 设一把，面板的锁就生效了。");
   }catch(e){ $("#pwState").textContent = "读不到状态：" + e.message; }
   let _t = "auto";
   try{ _t = localStorage.getItem("loci-theme") || "auto"; }catch(e){}
