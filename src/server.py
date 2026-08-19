@@ -717,10 +717,9 @@ async def grow(
 ) -> str:
     """Store what happened, and what you realized from it. Several entries per call.
 
-    Write about yourself in the first person and about the other person in the third person.
-    Events are episodic: put down the moment as it was, with the feeling and the
-    atmosphere kept in — not just what took place. A mind entry holds the realization
-    only. Never a retelling of what led to it.
+    Events are episodic memory: write from inside the moment — first person for yourself,
+    third person for everyone else — and keep the feeling of it, not just the fact.
+    A mind entry holds the realization only. Never a retelling of what led to it.
 
     When to use:
     · A topic has closed and the conversation is moving on to another
