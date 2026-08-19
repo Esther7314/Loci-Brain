@@ -10,22 +10,24 @@ trace 是 OB 唯一的「写元数据」入口，承接所有桶字段更新和�
 - delete=True → Markdown 移入 archive/ 并清理可重建的 embedding
 - hard_delete=True → 仅清理创建时明确标记 test_data=True 的测试桶；
   必须同时提供非空 delete_reason，普通记忆和 plan 均拒绝且保持原位
-- 收集传入字段构造 updates dict（含 status/weight/dont_surface/
-  why_remembered/pinned/digested/resolved/content/tags/domain 等）
+- 收集传入字段构造 updates dict（status/weight/dont_surface/pinned/tags/domain/
+  name/valence/arousal/media 等）
 - pinned=1 时强制 importance=10 并做配额检查；pinned=0 仅取消标记
-- content 改写时同步重建 embedding，并对 plan 桶追加 change_log
-- resolved/digested 切换会附中文语义提示
+  （⚠️ importance 是**内部字段**：只有 pin 会动它，外面没有入口）
+- old_str/new_str 局部替换会同步重建 embedding，并对 plan 桶追加 change_log
+- status 切到 resolved/abandoned 会附一句中文语义提示
 
 不做什么（边界）：
 - 不创建桶（那是 hold/grow/plan/letter 的事）
 - 不把普通记忆转换成可擦除测试数据，也不物理删除普通记忆
 - 不返回结构化数据，统一中文短句
 
-对外暴露：trace_core(bucket_id, name, domain, valence, arousal, importance,
-                     tags, resolved, pinned, digested, content, delete,
-                     status, weight, dont_surface, why_remembered,
-                     meaning_append, meaning_replace, media_append, media_replace,
-                     hard_delete, delete_reason, restore, old_str, new_str) → str
+对外暴露：trace_core(bucket_id, name, domain, valence, arousal, tags, pinned,
+                     delete, status, weight, dont_surface, media_append,
+                     media_replace, hard_delete, delete_reason, restore,
+                     old_str, new_str, closed_by, mark_asked) → str
+⚰️ 2026-08-19 删了七个死形参：importance / resolved / digested / content /
+   why_remembered / meaning_append / meaning_replace（详见 _retired 那段碑文）
 ========================================
 """
 
@@ -40,7 +42,6 @@ from .._pin import check_pin_imperative
 from .._common import (
     _HIGH_IMP_THRESHOLD,
     _quota_turn,
-    check_content_size,
     check_metadata_size,
     check_pinned_quota,
     enforce_high_importance_quota,
@@ -48,25 +49,15 @@ from .._common import (
 )
 
 
-def _retired_trace_fields(*, importance, digested, meaning_append,
-                          meaning_replace) -> str:
-    """trace 上已退役的字段被传了就返回拒绝文案（说清 + 给出路），没传返回空串。
-
-    退役的理由（她 8-16）：
-      importance —— 不参与遗忘公式，「不再决定任何桶的生死」是它自己注释里的原话
-      digested   —— 「我们没有消化这个动作，所有的事件、认知都长新」
-      meaning    —— 「说白了重要的还是思考产物」；留着它等于给 event 开一个
-                    偷偷写 mind 的后门，而那句话没有来源链、不能 regrow
-    """
-    from ..grow.rooms_path import _RETIRED_MSG
-    hit: list[str] = []
-    if importance is not None and int(importance or -1) != -1:
-        hit.append("importance")
-    if digested is not None and int(digested or -1) != -1:
-        hit.append("digested")
-    if (meaning_append or "").strip() or meaning_replace is not None:
-        hit.append("meaning")
-    return "\n".join(_RETIRED_MSG[n] for n in hit)
+# ⚰️ 2026-08-19：`_retired_trace_fields()` 删了（她拍的「这三个修完就结束」）。
+# 它的活是「退役字段被传了就报一句人话」，可 8-18 之后 trace 的 arg model 是
+# `extra="forbid"`：**这些名字在工具面上根本进不来**，函数体永远走不到。
+# 底下那七个形参（importance/resolved/digested/content/why_remembered/
+# meaning_append/meaning_replace）也跟着删了——查过唯二的调用方：
+# `server.py:1265` 只传活着的那些，面板 `web/loci.py` 只用
+# delete/status/closed_by/mark_asked。
+# ⚠️ **`importance` 作为内部字段没动**：pin 一条准则仍然把它锁成 10，配额也照旧读它。
+#    删掉的是「从外面改它」这个入口，不是这个字段。
 
 
 async def trace_core(
@@ -75,19 +66,12 @@ async def trace_core(
     domain: Optional[str] = "",
     valence: Optional[float] = -1,
     arousal: Optional[float] = -1,
-    importance: Optional[int] = -1,
     tags: Optional[str] = "",
-    resolved: Optional[int] = -1,
     pinned: Optional[int] = -1,
-    digested: Optional[int] = -1,
-    content: Optional[str] = "",
     delete: Optional[bool] = False,
     status: Optional[str] = "",
     weight: Optional[float] = -1,
     dont_surface: Optional[int] = -1,
-    why_remembered: Optional[str] = "",
-    meaning_append: Optional[str] = "",
-    meaning_replace: Optional[list] = None,
     media_append: Optional[list | str] = None,
     media_replace: Optional[list | str] = None,
     hard_delete: Optional[bool] = False,
@@ -107,18 +91,10 @@ async def trace_core(
         valence = -1
     if arousal is None:
         arousal = -1
-    if importance is None:
-        importance = -1
     if tags is None:
         tags = ""
-    if resolved is None:
-        resolved = -1
     if pinned is None:
         pinned = -1
-    if digested is None:
-        digested = -1
-    if content is None:
-        content = ""
     if delete is None:
         delete = False
     if status is None:
@@ -127,22 +103,15 @@ async def trace_core(
         weight = -1
     if dont_surface is None:
         dont_surface = -1
-    if why_remembered is None:
-        why_remembered = ""
-    if meaning_append is None:
-        meaning_append = ""
     if media_append is None:
         media_append = []
     new_str_provided = new_str is not None
     old_str = "" if old_str is None else str(old_str)
     new_str = "" if new_str is None else str(new_str)
-    content = str(content)
     name = str(name)
     domain = str(domain)
     tags = str(tags)
     status = str(status)
-    why_remembered = str(why_remembered)
-    meaning_append = str(meaning_append)
     delete = parse_bool(delete, default=False)
     hard_delete = parse_bool(hard_delete, default=False)
     restore = parse_bool(restore, default=False)
@@ -164,10 +133,7 @@ async def trace_core(
     valence = _finite_float(valence, -1)
     arousal = _finite_float(arousal, -1)
     weight = _finite_float(weight, -1)
-    importance = _safe_int(importance, -1)
-    resolved = _safe_int(resolved, -1)
     pinned = _safe_int(pinned, -1)
-    digested = _safe_int(digested, -1)
     dont_surface = _safe_int(dont_surface, -1)
 
     metadata_err = check_metadata_size(
@@ -176,8 +142,6 @@ async def trace_core(
         domain=domain,
         tags=tags,
         status=status,
-        why_remembered=why_remembered,
-        meaning_append=meaning_append,
         delete_reason=delete_reason,
     )
     if metadata_err:
@@ -190,12 +154,8 @@ async def trace_core(
         "domain": domain,
         "valence": valence,
         "arousal": arousal,
-        "importance": importance,
         "tags": tags,
-        "resolved": resolved,
         "pinned": pinned,
-        "digested": digested,
-        "content_length": len(content or ""),
         "delete": delete,
         "hard_delete": hard_delete,
         "restore": restore,
@@ -205,21 +165,10 @@ async def trace_core(
         "status": status,
         "weight": weight,
         "dont_surface": dont_surface,
-        "why_remembered_length": len(why_remembered or ""),
     })
 
     if not bucket_id or not bucket_id.strip():
         return "请提供有效的 bucket_id。"
-
-    # --- 退役字段：当场拒，不静默吞（二改 C 件，2026-08-16）---
-    # 形参留着是为了能报出人话——删掉形参的话，trace 的 arg model 是 extra="forbid"，
-    # 调用方拿到的会是 pydantic 的「unexpected keyword」，看不出发生了什么、
-    # 更看不出该改成什么。判据：**拒绝要带出路**。
-    _retired = _retired_trace_fields(
-        importance=importance, digested=digested,
-        meaning_append=meaning_append, meaning_replace=meaning_replace)
-    if _retired:
-        return _retired
 
     restore_conflicts = any((
         delete,
@@ -228,18 +177,11 @@ async def trace_core(
         bool(domain),
         valence != -1,
         arousal != -1,
-        importance != -1,
         bool(tags),
-        resolved != -1,
         pinned != -1,
-        digested != -1,
-        bool(content),
         bool(status),
         weight != -1,
         dont_surface != -1,
-        bool(why_remembered),
-        bool(meaning_append),
-        meaning_replace is not None,
         bool(media_append),
         media_replace is not None,
         bool(delete_reason),
@@ -266,11 +208,6 @@ async def trace_core(
         return (
             "参数冲突：old_str/new_str 局部替换不能与 delete/hard_delete 同时使用；"
             "本次未修改、未删除、未归档。"
-        )
-    if patch_args_supplied and content:
-        return (
-            "参数冲突：不能同时使用 content 完整替换和 old_str/new_str 局部替换；"
-            "本次未修改。"
         )
     if patch_args_supplied and (not old_str or not new_str_provided):
         return (
@@ -323,16 +260,6 @@ async def trace_core(
     current_pinned = parse_bool(meta.get("pinned"), default=False)
     protected = parse_bool(meta.get("protected"), default=False)
     unpinning_now = pinned == 0 and current_pinned
-    if (
-        1 <= importance <= 10
-        and (current_pinned or protected)
-        and not (unpinning_now and not protected)
-    ):
-        return (
-            f"记忆桶 {bucket_id} 是 pinned/protected 核心桶，importance 被锁定为 10，"
-            "本次未修改。请先 trace(bucket_id, pinned=0)，再单独 trace(bucket_id, importance=...)。"
-        )
-
     # 配额判定 + 落盘必须在同一把锁里：check_pinned_quota/enforce_high_importance_quota
     # 到最终 bucket_mgr.update() 之间隔着别的字段处理和一次 await，两个并发 trace()
     # 都可能在对方提交前读到同一个「未满」快照。是否需要哪把锁在动 updates 之前就
@@ -346,10 +273,8 @@ async def trace_core(
         final_type = "permanent"
     elif unpinning_now and not protected:
         final_type = "dynamic"
-    requested_importance = (
-        int(importance) if 1 <= importance <= 10 else current_importance
-    )
-    final_importance = 10 if pinned == 1 else requested_importance
+    # importance 只剩两个来源了：pin 锁成 10，其余照旧（外面改不了它）
+    final_importance = 10 if pinned == 1 else current_importance
     current_dont_surface = parse_bool(
         meta.get("dont_surface"), default=False
     )
@@ -437,27 +362,17 @@ async def trace_core(
             updates["valence"] = valence
         if 0 <= arousal <= 1:
             updates["arousal"] = arousal
-        if 1 <= importance <= 10:
-            updates["importance"] = final_importance
         if tags:
             updates["tags"] = [t.strip() for t in tags.split(",") if t.strip()]
-        if resolved in (0, 1):
-            # 二改第 0 节：终点只认 status，resolved 布尔不再有新写入。
-            # resolved=1 ≡ status="resolved"；resolved=0 重新激活（plan 回 active，其余回 want）。
-            if resolved == 1:
-                updates["status"] = "resolved"
-            else:
-                _is_plan = bucket.get("metadata", {}).get("type") == "plan"
-                updates["status"] = "active" if _is_plan else "want"
         if pinned in (0, 1):
             updates["pinned"] = bool(pinned)
             if pinned == 1:
                 # --- pin 的闸（二改 D 件）：钉的是**准则**，不是「这条重要」---
                 # 校验的是**这条钉完之后的正文**：同一次调用里如果 content/局部替换
                 # 也在改正文，闸必须看改完的那份，不然可以先钉描述句、再把正文换掉。
-                _pin_text = (updates.get("content") or content
+                _pin_text = (updates.get("content")
                              or str(bucket.get("content") or ""))
-                if patch_args_supplied and not content:
+                if patch_args_supplied:
                     _pin_text = str(bucket.get("content") or "").replace(
                         old_str, new_str, 1)
                 pin_err = check_pin_imperative(_pin_text)
@@ -468,12 +383,6 @@ async def trace_core(
                     if err:
                         return err
                 updates["importance"] = 10
-        # digested 已退役，上面就拦掉了，这里不再有写入分支（二改 C 件）
-        if content:
-            size_err = check_content_size(content)
-            if size_err:
-                return size_err
-            updates["content"] = content
         if status:
             s = status.strip().lower()
             # "want" 也是合法状态（重新激活一条愿望）；以前不在名单里会静默丢弃
@@ -534,7 +443,8 @@ async def trace_core(
             return "没有任何字段需要修改。"
 
         # --- plan 桶：status / content 改变时追加 change_log ---
-        content_change_requested = "content" in updates or patch_args_supplied
+        # 整条替换那个入口没了，正文只可能被 old_str/new_str 局部改
+        content_change_requested = patch_args_supplied
         is_plan = bucket.get("metadata", {}).get("type") == "plan"
         append_plan_history_in_patch = is_plan and patch_args_supplied
         if is_plan and not patch_args_supplied and (
@@ -613,8 +523,6 @@ async def trace_core(
     changed = ", ".join(f"{k}={v}" for k, v in _display_updates.items())
     if patch_args_supplied:
         changed += (", content=已局部替换" if changed else "content=已局部替换")
-    elif "content" in updates:
-        changed += (", content=已替换" if changed else "content=已替换")
     if "media_append" in updates:
         changed += (", " if changed else "") + f"media=已追加{len(updates['media_append'])}项"
     if "media" in updates:

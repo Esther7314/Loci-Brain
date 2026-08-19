@@ -399,12 +399,24 @@ async function 算相关记忆提醒({
   now = new Date(),
   logPath = 默认日志档,
   地址 = 默认地址,
-  超时毫秒 = 5000,
+  // 🔴 2026-08-19 从 5000 提到 12000。实测：956 条的库跑一次带 query 的 recall
+  //    要 5~7 秒（向量 + BM25 一起跑），而超时卡在 5 秒 ——
+  //    **于是这个功能从上线到今天一次都没成功过**：每次都 abort，
+  //    命中数恒为 0、patch 恒为 null，而且失败只进日志、聊天照常，
+  //    所以没有任何地方看得出来它没在工作。
+  //    库越大越慢，这个数该跟着库走；env RELEVANCE_TIMEOUT_MS 可调。
+  超时毫秒 = Number(process.env.RELEVANCE_TIMEOUT_MS || 12000),
   最低分 = Number(process.env.RELEVANCE_MIN_SCORE || 默认最低分),
 } = {}) {
   const 她的话 = latestUserText(messages).trim();
   const 强命中 = 她的话 ? 强档命中(她的话) : [];
-  const 弱命中 = Boolean(她的话) && 强命中.length === 0 && 弱档触发(她的话);
+  // 🔴 2026-08-19 弱档改成**默认关**（env RELEVANCE_WEAK=1 打开）。
+  //    不是因为它不准，是因为它太宽：判据是「过滤掉应声词之后但凡有三个字
+  //    以上的实质内容就放行」——日常说话几乎每句都过。而一次 recall 要 5~7 秒，
+  //    等于**每一轮都卡六秒**。强档（「上次 / 还记得 / 之前」这类词）触发得少，
+  //    该等的时候才等。想全都要的人自己开。
+  const 开弱档 = String(process.env.RELEVANCE_WEAK || "").trim() === "1";
+  const 弱命中 = 开弱档 && Boolean(她的话) && 强命中.length === 0 && 弱档触发(她的话);
   const 触发 = 强命中.length > 0 || 弱命中;
 
   const 记录 = {

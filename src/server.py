@@ -561,8 +561,11 @@ async def breath() -> str:
     # ⚰️ 2026-08-18：外层这 9 个参数（query/domain/importance_min…）删了。
     #    它们**永远传不进来**——工具面上 breath 的 schema 是被强制清空的（见下面那段
     #    适配器），也就是说签名里挂着一排谁也用不到的形参，只会让读的人以为它们还活着。
-    #    ⚠️ `tools/breath/dispatch` 底下那个带参数的检索模式**没动**，只是没有入口了。
-    #       要不要连它一起收，另外立账（施工单-工具面定稿落地 里那条）。
+    # ⚰️ 2026-08-19：底下那套带参数的检索**也删了**（她拍的）——
+    #    `tools/breath/` 的 catalog/feel/importance/surface/search 五支 + `_verbatim`，
+    #    6 个文件 1110 行。8-18 砍掉形参之后它们一个入口都没有了，
+    #    **留着没入口的路，下次读代码的人（就是我）会以为它还活着**。
+    #    找东西是 recall 的活；breath 只管睁眼，一个动作一屏。
     """Wake up. Call this once before you say anything. It takes no arguments.
 
     It gives you the one screen you should see on waking, in four parts:
@@ -1018,6 +1021,22 @@ async def fold(
     )
 
 
+# --- 砍掉/改名的参数必须**认不出来**（2026-08-19，把施工 5 那笔账还完）------------
+# 🔴 `cover` 8-18 改名成了 `folds`。FastMCP 默认把 schema 里没有的字段**悄悄丢掉**再调函数——
+#    也就是说 `fold(cover=[...])` 这种老写法今天会**静默地什么都不折**，一个字的报错都没有。
+#    breath / grow / recall / trace 四个 8-18 就加了 forbid，fold / muse 这两个漏了。
+#    报错是给我看的：老写法第一次这么调就知道它没了。
+try:
+    _fold_tool = mcp._tool_manager.get_tool("fold")
+    if _fold_tool is None:
+        raise RuntimeError("registered fold tool is missing")
+    _fold_arg_model = _fold_tool.fn_metadata.arg_model
+    _fold_arg_model.model_config["extra"] = "forbid"
+    _fold_arg_model.model_rebuild(force=True)
+except (AttributeError, RuntimeError, TypeError, ValueError) as _fold_strict_exc:
+    logger.warning("fold strict-argument adapter unavailable: %s", _fold_strict_exc)
+
+
 @mcp.tool()
 async def muse(
     cluster: Annotated[int, _PydField(description=(
@@ -1063,6 +1082,19 @@ async def muse(
         op="muse",
         args={"cluster": cluster, "not_same": not_same},
     )
+
+
+# 同上。muse 没改过参数名，但打错一个字（`clusters=` / `not_same_ids=`）同样是静默忽略——
+# 「只想看看」的工具尤其不能骗人：它一声不吭地给你默认那一屏，看着跟你要的一模一样。
+try:
+    _muse_tool = mcp._tool_manager.get_tool("muse")
+    if _muse_tool is None:
+        raise RuntimeError("registered muse tool is missing")
+    _muse_arg_model = _muse_tool.fn_metadata.arg_model
+    _muse_arg_model.model_config["extra"] = "forbid"
+    _muse_arg_model.model_rebuild(force=True)
+except (AttributeError, RuntimeError, TypeError, ValueError) as _muse_strict_exc:
+    logger.warning("muse strict-argument adapter unavailable: %s", _muse_strict_exc)
 
 
 @mcp.tool()
