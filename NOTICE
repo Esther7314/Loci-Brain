@@ -33,3 +33,10 @@ noncommercial notice，想商用的人请先去跟上游谈。
           代码注释里那些话有一半是它写的。
           （版权那行没有它 —— AI 在法律上持有不了版权，
             写进去只会给这份 MIT 添一个说不清的角。这儿是致谢，那儿是法条。）
+
+第三方
+----
+  three.js（`frontend/vendor/`）—— 星空那一页用的 3D 库，MIT，
+  版权 2010-2024 three.js authors。许可证全文见
+  `frontend/vendor/LICENSE-three.txt`，文件头里也带着 SPDX 标记。
+  我们一个字没改，只是引进来用。
