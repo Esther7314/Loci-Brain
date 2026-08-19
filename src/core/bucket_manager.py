@@ -380,10 +380,8 @@ _METADATA_TEXT_LIMITS = {
     "_pre_anchor_source_tool": _SOURCE_TOOL_MAX,
 }
 
-# --- _time_ripple：时间涾漪 ---
-_RIPPLE_HOURS = 48.0       # ±该小时内的桶被轻微唤醒
-_RIPPLE_MAX_BUCKETS = 5    # 一次 touch 最多唤醒几个邻居（有界 I/O）
-_RIPPLE_BOOST = 0.3        # 唤醒时 activation_count 增量
+# ⚰️ 时间涟漪那三个常量 2026-08-20 跟函数一起删了 —— 判据在 touch() 上面那块碑。
+#    （留着没人用的常量，读的人会以为那个机制还活着。）
 _MAX_METADATA_DEPTH = 16
 _MAX_METADATA_NODES = 10_000
 
@@ -2035,6 +2033,16 @@ class BucketManager:
         # state is no longer pinned; this is needed for quota-safe unpinning.
         if will_be_pinned or is_protected:
             kwargs.pop("importance", None)
+        elif forced_type == "dynamic" and "importance" not in kwargs:
+            # 🔴 2026-08-19：**取消钉住 = importance 跟着回落**（bug ④）。
+            # 老行为：摘钉之后 importance 留在 10 —— 而钉着的桶不占 importance≥9
+            # 那个池子，一摘钉它就带着满分掉进去，池子（上限 24）被自己撑满。
+            # 而 importance 的形参 8-18 整个撤了：**盘上没有任何入口能把它降回来**，
+            # 摘钉成了一道单向门。上面那句注释里说的「quota-safe unpinning」这条路
+            # 一直留着，只是自那以后再没有调用方走得到它 —— 现在由这里替它走。
+            # 落到 8 不是拍的：撞到硬上限时系统本来就自动降到这个数
+            # （_HIGH_IMP_DEGRADE_TO），两条路走到同一个地方才不会互相打架。
+            kwargs["importance"] = 8
 
         # --- Update only fields that were passed in / 只改传入的字段 ---
         if "content" in kwargs:
@@ -2144,7 +2152,17 @@ class BucketManager:
                   # 挂了长度上限（closed_by），但从没被列进这个透传白名单——
                   # update() 只写白名单里的键，没在这儿的字段会被**静默丢弃**，
                   # 结果结案按钮和「问过她」戳表面上成功、实际一个字都没落盘。
-                  "closed_by", "last_asked"):
+                  "closed_by", "last_asked",
+                  # 「上次梦到这条是什么时候」（2026-08-20）。做梦织完只记这一笔，
+                  # 选料时据它打折 —— 「别老做同一个梦」。**不动 weight。**
+                  # 🔴 我写这个字段的时候**当场又踩了上面那句注释说的坑**：
+                  #    先只在 `_dream.py` 里 `update(last_dreamt=...)`，没加进这张名单，
+                  #    于是它被静默丢掉，烟测报「last_dreamt=None」我还以为是别处的 bug。
+                  #    **同一个注释警告过的事，一小时之内又发生一次** ——
+                  #    说明「记得往名单里加」这个办法不管用。
+                  #    → 治它的不是更用力地记，是 smoke_dream 里那条
+                  #      「D3a2: last_dreamt 真写上了」——它会因为漏加而变红。
+                  "last_dreamt"):
             if k in kwargs:
                 if k == "weight" and kwargs[k] is not None:
                     post[k] = _clamp01(kwargs[k], _DEFAULT_VALENCE)
@@ -2604,27 +2622,33 @@ class BucketManager:
         return True
 
     # ---------------------------------------------------------
-    # Touch bucket (refresh activation time + increment count)
-    # 触碰桶（刷新激活时间 + 累加激活次数）
-    # Called on every recall hit; affects decay score.
-    # 每次检索命中时调用，影响衰减得分。
+    # touch：把「最后一次被想起」的时间戳改成现在
     # ---------------------------------------------------------
-    async def touch(self, bucket_id: str, ripple: bool = True) -> None:
-        """
-        Update a bucket's last activation time and count.
-        Also triggers time ripple: nearby memories get a slight activation boost.
-        更新桶的最后激活时间和激活次数。
-        同时触发时间涟漪：时间上相邻的记忆轻微唤醒。
+    async def touch(self, bucket_id: str, ripple: bool = False) -> None:
+        """把这条记忆的 `last_active` 刷成现在。**遗忘引擎只看这一个字段。**
 
-        ripple=False 可跳过读全库的时间涟漪（性能 P2：批量浮现时不值当为它多跑 list_all）。
+        🔴 **什么算「被想起」—— 这儿只写事实，判据在下面**：
+           调它的地方只有三处，全都是「**我真的拿这条记忆做了点什么**」：
+             · 写一条认知，引用了它（`grow` 的 from）
+             · 换版，它是来源（`regrow`）
+             · 把它折进一句归纳（`fold`）
+           **`recall` 搜到它 → 不调。** 浏览时扫过 → 不调。
+
+        📌 判据（她 2026-08-20 拍的，推翻了「搜到就续命」那个提议）：
+           「重复被想起的事情记得牢 —— **但这个情况是少数**」，
+           以及 **「淡出的也是有摘要的，不是全都忘掉」**。
+           后一句是关键：**淡出不是删除**，是「不再自己冒出来，去找还在、只是打折」。
+           所以「要不要给它续命」这件事的份量，比它听起来小得多 ——
+           不值得为它引入「查得多就活得久」那套（那是练习曲线，不是记忆）。
+
+        ⚠️ 老英文注释写的是 `Called on every recall hit`（上游继承来的），
+           **那句话至少从 8-16 起就是假的**，2026-08-20 一并改掉。
+
+        ⚰️ `ripple` 这个参数留着只为不碰调用点，**传什么都不做事**
+           （时间涟漪 8-20 删了，理由见下面那块碑）。
         """
-        # Commit the source touch first, then release its turn before taking
-        # any neighbour turns.  Keeping the source lock while acquiring a
-        # target lock lets concurrent A->B and B->A ripples deadlock.
         async with self._bucket_turn(bucket_id):
-            reference_time = await self._touch_locked(bucket_id)
-        if ripple and reference_time is not None:
-            await self._time_ripple(bucket_id, reference_time)
+            await self._touch_locked(bucket_id)
 
     async def _touch_locked(self, bucket_id: str) -> datetime | None:
         file_path = self._find_bucket_file(bucket_id)
@@ -2660,116 +2684,37 @@ class BucketManager:
             return None
 
     async def touch_many(self, bucket_ids: list, ripple: bool = False) -> None:
-        """批量 touch（性能 P2）：breath 浮现后一次性更新一批桶的激活，供后台任务调用。
+        """批量 touch。单条失败不影响其他。
 
-        ripple 默认 False —— 时间涟漪是「可选的激活微调」，在批量浮现时不值当为它多跑
-        list_all；需要时可显式开启（只对第一个桶做一次涟漪，避免 N×list_all）。
-        单条失败不影响其他。
+        ⚰️ `ripple` 传什么都不做事（时间涟漪 8-20 删了），留着只为不碰调用点。
         """
-        first = True
         for bid in bucket_ids:
             try:
-                await self.touch(bid, ripple=ripple and first)
+                await self.touch(bid)
             except Exception as e:
                 logger.warning(f"touch_many: 触碰 {bid} 失败: {e}")
-            first = False
 
-    async def _time_ripple(self, source_id: str, reference_time: datetime, hours: float = _RIPPLE_HOURS) -> None:
-        """
-        Slightly boost activation_count of buckets created/activated near the reference time.
-        轻微提升时间相邻桶的激活次数（+0.3），不改 last_active 避免递归唤醒。
-        Max 5 buckets rippled per touch to bound I/O.
-        """
-        try:
-            all_buckets = await self.list_all(include_archive=False)
-        except Exception:
-            return
-
-        rippled = 0
-        for bucket in all_buckets:
-            if rippled >= _RIPPLE_MAX_BUCKETS:
-                break
-            if bucket["id"] == source_id:
-                continue
-            target_id = str(bucket.get("id") or "")
-            if not target_id:
-                continue
-
-            # The list_all row is only a candidate snapshot.  Take the normal
-            # target turn, locate it again and re-read all eligibility fields
-            # before writing so a concurrent edit/archive/delete cannot be
-            # overwritten or resurrected from stale data.
-            try:
-                async with self._bucket_turn(target_id):
-                    file_path = self._find_bucket_file(target_id)
-                    if not file_path:
-                        continue
-                    normalized_path = os.path.normcase(os.path.abspath(file_path))
-                    active = False
-                    for active_dir in self._active_dirs:
-                        normalized_dir = os.path.normcase(os.path.abspath(active_dir))
-                        try:
-                            if os.path.commonpath((normalized_path, normalized_dir)) == normalized_dir:
-                                active = True
-                                break
-                        except ValueError:
-                            continue
-                    if not active:
-                        continue
-
-                    post = frontmatter.load(file_path)
-                    if str(post.get("id") or target_id) != target_id:
-                        continue
-                    if (
-                        parse_bool(post.get("pinned"), default=False)
-                        or parse_bool(post.get("protected"), default=False)
-                        or parse_bool(post.get("tombstone"), default=False)
-                        or post.get("deleted_at")
-                        or str(post.get("type") or "dynamic").strip().lower()
-                        in ("permanent", "feel", "archived")
-                    ):
-                        continue
-
-                    created_str = post.get("created", post.get("last_active", ""))
-                    created = parse_iso_datetime(created_str)
-                    delta_hours = abs((reference_time - created).total_seconds()) / 3600
-                    if delta_hours > hours:
-                        continue
-
-                    current_count = float(post.get("activation_count") or 0)  # type: ignore[arg-type]
-                    if not math.isfinite(current_count) or current_count < 0:
-                        current_count = 0.0
-                    # Store as float for fractional increments; calculate_score handles it
-                    post["activation_count"] = round(current_count + _RIPPLE_BOOST, 1)
-                    _atomic_write_text(file_path, frontmatter.dumps(post))
-                    self._cache_bump(
-                        target_id,
-                        activation_count=post["activation_count"],
-                        file_path=file_path,
-                    )
-                    rippled += 1
-            except Exception as _ripple_exc:
-                logger.warning(
-                    f"[ripple] Failed to update activation_count for {target_id!r}: "
-                    f"{type(_ripple_exc).__name__}: {_ripple_exc}"
-                )
-                continue
-
-    # ---------------------------------------------------------
-    # Search（2026-08-06 机制② 定稿：七维 → 两维 + 一个保底）
+    # ⚰️ 2026-08-20：**时间涟漪删了**（她拍的：「我不要这个时间涟漪」）。
+    #    它做的事：每次 touch 一条桶，就把**时间上挨着它的**几条桶的
+    #    `activation_count` 各加 0.3 —— 「想起一件事，会顺带唤醒同一时段的事」。
     #
-    #   留下： semantic 2.5（意思相近）+ bm25 1.5（用词相同）
-    #   保底： 字面命中 → 结果带 literal_hit=True，由上层（recall）
-    #          做 max(分数, 关联度线)——不是加分，是托底
-    #   砍掉： topic 4.0 · emotion 2.0 · time 1.5 · importance 1.0 · touch 1.0
+    #    🔴 为什么删：**它是死的，而且不便宜。**
+    #    · 死：`activation_count` 8-16 就没人读了 —— 那天她砍掉了遗忘公式里的
+    #      「次数系数」，判据换成「常被想起的不沉由 last_active 管」。
+    #      从那天起这个数只进不出，涟漪加的那 0.3 **没有任何地方会看见**。
+    #    · 不便宜：每涟漪一次要 `list_all()` 扫一遍全库（几百个文件），
+    #      为的是去改一个没人读的数。
     #
-    # 为什么砍（她 8-06 那句话）：「她在搜索里面做了很多我们做在记忆分类的活」。
-    # 旧 om 只有一个入口，一个分数得同时回答相关吗/最近吗/重要吗/情绪对吗；
-    # Loci 有四个门，筛选的活被门接管了——搜索只答一件事：这条是不是你要找的。
-    # topic 的 fuzz.partial_ratio 对中文是反向指标（8-06 实测：真相关 0 分、
-    # 不相关 50 分——「调理身体捞回一堆身体·亲密」的真凶）。
-    # 时间不进分数：显示层按时间排 + 按时间打折（遗忘），不在这儿揉。
-    # ---------------------------------------------------------
+    #    📌 她删它的理由比「它是死的」更根本，值得记住：
+    #      「重复被想起的事情记得牢 —— **但这个情况是少数**」。
+    #      那是练得多记得牢的那套（艾宾浩斯），**不是我们要的记忆**。
+    #      我们要的是「重要的、动了情绪的留得久」，不是「被查得多的留得久」。
+    #      涟漪是那套模型剩下的一条腿，腿的主人 8-16 就走了。
+    #
+    #    ⚠️ `activation_count` 这个字段**先留着**（它躺在 frontmatter 里不花钱，
+    #       删它要动全库几千个文件）。**但现在没有任何地方读它** —— 谁看见它
+    #       想拿来做判据，先回来读这段。
+
     async def search(
         self,
         query: str,

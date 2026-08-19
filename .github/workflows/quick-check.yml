@@ -1,0 +1,63 @@
+# Runs the fast lane on every push and pull request.
+#
+# WHY THIS EXISTS
+#   Until now, every check on this project ran because a human remembered to run it.
+#   That worked right up until it didn't: on 2026-08-19 two undefined names shipped to
+#   the public branch and stayed broken for two hours, because the one command that
+#   would have caught them in three seconds was never typed.
+#
+#   This workflow is not here to catch clever bugs. It is here so that "nobody ran it"
+#   stops being a possible explanation.
+#
+# WHAT IT DELIBERATELY DOES NOT RUN
+#   The end-to-end suite. That one starts real containers and talks to a real model —
+#   it cannot run here, and pretending otherwise would give a green check that means
+#   nothing. Run it locally before shipping; see docs.
+#
+#   A green check here means: no undefined names, the unit tests pass, the gateway
+#   tests pass. It does not mean the system works end to end. Do not read it as more
+#   than it says.
+
+name: quick-check
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  quick-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # Install the real dependencies, not just the test tooling.
+      #
+      # Two reasons, and the second one is why this is worth the extra thirty seconds:
+      #
+      #   1. The unit tests import real modules, and those reach starlette and friends.
+      #      A job that installs only pytest would fail on import and tell you nothing
+      #      about your code.
+      #   2. This makes every push exercise the OPEN dependency file — the one other
+      #      people actually install from. We develop against the lock file, so a bad
+      #      constraint in requirements.txt is invisible to us and breaks only strangers.
+      #      That already happened once: an unpinned `mcp>=1.0.0` resolved to 2.0.0,
+      #      which moved the module we import, so a fresh install died on startup while
+      #      every machine here kept working. This step is the thing that would have
+      #      caught it.
+      - name: Install dependencies (open file, on purpose)
+        run: |
+          python -m pip install --quiet -r requirements.txt
+          python -m pip install --quiet pyflakes pytest
+
+      - name: Fast lane
+        run: python scripts/quick_check.py

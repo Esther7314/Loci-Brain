@@ -69,7 +69,7 @@ def 是人话标签(tag: str) -> bool:
     return bool(t) and not t.startswith(_SYS_TAG_PREFIXES) and not _机器腔标签.match(t)
 
 _SEED_RE = re.compile(r"\[\[([a-z_]+)\]\]")
-# 底色只认情绪种子（七情+六欲的英文键），别的 [[wikilink]]（[[om]][[Es]]…）不是种子
+# 底色只认情绪种子（七情+六欲的英文键），别的 [[wikilink]]（[[项目名]][[人名]]…）不是种子
 _SEED_NAMES = frozenset({
     "joy", "anger", "sorrow", "fear", "love", "aversion", "desire",
     "lust", "sound", "scent", "taste", "touch", "dharma", "greed",
@@ -894,7 +894,7 @@ def _cell_span(cell: list[dict]) -> tuple[datetime, datetime]:
     return min(ts), max(ts) + timedelta(days=1)
 
 
-async def _big_lines(t0, t1, seen: set[str]) -> list[str]:
+def _big_lines(all_buckets: list, t0, t1, seen: set[str]) -> list[str]:
     """跟这一格有重叠的**时期**，一行标题（`时期 那阵子在做什么 (id) 8-13~8-16`）。
 
     🔴 8-17 14:30 终稿之后时期是**纯命名层**：它不写 `covered_by`，所以走不了
@@ -908,7 +908,7 @@ async def _big_lines(t0, t1, seen: set[str]) -> list[str]:
        贴得最近的那个。
     """
     out: list[str] = []
-    for meta, content, bid in await _big.covering(t0, t1):
+    for meta, content, bid in _big.covering(all_buckets, t0, t1):
         if bid in seen:
             continue
         seen.add(bid)
@@ -958,6 +958,17 @@ async def _render_browse(entries, gates, room, tag) -> str:
     """
     now = _w.now()
     today = _w.today()
+    # 🔴 **整份浏览只捞这一次库。** 底下时期那几行原来是各调各的
+    #    （每格一次、每天一次、远端一次 —— 一次浏览七八遍），
+    #    而那几遍**藏在 `covering()` 里面，调用方一遍都看不见**。
+    #    现在名单在这儿，谁用谁伸手拿，多捞一遍会摆在脸上。
+    #    ⚠️ 时期要的是**整个库**，不是这次筛出来的 entries ——
+    #       一个时期盖不盖得住这一格，跟它自己有没有过筛子无关。
+    try:
+        时期用的库 = await rt.bucket_mgr.list_all(include_archive=False)
+    except Exception as e:
+        rt.logger.warning(f"时期那半的库没捞到，这次浏览不盖时期: {e}")
+        时期用的库 = []
     dn = today - timedelta(days=_BROWSE_NEAR_DAYS - 1)   # 今天/昨天/前天
     tomorrow = today + timedelta(days=1)
 
@@ -995,7 +1006,7 @@ async def _render_browse(entries, gates, room, tag) -> str:
         lines.append("— 还没到的 —")
         for label, cell in reversed(_split_calendar(future, "month")):
             lines.append(_far_line(label, _cell_stats(cell), fixed_room, drop))
-            lines.extend(await _big_lines(*_cell_span(cell), 时期出过))
+            lines.extend(_big_lines(时期用的库, *_cell_span(cell), 时期出过))
 
     # 三天内：照旧（一天一行 + 突出的点另起一行）
     if near:
@@ -1006,7 +1017,7 @@ async def _render_browse(entries, gates, room, tag) -> str:
             st = _cell_stats(days[label])
             lines.append(_head(label, st))
             # 时期/gist 标题在突出的点**上面**：先说这几天叫什么，再说里面哪条扎眼
-            lines.extend(await _big_lines(*_cell_span(days[label]), 时期出过))
+            lines.extend(_big_lines(时期用的库, *_cell_span(days[label]), 时期出过))
             hl = _fmt_highlights(st)
             if hl:
                 lines.append(hl)
@@ -1042,7 +1053,7 @@ async def _render_browse(entries, gates, room, tag) -> str:
         # 她的原话：「给 2~3 条前 2~3 周的，**如果有大事件就换成大事件**。」
         # 大 event 先占位，剩下的位置才用代表条目补 —— 少于 3 条时不空着。
         # （第 5 条：盖，不替代 —— 上面那行统计和突出的点一个都没少，只是多一句话。）
-        盖这段的 = await _big.covering(*_cell_span(far))
+        盖这段的 = _big.covering(时期用的库, *_cell_span(far))
         covers = [x for x in 盖这段的 if x[2] not in 时期出过]
         for meta, content, bid in covers[:1]:      # 一格一条时期（8-19 她定）
             时期出过.add(bid)

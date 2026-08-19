@@ -29,7 +29,7 @@ tools/_dream.py — 织梦引擎（2026-08-17 从零造，night_fall 整个退�
 |---|---|
 | **吃哪个池子** | 压在心头的 want（权重 `weight`）＋ 想不明白的 event（权重 `arousal`）＋ 几个 tags |
 | **谁落笔** | 🔴 LLM（三个实例里只有梦是这样） |
-| **织完的后果** | **被梦到的 want 重量清零**（event 的 arousal 一个字不动） |
+| **织完的后果** | **只记一笔 `last_dreamt`**，短期内少选它。**weight / arousal 都不动**（8-20 改） |
 | **产物的命** | 会忘。**忘掉是默认，记住才是例外**（`grow` 一条才留得住） |
 
 「想不明白」= **没有任何认知指向它**（她 8-13：「我们的记忆里面没有消化这个说法」）——
@@ -216,6 +216,8 @@ DREAM_DEFAULTS: dict = {
     #     这条线实际管的是「多清淡的日子才安静」。
     "dull_line": 0.35,       # 平淡线：一条的分量低于它，**一分都不算**
     "pressure_line": 0.65,   # 压力线：**最重的那一条**过了才织（不是相加，见 压力()）
+    # 刚梦过的多久之内少选（2026-08-20）。**只影响选哪一条，不影响要不要做梦。**
+    "dream_cooldown_days": 7,
     "per_day": 1,            # 一天最多织几个（一夜一梦）
     # ---- 生命周期：现实时间 和 对话轮次，**谁先到算谁** ----
     "fragment_minutes": 30,  # 碎片层活多久
@@ -271,12 +273,36 @@ class 料条:
     权重: float                 # 压在心头取 `weight`，想不明白取 `arousal`（开工单 B 组的表）
     天数: int
     路: str                     # "压在心头" | "想不明白"
+    梦过几天前: int | None = None   # 上次梦到它是几天前；None = 没梦到过
 
 
 def 衰减(权重: float, 天数: int, c: dict) -> float:
     """`权重 ÷ (1 + 天数/7)` —— **真实的梦主要是日间残留**（B 组第 2 条要点）。"""
     半衰 = max(1.0, float(c["half_life_days"]))
     return float(权重) / (1.0 + max(0, int(天数)) / 半衰)
+
+
+def 刚梦过打折(梦过几天前: int | None, c: dict) -> float:
+    """刚梦过的**少选一点**，但绝不是不选。返回一个 0.15~1.0 的系数。
+
+    🔴 2026-08-20 她拍的，推翻了原来那个「织完把 want 的 weight 清零」：
+       > 「我只是希望做个梦而已，**不代表做梦真的要放下什么**」
+
+       原来的做法把**两件不同的事混成了一件**：
+         · 「别老做同一个梦」        ← 这是选料的事
+         · 「这件事不压着我了」      ← 这是她的事，只有她说了算
+       清零一次做掉两件，后果是反的：**你最放不下的那件，被梦到一次就从
+       「压在心头」里消失了** —— 而现实里反复入梦的，恰恰是还压着的那件。
+       它还跨了另一条线：`want` 只有两个终点（放下 / 不做了），**都得她手动标**。
+
+    📌 所以现在拆开：这个函数只管「别重样」，**一个字都不碰 `weight`**。
+    ⚠️ 也不进压力计算 —— 「要不要做梦」照旧看真实重量，
+       只有「梦哪一条」才打这个折。刚梦过不等于不压着了。
+    """
+    if 梦过几天前 is None:
+        return 1.0
+    冷却 = max(1.0, float(c.get("dream_cooldown_days", 7)))
+    return max(0.15, min(1.0, float(max(0, int(梦过几天前))) / 冷却))
 
 
 # 「想不明白」那一路的权重就是 **`arousal` 原值**（开工单 B 组的表 + 原型 `_试梦` 都是这个）。
@@ -291,6 +317,15 @@ def _天数(it: "M.Item", now: datetime) -> int:
     if 钟 is None:
         return 999
     return max(0, (now - 钟).days)
+
+
+def _梦过几天前(meta: dict, now: datetime) -> int | None:
+    """上次梦到这条是几天前。没梦到过 → None。读不懂也当没梦到过（不猜）。"""
+    raw = str(meta.get("last_dreamt") or "").strip()
+    if not raw:
+        return None
+    t = _w.parse_stamp(raw)
+    return max(0, (now - t).days) if t else None
 
 
 def want池(recs: list[tuple[dict, str]], now: datetime) -> list[料条]:
@@ -315,7 +350,7 @@ def want池(recs: list[tuple[dict, str]], now: datetime) -> list[料条]:
             continue
         出.append(料条(id=it.id, 正文=it.text, v=it.v, a=it.a,
                        权重=_f(meta.get("weight"), 0.5), 天数=_天数(it, now),
-                       路="压在心头"))
+                       路="压在心头", 梦过几天前=_梦过几天前(meta, now)))
     return 出
 
 
@@ -355,7 +390,7 @@ def 加权抽(池: list[料条], n: int, c: dict) -> list[料条]:
     池 = list(池)
     出: list[料条] = []
     for _ in range(min(int(n), len(池))):
-        w = [max(0.01, 衰减(x.权重, x.天数, c)) for x in 池]
+        w = [max(0.01, 衰减(x.权重, x.天数, c) * 刚梦过打折(x.梦过几天前, c)) for x in 池]
         i = random.choices(range(len(池)), weights=w)[0]
         出.append(池.pop(i))
     return 出
@@ -732,9 +767,12 @@ async def weave(force: bool = False, cfg: dict | None = None,
     （盘上只有碎片；夜里那段逐字随跨天坍塌消失，不用特意删）。
     不过线返回 `None`（`force=True` 跳过压力线，给桥/干跑用）。
 
-    织完的后果：**被梦到的 want 重量清零**（`weight=0`），
-    **event 的 arousal 一个字不动**——「它不再压着我了」是 want 的循环，
-    没想明白的事不会因为做了个梦就想明白了。
+    织完的后果：**只记一笔「上次梦到是什么时候」**（`last_dreamt`），
+    短期内这条少被选中。**`weight` 一个字不动，`arousal` 也一个字不动。**
+
+    ⚰️ 2026-08-20 之前这儿会把被梦到的 want 的 `weight` **清零**，理由是
+       「它不再压着我了」。她推翻了：**「我只是希望做个梦而已，不代表做梦
+       真的要放下什么」**。详见 `刚梦过打折()` 上面那块碑。
     """
     c = cfg or _c()
     料 = 料 if 料 is not None else await 备料(c)     # 挂点已经装好料了就别再扫一遍全库
@@ -773,24 +811,26 @@ async def weave(force: bool = False, cfg: dict | None = None,
     }
     落盘(rec)
 
-    清零了 = []
+    # 记一笔「上次梦到」—— **只为了别老做同一个梦**，不动 weight。
+    记下了 = []
+    戳 = now.isoformat(timespec="seconds")
     for x in 料["压在心头"]:
         try:
-            # bump_active 默认 False：清零不是「刚想起」，别去动遗忘时钟
-            ok = await rt.bucket_mgr.update(x.id, weight=0.0)
+            # bump_active 默认 False：做梦不是「刚想起」，别去动遗忘时钟
+            ok = await rt.bucket_mgr.update(x.id, last_dreamt=戳)
             if not ok:
                 # ⚠️ 8-17 验收真撞上：并发扫库那一刻 _find_bucket_file 会瞬时
                 #    找不到一个明明在盘上的老文件（路径索引 ready 但缺条目，
                 #    歇一拍就好）。update 返回 False 又不吭声 = 「绿灯骗人」——
                 #    歇两秒重试一次，还不行就大声记下来，绝不静默丢。
                 await asyncio.sleep(2)
-                ok = await rt.bucket_mgr.update(x.id, weight=0.0)
+                ok = await rt.bucket_mgr.update(x.id, last_dreamt=戳)
             if ok:
-                清零了.append(x.id)
+                记下了.append(x.id)
             else:
-                rt.logger.warning("[dream] want 重量清零没写进去（update 返回 False）: %s", x.id)
+                rt.logger.warning("[dream] last_dreamt 没写进去（update 返回 False）: %s", x.id)
         except Exception as e:                      # noqa: BLE001
-            rt.logger.warning("want 重量清零失败 %s: %s", x.id, e)
+            rt.logger.warning("last_dreamt 写失败 %s: %s", x.id, e)
 
     # 「一夜一梦」记账：跨天自己归零（用她的今天，不是容器的 UTC 今天）
     今天 = now.strftime("%Y-%m-%d")
@@ -803,7 +843,7 @@ async def weave(force: bool = False, cfg: dict | None = None,
     出 = dict(rec)
     出.pop("_路径", None)
     出["完整"] = 梦["完整"]              # ← 只在这儿存在
-    出["清零了"] = 清零了
+    出["记下了"] = 记下了      # ⚰️ 8-20 之前这个键叫「清零了」，装的是被清零的 want
     return 出
 
 

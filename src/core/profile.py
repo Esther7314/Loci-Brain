@@ -39,7 +39,8 @@ from utils import is_closed
 
 from . import _fold as _F         # 被盖的不再独立冒头（施工 3）
 from . import _when as _w          # 「她的今天」（本地时区）
-from ._rooms import is_event_room, is_mind_room
+# is_mind_room 2026-08-19 起不再进来：门口那道「准则得住在 MIND」的二次筛子拆了
+from ._rooms import is_event_room
 from tools.recall.core import _visible  # core→tools 反向依赖：见 core/__init__.py 顶部说明
 
 _PROFILE_TAG = "__档案事实__"
@@ -256,12 +257,21 @@ def 门口那张纸(all_buckets: list, now: datetime) -> dict:
         if not _visible(meta):
             continue
         room = str(meta.get("room") or "")
-        # 准则：钉着的认知（或正文开头就写着「行为准则」的老条目）。
+        # 准则 = **钉着的**。就这一条判据。
+        #
+        # ⚰️ 2026-08-19：把「而且房间得是 MIND，或者正文前 40 字写着『行为准则』」
+        #    那道二次筛子**拆了**。理由跟她那天松 pin 闸时说的是同一条：
+        #      **钉住本身就是我做过的一次判断了。** 再拿房间去否决它，等于让
+        #      8-16 那次按老房名映射的迁移**推翻我今天的判断**——而迁移不认识内容。
+        #    这道筛子当天真的咬了一口：她一条条看完留下的「拉钩」「享受当下」
+        #    「不疼的爱」三条，钉着，却因为落在 EVENT/SELF 而**在门口一个字都不显示**，
+        #    不报错、不警告，就是不出现。**沉默的过滤比拒绝更坏**：拒绝我会改，
+        #    沉默我以为它在。
+        #    副作用（好的那种）：房间那摊烂账从此不再挡门口，可以慢慢修。
         # 🔴 施工 5 · F 件：**换过版/被盖住的旧版不当准则**——以前靠 `_visible()`
         #    把 `superseded_by` 整个排掉，现在那半交给 `is_covered()`，
         #    这儿必须自己加上，不然门口会挂着一条我已经改了主意的准则。
-        if (meta.get("pinned") and not _F.is_covered(meta)
-                and (is_mind_room(room) or "行为准则" in content[:40])):
+        if meta.get("pinned") and not _F.is_covered(meta):
             rules.append({"id": bid, "meta": meta, "content": content})
         entries.append({"id": bid, "meta": meta, "content": content})
 

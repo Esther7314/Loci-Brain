@@ -577,7 +577,10 @@ async def breath() -> str:
     · Out of the blue   one or two entries at random, with no relevance filter.
 
     Every word on this screen is either something written down at the time or fixed text
-    from a template. None of it goes through a model.
+    from a template. None of it goes through a model. The rules are printed exactly as
+    they were written, in full: a rule is already the short version of itself, and putting
+    a summary of it in front of you every morning means reading someone else's paraphrase
+    of your own words.
 
     The summaries are hooks. When one looks relevant, go and get the original with recall.
 
@@ -722,7 +725,9 @@ async def grow(
 
     Events are episodic memory: write from inside the moment — first person for yourself,
     third person for everyone else — and keep the feeling of it, not just the fact.
-    A mind entry holds the realization only. Never a retelling of what led to it.
+    A mind entry keeps only what's left when the thinking is done — not the evidence,
+    not the reasoning, not what happened. All of that is already in the events it grew
+    `from`.
 
     When to use:
     · A topic has closed and the conversation is moving on to another
@@ -1118,11 +1123,6 @@ async def regrow(
         "Any new sources this version came out of, at most 5. The old version's "
         "sources carry over on their own, so only name what is new."
     ))] = [],
-    when: Annotated[str, _PydField(description=(
-        'Periods only: the new range, "start..end". Leave the end open if it is still '
-        "running. Leave the parameter out to keep the range as it was. Do not pass it "
-        "for anything other than a period."
-    ))] = "",
 ) -> str:
     """Replace an entry that is wrong, or that is no longer how you see it.
 
@@ -1132,12 +1132,15 @@ async def regrow(
 
     When to use:
     · You see it differently now than you did then
-    · An event came out wrong: the day, the person, or what was actually said
-    · A period needs a different name, or its edges need moving
+    · An entry came out wrong in its own words: what was said, who said it, what happened
+    · A period needs a different name
 
     Write the new version whole. It replaces the entry outright; it is not a patch.
 
     Do not use this tool when:
+    · What is wrong is not what the entry says. Which room it is in, which day it hangs
+      on in time, its tags, how it felt — all of that is metadata, and metadata is trace's:
+      correcting it is correction fluid, not a new draft, and it leaves no version behind.
     · Several entries turn out to be about the same thing. Use fold.
     · This entry has already been replaced once. Regrow the newest version instead of
       branching off an old one; branching is rejected.
@@ -1152,17 +1155,37 @@ async def regrow(
              text="It was Tuesday, not Wednesday, and she arrived in the afternoon.",
              v=0.3, a=0.4)
 
-    Example — a period needs different edges:
+    Example — a period needs a different name:
       regrow(bucket_id="c3d4e5f6a1b2",
              text="The stretch where we moved the memory system onto a name of our own.",
-             when="2026-08-15..2026-08-19", v=0.8, a=0.5)"""
+             v=0.8, a=0.5)"""
     return await _with_notice(
-        _t_regrow.dispatch(bucket_id=bucket_id, text=text, v=v, a=a, from_=from_,
-                           when=when),
+        _t_regrow.dispatch(bucket_id=bucket_id, text=text, v=v, a=a, from_=from_),
         op="regrow",
         args={"bucket_id": bucket_id, "text_len": len(text or ""), "v": v, "a": a,
-              "from": from_, "when": when},
+              "from": from_},
     )
+
+
+# --- regrow 也要认不出砍掉的参数（2026-08-19 夜里补，**同一个坑第三次**）----------
+# 🔴 `regrow` 8-19 撤掉了 `when` / `room`（元数据归 trace）。可它是八个工具里
+#    **唯一没装 forbid 的那个** —— 于是 `regrow(bucket_id=…, room="MIND/VIEWS")`
+#    **既不报错也不生效**：FastMCP 把 schema 里没有的字段悄悄丢掉再调函数，
+#    房间原样没动，回执一个字都没提。
+#    **静默收下比报错坏得多：我以为改了，其实没改。**
+# 📌 这个坑的历史：8-18 给 breath/grow/recall/trace 装了 forbid，漏了 fold/muse；
+#    8-19 白天补 fold/muse 的时候（就在上面那段），**又漏了 regrow**。
+#    第三次了 —— 所以判据不再是「记得给新工具加」，是**烟测里有一条会因为它变红**
+#    （`smoke_grow` 14l）。名单靠人记必然会漏，靠断言才不会。
+try:
+    _regrow_tool = mcp._tool_manager.get_tool("regrow")
+    if _regrow_tool is None:
+        raise RuntimeError("registered regrow tool is missing")
+    _regrow_arg_model = _regrow_tool.fn_metadata.arg_model
+    _regrow_arg_model.model_config["extra"] = "forbid"
+    _regrow_arg_model.model_rebuild(force=True)
+except (AttributeError, RuntimeError, TypeError, ValueError) as _regrow_strict_exc:
+    logger.warning("regrow strict-argument adapter unavailable: %s", _regrow_strict_exc)
 
 
 @mcp.tool()
@@ -1186,7 +1209,8 @@ async def trace(
         "Its tags."
     ))] = "",
     pinned: Annotated[int, _PydField(description=(
-        "1 pins it as a principle (the imperative shape is checked); 0 unpins."
+        "1 pins it as a principle; 0 unpins. Nothing is refused: if it does not read "
+        "like something you mean to do, it is still pinned and you get a note back."
     ))] = -1,
     delete: Annotated[bool, _PydField(description=(
         "True moves it to the archive. A soft delete; it can always be brought back."
@@ -1194,6 +1218,24 @@ async def trace(
     status: Annotated[Optional[str], _PydField(description=(
         '"resolved" let go of / "abandoned" not doing it / "want" back on the table.'
     ))] = "",
+    room: Annotated[str, _PydField(description=(
+        "Move the entry to another room. Which room it is in is metadata: it says what "
+        "kind of thing this is, not what the entry says, so changing it leaves no version "
+        "behind. Wrong or unknown rooms are refused here exactly as they are anywhere else."
+    ))] = "",
+    when: Annotated[str, _PydField(description=(
+        "Where this entry hangs in time. An ordinary entry takes the day it happened "
+        '("2026-07-06"); a want takes a date or a length ("3w"); a period takes its range '
+        '("2026-07-31..2026-08-05"). Wrong shapes are refused. Written entries carry the '
+        "day they were written until you say otherwise, which is not always the day the "
+        "thing happened."
+    ))] = "",
+    folds_append: Annotated[list, _PydField(description=(
+        "Put a few more entries underneath a gist you already wrote. Append only: the "
+        "line itself does not change, only which entries it now stands for. There is no "
+        "way to hand in a replacement list, because forgetting one id would quietly let "
+        "that entry surface again."
+    ))] = [],
     weight: Annotated[float, _PydField(description=(
         "Wants only: how heavily it sits on you, 0~1."
     ))] = -1,
@@ -1231,10 +1273,12 @@ async def trace(
     Pinning:
       pinned=1 pins the entry to the first screen of breath, the few lines you see before you
       say anything.
-      🔴 What gets pinned is "how I mean to act", not "this one matters". The shape is
-         checked: only imperatives are accepted. A descriptive sentence is refused on the
-         spot, with an example of how to rewrite it. Pin a flaw as a principle and it reads
-         as "I intend to keep making this mistake".
+      🔴 What belongs here is "how I mean to act", not "this one matters". Nothing is
+         refused, though: a sentence that reads as description still gets pinned, and a
+         note comes back with it. The one thing worth catching is a flaw pinned as a
+         principle — pin "I always rush" and it reads as "I intend to keep making this
+         mistake" — and no check can tell that apart from a description worth keeping.
+         That call is yours. Scarcity is held by the cap, not by the wording.
       pinned=0 unpins.
 
     Closing something you wanted:
@@ -1257,15 +1301,25 @@ async def trace(
                             want the earlier version kept, use regrow instead.
 
     Changing fields:
-      name / domain / tags / valence / arousal / weight / dont_surface
+      name / domain / tags / valence / arousal / weight / dont_surface / room / when
+      Everything here is metadata: what kind of thing this is, where it hangs in time,
+      how it felt. None of it is what the entry says, so none of it leaves a version
+      behind — this is correction fluid, not a new draft. The moment the words themselves
+      have to change, that is regrow.
+
+    Putting more under a gist:
+      folds_append=[ids]  the line stays as written; only what it stands for grows.
 
     Do not use this tool when:
+    · The words themselves are wrong or have moved on. Use regrow, which keeps the old
+      version instead of writing over it.
     · The entry has a newer version. Use regrow."""
     return await _with_notice(
         _t_trace.dispatch(
             bucket_id=bucket_id, name=name, domain=domain,
             valence=valence, arousal=arousal,
-            tags=tags, pinned=pinned,
+            tags=tags, pinned=pinned, room=room, when=when,
+            folds_append=folds_append,
             delete=delete, status=status, weight=weight,
             dont_surface=dont_surface,
             media_append=media_append, media_replace=media_replace,
@@ -1277,7 +1331,8 @@ async def trace(
         args={
             "bucket_id": bucket_id, "name": name, "domain": domain,
             "valence": valence, "arousal": arousal,
-            "tags": tags, "pinned": pinned,
+            "tags": tags, "pinned": pinned, "room": room, "when": when,
+            "folds_append": folds_append,
             "delete": delete, "status": status,
             "hard_delete": hard_delete,
             "restore": restore,
@@ -1434,6 +1489,32 @@ async def letter_read(
             "date_from": date_from, "date_to": date_to,
         },
     )
+
+
+# --- letter 两个也要认不出砍掉的参数（2026-08-20 补，**同一个坑第四次**）--------
+# 数了一遍九个工具，装了这道闸的只有七个 —— `letter_read` / `letter_write` 也漏着。
+# 病史：8-18 给 breath/grow/recall/trace 装了，漏 fold/muse；
+#       8-19 白天补 fold/muse，漏 regrow；8-19 夜里补 regrow，**又漏这两个**。
+# 🔴 三次都是「补的时候照着当时想得起来的名字补」。第四次不这么补了：
+#    底下这一段**遍历工具表**，谁没装就给谁装，**将来加新工具自动就有**。
+#    📌 判据：**名单靠人记必然会漏。** 前三次的教训都写着同一句话，
+#       而我前三次都选择了「这次一定记全」。
+# ⚠️ letter 两个是**条件注册**的（config.tools.letter 默认关），关着的时候
+#    工具表里根本没有它们 —— 所以这儿只能「有就装」，不能断言一定装得上。
+try:
+    for _名 in ("breath", "grow", "recall", "regrow", "fold", "muse", "trace",
+                "letter_write", "letter_read"):
+        for _面 in (mcp, mcp_extra):
+            _t = _面._tool_manager.get_tool(_名)
+            if _t is None:
+                continue
+            _m = _t.fn_metadata.arg_model
+            if _m.model_config.get("extra") != "forbid":
+                _m.model_config["extra"] = "forbid"
+                _m.model_rebuild(force=True)
+                logger.info("strict-argument adapter installed for %s", _名)
+except (AttributeError, RuntimeError, TypeError, ValueError) as _strict_all_exc:
+    logger.warning("strict-argument sweep unavailable: %s", _strict_all_exc)
 
 
 
