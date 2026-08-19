@@ -273,8 +273,11 @@ async def trace_core(
         final_type = "permanent"
     elif unpinning_now and not protected:
         final_type = "dynamic"
-    # importance 只剩两个来源了：pin 锁成 10，其余照旧（外面改不了它）
-    final_importance = 10 if pinned == 1 else current_importance
+    # importance 只剩两个来源了：pin 锁成 10，其余照旧（外面改不了它）。
+    # requested_importance 这个名字留着：底下那句「配额把它压下来了就落盘」
+    # 比的是「要的」和「最后给的」，语义没变，只是「要的」现在恒等于现状。
+    requested_importance = current_importance
+    final_importance = 10 if pinned == 1 else requested_importance
     current_dont_surface = parse_bool(
         meta.get("dont_surface"), default=False
     )
@@ -411,11 +414,6 @@ async def trace_core(
             # Unpinning/restoring surfacing can create an ordinary high slot.
             # Persist quota degradation in the same bucket transaction.
             updates["importance"] = final_importance
-        why_remembered = str(why_remembered).strip()
-        if why_remembered == "\\clear":
-            updates["why_remembered"] = ""
-        elif why_remembered:
-            updates["why_remembered"] = why_remembered[:500]
 
         # --- media —— 追加是日常操作，整体替换只用于纠错/清理 ---
         # （meaning 已退役，上面就拦掉了；盘上的老 meaning 不动，去处等她亲眼看完再定）
