@@ -26,7 +26,7 @@ codex 二轮修的四处：
 
 from core import _fold as _F           # fold 的骨头：regrow 是它的 n=1 特例
 from .. import _runtime as rt
-from core._bigevent import SPAN_RE, is_big as _is_big
+from core._bigevent import is_big as _is_big
 from .._common import _keyed_turn
 # is_mind_room 2026-08-18 起不再用于挡 event（那道闸拆了，见下面 regrow 里那段碑文）
 # from core._rooms import is_mind_room
@@ -36,8 +36,7 @@ from ..grow.rooms_path import _normalize_from
 _CHAIN_LIMIT = 64  # triggered_by 底层上限
 
 
-async def dispatch(bucket_id: str = "", text: str = "", v=-1, a=-1, from_=None,
-                   when: str = "") -> str:
+async def dispatch(bucket_id: str = "", text: str = "", v=-1, a=-1, from_=None) -> str:
     bucket_id = str(bucket_id or "").strip()
     text = str(text or "")  # 逐字落盘：不 strip 正文
     if not bucket_id:
@@ -77,6 +76,11 @@ async def dispatch(bucket_id: str = "", text: str = "", v=-1, a=-1, from_=None,
                         "把它捞回来，再 regrow。")
             return f"找不到 {bucket_id}。"
         old_meta = old.get("metadata", {}) or {}
+        # 房间从旧版继承，**这儿没有改它的口子**（2026-08-19 她定的轴）：
+        # 「regrow 改内容本身，trace 改元数据」。房间是元数据 —— 它不影响这条记忆说了什么，
+        # 改它像用修正带，不该产生一个新版本。搬家走 trace(bucket_id=…, room=…)。
+        # ⚰️ 8-19 白天这里短暂收过 `room`，理由是「搬家是换版的一部分」；
+        #    当晚她一句话点破：那是一个字段两个入口，正是 8-18 亲手杀掉的病。
         room = str(old_meta.get("room") or "")
         is_big = _is_big(old_meta)
         # 🔴 2026-08-18：这儿原来有一道闸，只放行认知（MIND 两间）和时期，
@@ -110,17 +114,12 @@ async def dispatch(bucket_id: str = "", text: str = "", v=-1, a=-1, from_=None,
             else:
                 dropped.append(fid)
 
-        # 大 event 换版：标签和起止都得跟过来，不然新版就不是大 event 了。
-        # when 不传 = 起止照旧（只改说法）；传了就是「这条主线的范围变了」
-        # （典型：`7-31..` 收口成 `7-31..8-05`，另起一条新主线）。
-        new_when = ""
-        if is_big:
-            new_when = str(when or "").strip() or str(old_meta.get("when") or "")
-            if new_when and not SPAN_RE.match(new_when):
-                return ('大 event 的 when 要写成起止："2026-07-31..2026-08-05"，'
-                        '进行中就把止留空："2026-07-31.."。不传＝范围照旧。')
-        elif when and str(when).strip():
-            return "when 只对大 event 有意义（改它盖住的那段时间）；认知换版不用传。"
+        # 时期换版：标签和起止都得跟过来，不然新版就不是时期了 —— **起止照抄旧版**。
+        # 时间从旧版继承，同样没有口子（2026-08-19）：`when` 是「这条挂在时间的哪儿」，
+        # 是元数据不是内容 —— 时期改起止、事件补发生日，都走 trace(bucket_id=…, when=…)。
+        # 📌 时期这条以前是特例（「范围是它的一半身体，所以算内容」），她当晚把这个特例也拆了：
+        #    点和段是同一种东西，都是「挂在哪儿」。时期真正的内容是**那个名字**。
+        new_when = str(old_meta.get("when") or "") if is_big else ""
 
         is_test = bool(old_meta.get("provenance", {}).get("kind") == "test"
                        if isinstance(old_meta.get("provenance"), dict) else False)

@@ -159,8 +159,12 @@ ERROR_CODES: dict[str, ErrorSpec] = {
         title_zh="importance≥9 配额接近上限",
         title_en="importance≥9 quota near cap",
         suggestion_zh=(
-            "标为 importance≥9 的桶接近上限（22/24，硬上限 24）。"
-            "建议先用 trace(bucket_id, importance=…) 把不再核心的旧桶降级，再标新桶。"
+            "标为 importance≥9 的桶接近上限（硬上限 24）。\n"
+            "⚠️ 2026-08-19 起这条**不是给模型的待办**：importance 已经不在工具面上"
+            "（trace / grow 的 importance 形参 8-18 撤了），"
+            "**没有任何入口能降低任何一条的 importance**。\n"
+            "撑满这个池子的只会是历史条目。要处理去 Dashboard 手动改，"
+            "或者不管——满了之后新的会自动降级（OB-I001），不会拒绝写入。"
         ),
     ),
     "OB-W004": ErrorSpec(
@@ -192,11 +196,11 @@ ERROR_CODES: dict[str, ErrorSpec] = {
         title_zh="importance 已自动降级（importance≥9 配额超标）",
         title_en="importance auto-downgraded (≥9 quota exceeded)",
         suggestion_zh=(
-            "★ 这是 OB 自作主张帮你做的事 ★\n"
-            "importance≥9 的桶已达硬上限 24，本次新桶被自动降级为 importance=8。\n"
-            "建议：用 breath_advanced(importance_min=9) 重读全部「核心事项」，"
-            "重新评估每条 importance；不再核心的用 trace(bucket_id, importance=7) 降级。\n"
-            "（重新设定 importance 的责任在你，OB 不会替你判断哪条更重要。）"
+            "★ 这是系统自作主张帮你做的事 ★\n"
+            "importance≥9 的桶已达硬上限 24，这一条被自动降级为 importance=8。\n"
+            "⚠️ 2026-08-19 起**不必也无法手动善后**：importance 的入口 8-18 整个撤了"
+            "（连带 breath_advanced 也没了），这条只是告诉你「盘上高分条目满了」。\n"
+            "真要重排，去 Dashboard。"
         ),
     ),
     "OB-I002": ErrorSpec(

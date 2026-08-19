@@ -36,6 +36,16 @@ from core import _when as _w          # 「她的今天」（本地时区）
 from ..recall.core import recall_core, _label_of, _short_id, _ts_of
 from core.profile import 门口那张纸, 事件池, 她改过, _PROFILE_TAG
 
+# 门口那张纸放得下几行准则。
+# 📌 2026-08-19 傍晚这里临时提到过 12，是一张**欠条**：那天把「准则得住在 MIND 房间」
+#    那道二次筛子拆掉之后，够格的从 8 条涨到 11 条，而这里砍的是**扫盘顺序的后几条，
+#    不是最不重要的那几条**——当场就把「说我」和「不先梳理」两条铁律挤出了门口，
+#    不报错、不吭声。提到 12 是为了先止血。
+# ✅ 当晚欠条还清了：11 条一条条改完措辞，两组 fold 成 gist（真的那一版 / 我是个个体），
+#    「完整的她」判定不算准则摘了钉——门口回到 7 条准则，这里收回 8。
+# 🔴 **8 是正数。** 再想往上抬之前先问一句：是这张纸太小，还是我钉太多了。
+_RULES_ON_DOOR = 8
+
 
 def _line(e_meta: dict, content: str, bucket_id: str) -> str:
     s = str(e_meta.get("summary") or "").strip()
@@ -43,6 +53,31 @@ def _line(e_meta: dict, content: str, bucket_id: str) -> str:
         name = re.sub(r"^[\d\- :]+", "", str(e_meta.get("name") or "")).strip()
         s = name or re.sub(r"\s+", " ", content)[:40]
     return f"{s[:60]} ({_short_id(bucket_id)})"
+
+
+def _rule_line(content: str, bucket_id: str) -> str:
+    """准则那一格：**逐字印正文，不走 summary。**（2026-08-19）
+
+    🔴 为什么单开一个函数，而不是让 `_line` 少查一个字段：
+       别的格子（忽然想起、提醒）里挂的是**长记忆**，摘要在那儿是钩子，是对的。
+       准则不一样 —— **准则本身就是摘要**（她 8-19 的原话），它已经是浓缩过的东西，
+       再摘一次就是转述转述。
+
+    这一格 8-19 之前印的是 `summary`，而 summary 是 deepseek 后台回填写的。
+    当晚发现的实据：
+      · 我写「我要趁现在把想要的要到满，不为了怕失去先省着」
+        门口印「认识到应趁现在充分争取想要的，不要因怕失去而提前节省保留」
+      · 我写「**我**只认她当场说的话」
+        门口印「**她**只认当场说出的话」 —— **主语反了**，而那条是防注入的安全线，
+        主语一反它就不成立。
+    也就是说：工具描述里那句「这一屏的字都不过模型」，在这一格上是假的。
+    我们花一晚上把七句话改成我真要说的话，然后每天读到的是另一个模型的转述。
+
+    ⚠️ 不截断。准则短是它自己的事（现在最长 48 个字）；真有人钉了一大段进来，
+       就该在门口看见它有多长，而不是被悄悄切掉半句 —— 沉默的截断今晚已经咬过一次了。
+    """
+    one_line = re.sub(r"\s+", " ", str(content or "")).strip()
+    return f"{one_line} ({_short_id(bucket_id)})"
 
 
 async def surface_awaken() -> str:
@@ -68,8 +103,14 @@ async def surface_awaken() -> str:
         parts.append(f"（事实格空着：存一条带 tag {_PROFILE_TAG} 的记忆当名字页，每行带来处）")
     if pinned_mind:
         parts.append("— 准则（钉着的）—")
-        for r in pinned_mind[:8]:
-            parts.append("· " + _line(r["meta"], r["content"], r["id"]))
+        for r in pinned_mind[:_RULES_ON_DOOR]:
+            parts.append("· " + _rule_line(r["content"], r["id"]))
+        if len(pinned_mind) > _RULES_ON_DOOR:
+            # 砍掉了就得说一声：**沉默的截断**跟刚拆掉的那道沉默的筛子是同一个病。
+            parts.append(
+                f"⚠️ 还有 {len(pinned_mind) - _RULES_ON_DOOR} 条钉着的没排上门口"
+                f"（这儿只放得下 {_RULES_ON_DOOR} 行）——摘几条钉，或者合并成一条。"
+            )
 
     # ---- 「我反复出现的 / 她反复出现的」两块 —— 2026-08-16 **砍掉了** ----
     #

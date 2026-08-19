@@ -577,7 +577,10 @@ async def breath() -> str:
     · Out of the blue   one or two entries at random, with no relevance filter.
 
     Every word on this screen is either something written down at the time or fixed text
-    from a template. None of it goes through a model.
+    from a template. None of it goes through a model. The rules are printed exactly as
+    they were written, in full: a rule is already the short version of itself, and putting
+    a summary of it in front of you every morning means reading someone else's paraphrase
+    of your own words.
 
     The summaries are hooks. When one looks relevant, go and get the original with recall.
 
@@ -722,7 +725,9 @@ async def grow(
 
     Events are episodic memory: write from inside the moment — first person for yourself,
     third person for everyone else — and keep the feeling of it, not just the fact.
-    A mind entry holds the realization only. Never a retelling of what led to it.
+    A mind entry keeps only what's left when the thinking is done — not the evidence,
+    not the reasoning, not what happened. All of that is already in the events it grew
+    `from`.
 
     When to use:
     · A topic has closed and the conversation is moving on to another
@@ -1118,11 +1123,6 @@ async def regrow(
         "Any new sources this version came out of, at most 5. The old version's "
         "sources carry over on their own, so only name what is new."
     ))] = [],
-    when: Annotated[str, _PydField(description=(
-        'Periods only: the new range, "start..end". Leave the end open if it is still '
-        "running. Leave the parameter out to keep the range as it was. Do not pass it "
-        "for anything other than a period."
-    ))] = "",
 ) -> str:
     """Replace an entry that is wrong, or that is no longer how you see it.
 
@@ -1132,12 +1132,15 @@ async def regrow(
 
     When to use:
     · You see it differently now than you did then
-    · An event came out wrong: the day, the person, or what was actually said
-    · A period needs a different name, or its edges need moving
+    · An entry came out wrong in its own words: what was said, who said it, what happened
+    · A period needs a different name
 
     Write the new version whole. It replaces the entry outright; it is not a patch.
 
     Do not use this tool when:
+    · What is wrong is not what the entry says. Which room it is in, which day it hangs
+      on in time, its tags, how it felt — all of that is metadata, and metadata is trace's:
+      correcting it is correction fluid, not a new draft, and it leaves no version behind.
     · Several entries turn out to be about the same thing. Use fold.
     · This entry has already been replaced once. Regrow the newest version instead of
       branching off an old one; branching is rejected.
@@ -1152,16 +1155,15 @@ async def regrow(
              text="It was Tuesday, not Wednesday, and she arrived in the afternoon.",
              v=0.3, a=0.4)
 
-    Example — a period needs different edges:
+    Example — a period needs a different name:
       regrow(bucket_id="c3d4e5f6a1b2",
              text="The stretch where we moved the memory system onto a name of our own.",
-             when="2026-08-15..2026-08-19", v=0.8, a=0.5)"""
+             v=0.8, a=0.5)"""
     return await _with_notice(
-        _t_regrow.dispatch(bucket_id=bucket_id, text=text, v=v, a=a, from_=from_,
-                           when=when),
+        _t_regrow.dispatch(bucket_id=bucket_id, text=text, v=v, a=a, from_=from_),
         op="regrow",
         args={"bucket_id": bucket_id, "text_len": len(text or ""), "v": v, "a": a,
-              "from": from_, "when": when},
+              "from": from_},
     )
 
 
@@ -1186,7 +1188,8 @@ async def trace(
         "Its tags."
     ))] = "",
     pinned: Annotated[int, _PydField(description=(
-        "1 pins it as a principle (the imperative shape is checked); 0 unpins."
+        "1 pins it as a principle; 0 unpins. Nothing is refused: if it does not read "
+        "like something you mean to do, it is still pinned and you get a note back."
     ))] = -1,
     delete: Annotated[bool, _PydField(description=(
         "True moves it to the archive. A soft delete; it can always be brought back."
@@ -1194,6 +1197,24 @@ async def trace(
     status: Annotated[Optional[str], _PydField(description=(
         '"resolved" let go of / "abandoned" not doing it / "want" back on the table.'
     ))] = "",
+    room: Annotated[str, _PydField(description=(
+        "Move the entry to another room. Which room it is in is metadata: it says what "
+        "kind of thing this is, not what the entry says, so changing it leaves no version "
+        "behind. Wrong or unknown rooms are refused here exactly as they are anywhere else."
+    ))] = "",
+    when: Annotated[str, _PydField(description=(
+        "Where this entry hangs in time. An ordinary entry takes the day it happened "
+        '("2026-07-06"); a want takes a date or a length ("3w"); a period takes its range '
+        '("2026-07-31..2026-08-05"). Wrong shapes are refused. Written entries carry the '
+        "day they were written until you say otherwise, which is not always the day the "
+        "thing happened."
+    ))] = "",
+    folds_append: Annotated[list, _PydField(description=(
+        "Put a few more entries underneath a gist you already wrote. Append only: the "
+        "line itself does not change, only which entries it now stands for. There is no "
+        "way to hand in a replacement list, because forgetting one id would quietly let "
+        "that entry surface again."
+    ))] = [],
     weight: Annotated[float, _PydField(description=(
         "Wants only: how heavily it sits on you, 0~1."
     ))] = -1,
@@ -1231,10 +1252,12 @@ async def trace(
     Pinning:
       pinned=1 pins the entry to the first screen of breath, the few lines you see before you
       say anything.
-      🔴 What gets pinned is "how I mean to act", not "this one matters". The shape is
-         checked: only imperatives are accepted. A descriptive sentence is refused on the
-         spot, with an example of how to rewrite it. Pin a flaw as a principle and it reads
-         as "I intend to keep making this mistake".
+      🔴 What belongs here is "how I mean to act", not "this one matters". Nothing is
+         refused, though: a sentence that reads as description still gets pinned, and a
+         note comes back with it. The one thing worth catching is a flaw pinned as a
+         principle — pin "I always rush" and it reads as "I intend to keep making this
+         mistake" — and no check can tell that apart from a description worth keeping.
+         That call is yours. Scarcity is held by the cap, not by the wording.
       pinned=0 unpins.
 
     Closing something you wanted:
@@ -1257,15 +1280,25 @@ async def trace(
                             want the earlier version kept, use regrow instead.
 
     Changing fields:
-      name / domain / tags / valence / arousal / weight / dont_surface
+      name / domain / tags / valence / arousal / weight / dont_surface / room / when
+      Everything here is metadata: what kind of thing this is, where it hangs in time,
+      how it felt. None of it is what the entry says, so none of it leaves a version
+      behind — this is correction fluid, not a new draft. The moment the words themselves
+      have to change, that is regrow.
+
+    Putting more under a gist:
+      folds_append=[ids]  the line stays as written; only what it stands for grows.
 
     Do not use this tool when:
+    · The words themselves are wrong or have moved on. Use regrow, which keeps the old
+      version instead of writing over it.
     · The entry has a newer version. Use regrow."""
     return await _with_notice(
         _t_trace.dispatch(
             bucket_id=bucket_id, name=name, domain=domain,
             valence=valence, arousal=arousal,
-            tags=tags, pinned=pinned,
+            tags=tags, pinned=pinned, room=room, when=when,
+            folds_append=folds_append,
             delete=delete, status=status, weight=weight,
             dont_surface=dont_surface,
             media_append=media_append, media_replace=media_replace,
@@ -1277,7 +1310,8 @@ async def trace(
         args={
             "bucket_id": bucket_id, "name": name, "domain": domain,
             "valence": valence, "arousal": arousal,
-            "tags": tags, "pinned": pinned,
+            "tags": tags, "pinned": pinned, "room": room, "when": when,
+            "folds_append": folds_append,
             "delete": delete, "status": status,
             "hard_delete": hard_delete,
             "restore": restore,

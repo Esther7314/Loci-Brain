@@ -2035,6 +2035,16 @@ class BucketManager:
         # state is no longer pinned; this is needed for quota-safe unpinning.
         if will_be_pinned or is_protected:
             kwargs.pop("importance", None)
+        elif forced_type == "dynamic" and "importance" not in kwargs:
+            # 🔴 2026-08-19：**取消钉住 = importance 跟着回落**（bug ④）。
+            # 老行为：摘钉之后 importance 留在 10 —— 而钉着的桶不占 importance≥9
+            # 那个池子，一摘钉它就带着满分掉进去，池子（上限 24）被自己撑满。
+            # 而 importance 的形参 8-18 整个撤了：**盘上没有任何入口能把它降回来**，
+            # 摘钉成了一道单向门。上面那句注释里说的「quota-safe unpinning」这条路
+            # 一直留着，只是自那以后再没有调用方走得到它 —— 现在由这里替它走。
+            # 落到 8 不是拍的：撞到硬上限时系统本来就自动降到这个数
+            # （_HIGH_IMP_DEGRADE_TO），两条路走到同一个地方才不会互相打架。
+            kwargs["importance"] = 8
 
         # --- Update only fields that were passed in / 只改传入的字段 ---
         if "content" in kwargs:

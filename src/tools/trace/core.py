@@ -38,7 +38,10 @@ from typing import Optional
 from locibrain.domain.memory_messages import resolved_hint
 from utils import parse_bool
 from .. import _runtime as rt
-from .._pin import check_pin_imperative
+from .._pin import pin_note
+from core._rooms import check_room
+from core._bigevent import SPAN_RE, is_big as _is_big
+from core import _fold as _F
 from .._common import (
     _HIGH_IMP_THRESHOLD,
     _quota_turn,
@@ -60,6 +63,71 @@ from .._common import (
 #    删掉的是「从外面改它」这个入口，不是这个字段。
 
 
+_DATE_RE = __import__("re").compile(r"^\d{4}-\d{2}-\d{2}$")
+_DUR_RE = __import__("re").compile(r"^\d+[dwmy]$")
+
+
+def _check_when(when: str, meta: dict) -> str | None:
+    """`when` 填得对不对 —— 三种桶三种形状，照 grow 那边的口径。
+
+    ⚠️ 这个参数扛着三种语义（事件=哪一天 / 时期=哪一段 / want=期限或时长），
+       她 8-19 说「一个参数有疑问就是设计的问题」，拆不拆记在开工单里了。
+       在拆之前，至少**当场拒绝填错的形状**，别让一个 "3w" 悄悄落到一条事件上。
+    """
+    if _is_big(meta):
+        if not SPAN_RE.match(when):
+            return ('时期的 when 要写成起止："2026-07-31..2026-08-05"，'
+                    '进行中就把止留空："2026-07-31.."。')
+        return None
+    if str(meta.get("status") or "") == "want" or meta.get("tense") == "want":
+        if not (_DATE_RE.match(when) or _DUR_RE.match(when)):
+            return ('想发生的事，when 要么是个日子（"2026-09-01"），'
+                    '要么是段时长（"3w" / "10d" / "2m" / "1y"）。')
+        return None
+    if not _DATE_RE.match(when):
+        return ('普通记忆的 when 是**它发生的那一天**："2026-07-06"。\n'
+                '（"3w" 这种时长只对想发生的事有意义；起止范围只对时期有意义。）')
+    return None
+
+
+async def _append_folds(gist_id: str, meta: dict, add: list) -> tuple[str | None, list]:
+    """往一条已有的 gist 底下**再塞几条**。返回 (报错, 新的 cover 名单)。
+
+    🔴 **只追加，不覆盖。** 传一份新名单去替换旧的，等于漏写一个 id 就把它**悄悄放出来**了 ——
+       又是一次沉默的行为改变（8-19 一晚上已经踩过两次：沉默的筛子、沉默的截断）。
+    """
+    if not _F.is_gist(meta):
+        return (f"{gist_id} 不是 gist（它没盖着任何东西）。"
+                "要把几条收成一句，用 fold；这个参数只往已有的 gist 底下加。", [])
+    old_cover = list(_F._covered_list(meta) if hasattr(_F, "_covered_list") else [])
+    old_cover = [c for c in (meta.get("cover") or [])] or old_cover
+    cover = list(dict.fromkeys([*old_cover, *add]))
+    被盖房间 = []
+    for cid in add:
+        if cid == gist_id:
+            return ("一条 gist 盖不了自己。", [])
+        live = await rt.bucket_mgr.get(cid)
+        if not live:
+            arch = await rt.bucket_mgr.get_including_archive(cid)
+            if arch:
+                return (f'{cid} 在归档区，盖不上（盖上了只会留半条链）。'
+                        f'先 trace(bucket_id="{cid}", restore=True) 捞回来。', [])
+            return (f"这些 id 不存在：{cid}。填真 bucket_id。", [])
+        被盖房间.append(str((live.get("metadata", {}) or {}).get("room") or ""))
+    from core._rooms import is_event_room
+    if len(cover) >= 2 and any(is_event_room(r) for r in 被盖房间):
+        return ("盖一组事件不存在（跟 fold 同一条闸）：日子用时期画圈，"
+                "看一条线用 recall(query)。", [])
+    # 两头都写：被盖的那几条要认这个 gist
+    for cid in add:
+        old = await rt.bucket_mgr.get(cid)
+        old_meta = (old or {}).get("metadata", {}) or {}
+        旧名单 = list(old_meta.get("covered_by") or [])
+        if gist_id not in 旧名单:
+            await rt.bucket_mgr.update(cid, covered_by=旧名单 + [gist_id])
+    return (None, cover)
+
+
 async def trace_core(
     bucket_id: str,
     name: Optional[str] = "",
@@ -79,6 +147,9 @@ async def trace_core(
     restore: Optional[bool] = False,
     old_str: Optional[str] = "",
     new_str: Optional[str] = None,
+    room: Optional[str] = "",
+    when: Optional[str] = "",
+    folds_append: Optional[list | str] = None,
     closed_by: Optional[str] = "",
     mark_asked: Optional[bool] = False,
 ) -> str:
@@ -116,6 +187,13 @@ async def trace_core(
     hard_delete = parse_bool(hard_delete, default=False)
     restore = parse_bool(restore, default=False)
     delete_reason = "" if delete_reason is None else str(delete_reason).strip()
+    room = "" if room is None else str(room).strip()
+    when = "" if when is None else str(when).strip()
+    if folds_append is None:
+        folds_append = []
+    if isinstance(folds_append, str):
+        folds_append = [x.strip() for x in folds_append.split(",") if x.strip()]
+    folds_append = [str(x).strip() for x in folds_append if str(x).strip()]
 
     def _finite_float(value, default: float) -> float:
         try:
@@ -165,6 +243,9 @@ async def trace_core(
         "status": status,
         "weight": weight,
         "dont_surface": dont_surface,
+        "room": room,
+        "when": when,
+        "folds_append": folds_append,
     })
 
     if not bucket_id or not bucket_id.strip():
@@ -187,6 +268,9 @@ async def trace_core(
         bool(delete_reason),
         bool(old_str),
         new_str_provided,
+        bool(room),
+        bool(when),
+        bool(folds_append),
     ))
     if restore and restore_conflicts:
         return (
@@ -260,6 +344,8 @@ async def trace_core(
     current_pinned = parse_bool(meta.get("pinned"), default=False)
     protected = parse_bool(meta.get("protected"), default=False)
     unpinning_now = pinned == 0 and current_pinned
+    # 8-19 松闸后 pin 的提醒挂在成功回执后面，所以要活到函数末尾（锁块之外）
+    pin_hint: str | None = None
     # 配额判定 + 落盘必须在同一把锁里：check_pinned_quota/enforce_high_importance_quota
     # 到最终 bucket_mgr.update() 之间隔着别的字段处理和一次 await，两个并发 trace()
     # 都可能在对方提交前读到同一个「未满」快照。是否需要哪把锁在动 updates 之前就
@@ -277,7 +363,15 @@ async def trace_core(
     # requested_importance 这个名字留着：底下那句「配额把它压下来了就落盘」
     # 比的是「要的」和「最后给的」，语义没变，只是「要的」现在恒等于现状。
     requested_importance = current_importance
-    final_importance = 10 if pinned == 1 else requested_importance
+    # 8-19：摘钉时 importance 回落到 8（bug ④，落盘那一下由 bucket_manager 兜底）。
+    # 这儿也要跟着算，不然配额还按「摘完仍是 10 分」去判，会推一条根本不该推的
+    # OB-W003 ——**警告说的和盘上发生的不是一回事，比没有警告更坏**。
+    if pinned == 1:
+        final_importance = 10
+    elif unpinning_now and not protected:
+        final_importance = min(requested_importance, 8)
+    else:
+        final_importance = requested_importance
     current_dont_surface = parse_bool(
         meta.get("dont_surface"), default=False
     )
@@ -370,17 +464,19 @@ async def trace_core(
         if pinned in (0, 1):
             updates["pinned"] = bool(pinned)
             if pinned == 1:
-                # --- pin 的闸（二改 D 件）：钉的是**准则**，不是「这条重要」---
-                # 校验的是**这条钉完之后的正文**：同一次调用里如果 content/局部替换
-                # 也在改正文，闸必须看改完的那份，不然可以先钉描述句、再把正文换掉。
+                # --- pin 的闸（二改 D 件立，2026-08-19 松）---
+                # 钉的还是**准则**（「我要怎么做」），但这道闸 8-19 起**不拦了**：
+                # 她说「靠代码没办法做好」——正则分不出「我总是心急」（该挡）和
+                # 「我和 Es 的爱是不疼的那种」（该留），两句都是描述句。
+                # 所以照钉，把提醒挂在成功回执后面（见 tools/_pin.py 的碑文）。
+                # 看的仍是**这条钉完之后的正文**：同一次调用里如果 content/局部替换
+                # 也在改正文，要看改完的那份，不然提醒会对着旧正文说话。
                 _pin_text = (updates.get("content")
                              or str(bucket.get("content") or ""))
                 if patch_args_supplied:
                     _pin_text = str(bucket.get("content") or "").replace(
                         old_str, new_str, 1)
-                pin_err = check_pin_imperative(_pin_text)
-                if pin_err:
-                    return pin_err
+                pin_hint = pin_note(_pin_text)
                 if need_pinned_lock:
                     err = await check_pinned_quota()
                     if err:
@@ -407,12 +503,33 @@ async def trace_core(
             updates["weight"] = float(weight)
         if dont_surface in (0, 1):
             updates["dont_surface"] = bool(dont_surface)
-        if (
-            reserves_high_importance
-            and final_importance != requested_importance
-        ):
+
+        # ---- 房间 / 时间 / 加盖 —— 元数据的家（2026-08-19 她定的轴）----
+        # 🔴 「**regrow 改内容本身，trace 改元数据**」。判据是她那句：
+        #    trace 是我要**修正记忆的元数据**；regrow 是我的记忆**出了差错、或者有了新想法**。
+        #    房间和时间都不影响这条记忆说了什么 —— 改它们像用修正带，不该产生一个新版本。
+        # ⚰️ 同一天早些时候 `regrow` 短暂收过 `room`（理由是「搬家是换版的一部分」）——
+        #    她当天晚上指出那等于一个字段两个入口，正是 8-18 亲手杀掉的那个病。撤了。
+        if room:
+            room_err = check_room(room, "")
+            if room_err:
+                return room_err
+            updates["room"] = room
+        if when:
+            when_err = _check_when(when, meta)
+            if when_err:
+                return when_err
+            updates["when"] = when
+        if folds_append:
+            fold_err, new_cover = await _append_folds(bucket_id, meta, folds_append)
+            if fold_err:
+                return fold_err
+            updates["cover"] = new_cover
+        if final_importance != requested_importance:
             # Unpinning/restoring surfacing can create an ordinary high slot.
             # Persist quota degradation in the same bucket transaction.
+            # 8-19：条件从「reserves_high_importance 且变了」放宽成「变了就写」——
+            # 摘钉回落（10→8）**不占**高分名额，正是它不该被前一个条件挡住的原因。
             updates["importance"] = final_importance
 
         # --- media —— 追加是日常操作，整体替换只用于纠错/清理 ---
@@ -531,4 +648,8 @@ async def trace_core(
         changed += f" → {resolved_hint(False)}"
     if cascaded:
         changed += f" → 同步把 {len(cascaded)} 个关联事件桶也标为已放下（{', '.join(cascaded)}）"
-    return f"已修改记忆桶 {bucket_id}: {changed}"
+    out = f"已修改记忆桶 {bucket_id}: {changed}"
+    # pin 的提醒跟在**成功回执**后面：它不是错误，钉已经落盘了（tools/_pin.py 碑文）
+    if pin_hint:
+        out += "\n\n" + pin_hint
+    return out

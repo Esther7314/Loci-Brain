@@ -279,6 +279,28 @@ async def 落一条gist(text: str, room: str, v: float, a: float,
     if supersedes:
         ok_sup = await rt.bucket_mgr.update(new_id, supersedes=supersedes)
         报告["链没写全"] = not (ok_sup and ok_cover and supersedes not in 报告["没写上"])
+        # ---- 🔴 换版要把「钉着」带过去（2026-08-19 修的 bug ①）----
+        # 老毛病：regrow 一条钉着的准则 = **悄悄取消钉住**。
+        #   新版是新建的桶（默认没钉），旧版被 dont_surface 压下去 ——
+        #   两下一合，门口那行**没了**，而且**不报错、不提一句**。
+        #   8-19 一天踩了三次，每次都靠改完当场验一眼才没丢。
+        # 这里补上：旧版钉着，新版就接着钉。**配额是净零的**（新钉一条、旧摘一条），
+        # 所以不走 check_pinned_quota —— 那道闸拦的是「多占一个名额」，这儿没多占。
+        # 顺序：**先钉新的再摘旧的**。反过来的话，中间那一瞬门口是空的；
+        # 而且万一后一步失败，宁可两条都钉着（看得见、我会发现），
+        # 也不要两条都没钉（看不见、正是这个 bug 本身）。
+        try:
+            old_b = await rt.bucket_mgr.get(supersedes)
+            old_meta = (old_b or {}).get("metadata", {}) or {}
+            if old_meta.get("pinned"):
+                报告["接着钉"] = bool(await rt.bucket_mgr.update(new_id, pinned=True))
+                await rt.bucket_mgr.update(supersedes, pinned=False)
+        except Exception as e:
+            报告["接着钉"] = False
+            try:
+                rt.logger.warning(f"regrow carry-pin failed {supersedes}->{new_id}: {e}")
+            except Exception:
+                pass
     elif not ok_cover:
         报告["链没写全"] = True
 
@@ -307,4 +329,10 @@ def 报告成话(报告: dict) -> str:
                    + "、".join(报告["没写上"][:5]) + "——把这条报给AI查。")
     if 报告["链没写全"]:
         out.append("⚠️ cover/版本链有一半没写上——把这条报给AI查。")
+    # 换版接钉（bug ①）：成了就说一声，没成必须喊——不然又是一次「悄悄取消钉住」
+    if 报告.get("接着钉") is True:
+        out.append("📌 旧版是钉着的，新版**接着钉**（门口那行没断），旧版已摘钉。")
+    elif 报告.get("接着钉") is False:
+        out.append("🔴 旧版是钉着的，但新版**没钉上**——门口那行现在是空的，"
+                   "手动 trace(bucket_id=新版id, pinned=1) 补上。")
     return "\n".join(out)
