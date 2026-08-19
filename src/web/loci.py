@@ -1399,9 +1399,17 @@ async def build_health() -> dict:
             f"{n} 个还在（时间到了自己会没）" if n else "空的（攒不到线就一夜无梦，正常）")
     guard("盘上的梦", sec_dreams, "确认 buckets/night_fall/dreams 目录在")
 
-    summary = {"ok": sum(1 for c in checks if c["status"] == "ok"),
-               "warn": sum(1 for c in checks if c["status"] == "warn"),
-               "error": sum(1 for c in checks if c["status"] == "error")}
+    # 🔴 2026-08-19：原来这儿写死数三种（ok/warn/error），而体检里**还有第四种
+    #    `note`**（「你还没开始」「这东西不强制」——中性说明，不是问题）。
+    #    后果：页面上说「14 项」，而 summary 三个数加起来只有 13 ——
+    #    **体检自己在少报**，而体检正是那个负责说实话的东西。
+    #    （烟测 smoke_loci「summary 和项数对得上」抓的就是这条。）
+    # 判据：**按实际出现的状态全数一遍**，别写死名单 ——
+    #    写死的话，以后再加第五种状态还会漏同一次。
+    summary = {"ok": 0, "warn": 0, "error": 0}
+    for c in checks:
+        st = str(c.get("status") or "").lower() or "unknown"
+        summary[st] = summary.get(st, 0) + 1
     return {"ok": summary["error"] == 0, "summary": summary, "checks": checks}
 
 
