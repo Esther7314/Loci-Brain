@@ -62,6 +62,23 @@ def parse_date(s: str) -> datetime:
     return datetime.fromisoformat(s[:10]).replace(tzinfo=LOCAL_TZ)
 
 
+def parse_date_or_none(s) -> datetime | None:
+    """`parse_date` 的宽容版：读不懂给 None，不抛。
+
+    🔴 2026-08-19 单元测试第一跑逮到的那一族 bug 就收在这儿。
+       病根：`\\d{4}-\\d{2}-\\d{2}` 这个正则只管**长得像不像**日期，
+       不管**是不是真有那一天**。`2026-09-31` / `2026-13-45` 一路畅通，
+       到 `fromisoformat` 那儿才炸 —— 而那时候已经在 recall 的循环里了。
+    ⚠️ `parse_date` 本身**故意不动**：它的契约是「给我一个合法日期串」，
+       七个调用点里有四个紧跟着 `+ timedelta(days=1)`，改它的返回类型
+       等于逼那四处各自编一个「拿不到日期怎么办」。**要宽容的自己点名要。**
+    """
+    try:
+        return parse_date(s)
+    except (ValueError, TypeError):
+        return None
+
+
 def parse_stamp(value) -> datetime | None:
     """把落盘的时间字符串读成本地 aware datetime；读不懂给 None。
 
@@ -75,7 +92,12 @@ def parse_stamp(value) -> datetime | None:
         return None
 
     if _DATE_ONLY.match(s):
-        return parse_date(s)
+        # 2026-08-19：这儿原来是裸调 parse_date —— 于是 `2026-09-31`（9 月没有 31 号）
+        # 会**抛异常**，而这个函数的第一句 docstring 写着「读不懂给 None」。
+        # 更要命的是上游全都按「None = 这条没有时间」写的，没有一处 try 住它：
+        # 一条这样的桶不是自己安静地掉出时间轴，是**把整趟 recall 掀翻**。
+        # （下面 `_LEADING_DATE` 那支一直是 try 住的 —— 同一个函数两种脾气。）
+        return parse_date_or_none(s)
 
     # ISO 8601：Python 3.11+ 的 fromisoformat 认 Z，也认 +08:00 和微秒
     try:

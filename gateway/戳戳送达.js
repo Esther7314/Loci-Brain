@@ -101,13 +101,27 @@ function httpBase(mcpUrl) {
 }
 
 /** 纯 HTTP GET，不走 MCP 握手（这个口本来就是普通 REST，不是 MCP 工具）。 */
+// 给 Loci 那四条 hook 路由带钥匙（2026-08-20）。
+// 🔴 为什么要有它：那四条以前在「免检名单」里 —— 面板设了密码也拦不住，
+//    **既能读到梦的正文，又能改状态**。现在改成「门锁了就要钥匙」，
+//    桥得把钥匙带上，否则梦和戳戳会 401。
+// ⚠️ 走请求头，**不走地址栏** —— 地址栏会被日志 / Referer / 浏览器历史带出去。
+// ⚠️ 没配 `LOCI_HOOK_TOKEN` 也照常跑：Loci 那头只有**门锁着**的时候才要钥匙。
+//    （所以不设密码的人一切照旧，什么都不用改。）
+function 请求头() {
+  const h = { Accept: "application/json" };
+  const k = String(process.env.LOCI_HOOK_TOKEN || "").trim();
+  if (k) h["x-loci-hook-token"] = k;
+  return h;
+}
+
 async function 问戳口(地址, { 超时毫秒 = 8000 } = {}) {
   const url = `${httpBase(地址)}/api/loci/poke`;
   const 控 = new AbortController();
   const 闹钟 = setTimeout(() => 控.abort(), 超时毫秒);
   let 回;
   try {
-    回 = await fetch(url, { method: "GET", headers: { Accept: "application/json" }, signal: 控.signal });
+    回 = await fetch(url, { method: "GET", headers: 请求头(), signal: 控.signal });
   } catch (错) {
     clearTimeout(闹钟);
     if (错?.name === "AbortError") throw new Error(`问 Loci 戳口超时（${url}）`);
@@ -130,7 +144,7 @@ async function 调唤醒口(地址, { 超时毫秒 = 8000 } = {}) {
   try {
     回 = await fetch(url, {
       method: "POST",
-      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      headers: { ...请求头(), "Content-Type": "application/json" },
       body: "{}",
       signal: 控.signal,
     });

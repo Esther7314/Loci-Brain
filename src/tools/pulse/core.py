@@ -36,6 +36,81 @@ from .._common import check_metadata_size
 
 
 
+def _多久以前(秒: float) -> str:
+    if 秒 < 0:
+        return "刚刚"
+    if 秒 < 90:
+        return f"{int(秒)} 秒前"
+    if 秒 < 5400:
+        return f"{int(秒 / 60)} 分钟前"
+    if 秒 < 172800:
+        return f"{秒 / 3600:.1f} 小时前"
+    return f"{int(秒 / 86400)} 天前"
+
+
+async def _在不在工作(all_buckets: list) -> str:
+    """「它在不在工作」—— 跟上面那段「它还活着吗」不是同一个问题。
+
+    🔴 2026-08-20 加的，起因是网关那个 bug：超时设成 5 秒，于是它**从上线起一次
+       都没工作过**，活了好几天没人发现。它没崩、没报错、日志里也看不出区别 ——
+       **它只是安静地什么都不做**。
+    📌 判据：**别问「引擎在不在跑」，问「它最近一次真的干成活是什么时候」。**
+       前者只证明进程还在，后者才是它在工作的证据。一个从来没成功过的东西，
+       和一个上次成功在三天前的东西，在这一段里一眼就分得出来。
+
+    ⚠️ 故意**不新建一套记账机制**：全部从盘上已有的东西推出来。
+       多一套账就多一个「账本自己坏了而没人知道」的地方 —— 那正是这一段要治的病。
+    """
+    import os
+    import time
+    from core import _when as _w
+
+    行 = ["", "=== 它在不在工作（不是「还活着吗」，是「最近一次真的干成活」）==="]
+    现在 = time.time()
+
+    # ── 打标：没打上标的还剩几条、最老那条挂了多久 ──────────────────────
+    # 这个数**只会往下走**（回填一条少一条）。它一直不降、或者最老那条越挂越久，
+    # 就是打标那条路停了 —— 而它停了不报错，只是新记忆的标签一直空着。
+    没标, 最近一次打标 = [], None
+    for b in all_buckets:
+        m = b.get("metadata", {}) or {}
+        建 = _w.parse_stamp(m.get("created"))
+        if not str(m.get("summary") or "").strip():
+            if 建:
+                没标.append(建)
+        elif 建 and (最近一次打标 is None or 建 > 最近一次打标):
+            最近一次打标 = 建
+    if 最近一次打标:
+        行.append("打标：最近一条打上标的记忆，是 "
+                  f"{_多久以前((_w.now() - 最近一次打标).total_seconds())}建的")
+    else:
+        行.append("打标：⚠️ 一条打上标的记忆都没有 —— 它可能从来没成功过")
+    if 没标:
+        挂了 = (_w.now() - min(没标)).total_seconds()
+        行.append(f"　　还有 {len(没标)} 条在排队，最老的那条 {_多久以前(挂了)}就建了"
+                  + ("  ⚠️ 挂太久了，去看一眼打标那条路" if 挂了 > 3600 else ""))
+    else:
+        行.append("　　没有排队的（每一条都打上标了）")
+
+    # ── 向量：拿 embeddings.db 的 mtime 当「最近一次真的写进去」──────────
+    库 = str((rt.config or {}).get("buckets_dir") or "")
+    db = os.path.join(库, "embeddings.db") if 库 else ""
+    if db and os.path.exists(db):
+        行.append(f"向量：最近一次写入 {_多久以前(现在 - os.path.getmtime(db))}")
+    else:
+        行.append("向量：⚠️ 找不到 embeddings.db —— 搜索会**安静地**退化成只认关键词")
+
+    # ── 做梦：它整个是后台活、一声不吭，所以最需要这一行 ────────────────
+    梦 = os.path.join(库, "_state", "dream_state.json") if 库 else ""
+    if 梦 and os.path.exists(梦):
+        行.append(f"做梦：最近一次动 {_多久以前(现在 - os.path.getmtime(梦))}")
+    else:
+        行.append("做梦：还没织过（刚装的话正常，装了好几天还这样就不正常）")
+
+    行.append(f"衰减引擎：{'在跑' if rt.decay_engine.is_running else '⚠️ 停了'}")
+    return "\n".join(行)
+
+
 async def pulse(include_archive: Optional[bool] = False) -> str:
     if include_archive is None:
         include_archive = False
@@ -102,6 +177,14 @@ async def pulse(include_archive: Optional[bool] = False) -> str:
         buckets = await rt.bucket_mgr.list_all(include_archive=include_archive)
     except Exception as e:
         return status + f"\n列出记忆桶失败: {e}"
+
+    # 「它在不在工作」挂在清单之前 —— 它比清单要紧得多。
+    # 这一段自己出岔子也不许把体检带崩：**体检正是那个负责说实话的东西。**
+    try:
+        status += await _在不在工作(buckets) + "\n"
+    except Exception as e:
+        status += f"\n=== 它在不在工作 ===\n⚠️ 这一段自己算不出来了：{e}\n"
+        rt.logger.warning(f"pulse liveness section failed: {e}")
 
     if not buckets:
         return status + "\n记忆库为空。"

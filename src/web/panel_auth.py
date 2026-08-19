@@ -54,11 +54,27 @@ PUBLIC_PATHS = frozenset([
     "/api/loci/auth/state",          # 门要读它才知道有没有安全问题
     "/api/loci/auth/set-password",   # 首启设密那条路（它自己有 loopback 校验）
     "/loci",                         # 页面本身要能打开，否则门无处显示
-    "/api/loci/dream/wake",          # ↓ 以下四条：调用方是桥，不是浏览器
+])
+
+# 🔴 **给桥用的四条路由**（2026-08-20 从上面那张免检名单里挪下来的）。
+#
+#    之前它们在 PUBLIC_PATHS 里，理由写着「调用方是桥，不是浏览器，它没有 cookie」。
+#    **理由成立，解法错了** —— 那是把门拆掉，不是给桥配钥匙。后果是：
+#    面板设了密码的人以为锁上了，而这四条一直敞着，
+#    **既能读到梦的正文，又能改状态**（`dream/wake` 会动 recall_count 和生命周期）。
+#    只在本机跑基本没事；一旦经过隧道 / 反代 / 局域网 / 误配置，边界就直接开了。
+#
+# 📌 现在的规矩一句话：**锁上了就没有例外。**
+#      门没锁（没设密码）→ 一切照旧，这四条照样谁都能调
+#      门锁了            → 这四条要带钥匙（Header），或者本来就是登录着的浏览器
+#    ⚠️ **钥匙走 Header，不走地址栏** —— 地址栏会被日志、Referer、浏览器历史带出去。
+HOOK_PATHS = frozenset([
+    "/api/loci/dream/wake",
     "/api/muse/pending",
     "/api/dream/current",
     "/api/loci/poke",
 ])
+HOOK_HEADER = "x-loci-hook-token"
 
 _PUBLIC_PREFIXES = ("/loci/vendor/",)   # 页面的静态件
 
@@ -115,6 +131,51 @@ def has_session(request: Request) -> bool:
 
 def is_public(path: str) -> bool:
     return path in PUBLIC_PATHS or path.startswith(_PUBLIC_PREFIXES)
+
+
+def is_hook(path: str) -> bool:
+    return path in HOOK_PATHS
+
+
+def hook_token() -> str:
+    """桥的钥匙。环境变量优先，其次 config。没配就是空串。"""
+    import os
+    v = str(os.environ.get("LOCI_HOOK_TOKEN") or "").strip()
+    if v:
+        return v
+    try:
+        return str(sh.config.get("hook_token") or "").strip()
+    except Exception:                    # noqa: BLE001
+        return ""
+
+
+def hook_ok(request: Request) -> tuple[bool, str]:
+    """这条给桥的请求放不放行。返回 (放不放, 不放的话说什么)。
+
+    三条路都能进：
+      ① **门没锁**（没开面板密码 / 还没设密码）→ 放行。锁都没有，这儿也不该有。
+      ② 已经登录的浏览器 → 放行（面板自己也要读这几条）。
+      ③ 带对了钥匙 → 放行。
+
+    🔴 **门锁了但没配钥匙 → 不放行。** 这是故意的（fail-closed）：
+       「配漏了就默认打开」是这一整条 bug 的老根 —— 一个只在配置正确时才存在的锁，
+       等于没有锁。所以宁可当场坏掉，也不安静地敞着。
+       ⚠️ 坏掉的时候要**说清楚怎么修**，见下面那句 401 的话 ——
+          静默失灵比报错坏得多（今晚已经在别处见过三次了）。
+    """
+    if not gate_needed():
+        return True, ""
+    if has_session(request):
+        return True, ""
+    want = hook_token()
+    if not want:
+        return False, ("面板锁着，而这条路由要一把给桥用的钥匙，但还没配。"
+                       f"设一个 `LOCI_HOOK_TOKEN`（或 config.yaml 里的 `hook_token`），"
+                       f"再让桥在请求头 `{HOOK_HEADER}` 里带上它。")
+    got = str(request.headers.get(HOOK_HEADER) or "")
+    if got and hmac.compare_digest(got, want):
+        return True, ""
+    return False, f"这条路由要钥匙：请求头 `{HOOK_HEADER}` 没带或者不对。"
 
 
 def _set_cookie(resp: Response, value: str, max_age: int) -> Response:

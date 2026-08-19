@@ -66,6 +66,24 @@ class _Gated:
         if panel_auth.is_public(path):
             return inner
 
+        # 给桥用的那四条：不要 cookie（桥没有），但门锁着的时候要钥匙。
+        # 判据和碑文都在 panel_auth.HOOK_PATHS 上面。
+        if panel_auth.is_hook(path):
+            def hook_deco(fn):
+                import functools
+                from starlette.responses import JSONResponse
+
+                @functools.wraps(fn)
+                async def hook_guarded(request):
+                    ok, 为什么 = panel_auth.hook_ok(request)
+                    if not ok:
+                        return JSONResponse({"error": 为什么}, status_code=401)
+                    return await fn(request)
+
+                return inner(hook_guarded)
+
+            return hook_deco
+
         def deco(fn):
             import functools
             from starlette.responses import JSONResponse

@@ -67,6 +67,21 @@ _DATE_RE = __import__("re").compile(r"^\d{4}-\d{2}-\d{2}$")
 _DUR_RE = __import__("re").compile(r"^\d+[dwmy]$")
 
 
+def _真有这一天(*日子: str) -> str | None:
+    """形状对不代表日历上有这一天。`2026-09-31` / `2026-13-45` 长得完全合法。
+
+    🔴 2026-08-19：写口只查形状，收下之后**写进库**，而读路（`parse_span`）
+       当时是裸调 —— **一次填错就能让那段时间的记忆永久读不出来**。
+       读路那半已经改成挡漏了退兜底，但真正该拦的是这儿：
+       **别让一个不存在的日子进库**，进去了再宽容也只是掩着。
+    """
+    from core._when import parse_date_or_none
+    for d in 日子:
+        if d and parse_date_or_none(d) is None:
+            return f"日历上没有 {d} 这一天。"
+    return None
+
+
 def _check_when(when: str, meta: dict) -> str | None:
     """`when` 填得对不对 —— 三种桶三种形状，照 grow 那边的口径。
 
@@ -75,19 +90,20 @@ def _check_when(when: str, meta: dict) -> str | None:
        在拆之前，至少**当场拒绝填错的形状**，别让一个 "3w" 悄悄落到一条事件上。
     """
     if _is_big(meta):
-        if not SPAN_RE.match(when):
+        m = SPAN_RE.match(when)
+        if not m:
             return ('时期的 when 要写成起止："2026-07-31..2026-08-05"，'
                     '进行中就把止留空："2026-07-31.."。')
-        return None
+        return _真有这一天(m.group(1), m.group(2) or "")
     if str(meta.get("status") or "") == "want" or meta.get("tense") == "want":
         if not (_DATE_RE.match(when) or _DUR_RE.match(when)):
             return ('想发生的事，when 要么是个日子（"2026-09-01"），'
                     '要么是段时长（"3w" / "10d" / "2m" / "1y"）。')
-        return None
+        return _真有这一天(when) if _DATE_RE.match(when) else None
     if not _DATE_RE.match(when):
         return ('普通记忆的 when 是**它发生的那一天**："2026-07-06"。\n'
                 '（"3w" 这种时长只对想发生的事有意义；起止范围只对时期有意义。）')
-    return None
+    return _真有这一天(when)
 
 
 async def _append_folds(gist_id: str, meta: dict, add: list) -> tuple[str | None, list]:
@@ -466,8 +482,8 @@ async def trace_core(
             if pinned == 1:
                 # --- pin 的闸（二改 D 件立，2026-08-19 松）---
                 # 钉的还是**准则**（「我要怎么做」），但这道闸 8-19 起**不拦了**：
-                # 她说「靠代码没办法做好」——正则分不出「我总是心急」（该挡）和
-                # 「我和 Es 的爱是不疼的那种」（该留），两句都是描述句。
+                # 这道闸靠代码做不好：正则分不出「我总是心急」（该挡）和
+                # 「我看重的东西向来是慢慢长出来的」（该留），两句都是描述句。
                 # 所以照钉，把提醒挂在成功回执后面（见 tools/_pin.py 的碑文）。
                 # 看的仍是**这条钉完之后的正文**：同一次调用里如果 content/局部替换
                 # 也在改正文，要看改完的那份，不然提醒会对着旧正文说话。

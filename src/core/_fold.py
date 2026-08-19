@@ -166,8 +166,15 @@ def check_span(span: str) -> tuple[datetime | None, datetime | None, str]:
     m = SPAN_RE.match(str(span or "").strip())
     if not m:
         return None, None, SPAN_HELP
-    t0 = _w.parse_date(m.group(1))
-    t1 = _w.parse_date(m.group(2)) + timedelta(days=1) if m.group(2) else None
+    # 2026-08-19：这两行原来是裸调，而这儿是**立时期唯一的闸**。
+    # `SPAN_RE` 过了只说明形状对（`2026-13-45..` 形状完全合法），
+    # 于是一个不存在的日子会在这儿抛异常，而不是回一句「你这个日子不对」。
+    t0 = _w.parse_date_or_none(m.group(1))
+    t1raw = _w.parse_date_or_none(m.group(2)) if m.group(2) else None
+    if t0 is None or (m.group(2) and t1raw is None):
+        坏 = m.group(1) if t0 is None else m.group(2)
+        return None, None, f"日历上没有 {坏} 这一天。{SPAN_HELP}"
+    t1 = t1raw + timedelta(days=1) if t1raw else None
     if t1 is not None and t1 <= t0:
         return None, None, f"止（{m.group(2)}）在起（{m.group(1)}）前面了。"
     return t0, t1, ""

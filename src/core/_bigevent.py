@@ -74,9 +74,15 @@ def parse_span(meta: dict) -> tuple[datetime | None, datetime | None]:
     w = str(meta.get("when") or "").strip()
     m = SPAN_RE.match(w)
     if m:
-        start = _w.parse_date(m.group(1))
-        end = _w.parse_date(m.group(2)) + timedelta(days=1) if m.group(2) else None
-        return start, end
+        # 2026-08-19：`SPAN_RE` 只校验**形状**，不校验那一天真的存在。
+        # 原来这两行是裸调，于是一条 `when="2026-13-45.."` 的时期桶会让
+        # **recall 一整段时间的时期覆盖全崩** —— 不是少盖一条，是整趟掀翻
+        # （`covering()` 的 try 只包住了 list_all，parse_span 在循环里、try 外面）。
+        # 挡漏了就当它没写对，退回下面那条老桶兜底，跟 `when` 空着一样待遇。
+        start = _w.parse_date_or_none(m.group(1))
+        end_raw = _w.parse_date_or_none(m.group(2)) if m.group(2) else None
+        if start is not None and (m.group(2) is None or end_raw is not None):
+            return start, (end_raw + timedelta(days=1)) if end_raw else None
     return _w.parse_stamp(w) or _w.parse_stamp(meta.get("created")), None
 
 
@@ -86,11 +92,25 @@ def fmt_span(meta: dict) -> str:
     m = SPAN_RE.match(w)
 
     def _short(d: str) -> str:
-        return f"{int(d[5:7])}-{int(d[8:10])}"
+        # 2026-08-19：原来是裸 `int()`。`when="2026-7-31..2026-8-5"`（单数位月份，
+        # **手写时很容易写出来**）会让它抛 `invalid literal for int()`。
+        # 而同一个输入 `parse_span` 是不抛的 —— 计算层活着、显示层炸了。
+        # 📌 判据：这一格宁可空着。空着看得出来，炸了会把整页带走。
+        try:
+            return f"{int(d[5:7])}-{int(d[8:10])}"
+        except (ValueError, TypeError, IndexError):
+            return ""
 
-    if m:
-        return f"{_short(m.group(1))}~{_short(m.group(2))}" if m.group(2) else f"{_short(m.group(1))} 起"
-    return f"{_short(w[:10])} 起" if len(w) >= 10 else ""
+    # 🔴 `_short` 挡漏时给空串，这儿必须跟着整条不显示。
+    #    不然会印出一个孤零零的「 起」——**一个没有日期的「起」比抛异常更难发现**，
+    #    它看起来就像页面本来就长这样。（8-19 加完 try 当场撞见的。）
+    起 = _short(m.group(1)) if m else _short(w[:10]) if len(w) >= 10 else ""
+    if not 起:
+        return ""
+    if m and m.group(2):
+        止 = _short(m.group(2))
+        return f"{起}~{止}" if 止 else f"{起} 起"
+    return f"{起} 起"
 
 
 def is_big(meta: dict) -> bool:
@@ -118,18 +138,32 @@ def first_line(content: str) -> str:
     return body.splitlines()[0] if body else ""
 
 
-async def covering(t0: datetime | None, t1: datetime | None,
-                   limit: int = COVER_MAX) -> list[tuple[dict, str, str]]:
-    """跟 [t0, t1) **有重叠**的大 event，新的在前。
+def covering(buckets: list, t0: datetime | None, t1: datetime | None,
+             limit: int = COVER_MAX) -> list[tuple[dict, str, str]]:
+    """跟 [t0, t1) **有重叠**的大 event，新的在前。**桶由调用方递进来。**
 
     重叠而不是包含 —— 第 6 条：它们是重叠的时期，不是串行接力。
     两头都空（没筛时间）= 问「现在」，那就是止还没到的那些。
+
+    🔴 2026-08-20：这个函数原来自己 `await rt.bucket_mgr.list_all()`，
+       现在改成**调用方把名单递进来**。改的不是风格，是两件具体的事：
+
+       ① **一个 bug 消失了。** 浏览面每一格、每一天都调它一次 —— 一次 recall
+          能调七八遍，每遍把整个库重扫一次，而**调用方完全看不见自己在这么干**
+          （8-19 那个「一次 recall 调四遍 list_all」就是这个形状，
+          当时以为是缓存没做，量完才知道是重复调用）。
+          名单由上面给，上面一眼就看得出自己给了几遍。
+       ② **它变得可单测了。** 原来想测这一个函数，得先把整个世界造出来
+          （全局运行时上挂着桶管理器、遗忘引擎、向量、日志、配置十样）。
+          现在递一个 list 进来就行。
+
+       📌 判据（值得记住的是这条，不是这一刀本身）：
+          **先改那些「让它可测」和「让 bug 更难写出来」是同一个改动的地方。**
+          这两件事在这儿是一件事 —— 那正是它排在下刀顺序第二位的理由。
+
+    ⚠️ 不再是 async 了：它现在不碰磁盘也不碰网络，纯算。
+       调用点记得把 `await` 去掉（去不掉会拿到一个协程当列表用，当场炸，不会静默）。
     """
-    try:
-        buckets = await rt.bucket_mgr.list_all(include_archive=False)
-    except Exception as e:
-        rt.logger.warning(f"大 event 扫描失败: {e}")
-        return []
     now = _w.now()
     out = []
     for b in buckets:

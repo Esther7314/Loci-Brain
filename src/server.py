@@ -1167,6 +1167,27 @@ async def regrow(
     )
 
 
+# --- regrow 也要认不出砍掉的参数（2026-08-19 夜里补，**同一个坑第三次**）----------
+# 🔴 `regrow` 8-19 撤掉了 `when` / `room`（元数据归 trace）。可它是八个工具里
+#    **唯一没装 forbid 的那个** —— 于是 `regrow(bucket_id=…, room="MIND/VIEWS")`
+#    **既不报错也不生效**：FastMCP 把 schema 里没有的字段悄悄丢掉再调函数，
+#    房间原样没动，回执一个字都没提。
+#    **静默收下比报错坏得多：我以为改了，其实没改。**
+# 📌 这个坑的历史：8-18 给 breath/grow/recall/trace 装了 forbid，漏了 fold/muse；
+#    8-19 白天补 fold/muse 的时候（就在上面那段），**又漏了 regrow**。
+#    第三次了 —— 所以判据不再是「记得给新工具加」，是**烟测里有一条会因为它变红**
+#    （`smoke_grow` 14l）。名单靠人记必然会漏，靠断言才不会。
+try:
+    _regrow_tool = mcp._tool_manager.get_tool("regrow")
+    if _regrow_tool is None:
+        raise RuntimeError("registered regrow tool is missing")
+    _regrow_arg_model = _regrow_tool.fn_metadata.arg_model
+    _regrow_arg_model.model_config["extra"] = "forbid"
+    _regrow_arg_model.model_rebuild(force=True)
+except (AttributeError, RuntimeError, TypeError, ValueError) as _regrow_strict_exc:
+    logger.warning("regrow strict-argument adapter unavailable: %s", _regrow_strict_exc)
+
+
 @mcp.tool()
 async def trace(
     bucket_id: Annotated[str, _PydField(description=(
@@ -1468,6 +1489,32 @@ async def letter_read(
             "date_from": date_from, "date_to": date_to,
         },
     )
+
+
+# --- letter 两个也要认不出砍掉的参数（2026-08-20 补，**同一个坑第四次**）--------
+# 数了一遍九个工具，装了这道闸的只有七个 —— `letter_read` / `letter_write` 也漏着。
+# 病史：8-18 给 breath/grow/recall/trace 装了，漏 fold/muse；
+#       8-19 白天补 fold/muse，漏 regrow；8-19 夜里补 regrow，**又漏这两个**。
+# 🔴 三次都是「补的时候照着当时想得起来的名字补」。第四次不这么补了：
+#    底下这一段**遍历工具表**，谁没装就给谁装，**将来加新工具自动就有**。
+#    📌 判据：**名单靠人记必然会漏。** 前三次的教训都写着同一句话，
+#       而我前三次都选择了「这次一定记全」。
+# ⚠️ letter 两个是**条件注册**的（config.tools.letter 默认关），关着的时候
+#    工具表里根本没有它们 —— 所以这儿只能「有就装」，不能断言一定装得上。
+try:
+    for _名 in ("breath", "grow", "recall", "regrow", "fold", "muse", "trace",
+                "letter_write", "letter_read"):
+        for _面 in (mcp, mcp_extra):
+            _t = _面._tool_manager.get_tool(_名)
+            if _t is None:
+                continue
+            _m = _t.fn_metadata.arg_model
+            if _m.model_config.get("extra") != "forbid":
+                _m.model_config["extra"] = "forbid"
+                _m.model_rebuild(force=True)
+                logger.info("strict-argument adapter installed for %s", _名)
+except (AttributeError, RuntimeError, TypeError, ValueError) as _strict_all_exc:
+    logger.warning("strict-argument sweep unavailable: %s", _strict_all_exc)
 
 
 

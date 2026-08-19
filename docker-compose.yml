@@ -6,8 +6,12 @@
 services:
   loci-brain:
     image: loci-brain:latest
-    # 想自己 build 就把上面注释掉，用这行：
-    # build: .
+    # 🔴 2026-08-20 默认打开 build：**没有这一行，别人 clone 下来第一步就死。**
+    #    `loci-brain:latest` 这个镜像只存在于我们自己机器上（我们自己 build 的），
+    #    公开 registry 上没有 —— 别人照 README 跑 `docker compose up -d`
+    #    只会得到一句「找不到镜像」，然后就没有然后了。
+    #    有了这行：本地没有就现 build，build 完照样 tag 成 loci-brain:latest。
+    build: .
     container_name: loci-brain
     restart: unless-stopped
     ports:
