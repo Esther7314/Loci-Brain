@@ -40,7 +40,6 @@ const path = require("path");
 const { Readable } = require("stream");
 const 自动贴 = require("./自动贴.js");
 const 戳戳 = require("./戳戳送达.js");
-const 近期视图 = require("./近期记忆视图.js");   // 🟡 可选，默认不接（见下面那个开关）
 
 const 端口 = Number(process.env.PORT || 3100);
 const 上游 = (process.env.LOCI_UPSTREAM || "").replace(/\/+$/, "");
@@ -48,9 +47,13 @@ const LOCI = process.env.LOCI_MCP || 戳戳.默认地址;
 const 闲时阈值分钟 = Number(process.env.POKE_IDLE_MINUTES || 戳戳.默认闲时阈值分钟);
 const 最低分 = Number(process.env.RELEVANCE_MIN_SCORE || 自动贴.默认最低分);
 const 数据根 = process.env.LOCI_GATEWAY_DATA || path.join(__dirname, "data");
-// 🟡 可选的那一样：近期记忆视图（昨天/最近做了什么，**留原文、留氛围，不压成 gist**）。
-// 默认关 —— 它每次开窗要多问 Loci 一次，而必选那两样已经够用了。
-const 开近期视图 = String(process.env.LOCI_RECENT_VIEW || "").trim() === "1";
+// ⚰️ 2026-08-19：**近期记忆视图整个撤了**（她拍的）。
+//    它做的是「隔天开窗，把 recall(when="昨天") 的原文摘录贴进去」，
+//    而她要的「昨日记忆」根本不用去 Loci 翻 —— **就是收窗时压出来的那几句话**，
+//    第二天带着它开窗就完了。多问 Loci 一次，换来的是同一件事的第二个做法。
+//    她的原话：「昨日记忆我说的就是压缩说过的话 就好了 根本就不要 recall 昨天」。
+//    思路留在 gateway/README.md 第四节（收窗压缩），代码不留 ——
+//    文档里不提、代码里还活着，就是留着一条没入口的路。
 const 日志档 = path.join(数据根, "logs", "memory-actions.jsonl");
 
 if (!上游) {
@@ -100,17 +103,6 @@ const 服务 = http.createServer(async (req, res) => {
         : d.calledLoci ? "戳戳无" : "戳戳没问(不够闲)");
     } catch (错) { 说.push("戳戳炸:" + (错?.message || 错)); }
 
-    // ---- 可选：近期记忆视图。跟戳戳同一处前缀区。 ----
-    if (开近期视图) {
-      try {
-        const c = await 近期视图.贴一次({
-          ...公共,
-          statePath: path.join(数据根, "state", "recent-view-window.json"),
-        });
-        说.push(c.patchInjected ? "近期视图" : "近期视图无");
-      } catch (错) { 说.push("近期视图炸:" + (错?.message || 错)); }
-    }
-
     // ---- B：相关记忆提醒。**最后一步，贴真尾巴** ----
     // 触发才跑（强档=关键词命中，弱档=本地判据）。没触发一次 recall 都不调。
     try {
@@ -155,6 +147,5 @@ const 服务 = http.createServer(async (req, res) => {
   console.log(`[gateway] 上游        ${上游}`);
   console.log(`[gateway] Loci        ${戳戳._internal.httpBase(LOCI)}`);
   console.log(`[gateway] 相关度最低分 ${最低分}  ·  闲时阈值 ${闲时阈值分钟} 分钟`);
-  console.log(`[gateway] 近期记忆视图 ${开近期视图 ? "开着" : "关着（LOCI_RECENT_VIEW=1 打开）"}`);
   console.log(`[gateway] 把客户端的 base_url 指到 http://127.0.0.1:${端口}/v1`);
 });

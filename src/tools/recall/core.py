@@ -309,11 +309,32 @@ def _visible(meta: dict) -> bool:
     # 条数/房间/标签/V·A 一个字不少；`superseded_by`（regrow 换版的）以前在这儿
     # 被**整个排掉**——于是「盖一条」反而比「盖两条」丢信息，跟开工单 2.3 的验收判据
     # （**任何 recall 能看到的信息量只能变多不能变少**）正着劲。
-    # 🔴 **统一成 covered_by 的待遇**：旧版照旧不独立冒头（逐条区都过
-    #    `_fold.is_covered()` 那道闸，它两个字段都认），但它**算进统计**，
-    #    而且换版那条新版会以「▣… 盖着这里 1 条」的形式在原地出头——
-    #    少一行单条、多一行标题 + 一个能钻的 id，这才是 fold 的形状。
+    # 🔴 **统一成 covered_by 的待遇**：旧版照旧不独立冒头，但它**算进统计**，
+    #    而且换版那条新版会以「▣… 盖着这里 1 条」的形式在原地出头。
     # ⚠️ 别把这一行加回来。要加之前先读 2.3。
+    #
+    # ⚰️ ——以上整段 2026-08-19 被她推翻了，下面那行就是「加回来的那一行」。
+    #    **推翻它的不是新口味，是前提没了**：8-17 这么定的理由是「regrow 就是
+    #    fold 的 n=1，两者待遇要一致」；而 8-18 B1/B2 之后 fold 只管收好几条、
+    #    regrow 只管换版，**「一致」这个要求本身不存在了**。
+    #    她当场看见的症状：浏览面里一排「▣…盖着这里 1 条」，那根本不是 fold，
+    #    是换版。她的原话：「**recall 出来其实要看的是 event**」。
+    #    关于 2.3（信息量只能变多不能变少）：旧版的字一个没少，id 直查逐字原文、
+    #    版本链两头、搜索全都够得到 —— **少的是它在浏览面上占的那一行和那个计数**。
+    #    2.3 管的是「别把东西弄丢」，不是「所有东西都得挤进同一屏」。
+    # 🔴 2026-08-19 她定：**regrow 换过版的旧版不算进条数**（也就不进浏览面）。
+    #    event 换版 =「我记错了」——那件事只发生过一次，记错的那版不是另一件事；
+    #    mind 换版 =「我以前那么想，现在不这么想了」——想法变了不是又想了一遍，
+    #    是同一条认知的上一版。两种理由不同，结论一样：**一条换了版还是一条**，
+    #    同一件事换三次版在计数里变成三条，那个数就开始撒谎了。
+    #    ⚰️ 这一条推翻的是 8-17（施工 5 · F 件）那个决定——当时把 superseded_by
+    #    和 covered_by 统一待遇，理由是「regrow 就是 fold 的 n=1」。
+    #    **8-18 B1/B2 之后那个前提没了**：fold 只管收好几条，regrow 只管换版。
+    #    ⚠️ 旧版没有消失：id 直查逐字原文都在，版本链两头（换掉了谁 / 被谁换掉）
+    #    照旧列出来，搜索也够得到。它只是不再占浏览面的一行、不再被数一遍。
+    #    ⚠️ **被 fold 盖住的照旧算进条数**（那是几条真记忆被收起来，不是同一条的旧版）。
+    if meta.get("superseded_by"):
+        return False
     if (meta.get("domain") or [""])[0] == "seed":
         return False
     tags = [str(t) for t in (meta.get("tags") or [])]
@@ -848,8 +869,14 @@ def _rep_line(mark: str, e: dict) -> str:
 
 
 def _big_line(meta: dict, content: str, bid: str) -> str:
+    """时期一行。
+
+    🔴 2026-08-19 她定：符号 `◈` 换成「时期」两个字。
+       符号要人先学会它是什么意思才读得懂，而这一行本来就该一眼看明白。
+    """
     span = _big.fmt_span(meta)
-    return f"  ◈{_big.first_line(content)[:38]}({_short_id(bid)})" + (f" {span}" if span else "")
+    return (f"  时期 {_big.first_line(content)[:38]}({_short_id(bid)})"
+            + (f" {span}" if span else ""))
 
 
 def _cell_span(cell: list[dict]) -> tuple[datetime, datetime]:
@@ -868,7 +895,7 @@ def _cell_span(cell: list[dict]) -> tuple[datetime, datetime]:
 
 
 async def _big_lines(t0, t1, seen: set[str]) -> list[str]:
-    """跟这一格有重叠的**时期**，每条一行标题（`◈那阵子在做什么 (id) 8-13~8-16`）。
+    """跟这一格有重叠的**时期**，一行标题（`时期 那阵子在做什么 (id) 8-13~8-16`）。
 
     🔴 8-17 14:30 终稿之后时期是**纯命名层**：它不写 `covered_by`，所以走不了
     `_gist_lines` 那条「谁被盖了」的路——它的成员是**现场按日期算**的，
@@ -876,6 +903,9 @@ async def _big_lines(t0, t1, seen: set[str]) -> list[str]:
     ⚠️ 一条时期在一次渲染里只出头一次（`seen`）：它盖着三天不等于该说三遍。
     ⚠️ 这是**只多一行**：底下逐条区和统计一个字不少（时期不塌任何行）——
        开工单 2.3「信息量只能变多不能变少」的落点。
+    🔴 2026-08-19 她定：**一格只留一条**（原来最多 3 条）。时期会越攒越多，
+       而浏览要的是梯度不是清单。`covering()` 是新的在前，取第一条就是跟这一格
+       贴得最近的那个。
     """
     out: list[str] = []
     for meta, content, bid in await _big.covering(t0, t1):
@@ -883,6 +913,7 @@ async def _big_lines(t0, t1, seen: set[str]) -> list[str]:
             continue
         seen.add(bid)
         out.append(_big_line(meta, content, bid))
+        break          # 一格一条
     return out
 
 
@@ -965,7 +996,6 @@ async def _render_browse(entries, gates, room, tag) -> str:
         for label, cell in reversed(_split_calendar(future, "month")):
             lines.append(_far_line(label, _cell_stats(cell), fixed_room, drop))
             lines.extend(await _big_lines(*_cell_span(cell), 时期出过))
-            lines.extend(await _gist_lines(cell))
 
     # 三天内：照旧（一天一行 + 突出的点另起一行）
     if near:
@@ -977,7 +1007,6 @@ async def _render_browse(entries, gates, room, tag) -> str:
             lines.append(_head(label, st))
             # 时期/gist 标题在突出的点**上面**：先说这几天叫什么，再说里面哪条扎眼
             lines.extend(await _big_lines(*_cell_span(days[label]), 时期出过))
-            lines.extend(await _gist_lines(days[label]))
             hl = _fmt_highlights(st)
             if hl:
                 lines.append(hl)
@@ -1015,14 +1044,17 @@ async def _render_browse(entries, gates, room, tag) -> str:
         # （第 5 条：盖，不替代 —— 上面那行统计和突出的点一个都没少，只是多一句话。）
         盖这段的 = await _big.covering(*_cell_span(far))
         covers = [x for x in 盖这段的 if x[2] not in 时期出过]
-        for meta, content, bid in covers[:_BROWSE_REP_MAX]:
+        for meta, content, bid in covers[:1]:      # 一格一条时期（8-19 她定）
             时期出过.add(bid)
             lines.append(_big_line(meta, content, bid))
-        # 施工 3：按时间盖上来的（上面那几行）之外，**按 cover 名单**盖住这段里某几条的
-        # gist 也要出头——它可能是「一组 id」圈出来的，跟时间范围对不上，
-        # 光靠 covering() 那条路永远看不见它。已经出现过的不重复。
-        lines.extend(await _gist_lines(far, skip={bid for _m, _c, bid in 盖这段的}))
-        for mark, e in _pick_reps(far, _BROWSE_REP_MAX - len(covers[:_BROWSE_REP_MAX])):
+        # ⚰️ 2026-08-19：**gist 的 mind 行从浏览面撤掉**（她定的）。
+        #    原来这儿会把「盖住这段里某几条的 gist」逐条列出来，一条一行。
+        #    🔴 她的判据：**recall 出来要看的是 event。** 认知可以在「突出的点」
+        #       那儿露面，但不该跟 event、时期挤在同一个位置上——
+        #       而且 gist 一多，这一格就全是标题行了（时期卡了 3 条，它没有上限）。
+        #    ⚠️ 被 fold 盖住的那些**照旧不逐条出现、照旧算进统计**，
+        #       要看是哪条 gist 盖的：`recall(query=完整id)` 或搜索路照旧给。
+        for mark, e in _pick_reps(far, _BROWSE_REP_MAX - len(covers[:1])):
             lines.append(_rep_line(mark, e))
         # 第 9 条：触发点挂在「recall 一段时间」上 —— 这一刻我本来就在回看，
         # 材料摊在眼前，「这阵子好像在做一件什么事」是自然浮上来的，
@@ -1180,15 +1212,45 @@ def _render_scene_clusters(entries, gates, floor: float = None, 账: dict | None
     return chr(10).join(x for x in lines if x)
 
 
+async def recall_两张皮(when: str, room: str, tag: str, query: str,
+                       floor=None, view: str = "", max_cells: int = 0) -> dict:
+    """一次采集，两张皮都给。**面板专用**。
+
+    🔴 2026-08-19：面板那个口原来是 `recall_data()` + `recall_core()` 各调一次，
+       而这两个函数各自都会走一遍 `_collect` —— 也就是**同一次搜索算了两遍**。
+       实测带 query 时工具面 3 秒、面板 8.6 秒，差的就是这一遍。
+       ⚠️ 讽刺的是 `recall_data` 的 docstring 一直写着「两张皮共用底下同一份收集，
+          **绝不各算各的**」—— 那句话说的是设计意图，代码从来没兑现过。
+       现在真的只采一次。
+
+    ⚠️ 两张皮各拿一份 entries 的**浅拷贝**：渲染那边会排序/切片，
+       共用同一个 list 的话谁先跑谁说了算。
+    """
+    采集 = await _collect(when, room, tag, query)
+    entries, err, 账 = 采集
+    data = await recall_data(when, room, tag, query, floor=floor, view=view,
+                             已采集=(list(entries), err, dict(账)))
+    if data.get("ok") and data.get("total"):
+        kwargs = {"max_cells": max_cells} if 1 <= max_cells <= 20 else {}
+        data["card"] = await recall_core(when, room, tag, query, floor=floor,
+                                         view=view,
+                                         已采集=(list(entries), err, dict(账)),
+                                         **kwargs)
+    else:
+        data["card"] = ""
+    return data
+
+
 async def recall_data(when: str, room: str, tag: str, query: str,
-                      floor=None, view: str = "") -> dict:
+                      floor=None, view: str = "", 已采集=None) -> dict:
     """recall 的**另一张皮**：同样的四个门、同样的 _collect/_cell_stats，吐 dict 给前端。
 
     文字那张皮是 recall_core()。两张皮共用底下同一份收集+统计，绝不各算各的——
     页面上看到的「主色调」和AI睁眼看到的必须是同一个数，不然就是两个系统了。
     ⚠️ `by` 2026-08-17 砍了（C 件）；`view` 只影响文字皮的形态，这张皮照旧给全量。
     """
-    entries, err, 账 = await _collect(when, room, tag, query)
+    entries, err, 账 = 已采集 if 已采集 is not None else await _collect(
+        when, room, tag, query)
     if err:
         return {"ok": False, "error": err, "entries": [], "total": 0}
     if not entries:
@@ -1225,7 +1287,8 @@ async def recall_data(when: str, room: str, tag: str, query: str,
 
 
 async def recall_core(when: str, room: str, tag: str, query: str,
-                      max_cells: int = _CELL_MAX, floor=None, view: str = "") -> str:
+                      max_cells: int = _CELL_MAX, floor=None, view: str = "",
+                      已采集=None) -> str:
     """文字那张皮。**参数账（5.4）**：when / room / tag / query / slices / view，就这六个。
 
     🔪 **`by` 2026-08-17 整个砍了**（C 件，代码和工具描述一起）：
@@ -1363,7 +1426,8 @@ async def recall_core(when: str, room: str, tag: str, query: str,
         return ("recall 至少给一个门：when（时间）/ room（房间）/ tag（标签）/ query（扔词搜）。"
                 "例：recall(when=\"上周\") · recall(room=\"MIND\") · recall(when=\"本月\", tag=\"Home\")")
 
-    entries, err, 账 = await _collect(when, room, tag, query)
+    entries, err, 账 = 已采集 if 已采集 is not None else await _collect(
+        when, room, tag, query)
     if err:
         return err
     if not entries:

@@ -1483,15 +1483,14 @@ def register(mcp) -> None:
         except (TypeError, ValueError):
             floor = None
         try:
-            from tools.recall.core import recall_data, recall_core
-            data = await recall_data(**gates, floor=floor)
+            # 🔴 2026-08-19：原来这儿是 recall_data() + recall_core() 各调一次，
+            #    而两个函数各自都会走一遍 _collect —— **同一次搜索算了两遍**。
+            #    实测带 query：工具面 3 秒、这个口 8.6 秒，差的就是那一遍。
+            #    recall_两张皮() 只采一次，两张皮共用。
+            from tools.recall.core import recall_两张皮
+            data = await recall_两张皮(**gates, floor=floor, max_cells=slices)
             if not data.get("ok"):
                 return JSONResponse(data, status_code=400)
-            if data["total"]:
-                kwargs = {"max_cells": slices} if 1 <= slices <= 20 else {}
-                data["card"] = await recall_core(**gates, floor=floor, **kwargs)
-            else:
-                data["card"] = ""
             return JSONResponse(data)
         except Exception as e:
             logger.warning(f"[loci] recall 失败: {e}")

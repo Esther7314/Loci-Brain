@@ -76,9 +76,36 @@ const 默认日志档 = path.join(数据根, "logs", "memory-actions.jsonl");
 //    换了字符串，那两处的诊断会静默失明。一个字不能改。
 const MARKER = "[Loci memory context]";
 
-const 强档关键词 = [
+// 强档 = 这句话里出现了「明说要翻旧账」的词。
+// 🔴 2026-08-19 挪出来可配：原来这份中文表是写死的，而弱档默认关着 ——
+//    合起来的后果是**一个不说中文的人装上之后，这个功能一次都不会触发，
+//    而且他不会收到任何提示**。跟「超时 5 秒所以从上线起就没工作过」是同一种失败：
+//    悄悄地什么都不做。
+// 怎么改（三选一，从近到远）：
+//    RELEVANCE_STRONG_WORDS="remember,last time,earlier"   逗号分隔，覆盖整张表
+//    gateway/强档词.json                                    一个 JSON 数组，同上
+//    什么都不设 → 用底下这份中文默认
+const 中文强档词 = [
   "我记得", "记得吗", "还记得", "上次", "之前", "以前", "那时候", "那天", "那次", "记不记得",
 ];
+
+function 读强档词() {
+  const 从env = String(process.env.RELEVANCE_STRONG_WORDS || "").trim();
+  if (从env) {
+    const 表 = 从env.split(",").map(w => w.trim()).filter(Boolean);
+    if (表.length) return 表;
+  }
+  try {
+    const 档 = path.join(__dirname, "强档词.json");
+    if (fs.existsSync(档)) {
+      const 表 = JSON.parse(fs.readFileSync(档, "utf8"));
+      if (Array.isArray(表) && 表.length) return 表.map(String);
+    }
+  } catch { /* 配置坏了不许让转发挂掉：退回默认表 */ }
+  return 中文强档词;
+}
+
+const 强档关键词 = 读强档词();
 
 // 分数线：跟 Loci recall 渲染的 0~100 尺度直接比，不做 0~1 换算了（施工7 那版
 // 换算成 0~1 纯粹是历史包袱）。env `RELEVANCE_MIN_SCORE` 覆盖——她原话「这个
@@ -279,7 +306,10 @@ function latestUserText(messages) {
 }
 
 function 强档命中(文本) {
-  return 强档关键词.filter(词 => 文本.includes(词));
+  // 小写比对：英文词表不能因为句首大写（"Remember when…"）就整条漏掉。
+  // 中文没有大小写，toLowerCase 对它是恒等变换，所以这一行对我们零影响。
+  const 低 = String(文本).toLowerCase();
+  return 强档关键词.filter(词 => 低.includes(String(词).toLowerCase()));
 }
 
 // 弱档触发的完整短句停用表：应声词/问候语，一字不差命中就不算「有实质内容」。
@@ -478,5 +508,21 @@ module.exports = {
   // 贴到真尾巴：server.js 组完 outgoingBody 之后，真正 push 记录.patch 用的是
   // 这个（不是 _internal——它是生产代码要用的手势，不只是测试）。
   贴到真尾巴,
+
+// ── 英文别名（2026-08-19 她提的：「你就不怕别人不好改吗」）─────────────────────
+// 🔴 **只是别名，指的是同一个函数**。文件内部照旧中文——`算相关记忆提醒` 一眼知道
+//    它干嘛，改成 computeRelevanceReminder 还得在脑子里翻译一次，而且改内部纯属
+//    给自己制造 bug。但**对外这几个名字是别人要亲手敲的**，一个不认识汉字的人
+//    连自己粘的是哪个都不知道。名字是给读的人用的，谁读就照顾谁。
+  // computeReminder({ messages, requestId, 地址, 最低分 }) → { patch, ... }
+  computeReminder: 算相关记忆提醒,
+  // appendToTail(messages, patch) —— 组完请求体之后的最后一步
+  appendToTail: 贴到真尾巴,
+  paste: 贴一次,
+  MARKER_LINE: MARKER,
+  DEFAULT_ADDRESS: 默认地址,
+  DEFAULT_MIN_SCORE: 默认最低分,
+  STRONG_WORDS: 强档关键词,
+
   _internal: { 造客户端, latestUserText, 强档命中, 弱档触发, 解析分数行, 建贴文, 建提醒行 },
 };
