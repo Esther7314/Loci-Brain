@@ -669,7 +669,7 @@ async def grow(
         "rejected on the spot."
     ))] = "",
     text: Annotated[str, _PydField(description=(
-        'The body of a single entry. Only kind="mind" uses it — you realise one '
+        'The body of a single entry. Only kind="mind" uses it — you realize one '
         "thing at a time, so this one is singular."
     ))] = "",
     # 对外参数名叫 "from"（规格定的）；from 是 Python 关键字，签名里写 from_，
@@ -682,10 +682,10 @@ async def grow(
         "but do not have to."
     ))] = [],
     v: Annotated[float, _PydField(description=(
-        "v: valence, 0~1 — how good or bad this felt. Required, and yours to set."
+        "v: valence, 0~1 — how it felt: 0 bad, 1 good. Required, and yours to set."
     ))] = -1,
     a: Annotated[float, _PydField(description=(
-        "a: arousal, 0~1 — how stirred up you were. Same."
+        "a: arousal, 0~1 — how stirred up you were: 0 calm, 1 intense. Same."
     ))] = -1,
     tense: Annotated[str, _PydField(description=(
         'Leave it out for something that already happened. "want" for something you '
@@ -718,7 +718,8 @@ async def grow(
     """Store what happened, and what you realized from it. Several entries per call.
 
     Write about yourself in the first person and about the other person in the third person.
-    Events are episodic: put down the moment as it was. A mind entry holds the realization
+    Events are episodic: put down the moment as it was, with the feeling and the
+    atmosphere kept in — not just what took place. A mind entry holds the realization
     only. Never a retelling of what led to it.
 
     When to use:
@@ -743,11 +744,8 @@ async def grow(
 
     Use a different tool when:
     · Your view has changed → regrow
+    · An event came out wrong → regrow, which puts a new version in its place
     · Several entries turn out to be about the same thing → fold
-
-    If you got an event wrong, do not edit it. Store a correction as a new entry with from
-    pointing at the original. If you caught the mistake yourself, you can also fold the wrong
-    entry away. What happened does not get a newer version.
 
     If an entry duplicates one already stored, you will be told so. Decide which one stays —
     nothing is merged on your behalf.
