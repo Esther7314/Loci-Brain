@@ -684,6 +684,47 @@ class EmbeddingEngine:
                 self._query_cache.popitem(last=False)
         return embedding
 
+    async def probe(self, timeout_seconds: float = 4.0) -> tuple[bool, str]:
+        """Actually ask the backend for one vector. Returns `(works, why not)`.
+
+        🔴 WHY THIS EXISTS, and why it embeds rather than asking "is the model installed":
+            Being configured and being usable are different things, and until this existed
+            nothing checked the second one. On a fresh machine the default compose file
+            starts an Ollama container with **no model pulled**, so:
+
+                everything comes up · every service reports healthy · the setup screen
+                shows a green tick for embedding · and the first real write fails
+
+            The failure is late, and it arrives attached to whatever the person was doing
+            at the time rather than to the thing that was actually wrong. Configuration is
+            the one moment they were prepared to hear about configuration.
+
+        ⚠️ It asks for a real embedding instead of querying a model list, because a model
+           list is a proxy for the question and this is the question. It is also the only
+           form that works across backends — Ollama, an OpenAI-compatible API, anything
+           else — without this function needing to know which one it is talking to.
+
+        The `why not` string is the same humanized hint the error panel uses, so a 404
+        already reads as "that model does not exist on this provider" rather than as a
+        status code.
+        """
+        if not self.enabled or not self._backend:
+            return False, "embedding is switched off"
+        try:
+            vector = await asyncio.wait_for(
+                self._backend.generate_async("probe"), timeout=timeout_seconds)
+        except asyncio.TimeoutError:
+            return False, (f"no answer within {timeout_seconds:g}s — is the backend up, "
+                           f"and is {self.model} already pulled?")
+        except Exception as exc:                      # noqa: BLE001 - report, never raise
+            hint = _humanize_api_error(
+                exc, api_format=getattr(self._backend, "api_format", ""),
+                base_url=getattr(self._backend, "base_url", ""))
+            return False, f"{exc}{(' ' + hint) if hint else ''}"
+        if not vector:
+            return False, "the backend answered, but with an empty vector"
+        return True, ""
+
     async def generate_and_store(self, bucket_id: str, content: str) -> bool:
         """Generate an embedding for the content and store it in SQLite. True on success."""
         if not self.enabled or not content or not content.strip():

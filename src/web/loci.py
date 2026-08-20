@@ -1175,9 +1175,30 @@ async def build_setup() -> dict:
     e_model = str(emb.get("model") or "")
     e_base = str(emb.get("base_url") or "")
     e_ok = e_on and bool(e_model) and (bool(e_key) or "localhost" in e_base or "ollama" in e_base)
+    # 🔴 Being configured and being usable are two different things, and this row used to
+    #    check only the first. On a fresh install the bundled compose file starts an Ollama
+    #    container with **no model pulled**: everything comes up, every service reports
+    #    healthy, THIS ROW SHOWS A GREEN TICK, and the first real write is what fails.
+    #    So when the configuration looks complete, ask the backend for one actual vector.
+    #    Configuration is the one moment someone is prepared to hear about configuration.
+    e_detail = ""
+    if e_ok:
+        # Read it off `sh` every time rather than binding it once: hot reload replaces the
+        # instance by assigning to `sh.embedding_engine`, and a captured reference would
+        # keep probing the engine that is no longer in use.
+        engine = getattr(sh, "embedding_engine", None)
+        probe = getattr(engine, "probe", None)
+        if callable(probe):
+            try:
+                works, why = await probe(timeout_seconds=3.0)
+            except Exception as exc:                  # noqa: BLE001 - a screen must not die
+                works, why = False, str(exc)
+            if not works:
+                e_ok = False
+                e_detail = f"{e_model} 配好了，但用不了：{why}"
     row("embedding", "向量", e_ok,
-        (e_model + "（" + (e_base or "默认地址") + "）") if e_ok else
-        ("开着但没配全" if e_on else "关着"),
+        e_detail or ((e_model + "（" + (e_base or "默认地址") + "）") if e_ok else
+                     ("开着但没配全" if e_on else "关着")),
         "搜索少一条腿：只剩字面匹配。换个说法搜同一件事就搜不到了 —— "
         "而它不会告诉你「这次没用上向量」。")
 
@@ -1241,6 +1262,30 @@ async def build_setup() -> dict:
             "任何能访问到这个地址的人都能看你全部记忆 —— 这台机器监听 0.0.0.0，"
             "同一个网里的设备都算。要锁上：上面「账号」里那个开关。",
             note=True)
+
+    # 🔴 The gap between two pieces of advice that are each correct on their own.
+    #    Locking the panel is the recommended setup. Once it is locked, the four hook
+    #    routes the bridge uses stop being exempt and need a key — and if that key was
+    #    never set, the bridge starts getting 401s.
+    #
+    #    Nobody does anything wrong to reach that state: they follow the instruction to
+    #    set a password, and something they were not told about breaks. The 401 does say
+    #    what to configure, but only to whoever reads the bridge's log, and the symptom
+    #    people actually notice is that dreams and nudges quietly stop arriving.
+    #    So it is said HERE, on the screen that exists to answer "is this set up right".
+    if locked:
+        try:
+            from web.panel_auth import hook_token
+            key = hook_token()
+        except Exception:                            # noqa: BLE001
+            key = ""
+        row("hook_token", "桥的钥匙", bool(key),
+            "配好了" if key else "面板锁着，但没配钥匙 —— 用桥的话它会被挡在门外",
+            "" if key else
+            "面板一上锁，桥走的那四条口就不再免检了。没有钥匙的话，"
+            "梦和「该发呆了」会安静地不再送达 —— 桥那边收到的是 401，"
+            "而你这边只会觉得它们不来了。"
+            "设一个环境变量 LOCI_HOOK_TOKEN（随便一串够长的字），桥那边设同一个。")
 
     # ---- Read-only facts: not "is this configured correctly", but "where things are" ----
     ver = ""

@@ -38,5 +38,30 @@ services:
     volumes:
       - ollama-models:/root/.ollama
 
+  # 🔴 把模型拉下来，跑一次就退出。
+  #    没有这一块的话，空白机上会出现这个形状：**compose 起来了、容器全绿、
+  #    面板上「向量」那一行也是绿的 —— 而第一次真写记忆的时候才炸**，
+  #    因为 ollama 起来了但里面一个模型都没有。
+  #    失败来得太晚，而且是挂在你当时正在做的事情上，不是挂在配置上。
+  #    （另一半在面板里：设置屏现在会真去要一个向量，而不是只看你填没填。）
+  #
+  #    模型已经在卷里的话，pull 会很快返回，所以每次 up 都跑一遍不花什么。
+  ollama-pull-model:
+    image: ollama/ollama:latest
+    container_name: ollama-pull-model
+    depends_on:
+      - ollama
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "[init] 等 ollama 起来…"
+        until ollama list >/dev/null 2>&1; do sleep 1; done
+        echo "[init] 拉 bge-m3（第一次要几分钟，之后是秒回）"
+        ollama pull bge-m3
+        echo "[init] 好了。"
+    restart: "no"
+
 volumes:
   ollama-models:
