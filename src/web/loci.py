@@ -867,7 +867,7 @@ async def build_profile() -> dict:
     """
     from tools.recall.core import _room_cn, _label_of, _short_id
     from core._rooms import normalize_room
-    from core.profile import door_note, edited_by_her
+    from core.profile import door_note, edited_by_user
     all_buckets = await sh.bucket_mgr.list_all(include_archive=False)
     now = _w.now()          # local timezone
     door = door_note(all_buckets, now)
@@ -907,7 +907,7 @@ async def build_profile() -> dict:
     edited = [{"id": e["id"], "short": _short_id(e["id"]),
                "label": _label(e), "content": e["content"].strip(),
                "corrects": (_read_from_ids(e["meta"]) or [""])[0]}
-              for e in edited_by_her(all_buckets)]
+              for e in edited_by_user(all_buckets)]
     rules = []
     for r in door["rules"]:
         room = normalize_room(r["meta"].get("room"))
@@ -1961,10 +1961,10 @@ def register(mcp) -> None:
         correction is stored as a separate entry whose `from` points back at it.
 
         A user's edit does not become truth directly. What lands is **a new event**, carrying
-        the `core.profile._EDITED_BY_HER_TAG` tag and `from=[old id]`, with the old bucket
+        the `core.profile._EDITED_BY_USER_TAG` tag and `from=[old id]`, with the old bucket
         untouched. Whether to accept the correction is decided by folding it, and the folding
         hand always belongs to the model. The notification is that new bucket itself
-        (`core.profile.edited_by_her()` scans for that same tag on entries not yet folded;
+        (`core.profile.edited_by_user()` scans for that same tag on entries not yet folded;
         see the comments there).
 
         mind has no such entry point — and that is not enforced merely by the front-end not
@@ -2007,7 +2007,7 @@ def register(mcp) -> None:
 
         try:
             from tools.grow.rooms_path import grow_event
-            from core.profile import _EDITED_BY_HER_TAG
+            from core.profile import _EDITED_BY_USER_TAG
             # v/a are inherited from the old bucket: this is a factual correction, not a new
             # emotional experience, so nobody should be made to re-score the coordinates.
             old_v = old_meta.get("valence", 0.5)
@@ -2020,14 +2020,14 @@ def register(mcp) -> None:
             if not m:
                 return JSONResponse({"error": f"新桶落盘失败：{msg}"}, status_code=500)
             new_id = m.group(1)
-            # Apply _EDITED_BY_HER_TAG by merging, not replacing — the same reason as
+            # Apply _EDITED_BY_USER_TAG by merging, not replacing — the same reason as
             # rooms_path._backfill_one: the background-filled tags may not have landed yet,
             # and trace(tags=...) replaces the whole list, which would wipe them out. So this
             # reads the new bucket's current tags, merges into them, and goes through
             # bucket_mgr.update rather than trace.
             fresh = await sh.bucket_mgr.get(new_id)
             cur_tags = [str(t) for t in ((fresh or {}).get("metadata", {}).get("tags") or [])]
-            merged_tags = list(dict.fromkeys(cur_tags + [_EDITED_BY_HER_TAG]))
+            merged_tags = list(dict.fromkeys(cur_tags + [_EDITED_BY_USER_TAG]))
             await sh.bucket_mgr.update(new_id, tags=merged_tags)
             return JSONResponse({"ok": True, "old_id": old_id, "new_id": new_id, "msg": msg})
         except Exception as e:

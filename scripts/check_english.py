@@ -109,8 +109,15 @@ BASELINE = {
     "identifiers": 0,
     "filenames": 0,
     "names": 0,
-    # Still going: the personal-information pass, which rides along with the comments.
-    "she": 461,
+    # 🔴 Down to the two categories that must NOT be cleared by a translation pass:
+    #   · the pronoun stop-list in tools/_subjects.py — it is a GATE. Remove the entries
+    #     and pronouns start being stored as legitimate subjects, which is the exact thing
+    #     it exists to prevent.
+    #   · six inside live LLM prompts in core/dehydrator.py — rewording a prompt changes
+    #     model behaviour, and those prompts carry a version stamp, so an edit invalidates
+    #     every cached result derived from them.
+    # Both need a decision from the owner, not a find-and-replace.
+    "she": 8,
 }
 
 

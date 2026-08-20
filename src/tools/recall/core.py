@@ -1306,7 +1306,7 @@ def _topk_line(ledger: dict | None) -> str:
         return ""
     k = int((ledger or {}).get("topk") or _SEARCH_TOPK)
     return (f"── 还有 {n} 条命中被 top-{k} 挡在外面（按相关度截的）——"
-            "词多了向量就取平均，换一两个核心词、用她当时的原话再搜一次")
+            "词多了向量就取平均，换一两个核心词、用当时的原话再搜一次")
 
 
 def _eff_score(e: dict, floor: float) -> float:
@@ -1354,7 +1354,7 @@ def _render_search(entries, gates, floor: float = None, ledger: dict | None = No
         return (f"〔{gates}〕**没有相关的记忆。**\n"
                 f"够到 {len(below)} 条，但最高才 {top_below:.1f} 分（线在 {floor:.0f}）——"
                 "都只是沾边，不弹出来。\n"
-                "真觉得该有：换她说过的原话当 query（别造词），或者用 when/room 直接翻。")
+                "真觉得该有：换当时说过的原话当 query（别造词），或者用 when/room 直接翻。")
 
     lines = [f"〔{gates}〕{len(hit)} 条 · 按时间 新→旧（线 {floor:.0f}，分数只管过滤）"]
     for e in sorted(hit, key=lambda x: x["ts"], reverse=True):
@@ -1372,7 +1372,7 @@ def _render_search(entries, gates, floor: float = None, ledger: dict | None = No
                      f"最早 {earliest['ts'].strftime('%m-%d')}：「{_label_of(earliest)[:40]}」）——"
                      "多半只是沾边，没列")
     lines.append(_topk_line(ledger))
-    lines.append("（看原文：拿 id 搜；换个说法再搜：用她的原话，别造词）")
+    lines.append("（看原文：拿 id 搜；换个说法再搜：用当时的原话，别造词）")
     return chr(10).join(x for x in lines if x)
 
 
@@ -1405,7 +1405,7 @@ def _render_scene_clusters(entries, gates, floor: float = None, ledger: dict | N
         return (f"〔{gates}〕**没有相关的记忆。**\n"
                 f"够到 {len(below)} 条，但最高才 {top_below:.1f} 分（线在 {floor:.0f}）——"
                 "都只是沾边，不弹出来。\n"
-                "真觉得该有：换她说过的原话当 query（别造词），或者用 when/room 直接翻。")
+                "真觉得该有：换当时说过的原话当 query（别造词），或者用 when/room 直接翻。")
 
     def _vis_tags(e) -> set[str]:
         # Clustering also grips plain-language scene words only: machine-voiced

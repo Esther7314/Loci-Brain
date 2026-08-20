@@ -26,11 +26,11 @@ with no new persisted field (the one tag convention below excepted):
    **hanging longest** (not the heaviest). The render layer uses it to decide which one
    turns into a question and which ones stay statements.
 ③ **A notification that a fact was edited from the panel**: alongside `event_pool()`
-   there is `edited_by_her()`, which scans for the edit tag plus "not yet folded away"
+   there is `edited_by_user()`, which scans for the edit tag plus "not yet folded away"
    (`_F.is_covered()`). That is the entire notification mechanism: the tag is both the
    mark and the notice, and no separate notification table was opened.
 
-Exports: door_note(all_buckets, now) / event_pool(all_buckets) / edited_by_her(all_buckets)
+Exports: door_note(all_buckets, now) / event_pool(all_buckets) / edited_by_user(all_buckets)
 ========================================
 """
 
@@ -57,7 +57,10 @@ _REMIND_DAYS = 30
 # next to _PROFILE_TAG / _BIGEVENT_TAG, so that the two ends (the write side in
 # web/loci.py and the read side here) cannot drift apart by each spelling the string
 # out for themselves.
-_EDITED_BY_HER_TAG = "她改的"
+# The tag a memory gets when a PERSON corrected it, as opposed to the assistant
+# revising its own view. Nothing on disk carried the old value, and every reference
+# goes through this constant, so the wording is free to be neutral.
+_EDITED_BY_USER_TAG = "人改的"
 
 # Duration mark: `<N><unit>`, with no prefix symbol — an earlier `~` prefix was cut,
 # because a symbol that carries no meaning does not earn its place.
@@ -333,9 +336,9 @@ def door_note(all_buckets: list, now: datetime) -> dict:
             "heavy_question_id": heavy_question_id}
 
 
-def edited_by_her(all_buckets: list) -> list[dict]:
+def edited_by_user(all_buckets: list) -> list[dict]:
     """The notification pool for "a fact was edited from the panel": events carrying the
-    `_EDITED_BY_HER_TAG` tag that have **not been folded away**.
+    `_EDITED_BY_USER_TAG` tag that have **not been folded away**.
 
     That is the entire notification mechanism: the tag is simultaneously the mark that an
     edit happened and the test for "not yet looked at" (`_F.is_covered()`). Agreeing with
@@ -349,7 +352,7 @@ def edited_by_her(all_buckets: list) -> list[dict]:
     for b in all_buckets:
         meta = b.get("metadata", {}) or {}
         tags = [str(t) for t in (meta.get("tags") or [])]
-        if _EDITED_BY_HER_TAG not in tags:
+        if _EDITED_BY_USER_TAG not in tags:
             continue
         if not _visible(meta) or _F.is_covered(meta):
             continue

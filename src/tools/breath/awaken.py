@@ -46,7 +46,7 @@ import re
 from .. import _runtime as rt
 from core import _when as _w          # "today" as the user lives it (local timezone)
 from ..recall.core import recall_core, _label_of, _short_id, _ts_of
-from core.profile import door_note, event_pool, edited_by_her, _PROFILE_TAG
+from core.profile import door_note, event_pool, edited_by_user, _PROFILE_TAG
 
 # How many principle lines fit on the note by the door.
 # 📌 This was briefly raised to 12 once, as an **IOU**: removing the secondary
@@ -209,8 +209,8 @@ async def surface_awaken() -> str:
             head = _label_of({"meta": h["meta"], "content": h["content"]})[:30]
             note = f"（{h['clock_note']}）" if h["clock_note"] else ""
             if h["id"] == heavy_q_id:
-                asked = (f"，上次问过她是 {h['last_asked'][:10]}" if h["last_asked"]
-                         else "，从来没问过她")
+                asked = (f"，上次问过是 {h['last_asked'][:10]}" if h["last_asked"]
+                         else "，从来没问过")
                 parts.append(f"🫀❓ 挂了 {h['held']} 天（重 {h['weight']:g}{asked}）："
                              f"{head} ({_short_id(h['id'])}) —— 这条还算数吗？{note}")
             else:
@@ -222,12 +222,12 @@ async def surface_awaken() -> str:
     # looked at or folded yet ----
     # The notification mechanism is this pool itself — the tag is both the mark
     # and the notification; see core/profile.py.
-    edited = edited_by_her(all_buckets)
+    edited = edited_by_user(all_buckets)
     if edited:
-        parts.append("\n═══ 她改过 ═══")
+        parts.append("\n═══ 人改过的 ═══")
         for e in edited[:3]:
             parts.append("· " + _line(e["meta"], e["content"], e["id"]))
-        parts.append("   └ 认同就 fold（folds=[那几条], text=…）；不认同就跟她聊")
+        parts.append("   └ 认同就 fold（folds=[那几条], text=…）；不认同就说出来")
 
     # ---- 3 Middle term: recall's three-day overview (free of charge) ----
     parts.append("\n═══ 中期（这三天）═══")

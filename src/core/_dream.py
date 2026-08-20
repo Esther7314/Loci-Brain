@@ -869,10 +869,16 @@ async def weave(force: bool = False, cfg: dict | None = None,
                 ingredients: dict | None = None) -> dict | None:
     """Weave one dream.
 
-    Returns the version **including the whole text** — 🔴 **the whole version exists only
-    in this return value and is not persisted** (only the fragment is on disk; the
-    verbatim night text collapses away across the day boundary and needs no explicit
-    deletion).
+    Returns the version including the whole text, and **the whole version is persisted
+    too** — see the amendment described in this module's header. Its only death is
+    `degrade_on_wake()`.
+
+    ⚠️ This docstring used to say the opposite: that the whole version existed only in
+       this return value and never reached disk. That was true before the amendment, and
+       it sat here contradicting the file's own header — which documents the change and
+       adds "to whoever reads this next: that is not a bug, it is the rule." Two
+       statements of the rule, in one file, disagreeing. The one that had gone stale is
+       the one nearer the code, which is also the one a reader trusts most.
     Returns `None` when below the line (`force=True` skips the pressure line; for the
     bridge and for dry runs).
 
@@ -961,7 +967,9 @@ async def weave(force: bool = False, cfg: dict | None = None,
 
     out = dict(rec)
     out.pop("_路径", None)
-    out["完整"] = dream["完整"]              # <- exists only here
+    # Re-attached to the returned copy because `rec` is written to disk without it being
+    # read back; the persisted record carries it as well (see `save_record` above).
+    out["完整"] = dream["完整"]
     out["记下了"] = noted      # ⚰️ this key used to be called 「清零了」 and held the wants that had been zeroed
     return out
 
