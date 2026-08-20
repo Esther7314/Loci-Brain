@@ -659,7 +659,7 @@ async function hit_health(target_gw, route = "/health") {
   return { 状态: resp.status, 体: body, 原文: raw };
 }
 /** Is this the health endpoint's own answer, rather than upstream's after being forwarded there */
-function is_health_answer(body) { return Boolean(body) && typeof body.结论 === "string"; }
+function is_health_answer(body) { return Boolean(body) && typeof body.verdict === "string"; }
 
 /**
  * Read the health endpoint once, and **assert on the way that the door opens**.
@@ -670,7 +670,7 @@ function is_health_answer(body) { return Boolean(body) && typeof body.结论 ===
 async function read_health(target_gw) {
   const { 状态: status, 体: body, 原文: raw } = await hit_health(target_gw);
   assert.ok(is_health_answer(body),
-    `GET /health 应该拿到健康口自己的 JSON（带「结论」那份）。实际状态 ${status}，拿到：${raw.slice(0, 160)}`);
+    `GET /health should return the health endpoint's own JSON (the one carrying "verdict"). Status ${status}, got: ${raw.slice(0, 160)}`);
   return body;
 }
 
@@ -705,7 +705,7 @@ test("健康口｜/health 通，而且老路径 /健康 不许漏给上游", { t
     // ① the new path opens
     fake_upstream.清账(); fake_loci.清账();
     const health = await read_health(rig.网关);
-    assert.ok(typeof health.日志档 === "string", "健康口该报出它读的是哪份日志");
+    assert.ok(typeof health.log_path === "string", "the health endpoint should say which log it reads");
     assert.deepStrictEqual(fake_upstream.收到, [], "/health 是本地只读口，一个字都不该转发出去");
 
     // ② the old path must not leak
@@ -735,12 +735,12 @@ test("健康口｜正常在工作的时候，它说「在工作」", { timeout: 
 
     const health = await read_health(rig.网关);
 
-    assert.strictEqual(health.结论, "在工作");
-    assert.ok(health.真的贴上 >= 1, `真的贴上应该 ≥ 1，实际 ${health.真的贴上}`);
-    assert.ok(health.最近一次真的贴上, "该有「最近一次真的贴上」");
-    assert.ok(health.最近一次真的贴上.命中 >= 1,
-      `最近一次真的贴上的命中数应该 ≥ 1，实际 ${health.最近一次真的贴上.命中}`);
-    assert.strictEqual(health.出过错, 0);
+    assert.strictEqual(health.verdict, "working");
+    assert.ok(health.attached >= 1, `attached should be >= 1, got ${health.attached}`);
+    assert.ok(health.last_attach, "there should be a last_attach");
+    assert.ok(health.last_attach.hits >= 1,
+      `last_attach.hits should be >= 1, got ${health.last_attach.hits}`);
+    assert.strictEqual(health.errors, 0);
   } finally { await rig.收(); }
 });
 
@@ -760,11 +760,11 @@ test("健康口｜那个 bug 的形状（触发了但一次都没贴上）必须
 
     const health = await read_health(rig.网关);
 
-    assert.ok(/🔴/.test(health.结论),
-      `坏成这样必须报红，实际结论是：${health.结论}`);
-    assert.strictEqual(health.真的贴上, 0, "一次都没贴上");
-    assert.strictEqual(health.触发过, 3);
-    assert.ok(health.最近一次出错 && health.最近一次出错.是什么, "得说得出上次错在哪儿");
+    assert.ok(/🔴/.test(health.verdict),
+      `this broken it must report red; verdict was: ${health.verdict}`);
+    assert.strictEqual(health.attached, 0, "nothing was ever attached");
+    assert.strictEqual(health.triggered, 3);
+    assert.ok(health.last_error && health.last_error.what, "it must be able to say what went wrong last");
   } finally { await rig.收(); }
 });
 
@@ -782,10 +782,10 @@ test("健康口｜一次都没触发 ≠ 坏了：不许报红", { timeout: 2000
     const health = await read_health(rig.网关);
 
     // 🔴 The most important one here: **a false alarm is worse than no alarm.** Nobody saying anything relevant is an ordinary day, not a fault.
-    assert.ok(!/🔴/.test(health.结论), `没触发不该报红，实际：${health.结论}`);
-    assert.ok(health.结论.includes("一次都没触发"), `实际结论：${health.结论}`);
-    assert.strictEqual(health.触发过, 0);
-    assert.strictEqual(health.真的贴上, 0);
+    assert.ok(!/🔴/.test(health.verdict), `no trigger must not report red; got: ${health.verdict}`);
+    assert.ok(health.verdict.includes("not triggered once"), `verdict was: ${health.verdict}`);
+    assert.strictEqual(health.triggered, 0);
+    assert.strictEqual(health.attached, 0);
   } finally { await rig.收(); }
 });
 
@@ -825,9 +825,9 @@ test("健康口｜日志档还不存在的时候：200 + 说清「还没有任�
 
     const health = is_health_answer(body) ? body : await read_health(rig.网关);
 
-    assert.ok(health.结论.includes("还没有任何一次记录"), `实际结论：${health.结论}`);
-    assert.strictEqual(health.最近这些轮, 0);
-    assert.ok(!/🔴/.test(health.结论), "没有日志不等于坏了，不许报红");
+    assert.ok(health.verdict.includes("no records at all yet"), `verdict was: ${health.verdict}`);
+    assert.strictEqual(health.rounds_examined, 0);
+    assert.ok(!/🔴/.test(health.verdict), "no log is not the same as broken — it must not report red");
   } finally { await rig.收(); }
 });
 
@@ -871,8 +871,8 @@ test("撒谎·漏报｜陈年的成功会盖住今天的全面失效", { timeout
     //    line asserted the answer it *should* give. The fix landed — the verdict now
     //    counts failures since the last success — so it passes. What it guards is that
     //    four straight failures can never again be papered over by a success from days ago.
-    assert.ok(/🔴/.test(health.结论),
-      `最近四轮全崩，健康口却说「${health.结论}」—— 陈年的成功把今天的失效盖住了`);
+    assert.ok(/🔴/.test(health.verdict),
+      `four straight failures and the health endpoint said "${health.verdict}" — an ancient success covered up today's outage`);
   } finally { await rig.收(); }
 });
 
@@ -909,7 +909,8 @@ test("撒谎·误报｜库里本来就没有相关的东西，会被说成「它
 
     // Once the door is fixed, this is where that false alarm would show up (for now, only pin the material and draw no conclusion for anyone)
     const health = await read_health(rig.网关);
-    assert.strictEqual(health.出过错, 0, "出过错必须是 0 —— 这是分辨「没命中」和「坏了」的唯一线索");
+    assert.strictEqual(health.errors, 0,
+      "errors must be 0 — it is the only clue that tells 'nothing matched' apart from 'it is broken'");
   } finally { await rig.收(); }
 });
 

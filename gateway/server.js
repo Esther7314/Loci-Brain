@@ -180,27 +180,28 @@ function build_health() {
     // health endpoint reads is not the log the gateway writes — and then it will say
     // "no records yet" forever while the gateway is working perfectly.
     // **These two cases have to stay distinguishable.**
-    verdict = "还没有任何一次记录 —— 日志档还不存在（刚起来？还是 LOCI_GATEWAY_DATA 指错了？）";
+    verdict = "no records at all yet — the log file does not exist "
+      + "(just started? or is LOCI_GATEWAY_DATA pointing somewhere else?)";
   } else if (records.length === 0) {
-    verdict = "还没有任何一次记录 —— 它可能刚起来，也可能从来没被调用过";
+    verdict = "no records at all yet — it may have just started, or may never have been called";
   } else if (triggered_records.length === 0) {
     // ⚠️ Not an alarm: if nobody said anything relevant, zero triggers is correct.
     //    But say something about language — the strong-trigger word list ships in
     //    Chinese, so anyone who does not speak Chinese would sit on this one verdict
     //    forever while it reassures them that things are "probably fine".
     //    **That misses an entire class of users.**
-    verdict = "最近这些轮里一次都没触发（可能正常：没人说到相关的事）"
-      + (records.length >= 30 ? "　⚠️ 攒了这么多轮一次都没触发，也可能是强档词表跟你说的语言对不上" : "");
+    verdict = "not triggered once in these rounds (may be fine: nobody said anything relevant)"
+      + (records.length >= 30 ? "   ⚠️ this many rounds with no trigger at all may also mean the strong-trigger word list does not match the language being spoken" : "");
   } else if (errors_since_success >= 3) {
-    verdict = `🔴 它是刚坏的：最近一次真的贴上之后，又连着失败了 ${errors_since_success} 次`;
+    verdict = `🔴 broken recently: since the last real attach it has failed ${errors_since_success} times in a row`;
   } else if (injected_records.length > 0) {
-    verdict = "在工作";
+    verdict = "working";
   } else if (error_records.length > 0 && triggered_records.length >= 2) {
     // This is the shape of that bug: **triggered, errored, never once attached.**
     // ⚠️ Only shout at ≥2: the README itself says the first relevance check after a
     //    Loci restart will very likely time out, and going red on that cold start
     //    means crying wolf on every single restart.
-    verdict = `🔴 触发了 ${triggered_records.length} 次，出错 ${error_records.length} 次，一次都没贴上 —— 它在安静地什么都不做`;
+    verdict = `🔴 triggered ${triggered_records.length} times, errored ${error_records.length} times, attached nothing at all — it is quietly doing nothing`;
   } else if (error_records.length === 0) {
     // 🔴 **No alarm here.** The first version shouted 🔴 on this branch, and what it
     //    caught was a perfectly healthy install: fresh setup, nothing relevant in the
@@ -210,28 +211,28 @@ function build_health() {
     //    library really has nothing" and "the parser has gone blind" (Loci changed its
     //    render layout) **look identical in the log**; nobody can tell them apart.
     //    So list the possibilities and **never conclude "everything is fine"**.
-    verdict = `触发了 ${triggered_records.length} 次，一条都没过线（没报错：可能库里确实没有 / 分数线太高 / Loci 改了渲染排版）`;
+    verdict = `triggered ${triggered_records.length} times, nothing cleared the floor (no errors: the library may genuinely hold nothing / the score floor may be too high / Loci may have changed its render layout)`;
   } else {
-    verdict = `触发了 ${triggered_records.length} 次还没贴上过，出错 ${error_records.length} 次 —— 次数还太少，再看看`;
+    verdict = `triggered ${triggered_records.length} times with nothing attached yet, ${error_records.length} errors — too few rounds to tell, look again later`;
   }
 
   return {
-    结论: verdict,
-    最近这些轮: records.length,
-    触发过: triggered_records.length,
-    真的贴上: injected_records.length,
-    出过错: error_records.length,
-    最近一次真的贴上之后又崩了: errors_since_success,
-    最近一次真的贴上: last_injected ? { 几秒前: seconds_ago(last_injected.time), 命中: (last_injected.event_count || 0) + (last_injected.mind_count || 0) } : null,
-    最近一次出错: last_error ? { 几秒前: seconds_ago(last_error.time), 是什么: String(last_error.error).slice(0, 200) } : null,
+    verdict,
+    rounds_examined: records.length,
+    triggered: triggered_records.length,
+    attached: injected_records.length,
+    errors: error_records.length,
+    errors_since_last_attach: errors_since_success,
+    last_attach: last_injected ? { seconds_ago: seconds_ago(last_injected.time), hits: (last_injected.event_count || 0) + (last_injected.mind_count || 0) } : null,
+    last_error: last_error ? { seconds_ago: seconds_ago(last_error.time), what: String(last_error.error).slice(0, 200) } : null,
     // ⚠️ Do not copy auto_attach.js's default (12000) — a copied constant is one more
     //    constant that can drift. "Not set" is itself information worth seeing, and a
     //    typo is reported as the typo it is: catching a misconfiguration is exactly
     //    what this endpoint is for.
-    超时设的是: number_or_raw(process.env.RELEVANCE_TIMEOUT_MS),
-    相关度最低分: number_or_raw(min_score),
-    日志档: log_path,
-    日志档存在: log_exists,
+    timeout_setting: number_or_raw(process.env.RELEVANCE_TIMEOUT_MS),
+    score_floor: number_or_raw(min_score),
+    log_path,
+    log_exists,
   };
 }
 
@@ -255,7 +256,7 @@ const server = http.createServer(async (req, res) => {
     req.resume();   // a GET has no body, but do not leave unread bytes on a keep-alive connection to derail the next request
     let payload = "{}";
     try { payload = JSON.stringify(build_health(), null, 2); }
-    catch (err) { payload = JSON.stringify({ 结论: "健康口自己算不出来了", 错: String(err?.message || err) }); }
+    catch (err) { payload = JSON.stringify({ verdict: "the health endpoint could not compute itself", error: String(err?.message || err) }); }
     const buf = Buffer.from(payload, "utf8");
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Content-Length": buf.length });
     res.end(buf);
@@ -317,8 +318,8 @@ const server = http.createServer(async (req, res) => {
   if (!route.startsWith("/v1/")) {
     req.resume();
     const payload = Buffer.from(JSON.stringify({
-      error: `这一层只转发 /v1/* 的请求，${route} 没往上游发。`,
-      提示: "看它在不在工作：GET /health",
+      error: `this layer only forwards /v1/* requests; ${route} was not sent upstream.`,
+      hint: "to see whether it is working: GET /health",
     }, null, 2), "utf8");
     res.writeHead(404, { "Content-Type": "application/json; charset=utf-8", "Content-Length": payload.length });
     res.end(payload);
@@ -340,7 +341,7 @@ const server = http.createServer(async (req, res) => {
     });
   } catch (err) {
     res.writeHead(502, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify({ error: "连不上上游：" + String(err?.message || err) }));
+    res.end(JSON.stringify({ error: "cannot reach upstream: " + String(err?.message || err) }));
     console.error(`[gateway] ${req.method} ${req.url} → 上游连不上：${err?.message || err}`);
     return;
   }
