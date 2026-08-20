@@ -131,20 +131,20 @@ def _person_tags() -> frozenset:
     from utils import get_ai_name, get_owner_name
     from tools._subjects import load_alias_table
 
-    规范名: set[str] = set()
+    canon_names: set[str] = set()
     for n in (get_ai_name(), get_owner_name()):
         n = str(n or "").strip()
         if n and n != "AI":          # 没配名字时的占位符不算名字
-            规范名.add(n)
-    if not 规范名:
+            canon_names.add(n)
+    if not canon_names:
         return frozenset(_PRONOUN_TAGS)
 
-    names = set(规范名)
+    names = set(canon_names)
     try:
         # 别名表是 {别名小写: 规范名}，反着查：这两个规范名底下挂的所有叫法
-        for 别名, canon in (load_alias_table() or {}).items():
-            if str(canon).strip() in 规范名:
-                names.add(str(别名).strip())
+        for alias, canon in (load_alias_table() or {}).items():
+            if str(canon).strip() in canon_names:
+                names.add(str(alias).strip())
                 names.add(str(canon).strip())
     except Exception:                # 表读不到就只挡规范名+代词，不炸
         pass

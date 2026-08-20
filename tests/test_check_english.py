@@ -71,11 +71,24 @@ def test_comments_are_not_names():
     assert (decl, other) == (set(), set())
 
 
-def test_attribute_access_on_a_chinese_field_is_not_a_binding():
-    # Criterion: reading someone else's Chinese attribute is not this file's problem to
-    # fix; only names this file itself introduces are.
-    decl, other = CE._python_names("y = obj.某个字段\n")
-    assert (decl, other) == (set(), set())
+def test_attribute_reads_are_counted_too():
+    # Criterion: this one reverses an earlier decision, and the reversal was earned.
+    #
+    # The first version counted bindings only, on the reasoning that reading someone
+    # else's attribute is not ours to fix. Then a field rename proved the reasoning
+    # backwards: renaming `Cluster.架v` made the binding count drop to zero **while two
+    # other files still read `x.架v`**. Everything was green — pyflakes cannot see a
+    # misspelled attribute, and no test had ever built one of those objects — and the
+    # first real call would have raised.
+    #
+    # Counting only definitions reports a rename as finished the moment it is started.
+    _, other = CE._python_names("y = obj.某个字段\n")
+    assert other == {".某个字段"}
+
+
+def test_an_ascii_attribute_is_not_counted():
+    _, other = CE._python_names("y = obj.some_field\n")
+    assert other == set()
 
 
 # ───────────────── must be counted (missing these is how a third round happens) ─────────────────
@@ -136,6 +149,21 @@ def test_js_exported_constants_are_the_ones_that_matter_most():
     # `require(...)`. It is exactly what the first version of this checker could not see.
     _, other = CE._js_names("const 强档关键词 = [];\nmodule.exports = { 强档关键词 };\n")
     assert "强档关键词" in other
+
+
+def test_js_attribute_reads_are_deliberately_not_counted():
+    # Criterion: this pins a decision that looks like an oversight, so nobody "fixes" it.
+    #
+    # The Python side counts attribute reads, and has to. Doing the same for JS was tried
+    # and flagged 45 things, every one of them a Chinese object KEY that must never be
+    # renamed — the /health response fields, the cross-process ledger keys, the test
+    # doubles' method names. Without a parser, `x.收到` cannot be told apart from a field.
+    #
+    # 🔴 100% false positives, on exactly the category where acting on the report destroys
+    #    data. Undercounting leaves work undone; overcounting sends someone to do work that
+    #    must not be done. When only one of the two is available, take the first.
+    _, other = CE._js_names("const a = x.收到;\nfake.清账();\n")
+    assert other == set()
 
 
 def test_js_strings_are_not_mistaken_for_declarations():

@@ -471,7 +471,7 @@ class SecurityHeadersMiddleware:
     #       那个语法现代浏览器早就不支持了，留着 DENY 会跟下面的 CSP 打架
     #       （规范说 CSP frame-ancestors 在场时该忽略 XFO，但别赌浏览器都守规矩）。
     #    📌 **她家的内网 IP 换了，这一行要跟着改** —— 记在 交接/环境速查.md 里。
-    _可以嵌我的 = " ".join([
+    _FRAME_ANCESTORS = " ".join([
         "'self'",
         "http://localhost:3010",
         "http://127.0.0.1:3010",
@@ -479,7 +479,7 @@ class SecurityHeadersMiddleware:
 
     _HEADERS = (
         (b"content-security-policy",
-         ("frame-ancestors " + _可以嵌我的).encode("utf-8")),
+         ("frame-ancestors " + _FRAME_ANCESTORS).encode("utf-8")),
         (b"x-content-type-options", b"nosniff"),
         (b"referrer-policy", b"no-referrer"),
         (

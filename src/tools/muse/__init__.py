@@ -40,8 +40,8 @@ from core import _muse as M
 from .. import _runtime as rt
 from core import _when as _w
 
-指法顺序 = ("词爆发", "成分漂移", "空白记账")
-线 = "─" * 40
+FINGER_ORDER = ("词爆发", "成分漂移", "空白记账")
+RULE = "─" * 40
 
 
 def _date_label(dt) -> str:
@@ -57,15 +57,15 @@ def _short_id(bid: str) -> str:
 
 def _mind_evidence(t: "M.Cluster") -> str:
     """一团的证据行：架坐标 · from 链 · 语义补。三样各自说各自的，不许含混。"""
-    块 = [f"架 v{t.架v:.2f} a{t.架a:.2f}"]
-    if t.from核心:
-        共 = ("共祖 " + "、".join(_short_id(x) for x in t.共祖[:2])) if t.共祖 else "同一条链"
-        块.append(f"from 链 {len(t.from核心)} 条（{共}）")
-    if t.语义补:
-        块.append(f"语义补 {len(t.语义补)} 条（最低 {t.最低相似:.2f}）")
-    if not t.from核心:
-        块.append("没有 from 痕迹，全靠语义海选")
-    return " · ".join(块)
+    parts = [f"架 v{t.shelf_v:.2f} a{t.shelf_a:.2f}"]
+    if t.from_core:
+        shared = ("共祖 " + "、".join(_short_id(x) for x in t.shared_from[:2])) if t.shared_from else "同一条链"
+        parts.append(f"from 链 {len(t.from_core)} 条（{shared}）")
+    if t.semantic_add:
+        parts.append(f"语义补 {len(t.semantic_add)} 条（最低 {t.min_sim:.2f}）")
+    if not t.from_core:
+        parts.append("没有 from 痕迹，全靠语义海选")
+    return " · ".join(parts)
 
 
 def _mind_line(n: int, t: "M.Cluster") -> str:
@@ -112,56 +112,58 @@ async def dispatch(cluster: int = 0, not_same=None) -> str:
                 f"这一组不再提。**组变了**（多一条、少一条）会重新出现——"
                 f"那时候它确实是新的一组。")
 
-    团们, 散着, 默认坐标, 指们, stats = await _both_sides()
-    团们, 摆出的指, 多余团, 全部 = layout(团们, 指们, stats, cfg)
+    clusters, scattered, default_coords, fingers, stats = await _both_sides()
+    clusters, shown_fingers, extra_clusters, everything = layout(clusters, fingers, stats, cfg)
 
     # ---------- 入口②：那一批的全条逐字 ----------
     if cluster:
         n = int(cluster)
-        if n < 1 or n > len(全部):
-            if not 全部:
+        if n < 1 or n > len(everything):
+            if not everything:
                 return ("现在一个团、一指都没有——没什么可看的。\n"
                         "（认知：v/a 分架成团；事件：词爆发 / 成分漂移 / 空白记账，"
                         "都得先有痕迹。）")
-            return f"没有第 {n} 个。现在只有 [1]~[{len(全部)}]。先调 muse() 看一眼。"
-        return _step_two(n, 全部[n - 1])
+            return f"没有第 {n} 个。现在只有 [1]~[{len(everything)}]。先调 muse() 看一眼。"
+        return _step_two(n, everything[n - 1])
 
-    return step_one(团们, 散着, 默认坐标, 多余团, 摆出的指, int(stats["event"]["主线"]))
+    return step_one(clusters, scattered, default_coords, extra_clusters, shown_fingers,
+                    int(stats["event"]["主线"]))
 
 
-def layout(团们, 指们, stats, cfg) -> tuple[list, list, int, list]:
+def layout(clusters, fingers, stats, cfg) -> tuple[list, list, int, list]:
     """截断 + 编号口径。**第一步和第二步共用这一份**——两处不一样，[N] 就会指错人。"""
-    团们 = list(团们)[:int(cfg["max_clusters"])]
-    多余团 = max(0, int(stats["mind"]["团"]) - len(团们))
-    上限 = int(cfg["max_fingers"])
-    摆出的指 = [(名, list(指们.get(名, []))[:上限], len(指们.get(名, [])))
-                for 名 in 指法顺序]
-    全部 = list(团们) + [x for _名, lst, _n in 摆出的指 for x in lst]
-    return 团们, 摆出的指, 多余团, 全部
+    clusters = list(clusters)[:int(cfg["max_clusters"])]
+    extra_clusters = max(0, int(stats["mind"]["团"]) - len(clusters))
+    cap = int(cfg["max_fingers"])
+    shown_fingers = [(name, list(fingers.get(name, []))[:cap], len(fingers.get(name, [])))
+                     for name in FINGER_ORDER]
+    everything = list(clusters) + [x for _name, lst, _n in shown_fingers for x in lst]
+    return clusters, shown_fingers, extra_clusters, everything
 
 
-def step_one(团们, 散着: int, 默认坐标: int, 多余团: int, 摆出的指, 主线: int) -> str:
+def step_one(clusters, scattered: int, default_coords: int, extra_clusters: int,
+             shown_fingers, era_n: int) -> str:
     """先给团/指，不给记忆。**纯函数**——干跑脚本拿它离线渲染样张，跟线上一模一样。"""
     out = ["▣发呆 · 先给团，不给记忆　（指点必须带痕迹：坐标是我打的、链是我连的、"
            "词是我存的时候写的；向量只当海选）"]
     out.append("")
     out.append("碎着的认知（MIND · 没被盖过 · v/a 分架 → from 链 → 语义补）")
-    if 团们:
-        out += [_mind_line(i + 1, t) for i, t in enumerate(团们)]
+    if clusters:
+        out += [_mind_line(i + 1, t) for i, t in enumerate(clusters)]
     else:
         out.append("  （一个团都没有）")
-    out.append(f"  另有 {散着} 条散着，没成团")
-    if 默认坐标:
-        out.append(f"  另有 {默认坐标} 条还在老默认坐标 (0.5, 0.3) 上——"
+    out.append(f"  另有 {scattered} 条散着，没成团")
+    if default_coords:
+        out.append(f"  另有 {default_coords} 条还在老默认坐标 (0.5, 0.3) 上——"
                    f"那是老默认值不是感觉，等主人亲手重打，不进架")
-    if 多余团:
-        out.append(f"  （还有 {多余团} 个团没摆出来）")
+    if extra_clusters:
+        out.append(f"  （还有 {extra_clusters} 个团没摆出来）")
     out.append("")
     out.append("没名字的日子（EVENT · 三种指法，全带证据）")
-    号 = len(团们)
-    for 名, lst, 总 in 摆出的指:
-        out.append(f"  · {名}")
-        if 名 == "空白记账" and 主线 < 1:
+    idx = len(clusters)
+    for name, lst, total in shown_fingers:
+        out.append(f"  · {name}")
+        if name == "空白记账" and era_n < 1:
             # 🔴 她的原话场景：「他完全可以说今年都没有」——**不许发生**。
             out.append("    （库里还没有一条时期——这一指不说话。没有地图的时候"
                        "「哪儿没盖」是个假问题，那不是空白，是还没开始画。）")
@@ -170,10 +172,10 @@ def step_one(团们, 散着: int, 默认坐标: int, 多余团: int, 摆出的�
             out.append("    （没有）")
             continue
         for x in lst:
-            号 += 1
-            out.append(f"    [{号}] {x.证据}")
-        if 总 > len(lst):
-            out.append(f"    （还有 {总 - len(lst)} 条没摆出来）")
+            idx += 1
+            out.append(f"    [{idx}] {x.evidence}")
+        if total > len(lst):
+            out.append(f"    （还有 {total - len(lst)} 条没摆出来）")
     out.append("")
     out.append("muse(cluster=N) 看那一批的全条逐字 · "
                "muse(not_same=[\"id\",\"id\"]) 这几条不是一回事")
@@ -187,33 +189,34 @@ def _step_two(n: int, x) -> str:
             rooms[it.room] = rooms.get(it.room, 0) + 1
         head = (f"▣[{n}] {len(x)} 条 · "
                 + "、".join(f"{r} {c}" for r, c in sorted(rooms.items())))
-        证据 = "证据：" + _mind_evidence(x)
-        if x.共祖:
-            证据 += "\n　　共祖全 id：" + "、".join(x.共祖)
-        块 = []
+        evidence = "证据：" + _mind_evidence(x)
+        if x.shared_from:
+            evidence += "\n　　共祖全 id：" + "、".join(x.shared_from)
+        parts = []
         for it in x.items:
             # 🔴 **时间不当证据**（她拍的：认知不认日历）——所以这儿给的是坐标不是日子。
-            标 = "← from 链" if it.id in x.from核心 else "← 语义补"
-            块.append(f"· {it.id}  v{it.v:.2f}/a{it.a:.2f}  {it.room}  {标}\n{it.text}")
-        出路 = (f'fold(folds={x.ids}, text=我写的那句)\n'
-                f'  不是一回事 → muse(not_same={x.ids})')
-        return f"{head}\n{证据}\n{线}\n" + f"\n\n{线}\n".join(块) + f"\n{线}\n{出路}"
+            mark = "← from 链" if it.id in x.from_core else "← 语义补"
+            parts.append(f"· {it.id}  v{it.v:.2f}/a{it.a:.2f}  {it.room}  {mark}\n{it.text}")
+        next_step = (f'fold(folds={x.ids}, text=我写的那句)\n'
+                     f'  不是一回事 → muse(not_same={x.ids})')
+        return f"{head}\n{evidence}\n{RULE}\n" + f"\n\n{RULE}\n".join(parts) + f"\n{RULE}\n{next_step}"
 
     # ---- 事件侧的一指 ----
-    跨 = f"{_date_label(x.起)}~{_date_label(x.止)}" if x.起 and x.止 and x.起 != x.止 else _date_label(x.起)
-    head = f"▣[{n}] {x.名} · {跨}"
-    块 = []
-    上一个 = None
+    span = (f"{_date_label(x.start)}~{_date_label(x.end)}"
+            if x.start and x.end and x.start != x.end else _date_label(x.start))
+    head = f"▣[{n}] {x.name} · {span}"
+    parts = []
+    prev = None
     for it in x.items:
-        if x.边界 is not None and 上一个 is not None and it.ts is not None \
-                and 上一个 < x.边界 <= it.ts:
-            块.append(f"{'┈' * 14} {_date_label(x.边界)} 这条线 {'┈' * 14}")
+        if x.boundary is not None and prev is not None and it.ts is not None \
+                and prev < x.boundary <= it.ts:
+            parts.append(f"{'┈' * 14} {_date_label(x.boundary)} 这条线 {'┈' * 14}")
         # 「已经有名字」= 日期落在某条活着的时期的范围里（现场算的，不是字段）；
         # 「已经被盖着」= 真 cover（事件改错换版那一条）。两件事，分开说。
-        标 = ("  ← 已经被盖着" if it.covered
-              else ("  ← 已经有名字（落在一条时期的范围里）" if it.named else ""))
-        块.append(f"· {it.id}  {_date_label(it.ts)}  {it.room}{标}\n{it.text}")
-        上一个 = it.ts
-    出路 = f"{x.出路}\n  不是一回事 → muse(not_same={x.ids})"
-    return (f"{head}\n证据：{x.证据}\n{线}\n" + f"\n\n{线}\n".join(块)
-            + f"\n{线}\n{出路}")
+        mark = ("  ← 已经被盖着" if it.covered
+                else ("  ← 已经有名字（落在一条时期的范围里）" if it.named else ""))
+        parts.append(f"· {it.id}  {_date_label(it.ts)}  {it.room}{mark}\n{it.text}")
+        prev = it.ts
+    next_step = f"{x.next_step}\n  不是一回事 → muse(not_same={x.ids})"
+    return (f"{head}\n证据：{x.evidence}\n{RULE}\n" + f"\n\n{RULE}\n".join(parts)
+            + f"\n{RULE}\n{next_step}")

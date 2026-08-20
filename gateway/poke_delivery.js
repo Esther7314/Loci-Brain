@@ -65,32 +65,32 @@ const path = require("path");
 
 // 2026-08-19 抽出来时只改了这一处路径：原来落在宿主项目根下的 data/，
 // 现在落在**这个网关自己目录**下的 data/（也可以用 LOCI_GATEWAY_DATA 指到别处）。
-const 数据根 = process.env.LOCI_GATEWAY_DATA || path.join(__dirname, "data");
+const data_root = process.env.LOCI_GATEWAY_DATA || path.join(__dirname, "data");
 
 // 跟 auto_attach.js / 近期记忆视图.js 用同一个环境变量名（她的 MCP 地址）；
 // Loci 的普通 REST 口挂在同一个进程、同一个端口，只是路径不是 /mcp——
 // 从这同一个地址派生 REST 根，不另开一个环境变量（一处配置，两边都对）。
-const 默认地址 = process.env.LOCI_MCP || "http://127.0.0.1:18002/mcp";
-const 默认状态档 = path.join(数据根, "state", "poke-window.json");
-const 默认日志档 = path.join(数据根, "logs", "memory-actions.jsonl");
+const DEFAULT_ADDRESS = process.env.LOCI_MCP || "http://127.0.0.1:18002/mcp";
+const DEFAULT_STATE_PATH = path.join(data_root, "state", "poke-window.json");
+const DEFAULT_LOG_PATH = path.join(data_root, "logs", "memory-actions.jsonl");
 // = 3.5 小时，她 8-18 上午口径的出厂值；server.js 读 env POKE_IDLE_MINUTES 覆盖，
 // 这儿的默认值只是这个模块自己被单独调用/测试时的兜底。
-const 默认闲时阈值分钟 = 210;
+const DEFAULT_IDLE_MINUTES = 210;
 
 // 诊断/测试认这个字面量 —— 跟 auto_attach.js 的 [Loci memory context] 是姐妹标记。
 const MARKER = "[Loci poke]";
 
-function read_json(文件, 缺省 = {}) {
-  try { return fs.existsSync(文件) ? JSON.parse(fs.readFileSync(文件, "utf8")) : 缺省; }
-  catch { return 缺省; }
+function read_json(file, fallback = {}) {
+  try { return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : fallback; }
+  catch { return fallback; }
 }
-function write_json(文件, 值) {
-  fs.mkdirSync(path.dirname(文件), { recursive: true });
-  fs.writeFileSync(文件, `${JSON.stringify(值, null, 2)}\n`);
+function write_json(file, value) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
 }
-function log_line(文件, 值) {
-  fs.mkdirSync(path.dirname(文件), { recursive: true });
-  fs.appendFileSync(文件, `${JSON.stringify(值)}\n`);
+function log_line(file, value) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.appendFileSync(file, `${JSON.stringify(value)}\n`);
 }
 
 /** `http://host:port/mcp` → `http://host:port`。Loci 的 REST 只读/写口
@@ -115,46 +115,46 @@ function request_headers() {
   return h;
 }
 
-async function fetch_poke(地址, { 超时毫秒 = 8000 } = {}) {
-  const url = `${httpBase(地址)}/api/loci/poke`;
-  const 控 = new AbortController();
-  const 闹钟 = setTimeout(() => 控.abort(), 超时毫秒);
-  let 回;
+async function fetch_poke(address, { timeout_ms = 8000 } = {}) {
+  const url = `${httpBase(address)}/api/loci/poke`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout_ms);
+  let resp;
   try {
-    回 = await fetch(url, { method: "GET", headers: request_headers(), signal: 控.signal });
-  } catch (错) {
-    clearTimeout(闹钟);
-    if (错?.name === "AbortError") throw new Error(`问 Loci 戳口超时（${url}）`);
-    throw new Error(`连不上 Loci 戳口（${url}）：${错?.message || 错}`);
+    resp = await fetch(url, { method: "GET", headers: request_headers(), signal: controller.signal });
+  } catch (err) {
+    clearTimeout(timer);
+    if (err?.name === "AbortError") throw new Error(`问 Loci 戳口超时（${url}）`);
+    throw new Error(`连不上 Loci 戳口（${url}）：${err?.message || err}`);
   }
-  clearTimeout(闹钟);
-  if (!回.ok) throw new Error(`Loci 戳口回了 HTTP ${回.status}`);
-  const 体 = await 回.json();
-  if (!体 || typeof 体 !== "object") throw new Error("Loci 戳口没给 JSON");
-  return 体;
+  clearTimeout(timer);
+  if (!resp.ok) throw new Error(`Loci 戳口回了 HTTP ${resp.status}`);
+  const body = await resp.json();
+  if (!body || typeof body !== "object") throw new Error("Loci 戳口没给 JSON");
+  return body;
 }
 
 /** 施工7d：降级信号——她回来发的第二条消息触发，POST 一次，幂等（Loci 那边
  *  没有活着的完整层就静默 200）。跟 fetch_poke 一样是纯 REST，不走 MCP 握手。 */
-async function call_wake(地址, { 超时毫秒 = 8000 } = {}) {
-  const url = `${httpBase(地址)}/api/loci/dream/wake`;
-  const 控 = new AbortController();
-  const 闹钟 = setTimeout(() => 控.abort(), 超时毫秒);
-  let 回;
+async function call_wake(address, { timeout_ms = 8000 } = {}) {
+  const url = `${httpBase(address)}/api/loci/dream/wake`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout_ms);
+  let resp;
   try {
-    回 = await fetch(url, {
+    resp = await fetch(url, {
       method: "POST",
       headers: { ...request_headers(), "Content-Type": "application/json" },
       body: "{}",
-      signal: 控.signal,
+      signal: controller.signal,
     });
-  } catch (错) {
-    clearTimeout(闹钟);
-    if (错?.name === "AbortError") throw new Error(`调 Loci 降级口超时（${url}）`);
-    throw new Error(`连不上 Loci 降级口（${url}）：${错?.message || 错}`);
+  } catch (err) {
+    clearTimeout(timer);
+    if (err?.name === "AbortError") throw new Error(`调 Loci 降级口超时（${url}）`);
+    throw new Error(`连不上 Loci 降级口（${url}）：${err?.message || err}`);
   }
-  clearTimeout(闹钟);
-  if (!回.ok) throw new Error(`Loci 降级口回了 HTTP ${回.status}`);
+  clearTimeout(timer);
+  if (!resp.ok) throw new Error(`Loci 降级口回了 HTTP ${resp.status}`);
   return true;
 }
 
@@ -163,25 +163,25 @@ async function call_wake(地址, { 超时毫秒 = 8000 } = {}) {
  *  发呆一句在后（提醒，绝不带团的内容）。哪样都没有就不该走到这儿——调用方在
  *  没货时压根不建这段。 */
 function build_patch_text(poke) {
-  const 段 = [MARKER];
+  const parts = [MARKER];
   if (poke.dream) {
-    段.push("〔梦〕昨夜织了一个梦：", String(poke.dream.内容 || "").trim());
+    parts.push("〔梦〕昨夜织了一个梦：", String(poke.dream.内容 || "").trim());
   }
   if (poke.musePending > 0) {
-    if (段.length > 1) 段.push("");
-    段.push(`〔发呆〕没成团的想法攒了 ${poke.musePending} 团，该发呆了（muse()）`);
+    if (parts.length > 1) parts.push("");
+    parts.push(`〔发呆〕没成团的想法攒了 ${poke.musePending} 团，该发呆了（muse()）`);
   }
-  return 段.join("\n");
+  return parts.join("\n");
 }
 
 function insert_before_latest_user(messages, patch) {
-  let 插入点 = messages.length;
+  let latest_user_index = messages.length;
   for (let i = messages.length - 1; i >= 0; i -= 1) {
-    if (messages[i]?.role === "user") { 插入点 = i; break; }
+    if (messages[i]?.role === "user") { latest_user_index = i; break; }
   }
-  let 插到 = 0;
-  while (插到 < messages.length && messages[插到]?.role === "system" && 插到 < 插入点) 插到 += 1;
-  messages.splice(插到, 0, patch);
+  let insert_at = 0;
+  while (insert_at < messages.length && messages[insert_at]?.role === "system" && insert_at < latest_user_index) insert_at += 1;
+  messages.splice(insert_at, 0, patch);
 }
 
 /**
@@ -203,39 +203,39 @@ async function attach_once({
   requestId,
   now = new Date(),
   newWindow = false,
-  statePath = 默认状态档,
-  logPath = 默认日志档,
-  地址 = 默认地址,
-  超时毫秒 = 8000,
-  闲时阈值分钟 = 默认闲时阈值分钟,
+  statePath = DEFAULT_STATE_PATH,
+  logPath = DEFAULT_LOG_PATH,
+  地址: address = DEFAULT_ADDRESS,
+  超时毫秒: timeout_ms = 8000,
+  闲时阈值分钟: idle_threshold_minutes = DEFAULT_IDLE_MINUTES,
 } = {}) {
-  const 结果 = {
+  const result = {
     patchInjected: false, calledLoci: false,
     hasDream: false, musePending: 0, error: null,
     idle: false, idleMinutes: null, wakeCalled: false, wakeError: null,
   };
-  const 状态 = read_json(statePath, {});
+  const state = read_json(statePath, {});
 
   // ---- 降级触发：跟这条请求够不够闲无关，只看"上一次是否已经武装" ----
   // 武装 = 上一条请求判过"够闲"（=那条消息是她回来的第一句），这条消息就是
   // 她回来之后的下一句——降级一次。武装/撤武装都要落state，所以先算出这条
   // 请求该不该撤武装，落盘的事跟下面闲时闸那段的写state合并成一次。
-  let wakePending = 状态.wakePending === true;
+  let wakePending = state.wakePending === true;
   if (wakePending) {
-    结果.wakeCalled = true;
+    result.wakeCalled = true;
     try {
-      await call_wake(地址, { 超时毫秒 });
+      await call_wake(address, { timeout_ms });
       log_line(logPath, {
         time: now.toISOString(), request_id: requestId, actor: "gateway/poke",
         action: "dream_wake", status: "ok",
       });
       wakePending = false;               // 降级成功，撤武装
-    } catch (错) {
-      结果.wakeError = String(错?.message || 错);
-      结果.wakeCalled = false;
+    } catch (err) {
+      result.wakeError = String(err?.message || err);
+      result.wakeCalled = false;
       log_line(logPath, {
         time: now.toISOString(), request_id: requestId, actor: "gateway/poke",
-        action: "dream_wake", status: "error", error: 结果.wakeError,
+        action: "dream_wake", status: "error", error: result.wakeError,
       });
       // 🔴 降级失败不挡聊天，也不假装成功——武装保留到下一条消息再试一次
       //    （Loci 那边 wake 是幂等的，多试几次没有副作用）。
@@ -243,48 +243,48 @@ async function attach_once({
   }
 
   // ---- 闲时闸：距她上一条消息够不够久 ----
-  const 上次时间 = 状态.lastUserMessageTime ? new Date(状态.lastUserMessageTime) : null;
-  const 距上次分钟 = 上次时间 && !Number.isNaN(上次时间.getTime())
-    ? (now.getTime() - 上次时间.getTime()) / 60000
+  const last_user_time = state.lastUserMessageTime ? new Date(state.lastUserMessageTime) : null;
+  const minutes_since = last_user_time && !Number.isNaN(last_user_time.getTime())
+    ? (now.getTime() - last_user_time.getTime()) / 60000
     : Infinity;                          // 没有历史记录：没法说她"刚"发过消息，闸默认开
-  const 够闲 = 距上次分钟 >= Number(闲时阈值分钟);
-  结果.idle = 够闲;
-  结果.idleMinutes = Number.isFinite(距上次分钟) ? Math.round(距上次分钟) : null;
+  const idle_enough = minutes_since >= Number(idle_threshold_minutes);
+  result.idle = idle_enough;
+  result.idleMinutes = Number.isFinite(minutes_since) ? Math.round(minutes_since) : null;
 
-  if (!够闲) {
+  if (!idle_enough) {
     // 🔴 不够闲：一个字不注入，连 Loci 都不问（省调用）——聊天中绝不插嘴。
-    write_json(statePath, { ...状态, lastUserMessageTime: now.toISOString(), wakePending });
-    return 结果;
+    write_json(statePath, { ...state, lastUserMessageTime: now.toISOString(), wakePending });
+    return result;
   }
 
   // ---- 够闲：这条消息是她刚回来的第一句，真问一次 Loci ----
-  结果.calledLoci = true;
+  result.calledLoci = true;
   let poke = null;
   try {
-    const 数据 = await fetch_poke(地址, { 超时毫秒 });
-    const 梦们 = Array.isArray(数据.dreams) ? 数据.dreams : [];
-    poke = { dream: 梦们.length ? 梦们[0] : null, musePending: Number(数据.muse_pending) || 0 };
+    const data = await fetch_poke(address, { timeout_ms });
+    const dreams = Array.isArray(data.dreams) ? data.dreams : [];
+    poke = { dream: dreams.length ? dreams[0] : null, musePending: Number(data.muse_pending) || 0 };
     log_line(logPath, {
       time: now.toISOString(), request_id: requestId, actor: "gateway/poke",
-      action: "poke_fetch", status: "ok", idle_minutes: 结果.idleMinutes,
+      action: "poke_fetch", status: "ok", idle_minutes: result.idleMinutes,
       has_dream: Boolean(poke.dream), muse_pending: poke.musePending,
     });
-  } catch (错) {
-    结果.error = String(错?.message || 错);
+  } catch (err) {
+    result.error = String(err?.message || err);
     log_line(logPath, {
       time: now.toISOString(), request_id: requestId, actor: "gateway/poke",
-      action: "poke_fetch", status: "error", error: 结果.error,
-      fallback_to_stale_cache: Boolean(状态.poke),
+      action: "poke_fetch", status: "error", error: result.error,
+      fallback_to_stale_cache: Boolean(state.poke),
     });
     // 失败不挡聊天：有上次成功的内容就照旧贴，没有就这轮不贴。
-    poke = 状态.poke || null;
+    poke = state.poke || null;
   }
 
   // 只要闲时闸这次开了，就武装等她下一句降级——就算这次没查到货（poke 为
   // null）也一样：wake 那边没有完整层会静默 200，多武装一次没有副作用。
   // （如果这条消息同时也是"武装武装"——上面 wakePending 那段刚触发过降级——
   // 就不重新武装，等真正下一次独立的空档再说。）
-  if (!结果.wakeCalled) wakePending = true;
+  if (!result.wakeCalled) wakePending = true;
 
   write_json(statePath, {
     poke, fetchedAt: now.toISOString(),
@@ -294,20 +294,28 @@ async function attach_once({
   if (poke && (poke.dream || poke.musePending > 0)) {
     const patch = { role: "system", content: build_patch_text(poke) };
     insert_before_latest_user(Array.isArray(messages) ? messages : [], patch);
-    结果.patchInjected = true;
-    结果.hasDream = Boolean(poke.dream);
-    结果.musePending = poke.musePending;
+    result.patchInjected = true;
+    result.hasDream = Boolean(poke.dream);
+    result.musePending = poke.musePending;
   }
-  return 结果;
+  return result;
 }
 
 module.exports = {
   MARKER,
-  默认地址,
-  默认状态档,
-  默认日志档,
-  默认闲时阈值分钟,
+  DEFAULT_ADDRESS,
+  DEFAULT_STATE_PATH,
+  DEFAULT_LOG_PATH,
+  DEFAULT_IDLE_MINUTES,
   attach_once,
+
+// ── 过时别名，2026-08-20 之前叫这个名字。下个大版本删。────────────────────────
+// 🔴 绑定改成英文是内部事，但这几个键是**别人 require() 之后要亲手敲的名字** ——
+//    删掉的话，别人的代码会当场断在一个他打不出来的名字上。留一行成本为零。
+  默认地址: DEFAULT_ADDRESS,
+  默认状态档: DEFAULT_STATE_PATH,
+  默认日志档: DEFAULT_LOG_PATH,
+  默认闲时阈值分钟: DEFAULT_IDLE_MINUTES,
 
 // ── 英文别名（2026-08-19 她提的：「你就不怕别人不好改吗」）─────────────────────
 // 🔴 **只是别名，指的是同一个函数**。文件内部照旧中文——`算相关记忆提醒` 一眼知道
@@ -317,8 +325,7 @@ module.exports = {
   // paste({ messages, requestId, 地址, 闲时阈值分钟 }) —— 就地改 messages
   paste: attach_once,
   MARKER_LINE: MARKER,
-  DEFAULT_ADDRESS: 默认地址,
-  DEFAULT_IDLE_MINUTES: 默认闲时阈值分钟,
+  // DEFAULT_ADDRESS / DEFAULT_IDLE_MINUTES 现在就是正式名字了，导在上面。
 
   _internal: { httpBase, fetch_poke, call_wake, build_patch_text, insert_before_latest_user },
 };

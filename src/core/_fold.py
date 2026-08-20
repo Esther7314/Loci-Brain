@@ -172,8 +172,8 @@ def check_span(span: str) -> tuple[datetime | None, datetime | None, str]:
     t0 = _w.parse_date_or_none(m.group(1))
     t1raw = _w.parse_date_or_none(m.group(2)) if m.group(2) else None
     if t0 is None or (m.group(2) and t1raw is None):
-        坏 = m.group(1) if t0 is None else m.group(2)
-        return None, None, f"日历上没有 {坏} 这一天。{SPAN_HELP}"
+        bad_day = m.group(1) if t0 is None else m.group(2)
+        return None, None, f"日历上没有 {bad_day} 这一天。{SPAN_HELP}"
     t1 = t1raw + timedelta(days=1) if t1raw else None
     if t1 is not None and t1 <= t0:
         return None, None, f"止（{m.group(2)}）在起（{m.group(1)}）前面了。"
@@ -258,34 +258,34 @@ async def save_gist(text: str, room: str, v: float, a: float,
         test_data=test_data,
     )
 
-    报告: dict = {"cover": cover, "叠盖": [], "没写上": [], "链没写全": False}
+    report: dict = {"cover": cover, "叠盖": [], "没写上": [], "链没写全": False}
 
     # ---- 两头都写 ----
     # 🔴 **版本链不算记账**：时期换版时 cover 是空的（上面清掉了），但旧版那条**必须**
     #    写上 superseded_by/dont_surface，不然旧版会跟新版一起冒到那段日子上。
     #    所以要写的是 cover ∪ {supersedes}，其中只有 cover 那部分写 covered_by。
-    要写的 = list(cover) + ([supersedes] if supersedes and supersedes not in cover else [])
+    targets = list(cover) + ([supersedes] if supersedes and supersedes not in cover else [])
     ok_cover = await rt.bucket_mgr.update(new_id, cover=cover) if cover else True
-    for cid in 要写的:
+    for cid in targets:
         old = await rt.bucket_mgr.get(cid)
         old_meta = (old or {}).get("metadata", {}) or {}
         kwargs: dict = {}
         if cid in cover:
-            旧名单 = _covered_list(old_meta)
-            if 旧名单 and new_id not in 旧名单:
+            old_covers = _covered_list(old_meta)
+            if old_covers and new_id not in old_covers:
                 # 她 8-05 第六条：交叉是事实不是冲突 → 显式盖已被盖的 = **叠着盖**（append），
                 # 谁都不抢谁；两层都看得见、都钻得到。（8-17 零点她抓回来的，替掉第一版的「抢」。）
-                报告["叠盖"].append((cid, list(旧名单)))
-            kwargs["covered_by"] = 旧名单 + ([new_id] if new_id not in 旧名单 else [])
+                report["叠盖"].append((cid, list(old_covers)))
+            kwargs["covered_by"] = old_covers + ([new_id] if new_id not in old_covers else [])
         if supersedes and cid == supersedes:
             # 换版那一档才写版本链和 dont_surface（regrow 8-03 起的行为，一个字不动）
             kwargs["superseded_by"] = new_id
             kwargs["dont_surface"] = True
         if not await rt.bucket_mgr.update(cid, **kwargs):
-            报告["没写上"].append(cid)
+            report["没写上"].append(cid)
     if supersedes:
         ok_sup = await rt.bucket_mgr.update(new_id, supersedes=supersedes)
-        报告["链没写全"] = not (ok_sup and ok_cover and supersedes not in 报告["没写上"])
+        report["链没写全"] = not (ok_sup and ok_cover and supersedes not in report["没写上"])
         # ---- 🔴 换版要把「钉着」带过去（2026-08-19 修的 bug ①）----
         # 老毛病：regrow 一条钉着的准则 = **悄悄取消钉住**。
         #   新版是新建的桶（默认没钉），旧版被 dont_surface 压下去 ——
@@ -300,16 +300,16 @@ async def save_gist(text: str, room: str, v: float, a: float,
             old_b = await rt.bucket_mgr.get(supersedes)
             old_meta = (old_b or {}).get("metadata", {}) or {}
             if old_meta.get("pinned"):
-                报告["接着钉"] = bool(await rt.bucket_mgr.update(new_id, pinned=True))
+                report["接着钉"] = bool(await rt.bucket_mgr.update(new_id, pinned=True))
                 await rt.bucket_mgr.update(supersedes, pinned=False)
         except Exception as e:
-            报告["接着钉"] = False
+            report["接着钉"] = False
             try:
                 rt.logger.warning(f"regrow carry-pin failed {supersedes}->{new_id}: {e}")
             except Exception:
                 pass
     elif not ok_cover:
-        报告["链没写全"] = True
+        report["链没写全"] = True
 
     # 被盖的那些等于「又被想起了一次」（跟 regrow touch 来源同一个道理）
     try:
@@ -321,25 +321,25 @@ async def save_gist(text: str, room: str, v: float, a: float,
     from tools.grow.rooms_path import _backfill_batch
     kind = "big" if when else ("mind" if room.startswith("MIND") else "event")
     asyncio.create_task(_backfill_batch([(new_id, text, kind)]))
-    return new_id, 报告
+    return new_id, report
 
 
-def format_report(报告: dict) -> str:
+def format_report(report: dict) -> str:
     """把落盘报告拼成给人看的尾巴（没什么可说的就返回空串）。"""
     out = []
-    if 报告["叠盖"]:
-        out.append("ℹ️ 其中 " + str(len(报告["叠盖"])) + " 条已被别的 gist 盖着，现在**叠着盖**（交叉）："
-                   + "、".join(f"{cid}（已有 {'、'.join(olds[:3])}）" for cid, olds in 报告["叠盖"][:5])
+    if report["叠盖"]:
+        out.append("ℹ️ 其中 " + str(len(report["叠盖"])) + " 条已被别的 gist 盖着，现在**叠着盖**（交叉）："
+                   + "、".join(f"{cid}（已有 {'、'.join(olds[:3])}）" for cid, olds in report["叠盖"][:5])
                    + "。两层都在，都钻得到。")
-    if 报告["没写上"]:
+    if report["没写上"]:
         out.append("⚠️ 这几条的 covered_by 没写上（归档区？）："
-                   + "、".join(报告["没写上"][:5]) + "——把这条报给AI查。")
-    if 报告["链没写全"]:
+                   + "、".join(report["没写上"][:5]) + "——把这条报给AI查。")
+    if report["链没写全"]:
         out.append("⚠️ cover/版本链有一半没写上——把这条报给AI查。")
     # 换版接钉（bug ①）：成了就说一声，没成必须喊——不然又是一次「悄悄取消钉住」
-    if 报告.get("接着钉") is True:
+    if report.get("接着钉") is True:
         out.append("📌 旧版是钉着的，新版**接着钉**（门口那行没断），旧版已摘钉。")
-    elif 报告.get("接着钉") is False:
+    elif report.get("接着钉") is False:
         out.append("🔴 旧版是钉着的，但新版**没钉上**——门口那行现在是空的，"
                    "手动 trace(bucket_id=新版id, pinned=1) 补上。")
     return "\n".join(out)

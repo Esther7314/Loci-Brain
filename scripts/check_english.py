@@ -101,19 +101,36 @@ SELF = os.path.join("scripts", "check_english.py")
 
 # ═══ BASELINE — lower these as batches land; when all are 0 this becomes a plain gate ═══
 BASELINE = {
-    # 2026-08-20: the first batch (identifiers + filenames) is finished. These two are
-    # now plain gates — anything above zero means Chinese was put back.
+    # 2026-08-20: the first batch (identifiers + filenames) is finished, and the second
+    # one (`names` — the half the first version of this file could not see) landed the
+    # same day: 412 → 0. These three are now plain gates — anything above zero means
+    # Chinese was put back.
     "identifiers": 0,
     "filenames": 0,
-    # Still going. `names` is the second half the first version of this file could not
-    # see; `she` is the personal-information pass, which rides along with the comments.
-    "names": 412,
-    "she": 543,
+    "names": 0,
+    # Still going: the personal-information pass, which rides along with the comments.
+    "she": 461,
 }
 
 
 JS_DECL = re.compile(r"\b(?:const|let|var|function|class)\s+([\w一-鿿$]+)")
 JS_DECL_KINDS = re.compile(r"\b(function|class)\s+([\w一-鿿$]+)")
+
+# ⚰️ There is deliberately NO JavaScript attribute check, and the reason is worth keeping.
+#
+#    The Python side counts attribute reads, because a half-finished field rename there
+#    passed everything green while two files still read the old names. The obvious move
+#    was to do the same for JS. It was tried, and it flagged 45 things — every single one
+#    of them a Chinese OBJECT KEY that must never be renamed: the /health response fields,
+#    the cross-process ledger keys, the test doubles' method names.
+#
+#    In JavaScript `x.收到` is far more often a key than a field, and without a parser
+#    there is no way to tell which. So the check would be 100% false positives, on exactly
+#    the category where acting on the report destroys data.
+#
+# 🔴 Overcounting is the worse of the two errors this file can make. Undercounting leaves
+#    work undone; overcounting sends someone to do work that must not be done.
+
 
 
 class _Bindings(ast.NodeVisitor):
@@ -154,6 +171,19 @@ class _Bindings(ast.NodeVisitor):
         if isinstance(node.ctx, ast.Store) and self._chinese(node.id):
             self.other.add(node.id)
 
+    def visit_Attribute(self, node):
+        # 🔴 Attribute READS, not just bindings — and this one was proved necessary the
+        #    hard way. During the field rename there was a window where `_muse.py` had the
+        #    new field names and two other files still read the old ones. Everything was
+        #    green: pyflakes cannot see a misspelled attribute, and no test had ever
+        #    constructed one of those objects. It would have raised on the first real call.
+        #
+        #    Counting bindings alone says "0" the instant the definition is renamed, while
+        #    every reader is still broken. Counting reads is what closes that window.
+        if self._chinese(node.attr):
+            self.other.add(f".{node.attr}")
+        self.generic_visit(node)
+
     def visit_alias(self, node):
         name = node.asname or node.name
         if self._chinese(name):
@@ -176,10 +206,15 @@ def _python_names(text: str) -> tuple[set[str], set[str]]:
 
 
 def _js_names(text: str) -> tuple[set[str], set[str]]:
-    """Approximate: declaration forms only. JS has no parser available here.
+    """Approximate: declaration forms and attribute reads. JS has no parser here.
 
-    Parameters and destructured bindings are therefore NOT counted — the number is a
-    floor, not a total, and the report says so rather than implying otherwise.
+    Parameters, `catch` bindings and destructured bindings are NOT counted, so this is a
+    floor and not a total. Measured once by hand against `gateway/`: this saw 199 where
+    the real number was 276 — about 72% of them.
+
+    🔴 A gap that size is only tolerable because the report SAYS it is a floor. A number
+       that is quietly partial is precisely the failure this whole file exists to prevent:
+       a green light that means less than the reader thinks.
     """
     decl = {m.group(2) for m in JS_DECL_KINDS.finditer(text) if CJK.search(m.group(2))}
     everything = {m.group(1) for m in JS_DECL.finditer(text) if CJK.search(m.group(1))}
@@ -191,7 +226,17 @@ def _walk(rel_root: str):
     if not os.path.isdir(base):
         return
     for cur, dirs, files in os.walk(base):
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+        # Dot-directories are never shipped code: caches, virtualenvs, and — the one that
+        # actually bit — the scratch directory the gateway tests leave behind, which has a
+        # Chinese name and a Chinese file inside it.
+        #
+        # 🔴 That produced a FALSE RED in a gate that is supposed to mean one thing. The
+        #    chain is short and entirely internal: quick_check runs the gateway tests at
+        #    step (3) and this ratchet at step (4), back to back in the same script. If
+        #    step (3) dies part-way through, or someone keeps the scratch dir on purpose,
+        #    step (4) goes red — over a filename that has nothing to do with what ships.
+        #    A gate that cries wolf gets ignored, and then it is not a gate.
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")]
         for f in files:
             yield os.path.join(cur, f)
 
@@ -303,6 +348,8 @@ def main() -> int:
         print(f"  {mark} {label:44s} {now:5d}   {note}")
 
     print(f"  · {'Chinese comment lines (context only)':44s} {r['comment_lines']:5d}")
+    print("  ⚠️ `names` is EXACT for Python (parsed) and a FLOOR for JavaScript — there is "
+          "no JS parser here, so params, catch bindings and destructuring go uncounted.")
     print(f"  · {'of the 她 above, 「她说/她定的」':44s} {r['she_said_total']:5d}")
 
     if args.list:

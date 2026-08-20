@@ -16,61 +16,61 @@ const zlib = require("node:zlib");
 /**
  * @param 端口  外面挑好、确认过没被占用的高位端口（19xxx）
  */
-async function start_fake_upstream({ 端口 }) {
-  const 收到 = [];
+async function start_fake_upstream({ 端口: port }) {
+  const received = [];
   // 压缩：真上游（DeepSeek / OpenAI / GLM）只要请求头里有 accept-encoding 就会 gzip。
   // 默认关着，只有专门测转发的那条会打开。
-  let 要压缩 = false;
+  let compress = false;
 
-  const 服务 = http.createServer((req, res) => {
-    const 块 = [];
-    req.on("data", (c) => 块.push(c));
+  const server = http.createServer((req, res) => {
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
     req.on("end", () => {
-      const 原文 = Buffer.concat(块).toString("utf8");
-      let 体 = null;
-      try { 体 = 原文 ? JSON.parse(原文) : null; } catch { 体 = null; }
-      收到.push({
+      const raw = Buffer.concat(chunks).toString("utf8");
+      let body = null;
+      try { body = raw ? JSON.parse(raw) : null; } catch { body = null; }
+      received.push({
         方法: req.method,
         路径: req.url,
         头: { ...req.headers },
-        体,
-        原文,
+        体: body,
+        原文: raw,
         // 网关不该把 messages 弄丢或弄乱，所以整份原文也留着，出问题能逐字比
       });
-      const 回 = {
+      const resp = {
         id: "假上游-固定回应",
         object: "chat.completion",
         choices: [{ index: 0, message: { role: "assistant", content: "假上游收到了。" }, finish_reason: "stop" }],
       };
-      const 正文 = Buffer.from(JSON.stringify(回), "utf8");
-      if (要压缩) {
+      const payload = Buffer.from(JSON.stringify(resp), "utf8");
+      if (compress) {
         // 真上游就是这么回的：gzip 过的身子 + content-encoding + **压缩后**的 content-length
-        const 压 = zlib.gzipSync(正文);
+        const gzipped = zlib.gzipSync(payload);
         res.writeHead(200, {
           "Content-Type": "application/json; charset=utf-8",
           "Content-Encoding": "gzip",
-          "Content-Length": String(压.length),
+          "Content-Length": String(gzipped.length),
         });
-        return res.end(压);
+        return res.end(gzipped);
       }
       res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-      res.end(正文);
+      res.end(payload);
     });
   });
 
-  await new Promise((好, 坏) => {
-    服务.once("error", 坏);
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
     // 只听 127.0.0.1：不给局域网留任何一个口子
-    服务.listen(端口, "127.0.0.1", 好);
+    server.listen(port, "127.0.0.1", resolve);
   });
 
   return {
-    端口,
-    地址: `http://127.0.0.1:${端口}/v1`,
-    收到,
-    清账() { 收到.length = 0; },
-    最后一笔() { return 收到[收到.length - 1]; },
-    设压缩(开) { 要压缩 = Boolean(开); },
+    端口: port,
+    地址: `http://127.0.0.1:${port}/v1`,
+    收到: received,
+    清账() { received.length = 0; },
+    最后一笔() { return received[received.length - 1]; },
+    设压缩(on) { compress = Boolean(on); },
     /** 上游那份回应正文的原样（没压缩时客户端应该逐字拿到这个） */
     应该拿到的正文: JSON.stringify({
       id: "假上游-固定回应",
@@ -80,8 +80,8 @@ async function start_fake_upstream({ 端口 }) {
     async 关() {
       // closeAllConnections：网关那边是 keep-alive，光 close() 会一直等着那条连接
       // 自己断，测试就卡在收尾里不退出了。
-      服务.closeAllConnections?.();
-      await new Promise((好) => 服务.close(好));
+      server.closeAllConnections?.();
+      await new Promise((resolve) => server.close(resolve));
     },
   };
 }

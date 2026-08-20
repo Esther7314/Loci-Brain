@@ -36,16 +36,16 @@ from .._common import check_metadata_size
 
 
 
-def _ago(秒: float) -> str:
-    if 秒 < 0:
+def _ago(seconds: float) -> str:
+    if seconds < 0:
         return "刚刚"
-    if 秒 < 90:
-        return f"{int(秒)} 秒前"
-    if 秒 < 5400:
-        return f"{int(秒 / 60)} 分钟前"
-    if 秒 < 172800:
-        return f"{秒 / 3600:.1f} 小时前"
-    return f"{int(秒 / 86400)} 天前"
+    if seconds < 90:
+        return f"{int(seconds)} 秒前"
+    if seconds < 5400:
+        return f"{int(seconds / 60)} 分钟前"
+    if seconds < 172800:
+        return f"{seconds / 3600:.1f} 小时前"
+    return f"{int(seconds / 86400)} 天前"
 
 
 async def _working_section(all_buckets: list) -> str:
@@ -65,8 +65,8 @@ async def _working_section(all_buckets: list) -> str:
     import time
     from core import _when as _w
 
-    行 = ["", "=== 它在不在工作（不是「还活着吗」，是「最近一次真的干成活」）==="]
-    现在 = time.time()
+    lines = ["", "=== 它在不在工作（不是「还活着吗」，是「最近一次真的干成活」）==="]
+    now_ts = time.time()
 
     # ── 打标：没打上标的还剩几条、最老那条挂了多久 ──────────────────────
     # 这个数**只会往下走**（回填一条少一条）。它一直不降、或者最老那条越挂越久，
@@ -83,47 +83,47 @@ async def _working_section(all_buckets: list) -> str:
     #    ⚠️ 判据：**这一格只该报「本来会被打标、但还没打上」的**。
     #       报一件不会发生的事，读的人第一反应是去修一个不存在的问题
     #       —— 她当时就问了「能不能整一个一键打标的东西」。**根本没有东西需要打标。**
-    不打标的type = {"letter"}
-    没标, 最近一次打标 = [], None
+    skip_types = {"letter"}
+    untagged, last_tagged = [], None
     for b in all_buckets:
         m = b.get("metadata", {}) or {}
-        if str(m.get("type") or "") in 不打标的type:
+        if str(m.get("type") or "") in skip_types:
             continue
-        建 = _w.parse_stamp(m.get("created"))
+        created = _w.parse_stamp(m.get("created"))
         if not str(m.get("summary") or "").strip():
-            if 建:
-                没标.append(建)
-        elif 建 and (最近一次打标 is None or 建 > 最近一次打标):
-            最近一次打标 = 建
-    if 最近一次打标:
-        行.append("打标：最近一条打上标的记忆，是 "
-                  f"{_ago((_w.now() - 最近一次打标).total_seconds())}建的")
+            if created:
+                untagged.append(created)
+        elif created and (last_tagged is None or created > last_tagged):
+            last_tagged = created
+    if last_tagged:
+        lines.append("打标：最近一条打上标的记忆，是 "
+                     f"{_ago((_w.now() - last_tagged).total_seconds())}建的")
     else:
-        行.append("打标：⚠️ 一条打上标的记忆都没有 —— 它可能从来没成功过")
-    if 没标:
-        挂了 = (_w.now() - min(没标)).total_seconds()
-        行.append(f"　　还有 {len(没标)} 条在排队，最老的那条 {_ago(挂了)}就建了"
-                  + ("  ⚠️ 挂太久了，去看一眼打标那条路" if 挂了 > 3600 else ""))
+        lines.append("打标：⚠️ 一条打上标的记忆都没有 —— 它可能从来没成功过")
+    if untagged:
+        stuck_for = (_w.now() - min(untagged)).total_seconds()
+        lines.append(f"　　还有 {len(untagged)} 条在排队，最老的那条 {_ago(stuck_for)}就建了"
+                     + ("  ⚠️ 挂太久了，去看一眼打标那条路" if stuck_for > 3600 else ""))
     else:
-        行.append("　　没有排队的（每一条都打上标了）")
+        lines.append("　　没有排队的（每一条都打上标了）")
 
     # ── 向量：拿 embeddings.db 的 mtime 当「最近一次真的写进去」──────────
-    库 = str((rt.config or {}).get("buckets_dir") or "")
-    db = os.path.join(库, "embeddings.db") if 库 else ""
+    buckets_dir = str((rt.config or {}).get("buckets_dir") or "")
+    db = os.path.join(buckets_dir, "embeddings.db") if buckets_dir else ""
     if db and os.path.exists(db):
-        行.append(f"向量：最近一次写入 {_ago(现在 - os.path.getmtime(db))}")
+        lines.append(f"向量：最近一次写入 {_ago(now_ts - os.path.getmtime(db))}")
     else:
-        行.append("向量：⚠️ 找不到 embeddings.db —— 搜索会**安静地**退化成只认关键词")
+        lines.append("向量：⚠️ 找不到 embeddings.db —— 搜索会**安静地**退化成只认关键词")
 
     # ── 做梦：它整个是后台活、一声不吭，所以最需要这一行 ────────────────
-    梦 = os.path.join(库, "_state", "dream_state.json") if 库 else ""
-    if 梦 and os.path.exists(梦):
-        行.append(f"做梦：最近一次动 {_ago(现在 - os.path.getmtime(梦))}")
+    dream_state = os.path.join(buckets_dir, "_state", "dream_state.json") if buckets_dir else ""
+    if dream_state and os.path.exists(dream_state):
+        lines.append(f"做梦：最近一次动 {_ago(now_ts - os.path.getmtime(dream_state))}")
     else:
-        行.append("做梦：还没织过（刚装的话正常，装了好几天还这样就不正常）")
+        lines.append("做梦：还没织过（刚装的话正常，装了好几天还这样就不正常）")
 
-    行.append(f"衰减引擎：{'在跑' if rt.decay_engine.is_running else '⚠️ 停了'}")
-    return "\n".join(行)
+    lines.append(f"衰减引擎：{'在跑' if rt.decay_engine.is_running else '⚠️ 停了'}")
+    return "\n".join(lines)
 
 
 async def pulse(include_archive: Optional[bool] = False) -> str:

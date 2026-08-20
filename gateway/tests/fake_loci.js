@@ -26,7 +26,7 @@ const http = require("node:http");
 // ——— 写死的检索结果：抄 Loci recall 的渲染排版（auto_attach.js parse_score_line 认这个格式）———
 // `{score:5.1f}  [🧠]{摘要}  ({短id})  {MM-DD}`，分数是 0~100 的尺度。
 // 故意放一条 12.7 分的在里面：**它必须被分数线挡掉**，不然「过线才算」就是假的。
-const 渲染文本 = [
+const RENDERED_TEXT = [
   "找到 4 条：",
   " 88.4  上次她把网关的超时从 5 秒提到 12 秒。  (aa11bb22)  08-19",
   " 71.0  今晚她连上了 Loci，第一次睁眼。  (cc33dd44)  08-03",
@@ -37,67 +37,67 @@ const 渲染文本 = [
 
 // 上面那份渲染文本按「≥50 分才算」应该得出的结论 —— 断言拿这几个数去对，
 // 而不是在测试里另抄一遍魔法数字（抄两遍就会有一天对不上）。
-const 应该过线的id = ["aa11bb22", "cc33dd44", "ee55ff66"];
+const EXPECTED_PASSING_IDS = ["aa11bb22", "cc33dd44", "ee55ff66"];
 
 // **同样的内容，换一种排版** —— 日期挪到前面、id 从圆括号换成方括号。
 // Loci 那边哪天改一下 recall 的渲染就是这个样子。auto_attach.js 的 parse_score_line 是照着
 // 旧排版写死的正则，换了就一条都认不出来 —— 用来把那个「静默失明」照出来。
-const 换了排版的渲染文本 = [
+const RELAYOUT_RENDERED_TEXT = [
   "找到 4 条：",
   " 08-19  88.4  上次她把网关的超时从 5 秒提到 12 秒。  [aa11bb22]",
   " 08-03  71.0  今晚她连上了 Loci，第一次睁眼。  [cc33dd44]",
   " 08-05  63.2  🧠 她要的不是我少犯错，是我别装。  [ee55ff66]",
   " 07-11  12.7  一条不该过线的旧事。  [99aa88bb]",
 ].join("\n");
-const 应该的事件数 = 2;   // 88.4 / 71.0，没戴 🧠 牌
-const 应该的认知数 = 1;   // 63.2 戴了 🧠 牌
-const 挡在线下的id = "99aa88bb";
+const EXPECTED_EVENT_COUNT = 2;   // 88.4 / 71.0，没戴 🧠 牌
+const EXPECTED_MIND_COUNT = 1;   // 63.2 戴了 🧠 牌
+const BLOCKED_ID = "99aa88bb";
 // 查成功了，但库里就是没有相关的东西 —— 这不是坏，这是新装的人的第一天。
 // 它在日志里留下的痕迹跟「Loci 换了排版」**一模一样**（triggered、recall_called、
 // 0 条、injected=false、没有 error），健康口分不出这两者，见测试第八节。
-const 空库渲染文本 = "找到 0 条。";
+const EMPTY_RENDERED_TEXT = "找到 0 条。";
 
 // 真正的记忆正文 —— **一个字都不许出现在贴回去的那行里**（「只报数量不报正文」）
-const 记忆正文样本 = ["上次她把网关的超时从 5 秒提到 12 秒。", "她要的不是我少犯错，是我别装。"];
+const MEMORY_BODY_SAMPLES = ["上次她把网关的超时从 5 秒提到 12 秒。", "她要的不是我少犯错，是我别装。"];
 
-async function start_fake_loci({ 端口 }) {
-  const 收到 = [];        // 每一个 HTTP 请求都记一笔（每条测试开头清账）
-  const 工具调用 = [];    // 只记 tools/call：{ 工具, 参数 }
+async function start_fake_loci({ 端口: port }) {
+  const received = [];        // 每一个 HTTP 请求都记一笔（每条测试开头清账）
+  const tool_calls = [];    // 只记 tools/call：{ 工具, 参数 }
   // 全程账：**清账清不掉**。用来在最后对总账 ——「整套跑下来某条路一次都没出声」
   // 这种话，只有一份从头记到尾的账本才说得出口。
-  const 全程收到 = [];
-  let 模式 = "正常";
-  let 慢多久毫秒 = 3000;
-  const 定时器们 = new Set();
+  const all_received = [];
+  let mode = "正常";
+  let slow_ms = 3000;
+  const timers = new Set();
 
-  function send_sse(res, 对象, 会话) {
-    const 头 = { "Content-Type": "text/event-stream; charset=utf-8" };
-    if (会话) 头["Mcp-Session-Id"] = 会话;
-    res.writeHead(200, 头);
-    res.end(`event: message\ndata: ${JSON.stringify(对象)}\n\n`);
+  function send_sse(res, obj, session) {
+    const headers = { "Content-Type": "text/event-stream; charset=utf-8" };
+    if (session) headers["Mcp-Session-Id"] = session;
+    res.writeHead(200, headers);
+    res.end(`event: message\ndata: ${JSON.stringify(obj)}\n\n`);
   }
 
-  const 服务 = http.createServer((req, res) => {
-    const 块 = [];
-    req.on("data", (c) => 块.push(c));
+  const server = http.createServer((req, res) => {
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
     req.on("end", () => {
-      const 原文 = Buffer.concat(块).toString("utf8");
-      let 体 = null;
-      try { 体 = 原文 ? JSON.parse(原文) : null; } catch { 体 = null; }
-      const 路径 = String(req.url || "").split("?")[0];
-      const 一笔 = { 方法: req.method, 路径, rpc方法: 体?.method || null, 体, 模式 };
-      收到.push(一笔);
-      全程收到.push(一笔);
+      const raw = Buffer.concat(chunks).toString("utf8");
+      let body = null;
+      try { body = raw ? JSON.parse(raw) : null; } catch { body = null; }
+      const route = String(req.url || "").split("?")[0];
+      const entry = { 方法: req.method, 路径: route, rpc方法: body?.method || null, 体: body, 模式: mode };
+      received.push(entry);
+      all_received.push(entry);
 
       // ——— 断连：Loci 压根没起，连接建了立刻断 ———
-      if (模式 === "断连" && 路径 === "/mcp") { req.socket.destroy(); return; }
+      if (mode === "断连" && route === "/mcp") { req.socket.destroy(); return; }
 
       // ——— MCP 面 ———
-      if (req.method === "POST" && 路径 === "/mcp") {
-        const rpc = 体?.method;
+      if (req.method === "POST" && route === "/mcp") {
+        const rpc = body?.method;
         if (rpc === "initialize") {
           return send_sse(res, {
-            jsonrpc: "2.0", id: 体.id,
+            jsonrpc: "2.0", id: body.id,
             result: { protocolVersion: "2024-11-05", capabilities: {}, serverInfo: { name: "假loci", version: "0" } },
           // 🔴 会话 id 必须从头里给，不给的话客户端握手会自己判失败。
           //    而且**只能是 ASCII** —— HTTP 头的值是 latin-1，写成中文的话
@@ -108,40 +108,40 @@ async function start_fake_loci({ 端口 }) {
           res.writeHead(202); return res.end();     // 通知无 id，202 空身子（真 MCP 就这么回）
         }
         if (rpc === "tools/call") {
-          工具调用.push({ 工具: 体?.params?.name, 参数: 体?.params?.arguments || {} });
-          if (模式 === "五百") {
+          tool_calls.push({ 工具: body?.params?.name, 参数: body?.params?.arguments || {} });
+          if (mode === "五百") {
             res.writeHead(500, { "Content-Type": "text/plain" });
             return res.end("假 Loci 故意炸给你看");
           }
-          const 回 = {
-            jsonrpc: "2.0", id: 体.id,
+          const resp = {
+            jsonrpc: "2.0", id: body.id,
             result: { content: [{ type: "text", text:
-              模式 === "换排版" ? 换了排版的渲染文本
-              : 模式 === "空库" ? 空库渲染文本
-              : 渲染文本 }] },
+              mode === "换排版" ? RELAYOUT_RENDERED_TEXT
+              : mode === "空库" ? EMPTY_RENDERED_TEXT
+              : RENDERED_TEXT }] },
           };
-          if (模式 === "慢") {
+          if (mode === "慢") {
             // 拖过网关的超时再回。回的时候对面多半已经 abort 了，写不进去很正常，
             // 所以整段包起来 —— 假货自己不许把测试进程搞崩。
-            const 闹钟 = setTimeout(() => {
-              定时器们.delete(闹钟);
-              try { send_sse(res, 回); } catch { /* 对面早走了，正常 */ }
-            }, 慢多久毫秒);
-            if (闹钟.unref) 闹钟.unref();   // 别让它拖着进程不退出
-            定时器们.add(闹钟);
+            const timer = setTimeout(() => {
+              timers.delete(timer);
+              try { send_sse(res, resp); } catch { /* 对面早走了，正常 */ }
+            }, slow_ms);
+            if (timer.unref) timer.unref();   // 别让它拖着进程不退出
+            timers.add(timer);
             return;
           }
-          return send_sse(res, 回);
+          return send_sse(res, resp);
         }
         res.writeHead(400); return res.end();
       }
 
       // ——— REST 面：这一单里**它一次都不该被敲响**，敲了就是账本上的证据 ———
-      if (路径 === "/api/loci/poke") {
+      if (route === "/api/loci/poke") {
         res.writeHead(200, { "Content-Type": "application/json" });
         return res.end(JSON.stringify({ dreams: [], muse_pending: 0 }));
       }
-      if (路径 === "/api/loci/dream/wake") {
+      if (route === "/api/loci/dream/wake") {
         res.writeHead(200, { "Content-Type": "application/json" });
         return res.end("{}");
       }
@@ -150,31 +150,33 @@ async function start_fake_loci({ 端口 }) {
     });
   });
 
-  await new Promise((好, 坏) => {
-    服务.once("error", 坏);
-    服务.listen(端口, "127.0.0.1", 好);   // 只听回环
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", resolve);   // 只听回环
   });
 
   return {
-    端口,
-    地址: `http://127.0.0.1:${端口}/mcp`,
-    收到,
-    工具调用,
-    全程收到,
-    渲染文本,
-    换了排版的渲染文本,
-    空库渲染文本,
-    应该过线的id, 应该的事件数, 应该的认知数, 挡在线下的id, 记忆正文样本,
-    设模式(新模式, 毫秒) { 模式 = 新模式; if (毫秒 != null) 慢多久毫秒 = 毫秒; },
-    清账() { 收到.length = 0; 工具调用.length = 0; },
+    端口: port,
+    地址: `http://127.0.0.1:${port}/mcp`,
+    收到: received,
+    工具调用: tool_calls,
+    全程收到: all_received,
+    渲染文本: RENDERED_TEXT,
+    换了排版的渲染文本: RELAYOUT_RENDERED_TEXT,
+    空库渲染文本: EMPTY_RENDERED_TEXT,
+    应该过线的id: EXPECTED_PASSING_IDS, 应该的事件数: EXPECTED_EVENT_COUNT,
+    应该的认知数: EXPECTED_MIND_COUNT, 挡在线下的id: BLOCKED_ID, 记忆正文样本: MEMORY_BODY_SAMPLES,
+    设模式(new_mode, ms) { mode = new_mode; if (ms != null) slow_ms = ms; },
+    清账() { received.length = 0; tool_calls.length = 0; },
     async 关() {
-      for (const t of 定时器们) clearTimeout(t);
-      定时器们.clear();
+      for (const t of timers) clearTimeout(t);
+      timers.clear();
       // 同 假上游：keep-alive 的连接不主动掐掉，close() 会挂在那儿
-      服务.closeAllConnections?.();
-      await new Promise((好) => 服务.close(好));
+      server.closeAllConnections?.();
+      await new Promise((resolve) => server.close(resolve));
     },
   };
 }
 
-module.exports = { start_fake_loci, 渲染文本, 应该过线的id, 应该的事件数, 应该的认知数 };
+module.exports = { start_fake_loci, 渲染文本: RENDERED_TEXT, 应该过线的id: EXPECTED_PASSING_IDS,
+  应该的事件数: EXPECTED_EVENT_COUNT, 应该的认知数: EXPECTED_MIND_COUNT };

@@ -115,21 +115,21 @@ async def dispatch(text: str = "", room: str = "", v=-1, a=-1,
     # 🔴 8-17 14:30 终稿：时期=纯命名层（只落名字 + 范围，谁在里面现场算）。
     #    第一版在这儿把范围解析成 cover 存死——那是从 consolidation/ACP 抄的记账，
     #    我们一个字不删、只起名字，记账那一半白抄，她当天退了货。
-    现有 = 0
+    members_now = 0
     if when:
         _t0, _t1, span_err = F.check_span(when)
         if span_err:
             return span_err
-        现有 = len(await F.span_members(_t0, _t1))
+        members_now = len(await F.span_members(_t0, _t1))
 
     # ---- 圈法①②：给的 id 逐个验存在；归档的不给盖（update 不写归档桶，硬做必留半条链）----
     inherit_from = ""
-    被盖房间: list[str] = []
+    covered_rooms: list[str] = []
     for cid in cover:
         live = await rt.bucket_mgr.get(cid)
         if live:
             inherit_from = inherit_from or cid
-            被盖房间.append(str((live.get("metadata", {}) or {}).get("room") or ""))
+            covered_rooms.append(str((live.get("metadata", {}) or {}).get("room") or ""))
             continue
         arch = await rt.bucket_mgr.get_including_archive(cid)
         if arch:
@@ -141,7 +141,7 @@ async def dispatch(text: str = "", room: str = "", v=-1, a=-1,
     # 判据看**被盖那几条自己的房间**，不只看 room 参数（room 可以填错、可以不填，
     # 而「我圈的是事件还是想法」被圈的那几条自己知道）。
     if len(cover) >= 2 and (is_event_room(room)
-                            or any(is_event_room(r) for r in 被盖房间)):
+                            or any(is_event_room(r) for r in covered_rooms)):
         return ('盖一组事件不存在——日子用 when 画圈，看一条线用 recall(query)。\n'
                 '  那几天在做一件什么事 → fold(when="2026-08-13..2026-08-16", '
                 'room="EVENT/SELF", text=我写的那句)\n'
@@ -171,7 +171,7 @@ async def dispatch(text: str = "", room: str = "", v=-1, a=-1,
     #       （regrow 就是 fold 的 n=1 特例），撤掉的只是 fold 这个入口。
     supersedes = ""
 
-    new_id, 报告 = await F.save_gist(
+    new_id, report = await F.save_gist(
         text, room, v, a, cover, when=when, from_ids=from_ids,
         supersedes=supersedes, test_data=bool(test_data))
 
@@ -179,19 +179,19 @@ async def dispatch(text: str = "", room: str = "", v=-1, a=-1,
     if when:
         # 「◈时期→id 范围 名字」+ 现场数的手感（不落盘）
         head = f"◈时期→{new_id} {when} {room}「{text.strip().splitlines()[0][:38]}」"
-        tail = [f"（范围内现在有 {现有} 条——**现场数的**，只给个手感，不落盘。）",
+        tail = [f"（范围内现在有 {members_now} 条——**现场数的**，只给个手感，不落盘。）",
                 "（时期只给这段日子起了个名字：谁在里面按日期现算，"
                 "补记自动归队、交叉和嵌套天然成立；**一条都没被压住**"
                 "（照旧独立冒头、照旧搜得到）。recall 那段时间时它盖在顶上。）",
                 "（边界想改就 regrow 换 when——边界本来就是糊的。）"]
         return head + "\n" + "\n".join(tail)
 
-    n = len(报告["cover"])
+    n = len(report["cover"])
     head = f"▣gist→{new_id} {room}（盖着 {n} 条"
     if n:
-        head += "：" + "、".join(报告["cover"][:8]) + ("…" if n > 8 else "")
+        head += "：" + "、".join(report["cover"][:8]) + ("…" if n > 8 else "")
     head += "）"
-    tail = [F.format_report(报告)]
+    tail = [F.format_report(report)]
     if supersedes:
         tail.append("（= 换版：旧版留档不浮现，id 直查仍能看）")
     else:

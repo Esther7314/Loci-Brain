@@ -772,22 +772,22 @@ async def build_profile() -> dict:
     from core.profile import door_note, edited_by_her
     all_buckets = await sh.bucket_mgr.list_all(include_archive=False)
     now = _w.now()          # 本地时区（codex #4）
-    纸 = door_note(all_buckets, now)
-    heavy_q_id = 纸["heavy_question_id"]      # 施工 6 · B 件：只问最久那条
+    door = door_note(all_buckets, now)
+    heavy_q_id = door["heavy_question_id"]      # 施工 6 · B 件：只问最久那条
 
     def _label(x) -> str:
         return _label_of({"meta": x["meta"], "content": x["content"]})
 
     facts = [{"id": f["id"], "short": _short_id(f["id"]),
               "created": f["created"], "content": f["content"].strip()}
-             for f in 纸["facts"]]
+             for f in door["facts"]]
     big = [{"id": g["id"], "short": _short_id(g["id"]),
             "line": (g["content"].strip().splitlines() or [""])[0]}
-           for g in 纸["big"]]
+           for g in door["big"]]
     reminders = [{"id": r["id"], "short": _short_id(r["id"]), "days": r["days"],
                   "when": r["when"], "status": r["status"],
                   "label": _label(r), "loud": r["loud"]}
-                 for r in 纸["reminders"]]
+                 for r in door["reminders"]]
     # **不截断**——睁眼那屏只给 2 条（一屏有限），这儿是她自己翻的页面，
     # 挂着几条就该看见几条。排序（重的在前、一样重的挂得久的在前）在合同源里。
     # 施工 6 · A/B/C 件：clock/clock_note 是三类钟判出来的类别 + 旧数据备注
@@ -800,7 +800,7 @@ async def build_profile() -> dict:
               "last_asked": h["last_asked"],
               "closed_by": str(h["meta"].get("closed_by") or ""),
               "is_question": h["id"] == heavy_q_id}
-             for h in 纸["heavy"]]
+             for h in door["heavy"]]
     # 施工 6 · C 件（§8）：她改过、我还没看/没 fold 的通知池
     from utils import read_from_ids as _read_from_ids
     edited = [{"id": e["id"], "short": _short_id(e["id"]),
@@ -808,7 +808,7 @@ async def build_profile() -> dict:
                "corrects": (_read_from_ids(e["meta"]) or [""])[0]}
               for e in edited_by_her(all_buckets)]
     rules = []
-    for r in 纸["rules"]:
+    for r in door["rules"]:
         room = normalize_room(r["meta"].get("room"))
         rules.append({"id": r["id"], "short": _short_id(r["id"]), "room": room,
                       "room_cn": _room_cn(room), "label": _label(r),
@@ -879,30 +879,31 @@ async def build_muse_pending() -> dict:
     #    `load_records + propose_mind + propose_gist` 又扫一遍全库，
     #    而且那是第三份平行实现：页面说「攒了 3 团」、我 muse() 看到 4 团，
     #    就是两个脑子。缓存的钥匙是桶的写盘代数，宁可失效勤一点。
-    团们, _散着, _默认坐标, 指们, _stats = await M.both_sides()
+    clusters, _scattered, _default_coords, fingers, _stats = await M.both_sides()
 
     now = W.now()
     ages: list[int] = []
-    for t in 团们:
+    for t in clusters:
         ages += [(now - it.created).days for it in t.items if it.created]
-    指数 = 0
-    for lst in 指们.values():
-        指数 += len(lst)
+    finger_count = 0
+    for lst in fingers.values():
+        finger_count += len(lst)
         for x in lst:
             # 一指的年龄按它那段的**结束**算（「停了多久还没起名字」）
-            端 = x.止 or x.边界 or x.起
-            if 端 is not None:
-                ages.append((now - 端).days)
+            edge = x.end or x.boundary or x.start
+            if edge is not None:
+                ages.append((now - edge).days)
 
     oldest = max(ages) if ages else 0
-    团数 = len(团们)
-    线团 = int(cfg["poke_min_clusters"])
-    线天 = int(cfg["poke_min_age_days"])
+    cluster_count = len(clusters)
+    min_clusters = int(cfg["poke_min_clusters"])
+    min_age_days = int(cfg["poke_min_age_days"])
     return {
-        "mind_clusters": 团数,
-        "gist_fingers": 指数,
+        "mind_clusters": cluster_count,
+        "gist_fingers": finger_count,
         "oldest_days": int(oldest),
-        "worth_poking": bool((团数 >= 线团 or 指数 >= 线团) and oldest >= 线天),
+        "worth_poking": bool((cluster_count >= min_clusters or finger_count >= min_clusters)
+                             and oldest >= min_age_days),
     }
 
 
@@ -948,19 +949,19 @@ async def build_poke(query: str = "", when: str = "", room: str = "",
         c = _D._c()
         now = _D._w.now()
         for rec in _D.load_dreams():
-            层 = _D.layer_of(rec, now, c)
-            if 层 == "没了":
+            layer = _D.layer_of(rec, now, c)
+            if layer == "没了":
                 continue          # 到点该消失的不装死——但这条闸只是纯计算，不删文件
             # 🔴 2026-08-18 修宪：完整层给整版正文，原样不截（跟碎片层同一条纪律：
             #    梦是交付，给全文）。降级后（完整字段被 degrade_on_wake() 摘掉）才落回碎片/一句。
-            if 层 == "完整":
-                内容 = rec.get("完整") or ""
-            elif 层 == "碎片":
-                内容 = rec["碎片"]
+            if layer == "完整":
+                content = rec.get("完整") or ""
+            elif layer == "碎片":
+                content = rec["碎片"]
             else:
-                内容 = _D.first_sentence(rec["碎片"])
+                content = _D.first_sentence(rec["碎片"])
             dreams.append({
-                "id": rec.get("id"), "层": 层, "内容": 内容,
+                "id": rec.get("id"), "层": layer, "内容": content,
                 "v": rec.get("v"), "a": rec.get("a"),
                 "nightmare": bool(rec.get("nightmare")),
                 "织于": rec.get("织于"),
@@ -2198,11 +2199,11 @@ def register(mcp) -> None:
         from starlette.responses import JSONResponse
         try:
             from core import _dream as _D
-            降级了 = _D.degrade_on_wake()
+            degraded = _D.degrade_on_wake()
         except Exception as e:
             logger.warning(f"[loci] dream/wake 失败: {e}")
             return JSONResponse({"error": str(e)}, status_code=500)
-        return JSONResponse({"降级了": 降级了})
+        return JSONResponse({"降级了": degraded})
 
     # ---------------------------------------------------------
     # 取梦：**这单唯一的取梦口**（MCP 工具面一个新工具都不加）

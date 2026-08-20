@@ -137,7 +137,7 @@ async def dispatch(bucket_id: str = "", text: str = "", v=-1, a=-1, from_=None) 
             _t0, _t1, span_err = _F.check_span(new_when)
             if span_err:
                 return span_err
-        new_id, 报告 = await _F.save_gist(
+        new_id, report = await _F.save_gist(
             text, room, v, a, cover, when=new_when if is_big else "",
             from_ids=sources, supersedes=bucket_id, test_data=is_test)
 
@@ -157,9 +157,9 @@ async def dispatch(bucket_id: str = "", text: str = "", v=-1, a=-1, from_=None) 
                     "**现场数的**，不落盘；时期只起名字，一条都没被压住。）")
     if dropped:
         out += f"\n⚠️ 来源链满：这几个没挂上 {', '.join(dropped)}（继承链优先）"
-    if 报告["链没写全"]:
+    if report["链没写全"]:
         out += "\n⚠️ 版本链没写全（supersedes/superseded_by 有一半失败）——把这条报给AI查"
-    tail = _F.format_report(报告)
+    tail = _F.format_report(report)
     if tail:
         out += "\n" + tail
     return out

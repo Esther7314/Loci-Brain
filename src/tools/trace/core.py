@@ -67,7 +67,7 @@ _DATE_RE = __import__("re").compile(r"^\d{4}-\d{2}-\d{2}$")
 _DUR_RE = __import__("re").compile(r"^\d+[dwmy]$")
 
 
-def _check_real_dates(*日子: str) -> str | None:
+def _check_real_dates(*dates: str) -> str | None:
     """形状对不代表日历上有这一天。`2026-09-31` / `2026-13-45` 长得完全合法。
 
     🔴 2026-08-19：写口只查形状，收下之后**写进库**，而读路（`parse_span`）
@@ -76,7 +76,7 @@ def _check_real_dates(*日子: str) -> str | None:
        **别让一个不存在的日子进库**，进去了再宽容也只是掩着。
     """
     from core._when import parse_date_or_none
-    for d in 日子:
+    for d in dates:
         if d and parse_date_or_none(d) is None:
             return f"日历上没有 {d} 这一天。"
     return None
@@ -118,7 +118,7 @@ async def _append_folds(gist_id: str, meta: dict, add: list) -> tuple[str | None
     old_cover = list(_F._covered_list(meta) if hasattr(_F, "_covered_list") else [])
     old_cover = [c for c in (meta.get("cover") or [])] or old_cover
     cover = list(dict.fromkeys([*old_cover, *add]))
-    被盖房间 = []
+    covered_rooms = []
     for cid in add:
         if cid == gist_id:
             return ("一条 gist 盖不了自己。", [])
@@ -129,18 +129,18 @@ async def _append_folds(gist_id: str, meta: dict, add: list) -> tuple[str | None
                 return (f'{cid} 在归档区，盖不上（盖上了只会留半条链）。'
                         f'先 trace(bucket_id="{cid}", restore=True) 捞回来。', [])
             return (f"这些 id 不存在：{cid}。填真 bucket_id。", [])
-        被盖房间.append(str((live.get("metadata", {}) or {}).get("room") or ""))
+        covered_rooms.append(str((live.get("metadata", {}) or {}).get("room") or ""))
     from core._rooms import is_event_room
-    if len(cover) >= 2 and any(is_event_room(r) for r in 被盖房间):
+    if len(cover) >= 2 and any(is_event_room(r) for r in covered_rooms):
         return ("盖一组事件不存在（跟 fold 同一条闸）：日子用时期画圈，"
                 "看一条线用 recall(query)。", [])
     # 两头都写：被盖的那几条要认这个 gist
     for cid in add:
         old = await rt.bucket_mgr.get(cid)
         old_meta = (old or {}).get("metadata", {}) or {}
-        旧名单 = list(old_meta.get("covered_by") or [])
-        if gist_id not in 旧名单:
-            await rt.bucket_mgr.update(cid, covered_by=旧名单 + [gist_id])
+        old_covers = list(old_meta.get("covered_by") or [])
+        if gist_id not in old_covers:
+            await rt.bucket_mgr.update(cid, covered_by=old_covers + [gist_id])
     return (None, cover)
 
 

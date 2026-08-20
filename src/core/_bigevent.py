@@ -104,13 +104,13 @@ def fmt_span(meta: dict) -> str:
     # 🔴 `_short` 挡漏时给空串，这儿必须跟着整条不显示。
     #    不然会印出一个孤零零的「 起」——**一个没有日期的「起」比抛异常更难发现**，
     #    它看起来就像页面本来就长这样。（8-19 加完 try 当场撞见的。）
-    起 = _short(m.group(1)) if m else _short(w[:10]) if len(w) >= 10 else ""
-    if not 起:
+    start = _short(m.group(1)) if m else _short(w[:10]) if len(w) >= 10 else ""
+    if not start:
         return ""
     if m and m.group(2):
-        止 = _short(m.group(2))
-        return f"{起}~{止}" if 止 else f"{起} 起"
-    return f"{起} 起"
+        end = _short(m.group(2))
+        return f"{start}~{end}" if end else f"{start} 起"
+    return f"{start} 起"
 
 
 def is_big(meta: dict) -> bool:

@@ -66,16 +66,16 @@ def _alias_path() -> str:
         return env
     buckets = (os.environ.get("LOCI_BUCKETS_DIR", "").strip()
                or os.path.join(os.path.dirname(_CONFIG_DIR), "buckets"))
-    候选 = [
+    candidates = [
         os.path.join(buckets, _ALIAS_FILENAME),           # 新：数据卷 + 英文名
         os.path.join(buckets, _ALIAS_FILENAME_OLD),       # 兼容：数据卷 + 老中文名
         os.path.join(_CONFIG_DIR, _ALIAS_FILENAME),       # 兼容：老布局
         os.path.join(_CONFIG_DIR, _ALIAS_FILENAME_OLD),
     ]
-    for p in 候选:
+    for p in candidates:
         if os.path.isfile(p):
             return p
-    return 候选[0]        # 都没有：报错信息里指向「该放哪儿」的那个位置
+    return candidates[0]        # 都没有：报错信息里指向「该放哪儿」的那个位置
 
 
 _ALIAS_PATH = _alias_path()

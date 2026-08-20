@@ -1502,17 +1502,17 @@ async def letter_read(
 # ⚠️ letter 两个是**条件注册**的（config.tools.letter 默认关），关着的时候
 #    工具表里根本没有它们 —— 所以这儿只能「有就装」，不能断言一定装得上。
 try:
-    for _名 in ("breath", "grow", "recall", "regrow", "fold", "muse", "trace",
-                "letter_write", "letter_read"):
-        for _面 in (mcp, mcp_extra):
-            _t = _面._tool_manager.get_tool(_名)
+    for _tool_name in ("breath", "grow", "recall", "regrow", "fold", "muse", "trace",
+                       "letter_write", "letter_read"):
+        for _surface in (mcp, mcp_extra):
+            _t = _surface._tool_manager.get_tool(_tool_name)
             if _t is None:
                 continue
             _m = _t.fn_metadata.arg_model
             if _m.model_config.get("extra") != "forbid":
                 _m.model_config["extra"] = "forbid"
                 _m.model_rebuild(force=True)
-                logger.info("strict-argument adapter installed for %s", _名)
+                logger.info("strict-argument adapter installed for %s", _tool_name)
 except (AttributeError, RuntimeError, TypeError, ValueError) as _strict_all_exc:
     logger.warning("strict-argument sweep unavailable: %s", _strict_all_exc)
 

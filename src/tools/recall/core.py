@@ -60,13 +60,13 @@ _SYS_TAG_PREFIXES = ("__", "aspect:", "疑似同件:", "相似认知:")
 # 前缀表只挡得住已经出现过的那几种，`xx:yy` 这个**形状**才是判据。
 # 「脸」只配人话场景词——`aspect:patterns` 这类结构化标签是旧 om 退役时留下的渣。
 # 判据跟 tools/_muse.py 的 `is_scene_word()` 同一条，别两处各写一套。
-_机器腔标签 = re.compile(r"^[^:：]{1,12}[:：]")
+_MACHINE_TAG_RE = re.compile(r"^[^:：]{1,12}[:：]")
 
 
 def is_human_tag(tag: str) -> bool:
     """这个标签配不配上脸。系统前缀 + `xx:yy` 机器腔都不配。"""
     t = str(tag)
-    return bool(t) and not t.startswith(_SYS_TAG_PREFIXES) and not _机器腔标签.match(t)
+    return bool(t) and not t.startswith(_SYS_TAG_PREFIXES) and not _MACHINE_TAG_RE.match(t)
 
 _SEED_RE = re.compile(r"\[\[([a-z_]+)\]\]")
 # 底色只认情绪种子（七情+六欲的英文键），别的 [[wikilink]]（[[项目名]][[人名]]…）不是种子
@@ -107,14 +107,14 @@ _LADDER = [
 #      V0.62 / A0.50           → 「心里还行，不算绷着」
 #    ⏳@她 词儿归我调，**她看到不对味有权改**——改这四张表就行，逻辑一行不用动。
 
-_房间主句 = {
+_ROOM_PHRASES = {
     "EVENT/SELF":  ("多半是我自己在做事",   "几乎都是我自己在做事"),
     "EVENT/WORLD": ("多半是我听说看到的",   "几乎都是我听说看到的"),
     "MIND/TRAITS": ("多半在想我是个什么样的人", "几乎都在想我是个什么样的人"),
     "MIND/VIEWS":  ("多半在想我怎么看一件事",  "几乎都在想我怎么看一件事"),
 }
 # 副句：主句在事件那边、认知又占了一小半时补一句（她的第二个例子「想得也不少」）
-_副句门 = 0.15
+_SUBCLAUSE_GATE = 0.15
 
 
 def rooms_in_words(rooms: Counter, n: int) -> str:
@@ -125,24 +125,24 @@ def rooms_in_words(rooms: Counter, n: int) -> str:
     """
     if not rooms or not n:
         return ""
-    事件 = sum(c for r, c in rooms.items() if r.startswith("EVENT"))
-    认知 = sum(c for r, c in rooms.items() if r.startswith("MIND"))
-    主, 主数 = max(rooms.items(), key=lambda kv: kv[1])
-    多半, 几乎 = _房间主句.get(主, (f"多半在 {主}", f"几乎都在 {主}"))
-    强 = max(事件, 认知) / n
-    if 强 >= 0.85:
-        句 = 几乎
-    elif 强 >= 0.6:
-        句 = 多半
+    event_n = sum(c for r, c in rooms.items() if r.startswith("EVENT"))
+    mind_n = sum(c for r, c in rooms.items() if r.startswith("MIND"))
+    top_room, top_n = max(rooms.items(), key=lambda kv: kv[1])
+    mostly, nearly_all = _ROOM_PHRASES.get(top_room, (f"多半在 {top_room}", f"几乎都在 {top_room}"))
+    dominance = max(event_n, mind_n) / n
+    if dominance >= 0.85:
+        sentence = nearly_all
+    elif dominance >= 0.6:
+        sentence = mostly
     else:
-        句 = "做的和想的一半一半"
-        return 句
+        sentence = "做的和想的一半一半"
+        return sentence
     # 另一半够 _副句门 就补一句——她的例子里 MIND/TRAITS 19% 就是这一句
-    if 主.startswith("EVENT") and _副句门 <= 认知 / n < 0.5:
-        句 += "，想得也不少"
-    elif 主.startswith("MIND") and _副句门 <= 事件 / n < 0.5:
-        句 += "，也记了些发生的事"
-    return 句
+    if top_room.startswith("EVENT") and _SUBCLAUSE_GATE <= mind_n / n < 0.5:
+        sentence += "，想得也不少"
+    elif top_room.startswith("MIND") and _SUBCLAUSE_GATE <= event_n / n < 0.5:
+        sentence += "，也记了些发生的事"
+    return sentence
 
 
 def mood_in_words(v, a) -> str:
@@ -150,29 +150,29 @@ def mood_in_words(v, a) -> str:
     if v is None:
         return ""
     if v >= 0.7:
-        v话 = "心里挺好"
+        v_words = "心里挺好"
     elif v >= 0.55:
-        v话 = "心里还行"
+        v_words = "心里还行"
     elif v >= 0.45:
-        v话 = "心里平平"
+        v_words = "心里平平"
     elif v >= 0.3:
-        v话 = "心里有点沉"
+        v_words = "心里有点沉"
     else:
-        v话 = "心里不好受"
+        v_words = "心里不好受"
     if a is None:
-        return v话
+        return v_words
     if a >= 0.7:
-        a话 = "绷得紧"
+        a_words = "绷得紧"
     elif a >= 0.55:
-        a话 = "有点绷着"
+        a_words = "有点绷着"
     elif a >= 0.35:
-        a话 = "不算绷着"
+        a_words = "不算绷着"
     else:
-        a话 = "松着"
-    return f"{v话}，{a话}"
+        a_words = "松着"
+    return f"{v_words}，{a_words}"
 
 
-def tags_in_words(tags: list, k: int = 2, 带数: bool = False, 框: bool = True) -> str:
+def tags_in_words(tags: list, k: int = 2, with_counts: bool = False, framed: bool = True) -> str:
     """标签 → 「围着青岛、交接单转」。**标签原词一个字不改**，框子才是模板。
 
     `带数=True`（她 8-05 点破的：`床 3` 和 `床 30` 是两种日子，没有数量那两行
@@ -182,10 +182,10 @@ def tags_in_words(tags: list, k: int = 2, 带数: bool = False, 框: bool = True
     items = [(t, n) for t, n in (tags or []) if is_human_tag(t)][:max(1, k)]
     if not items:
         return ""
-    词 = [f"{t} {n}" if 带数 else str(t) for t, n in items]
-    if not 框:
-        return " · ".join(词)
-    return "围着" + "、".join(词) + "转"
+    parts = [f"{t} {n}" if with_counts else str(t) for t, n in items]
+    if not framed:
+        return " · ".join(parts)
+    return "围着" + "、".join(parts) + "转"
 
 
 def kind_badge(meta: dict) -> str:
@@ -348,14 +348,14 @@ async def _collect(when, room, tag, query) -> tuple[list[dict], str, dict]:
 
     `账` 现在只记一样：top-k 砍掉了几条（`topk砍掉`）——**挡了什么必须看得见**。
     """
-    账: dict = {"topk砍掉": 0, "topk": _SEARCH_TOPK}
+    ledger: dict = {"topk砍掉": 0, "topk": _SEARCH_TOPK}
     t0, t1, err = _parse_when(when)
     if err:
-        return [], err, 账
+        return [], err, ledger
     room = room.strip()
     gate_err = check_gate(room)
     if gate_err:
-        return [], gate_err, 账
+        return [], gate_err, ledger
     tag = tag.strip()
 
     # query 门：多取（300）→ 过完所有门再截相关度前 _SEARCH_TOPK（codex 二轮 P1-5：
@@ -366,7 +366,7 @@ async def _collect(when, room, tag, query) -> tuple[list[dict], str, dict]:
         try:
             hits = await rt.bucket_mgr.search(query.strip(), limit=300)
         except Exception as e:
-            return [], f"搜索失败：{e}", 账
+            return [], f"搜索失败：{e}", ledger
         pool = []
         for h in hits:
             hid = str(h.get("id") or "")
@@ -418,10 +418,10 @@ async def _collect(when, room, tag, query) -> tuple[list[dict], str, dict]:
         # 过完门再按相关度收口：留分数最高的 k 条，再回到时间轴。
         # 砍掉几条记在账上——**挡了什么看得见**（渲染时末尾报一行）。
         out.sort(key=lambda x: scores.get(x["id"], 0.0), reverse=True)
-        账["topk砍掉"] = len(out) - _SEARCH_TOPK
+        ledger["topk砍掉"] = len(out) - _SEARCH_TOPK
         out = out[:_SEARCH_TOPK]
     out.sort(key=lambda x: x["ts"])
-    return out, "", 账
+    return out, "", ledger
 
 
 # ------------------------------------------------------------
@@ -504,11 +504,11 @@ def _cell_stats(entries: list[dict]) -> dict:
     #    但它们**照样算进上面的统计**（条数/房间/标签/V·A 一个字不少）：
     #    验收判据写死了「任何 recall 能看到的信息量只能变多不能变少」，
     #    gist 只是把成分表里的那几条**换成一句话**，不是把它们从账上抹掉。
-    冒头的 = [e for e in entries if not _F.is_covered(e["meta"])]
-    odd = [e for e in 冒头的
+    surfacing = [e for e in entries if not _F.is_covered(e["meta"])]
+    odd = [e for e in surfacing
            if top_tags and not (set(map(str, e["meta"].get("tags") or [])) & top_tags)]
     odd.sort(key=_imp, reverse=True)
-    heavy = sorted(冒头的, key=_weigh, reverse=True)
+    heavy = sorted(surfacing, key=_weigh, reverse=True)
     highlights: list[tuple[str, dict]] = []
     seen = set()
     for e in odd[:1]:
@@ -523,21 +523,21 @@ def _cell_stats(entries: list[dict]) -> dict:
     # 重的排前、异的殿后阅读更顺
     highlights.sort(key=lambda p: p[0] == "◇")
 
-    v平 = (v_sum / v_n) if v_n else None
-    a平 = (a_sum / v_n) if v_n else None
+    v_avg = (v_sum / v_n) if v_n else None
+    a_avg = (a_sum / v_n) if v_n else None
     return {
         "n": len(entries),
         "rooms": rooms.most_common(2),
         # 人话那两句（B 件）：**从整个 Counter 算**，不是从 most_common(2) ——
         # 「多半是我自己在做事」问的是这一格的全貌，只看前两名会算错分母。
         "房间话": rooms_in_words(rooms, len(entries)),
-        "情绪话": mood_in_words(v平, a平),
+        "情绪话": mood_in_words(v_avg, a_avg),
         # 6 而不是 4（2026-08-05 夜她点破的）：**标签不是「这条记忆的属性」，
         # 是「一堆记忆的分布」** —— 单条的 tag 信息量极低（正文本来就在那儿），
         # 它的价值全在塌缩那一刻。所以塌得越狠，越需要多给几个、并且带上数量。
         "tags": tags.most_common(6),
-        "v": v平,
-        "a": a平,
+        "v": v_avg,
+        "a": a_avg,
         "seeds": [s for s, _ in seeds.most_common(2)],
         "highlights": highlights,
     }
@@ -744,7 +744,7 @@ def _fmt_card(label: str, st: dict) -> str:
     lines.append("在做什么   " + (st["房间话"] or "-"))
     # 标签这一行**带数量**（她 8-05：`床 3` 和 `床 30` 是两种日子）；
     # 行头已经说了「围着什么」，值里就不再套一遍「围着…转」
-    lines.append("围着什么   " + (tags_in_words(st["tags"], 6, 带数=True, 框=False) or "-"))
+    lines.append("围着什么   " + (tags_in_words(st["tags"], 6, with_counts=True, framed=False) or "-"))
     lines.append("心里       " + (st["情绪话"] or "-")
                  + ("  " + " ".join(f"[[{s}]]" for s in st["seeds"]) if st["seeds"] else ""))
     if st["highlights"]:
@@ -965,10 +965,10 @@ async def _render_browse(entries, gates, room, tag) -> str:
     #    ⚠️ 时期要的是**整个库**，不是这次筛出来的 entries ——
     #       一个时期盖不盖得住这一格，跟它自己有没有过筛子无关。
     try:
-        时期用的库 = await rt.bucket_mgr.list_all(include_archive=False)
+        span_buckets = await rt.bucket_mgr.list_all(include_archive=False)
     except Exception as e:
         rt.logger.warning(f"时期那半的库没捞到，这次浏览不盖时期: {e}")
-        时期用的库 = []
+        span_buckets = []
     dn = today - timedelta(days=_BROWSE_NEAR_DAYS - 1)   # 今天/昨天/前天
     tomorrow = today + timedelta(days=1)
 
@@ -991,7 +991,7 @@ async def _render_browse(entries, gates, room, tag) -> str:
         # 词和数字本来就是原样给的，框子只在不带数的地方帮忙。
         tags = _pick_tags_n(st, drop)
         if tags:
-            bits.append(tags_in_words(tags, 2, 带数=True, 框=False))
+            bits.append(tags_in_words(tags, 2, with_counts=True, framed=False))
         if st["情绪话"]:
             bits.append(st["情绪话"])
         seeds = "".join(f"[[{x}]]" for x in st["seeds"])
@@ -999,14 +999,14 @@ async def _render_browse(entries, gates, room, tag) -> str:
 
     lines = [f"〔{gates}〕{len(entries)} 条 · 新→旧"]
     # 一次渲染里每条时期只出头一次（近端出过了，远端那段就不再重复）
-    时期出过: set[str] = set()
+    spans_shown: set[str] = set()
 
     # 还没到的日子：按自然月塌，多远都只占几行
     if future:
         lines.append("— 还没到的 —")
         for label, cell in reversed(_split_calendar(future, "month")):
             lines.append(_far_line(label, _cell_stats(cell), fixed_room, drop))
-            lines.extend(_big_lines(时期用的库, *_cell_span(cell), 时期出过))
+            lines.extend(_big_lines(span_buckets, *_cell_span(cell), spans_shown))
 
     # 三天内：照旧（一天一行 + 突出的点另起一行）
     if near:
@@ -1017,7 +1017,7 @@ async def _render_browse(entries, gates, room, tag) -> str:
             st = _cell_stats(days[label])
             lines.append(_head(label, st))
             # 时期/gist 标题在突出的点**上面**：先说这几天叫什么，再说里面哪条扎眼
-            lines.extend(_big_lines(时期用的库, *_cell_span(days[label]), 时期出过))
+            lines.extend(_big_lines(span_buckets, *_cell_span(days[label]), spans_shown))
             hl = _fmt_highlights(st)
             if hl:
                 lines.append(hl)
@@ -1044,7 +1044,7 @@ async def _render_browse(entries, gates, room, tag) -> str:
         # 她自己说过「按频率永远抓不准」：带上数量之后，频率不再是抓手，是内容。
         drop_lite = room_implied_tags(room) | ({tag.strip()} if tag.strip() else set())
         dist = tags_in_words([(t, n) for t, n in st["tags"] if t not in drop_lite],
-                             5, 带数=True, 框=False)
+                             5, with_counts=True, framed=False)
         if dist:
             bits.append(dist)
         if st["情绪话"]:
@@ -1053,10 +1053,10 @@ async def _render_browse(entries, gates, room, tag) -> str:
         # 她的原话：「给 2~3 条前 2~3 周的，**如果有大事件就换成大事件**。」
         # 大 event 先占位，剩下的位置才用代表条目补 —— 少于 3 条时不空着。
         # （第 5 条：盖，不替代 —— 上面那行统计和突出的点一个都没少，只是多一句话。）
-        盖这段的 = _big.covering(时期用的库, *_cell_span(far))
-        covers = [x for x in 盖这段的 if x[2] not in 时期出过]
+        covering_spans = _big.covering(span_buckets, *_cell_span(far))
+        covers = [x for x in covering_spans if x[2] not in spans_shown]
         for meta, content, bid in covers[:1]:      # 一格一条时期（8-19 她定）
-            时期出过.add(bid)
+            spans_shown.add(bid)
             lines.append(_big_line(meta, content, bid))
         # ⚰️ 2026-08-19：**gist 的 mind 行从浏览面撤掉**（她定的）。
         #    原来这儿会把「盖住这段里某几条的 gist」逐条列出来，一条一行。
@@ -1072,7 +1072,7 @@ async def _render_browse(entries, gates, room, tag) -> str:
         # 不需要我刻意记得去想。所以提示只在**真没人盖着**的时候出现一次。
         # ⚠️ 判据是 `盖这段的`（真的有没有时期），不是 `covers`（这一格还没出头的那些）——
         #    近端已经把那条时期说过了不等于「这段没人盖」。
-        if not 盖这段的 and (now - a).days >= 7:
+        if not covering_spans and (now - a).days >= 7:
             lines.append("  （这段时间上没有时期盖着。真觉得是在做一件什么事就写下来："
                          'grow(kind="big", room=…, text=…, when="起..止")）')
 
@@ -1080,16 +1080,16 @@ async def _render_browse(entries, gates, room, tag) -> str:
     return chr(10).join(lines)
 
 
-def _topk_line(账: dict | None) -> str:
+def _topk_line(ledger: dict | None) -> str:
     """top-k 砍掉了几条 —— **挡了什么看得见**（D 件收紧 top-k 的配套）。
 
     她 8-15 的判据：query 词多 = 向量平均 = 找不准。所以这一行不光报数，
     还把出路说清楚：**用一两个核心词、她当时的原话**。
     """
-    n = int((账 or {}).get("topk砍掉") or 0)
+    n = int((ledger or {}).get("topk砍掉") or 0)
     if n <= 0:
         return ""
-    k = int((账 or {}).get("topk") or _SEARCH_TOPK)
+    k = int((ledger or {}).get("topk") or _SEARCH_TOPK)
     return (f"── 还有 {n} 条命中被 top-{k} 挡在外面（按相关度截的）——"
             "词多了向量就取平均，换一两个核心词、用她当时的原话再搜一次")
 
@@ -1103,7 +1103,7 @@ def _eff_score(e: dict, floor: float) -> float:
     return max(s, floor) if e.get("literal") else s
 
 
-def _render_search(entries, gates, floor: float = None, 账: dict | None = None) -> str:
+def _render_search(entries, gates, floor: float = None, ledger: dict | None = None) -> str:
     """搜索：在找，知道要什么。**这是有 query 时的默认视图**（施工 5 · D 件）。
 
     过线的按时间排（新→旧）、每条带分数（E1）。
@@ -1144,12 +1144,12 @@ def _render_search(entries, gates, floor: float = None, 账: dict | None = None)
         lines.append(f"── 另有 {len(below)} 条在线下（最高 {top_below:.1f}，"
                      f"最早 {earliest['ts'].strftime('%m-%d')}：「{_label_of(earliest)[:40]}」）——"
                      "多半只是沾边，没列")
-    lines.append(_topk_line(账))
+    lines.append(_topk_line(ledger))
     lines.append("（看原文：拿 id 搜；换个说法再搜：用她的原话，别造词）")
     return chr(10).join(x for x in lines if x)
 
 
-def _render_scene_clusters(entries, gates, floor: float = None, 账: dict | None = None) -> str:
+def _render_scene_clusters(entries, gates, floor: float = None, ledger: dict | None = None) -> str:
     """画面式回忆（G2，机制② 第 7 条）：这件事是怎么一路过来的。
 
     🔴 **2026-08-17 起要显式要**（施工 5 · D 件）：`recall(query=…, view="scene")`。
@@ -1218,7 +1218,7 @@ def _render_scene_clusters(entries, gates, floor: float = None, 账: dict | None
         earliest = min(below, key=lambda x: x["ts"])
         lines.append(f"── 另有 {len(below)} 条在线下（最高 {top_below:.1f}，"
                      f"最早 {earliest['ts'].strftime('%m-%d')}：「{_label_of(earliest)[:40]}」）")
-    lines.append(_topk_line(账))
+    lines.append(_topk_line(ledger))
     lines.append("（要平铺的时间轴：去掉 view；看原文：拿 id 搜）")
     return chr(10).join(x for x in lines if x)
 
@@ -1237,15 +1237,15 @@ async def recall_text_and_data(when: str, room: str, tag: str, query: str,
     ⚠️ 两张皮各拿一份 entries 的**浅拷贝**：渲染那边会排序/切片，
        共用同一个 list 的话谁先跑谁说了算。
     """
-    采集 = await _collect(when, room, tag, query)
-    entries, err, 账 = 采集
+    collection = await _collect(when, room, tag, query)
+    entries, err, ledger = collection
     data = await recall_data(when, room, tag, query, floor=floor, view=view,
-                             已采集=(list(entries), err, dict(账)))
+                             collected=(list(entries), err, dict(ledger)))
     if data.get("ok") and data.get("total"):
         kwargs = {"max_cells": max_cells} if 1 <= max_cells <= 20 else {}
         data["card"] = await recall_core(when, room, tag, query, floor=floor,
                                          view=view,
-                                         已采集=(list(entries), err, dict(账)),
+                                         collected=(list(entries), err, dict(ledger)),
                                          **kwargs)
     else:
         data["card"] = ""
@@ -1253,14 +1253,14 @@ async def recall_text_and_data(when: str, room: str, tag: str, query: str,
 
 
 async def recall_data(when: str, room: str, tag: str, query: str,
-                      floor=None, view: str = "", 已采集=None) -> dict:
+                      floor=None, view: str = "", collected=None) -> dict:
     """recall 的**另一张皮**：同样的四个门、同样的 _collect/_cell_stats，吐 dict 给前端。
 
     文字那张皮是 recall_core()。两张皮共用底下同一份收集+统计，绝不各算各的——
     页面上看到的「主色调」和AI睁眼看到的必须是同一个数，不然就是两个系统了。
     ⚠️ `by` 2026-08-17 砍了（C 件）；`view` 只影响文字皮的形态，这张皮照旧给全量。
     """
-    entries, err, 账 = 已采集 if 已采集 is not None else await _collect(
+    entries, err, ledger = collected if collected is not None else await _collect(
         when, room, tag, query)
     if err:
         return {"ok": False, "error": err, "entries": [], "total": 0}
@@ -1290,8 +1290,8 @@ async def recall_data(when: str, room: str, tag: str, query: str,
         "floor": fl,
         "floor_default": RELEVANCE_FLOOR,
         # top-k 砍掉几条：面板上也得看得见（文字皮末尾那行的同一个数）
-        "topk": 账.get("topk"),
-        "topk_dropped": 账.get("topk砍掉", 0),
+        "topk": ledger.get("topk"),
+        "topk_dropped": ledger.get("topk砍掉", 0),
         "below": sum(1 for e in entries
                      if e.get("score") is not None and _eff_score(e, fl) < fl),
     }
@@ -1299,7 +1299,7 @@ async def recall_data(when: str, room: str, tag: str, query: str,
 
 async def recall_core(when: str, room: str, tag: str, query: str,
                       max_cells: int = _CELL_MAX, floor=None, view: str = "",
-                      已采集=None) -> str:
+                      collected=None) -> str:
     """文字那张皮。**参数账（5.4）**：when / room / tag / query / slices / view，就这六个。
 
     🔪 **`by` 2026-08-17 整个砍了**（C 件，代码和工具描述一起）：
@@ -1437,7 +1437,7 @@ async def recall_core(when: str, room: str, tag: str, query: str,
         return ("recall 至少给一个门：when（时间）/ room（房间）/ tag（标签）/ query（扔词搜）。"
                 "例：recall(when=\"上周\") · recall(room=\"MIND\") · recall(when=\"本月\", tag=\"Home\")")
 
-    entries, err, 账 = 已采集 if 已采集 is not None else await _collect(
+    entries, err, ledger = collected if collected is not None else await _collect(
         when, room, tag, query)
     if err:
         return err
@@ -1484,8 +1484,8 @@ async def recall_core(when: str, room: str, tag: str, query: str,
             #    画面式要显式要 `view="scene"` —— 而且 `when` 从此只管范围，
             #    加不加 when 视图形态一个字不变（「一个参数管两件事」那条修掉了）。
             if view == "scene":
-                return _render_scene_clusters(entries, gates, floor, 账)
-            return _render_search(entries, gates, floor, 账)
+                return _render_scene_clusters(entries, gates, floor, ledger)
+            return _render_search(entries, gates, floor, ledger)
         # 「今天」不塌缩（她 2026-08-08 定）：今天的事我人还在里面，
         # 塌成「前段时间 + 2~3 条代表」等于把刚发生的推远。
         # 🔴 **只认「今天」**——昨天、前天照旧塌缩，那些已经是历史了。

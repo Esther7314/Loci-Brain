@@ -25,42 +25,42 @@
 const net = require("node:net");
 const fs = require("node:fs");
 
-const 白名单 = new Set(
+const allowlist = new Set(
   String(process.env.围栏白名单端口 || "")
     .split(",").map((s) => s.trim()).filter(Boolean).map(Number),
 );
-const 账本路径 = process.env.围栏账本 || "";
-const 账本 = [];
+const ledger_path = process.env.围栏账本 || "";
+const ledger = [];
 
-function allow(...端口们) { for (const p of 端口们) 白名单.add(Number(p)); }
+function allow(...ports) { for (const p of ports) allowlist.add(Number(p)); }
 
-function record_attempt(条) {
-  账本.push(条);
+function record_attempt(entry) {
+  ledger.push(entry);
   // 子进程里的账本要能被测试进程读到，所以还落一份文件（一行一笔）
-  if (账本路径) { try { fs.appendFileSync(账本路径, `${JSON.stringify(条)}\n`); } catch { /* 记账失败不许影响被测的东西 */ } }
+  if (ledger_path) { try { fs.appendFileSync(ledger_path, `${JSON.stringify(entry)}\n`); } catch { /* 记账失败不许影响被测的东西 */ } }
 }
 
 // undici 调的是 socket.connect([options, cb]) 这种数组形态，直接读 参[0].port
 // 会拿到 undefined —— 那样所有连接都会被误判成「不认识的端口」。先拆。
-function parse_destination(参) {
-  let 头 = 参[0];
-  if (Array.isArray(头)) 头 = 头[0];
+function parse_destination(args) {
+  let head = args[0];
+  if (Array.isArray(head)) head = head[0];
   // host 拿不到就退到 path（unix socket / 具名管道那种，没有 host 只有 path）
-  if (头 && typeof 头 === "object") return { 端口: Number(头.port), 主机: String(头.host ?? 头.path ?? "") };
-  return { 端口: Number(参[0]), 主机: String(参[1] ?? "") };
+  if (head && typeof head === "object") return { 端口: Number(head.port), 主机: String(head.host ?? head.path ?? "") };
+  return { 端口: Number(args[0]), 主机: String(args[1] ?? "") };
 }
 
-const 原连接 = net.Socket.prototype.connect;
-net.Socket.prototype.connect = function (...参) {
-  const { 端口, 主机 } = parse_destination(参);
-  const 放行 = 白名单.has(端口);
-  record_attempt({ 时间: new Date().toISOString(), pid: process.pid, 端口, 主机, 放行 });
-  if (!放行) {
-    const 错 = new Error(`[网络围栏] 拦下一条不该出门的连接：${主机}:${端口}（白名单只有 ${[...白名单].join(",") || "空"}）`);
-    process.nextTick(() => this.destroy(错));
+const orig_connect = net.Socket.prototype.connect;
+net.Socket.prototype.connect = function (...args) {
+  const { 端口: port, 主机: host } = parse_destination(args);
+  const allowed = allowlist.has(port);
+  record_attempt({ 时间: new Date().toISOString(), pid: process.pid, 端口: port, 主机: host, 放行: allowed });
+  if (!allowed) {
+    const err = new Error(`[网络围栏] 拦下一条不该出门的连接：${host}:${port}（白名单只有 ${[...allowlist].join(",") || "空"}）`);
+    process.nextTick(() => this.destroy(err));
     return this;
   }
-  return 原连接.apply(this, 参);
+  return orig_connect.apply(this, args);
 };
 
-module.exports = { allow, 账本, 白名单 };
+module.exports = { allow, 账本: ledger, 白名单: allowlist };

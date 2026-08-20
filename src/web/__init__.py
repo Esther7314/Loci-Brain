@@ -75,9 +75,9 @@ class _Gated:
 
                 @functools.wraps(fn)
                 async def hook_guarded(request):
-                    ok, 为什么 = panel_auth.hook_ok(request)
+                    ok, why = panel_auth.hook_ok(request)
                     if not ok:
-                        return JSONResponse({"error": 为什么}, status_code=401)
+                        return JSONResponse({"error": why}, status_code=401)
                     return await fn(request)
 
                 return inner(hook_guarded)

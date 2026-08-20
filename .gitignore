@@ -15,3 +15,7 @@ __pycache__/
 
 # 网关跑起来之后自己生成的状态和日志（里面是真的记忆内容）
 gateway/data/
+# The gateway tests' scratch directory. It has a Chinese name and Chinese files
+# inside it, so leaving it untracked is not enough — the English ratchet used to
+# count it and go red over something that never ships.
+gateway/tests/.跑测试留下的东西/

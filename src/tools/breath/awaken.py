@@ -85,13 +85,13 @@ async def surface_awaken() -> str:
     now = _w.now()      # 本地时区：容器是 UTC，她凌晨的「今天」在容器眼里是昨天（codex #4）
     parts: list[str] = []
 
-    纸 = door_note(all_buckets, now)          # ← 判据全在合同源里（E 件）
-    profile_pages = 纸["facts"]
-    pinned_mind = 纸["rules"]
-    reminders = 纸["reminders"]
-    heavy = 纸["heavy"]
-    entries = 纸["entries"]
-    heavy_q_id = 纸["heavy_question_id"]      # 施工 6 · B 件：只问最久那条
+    door = door_note(all_buckets, now)          # ← 判据全在合同源里（E 件）
+    profile_pages = door["facts"]
+    pinned_mind = door["rules"]
+    reminders = door["reminders"]
+    heavy = door["heavy"]
+    entries = door["entries"]
+    heavy_q_id = door["heavy_question_id"]      # 施工 6 · B 件：只问最久那条
 
     # ---- 1 档案：薄纸两面 ----
     parts.append("═══ 档案（门口那张纸）═══")
@@ -140,12 +140,12 @@ async def surface_awaken() -> str:
     # ---- 6 提醒：越近越大声（门槛在合同源的 _reminder_loudness()，这儿只挑词）----
     if reminders:
         parts.append("\n═══ 提醒 ═══")
-        _口气 = {"now": "⏰ 就是今天！{head}", "soon": "⏰ 马上（还有 {days} 天）：{head}",
+        _tone = {"now": "⏰ 就是今天！{head}", "soon": "⏰ 马上（还有 {days} 天）：{head}",
                  "near": "⏰ 快到了（{days} 天后）：{head}",
                  "far": "⏰ 记着（{days} 天后）：{head}"}
         for r in reminders[:3]:
             head = _label_of({"meta": r["meta"], "content": r["content"]})[:30]
-            parts.append(_口气[r["loud"]].format(head=head, days=r["days"])
+            parts.append(_tone[r["loud"]].format(head=head, days=r["days"])
                          + f" ({_short_id(r['id'])})")
 
     # ---- 压在心头（她 2026-08-08 定）：跟「⏰提醒」**分开两块** ----
