@@ -1,43 +1,50 @@
 // ============================================================
-// gateway/tests/start_gateway.js —— 把 gateway/server.js 当**黑盒**起在一个子进程里
+// gateway/tests/start_gateway.js — run gateway/server.js as a **black box** in a child
+// process
 //
-// 为什么起子进程、不 require 进来测：
-//   server.js 的一堆配置（端口、上游、Loci 地址、数据落点）是在**模块加载那一刻**
-//   从 env 读死的。require 进来就没法再改，也就测不出「网关按配置真的把请求
-//   转到了这儿」这件事。黑盒起进程 = 测的是她真正会跑起来的那个东西。
+// Why a child process instead of requiring it in:
+//   a whole pile of server.js's configuration (port, upstream, Loci address, where data
+//   lands) is read out of env **at module load time**. Require it in and none of that
+//   can be changed afterwards, which means there is no way to test "the gateway really
+//   did route the request here, following its configuration". A black-box process is a
+//   test of the thing that actually runs.
 //
-// 这个文件还管两件生死攸关的事：
-//   ① 环境**不继承**任何 RELEVANCE_* / LOCI_* —— 机器上要是恰好设了
-//      RELEVANCE_WEAK=1 或者 LOCI_MCP 指着真的 18002，测试就会变成薛定谔的绿，
-//      甚至真的去敲她的记忆库。这儿一律删掉再显式重设。
-//   ② 起进程时挂上 网络围栏（-r），白名单只有两个假端口。
+// This file also handles two life-or-death details:
+//   ① The environment **inherits nothing** matching RELEVANCE_* / LOCI_* — if the
+//      machine happens to have RELEVANCE_WEAK=1 set, or LOCI_MCP pointing at the real
+//      18002, the tests turn into Schrödinger's green and may go knocking on the real
+//      memory library. Every one of them is deleted here and set again explicitly.
+//   ② The network fence is attached at spawn time (-r), with an allowlist of exactly the
+//      two fake ports.
 //
-// 收摊：只掐**自己 spawn 的那个 pid**，绝不 taskkill 任何别的东西。
+// Teardown: kill **only the pid it spawned itself**, never taskkill anything else.
 // ============================================================
 
 const { spawn } = require("node:child_process");
 const path = require("node:path");
 
-// 默认就是仓库里那个 server.js。
-// `LOCI_GATEWAY_ENTRY` 是给「拿一份改过的副本试一下」用的口子 —— 比如想看
-// 「这个 bug 修好之后，那几条测试会不会过」，不用去动仓库里的文件：
-//   LOCI_GATEWAY_ENTRY=/某处/server.js  node --test "gateway/tests/*.test.js"
+// Defaults to the server.js in the repository.
+// `LOCI_GATEWAY_ENTRY` is the hatch for "try it with a modified copy" — for instance to
+// see whether those tests would pass once this bug is fixed, without touching the file
+// in the repository:
+//   LOCI_GATEWAY_ENTRY=/somewhere/server.js  node --test "gateway/tests/*.test.js"
 const GATEWAY_ENTRY = process.env.LOCI_GATEWAY_ENTRY || path.join(__dirname, "..", "server.js");
 const FENCE_FILE = path.join(__dirname, "network_fence.js");
 
 /**
- * @param 端口          网关自己听哪儿（外面挑好的 19xxx）
- * @param 上游地址      假上游，形如 http://127.0.0.1:19xxx/v1
- * @param loci地址      假 Loci，形如 http://127.0.0.1:19xxx/mcp
- * @param 数据根        state/logs 落哪儿（测试自己的临时目录，别碰 gateway/data）
- * @param 相关超时毫秒  RELEVANCE_TIMEOUT_MS —— 那个 bug 就出在这个数上
- * @param 白名单端口    围栏放行的端口（只该有假上游 + 假 Loci）
- * @param 账本路径      围栏账本落哪儿
+ * @param 端口          where the gateway itself listens (a 19xxx picked by the caller)
+ * @param 上游地址      the fake upstream, of the form http://127.0.0.1:19xxx/v1
+ * @param loci地址      the fake Loci, of the form http://127.0.0.1:19xxx/mcp
+ * @param 数据根        where state/logs land (the test's own temp directory — do not
+ *                      touch gateway/data)
+ * @param 相关超时毫秒  RELEVANCE_TIMEOUT_MS — the number that bug lived on
+ * @param 白名单端口    ports the fence lets through (only the fake upstream + fake Loci)
+ * @param 账本路径      where the fence's ledger lands
  */
 async function start_gateway({ 端口: port, 上游地址: upstream_url, loci地址: loci_url, 数据根: data_root,
                                相关超时毫秒: relevance_timeout_ms, 白名单端口: allowed_ports, 账本路径: ledger_path }) {
   const env = { ...process.env };
-  // 🔴 先把所有可能影响判断的都清干净，再显式给 —— 别让机器上的 env 说了算
+  // 🔴 Wipe everything that could sway the outcome first, then set it explicitly — the machine's env does not get a vote
   for (const key of Object.keys(env)) {
     if (/^(RELEVANCE_|LOCI_|POKE_|PORT$)/.test(key)) delete env[key];
   }
@@ -46,14 +53,15 @@ async function start_gateway({ 端口: port, 上游地址: upstream_url, loci地
     LOCI_UPSTREAM: upstream_url,
     LOCI_MCP: loci_url,
     LOCI_GATEWAY_DATA: data_root,
-    RELEVANCE_MIN_SCORE: "50",              // 写死，不看机器上的默认
+    RELEVANCE_MIN_SCORE: "50",              // pinned, never the machine's default
     RELEVANCE_TIMEOUT_MS: String(relevance_timeout_ms),
-    POKE_IDLE_MINUTES: "210",               // 出厂值；戳戳的闸靠预置 state 关着
+    POKE_IDLE_MINUTES: "210",               // factory value; the poke gate is held shut by the preset state file
     围栏白名单端口: allowed_ports.join(","),
     围栏账本: ledger_path,
   });
-  // RELEVANCE_WEAK 不设 = 弱档关着（默认）；RELEVANCE_STRONG_WORDS 不设 = 用出厂中文词表。
-  // 这两条是**故意不设**的：测的就是拆箱默认状态下它到底工不工作。
+  // RELEVANCE_WEAK unset = the weak trigger is off (the default); RELEVANCE_STRONG_WORDS
+  // unset = the factory Chinese word list. Both are **deliberately left unset**: what is
+  // under test is whether it works at all straight out of the box.
 
   const child = spawn(process.execPath, ["-r", FENCE_FILE, GATEWAY_ENTRY], {
     env: env,
@@ -66,8 +74,9 @@ async function start_gateway({ 端口: port, 上游地址: upstream_url, loci地
   child.stdout.on("data", (d) => { output += d.toString("utf8"); });
   child.stderr.on("data", (d) => { output += d.toString("utf8"); });
 
-  // 等它真的 listen 了再往下走 —— sleep 猜时间是不老实的做法，
-  // 而且端口万一被占，这儿能立刻炸出来（而不是后面一堆莫名其妙的连不上）
+  // Wait until it has really listened before going on — sleeping for a guessed duration
+  // is a dishonest way to do this, and if the port turns out to be taken, this blows up
+  // right here instead of as a pile of baffling connection failures further down.
   await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`网关 10 秒没起来。它说：\n${output}`)), 10000);
     const check_ready = () => {
@@ -85,12 +94,13 @@ async function start_gateway({ 端口: port, 上游地址: upstream_url, loci地
     端口: port,
     地址: `http://127.0.0.1:${port}`,
     全部输出() { return output; },
-    /** 上次调用之后网关新说的话 —— 用来看某一次请求它在控制台上留下了什么 */
+    /** Whatever the gateway has said since the last call — used to see what one request left on the console */
     输出增量() { const fresh = output.slice(read_offset); read_offset = output.length; return fresh; },
     /**
-     * 同上，但**等**那一行真的到了再返回。
-     * 子进程的 stdout 是异步管道：客户端已经拿到回应了，那行日志可能还在路上。
-     * 直接读增量会读到空的 —— 那样断言就变成在赌时序。
+     * The same, but **waits** until that line has really arrived before returning.
+     * A child process's stdout is an async pipe: the client already has its response
+     * while that log line may still be in flight. Reading the delta directly would read
+     * an empty string — and then the assertion is just a bet on timing.
      */
     async 等增量(predicate = (text) => /→\s*\d{3}\s+\d+ms/.test(text), timeout_ms = 5000) {
       const deadline = Date.now() + timeout_ms;
@@ -104,8 +114,8 @@ async function start_gateway({ 端口: port, 上游地址: upstream_url, loci地
     async 停() {
       if (child.exitCode !== null || child.signalCode !== null) return;
       const exited = new Promise((resolve) => child.once("exit", resolve));
-      child.kill();                       // Windows 上就是 TerminateProcess，只对这一个 pid
-      const fallback_timer = setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* 已经没了 */ } }, 3000);
+      child.kill();                       // on Windows this is TerminateProcess, and only for this one pid
+      const fallback_timer = setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* already gone */ } }, 3000);
       await exited;
       clearTimeout(fallback_timer);
     },

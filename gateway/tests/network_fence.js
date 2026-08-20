@@ -1,25 +1,30 @@
 // ============================================================
-// gateway/tests/network_fence.js —— 拦住每一条「出门」的连接，逐条记账
+// gateway/tests/network_fence.js — stop every outbound connection, and write each down
 //
-// 为什么要这么一道东西：这一单的红线是
-//   「每一条出门的网络路径都要逐条确认打到假环境」。
-// 光看断言绿了**不算数** —— 网关要是偷偷连了真的 18002，
-// 断言照样可能绿（那边恰好也返回了一份能解析的结果），
-// 而她的记忆库已经被敲过了。血的教训是 8-15 那次烧到真 gateway。
+// Why something like this is needed: the red line here is
+//   "every outbound network path must be confirmed, one by one, to land in the fake
+//    environment".
+// Green assertions **do not count** — if the gateway quietly connected to the real
+// 18002, the assertions could still go green (that side happens to return a parseable
+// result too) while the real memory library has already been knocked on. The lesson was
+// paid for in blood: one run burned through to the real gateway.
 //
-// 所以在最底下那一层（net.Socket.prototype.connect，Node 自己的 fetch/undici
-// 最终也走这儿）拦一道：
-//   · 白名单里的端口 —— 放行，但记一笔
-//   · 白名单外的     —— **物理上连不出去**（socket 当场 destroy），也记一笔
-// 跑完拿账本对：账上只该有假上游和假 Loci 那两个 19xxx 的端口。
+// So the interception happens at the very bottom layer (net.Socket.prototype.connect,
+// where Node's own fetch/undici ends up too):
+//   · a port on the allowlist — let it through, but write it down
+//   · anything else           — **physically cannot get out** (the socket is destroyed
+//                               on the spot), and write that down too
+// Reconcile against the ledger afterwards: it should hold nothing but the two 19xxx
+// ports of the fake upstream and the fake Loci.
 //
-// 拦的时候不 throw：throw 会从 undici 内部抛成未捕获异常、把网关整个搞崩，
-// 那样账本还没写完进程就没了。destroy 掉是干净的 —— 上层看见的是一次
-// 普通的「连不上」，而账本上白纸黑字记着它想去哪儿。
+// It does not throw when it blocks: a throw surfaces from undici's internals as an
+// uncaught exception and takes the whole gateway down, and then the process is gone
+// before the ledger is finished. destroy is clean — the layer above sees an ordinary
+// "cannot connect", while the ledger records in black and white where it wanted to go.
 //
-// 用法两种：
-//   子进程： node -r <这个文件> gateway/server.js，白名单走 env `围栏白名单端口`
-//   本进程： require 进来之后 allow(端口...)
+// Two ways to use it:
+//   child process: node -r <this file> gateway/server.js, allowlist from env 围栏白名单端口
+//   this process:  require it, then allow(port…)
 // ============================================================
 
 const net = require("node:net");
@@ -36,16 +41,17 @@ function allow(...ports) { for (const p of ports) allowlist.add(Number(p)); }
 
 function record_attempt(entry) {
   ledger.push(entry);
-  // 子进程里的账本要能被测试进程读到，所以还落一份文件（一行一笔）
-  if (ledger_path) { try { fs.appendFileSync(ledger_path, `${JSON.stringify(entry)}\n`); } catch { /* 记账失败不许影响被测的东西 */ } }
+  // the child process's ledger has to be readable from the test process, so it also lands in a file, one entry per line
+  if (ledger_path) { try { fs.appendFileSync(ledger_path, `${JSON.stringify(entry)}\n`); } catch { /* a failed write must never affect the thing under test */ } }
 }
 
-// undici 调的是 socket.connect([options, cb]) 这种数组形态，直接读 参[0].port
-// 会拿到 undefined —— 那样所有连接都会被误判成「不认识的端口」。先拆。
+// undici calls socket.connect([options, cb]) — the array form — so reading args[0].port
+// directly gives undefined, and every connection would then be misjudged as "a port we
+// do not recognise". Unwrap it first.
 function parse_destination(args) {
   let head = args[0];
   if (Array.isArray(head)) head = head[0];
-  // host 拿不到就退到 path（unix socket / 具名管道那种，没有 host 只有 path）
+  // no host? fall back to path (unix sockets and named pipes have a path and no host)
   if (head && typeof head === "object") return { 端口: Number(head.port), 主机: String(head.host ?? head.path ?? "") };
   return { 端口: Number(args[0]), 主机: String(args[1] ?? "") };
 }

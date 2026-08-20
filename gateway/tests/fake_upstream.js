@@ -1,25 +1,28 @@
 // ============================================================
-// gateway/tests/fake_upstream.js —— 冒充「真正的模型」的那一头
+// gateway/tests/fake_upstream.js — the end that pretends to be "the real model"
 //
-// 为什么要它：**网关有没有真的改过消息，只有上游看得见。**
-// 网关改的是它自己进程里那个 messages 数组，客户端这边看不到；
-// 日志说「贴了」也只是网关自己在说自己。所以断言必须打在
-// **上游收到的那个 body** 上 —— 那是唯一一份「真的送出去了」的证据。
+// Why it has to exist: **only upstream can see whether the gateway really changed the
+// messages.** The gateway edits the messages array inside its own process, which the
+// client never sees, and a log line saying "attached" is only the gateway talking about
+// itself. So the assertions have to land on **the body upstream received** — the one
+// piece of evidence that something really went out.
 //
-// 它还兼职记账：每一个到达这儿的请求都记一笔（方法/路径/头/体），
-// 跑完对账，确认网关一条请求都没漏到别处去。
+// It keeps the books as a sideline: every request that arrives here is written down
+// (method / path / headers / body), so the reconciliation at the end can confirm the
+// gateway never leaked a single request anywhere else.
 // ============================================================
 
 const http = require("node:http");
 const zlib = require("node:zlib");
 
 /**
- * @param 端口  外面挑好、确认过没被占用的高位端口（19xxx）
+ * @param 端口  a high port (19xxx), picked and confirmed free by the caller
  */
 async function start_fake_upstream({ 端口: port }) {
   const received = [];
-  // 压缩：真上游（DeepSeek / OpenAI / GLM）只要请求头里有 accept-encoding 就会 gzip。
-  // 默认关着，只有专门测转发的那条会打开。
+  // Compression: a real upstream (DeepSeek / OpenAI / GLM) gzips as soon as the request
+  // carries an accept-encoding header. Off by default; only the test that specifically
+  // covers forwarding turns it on.
   let compress = false;
 
   const server = http.createServer((req, res) => {
@@ -35,7 +38,7 @@ async function start_fake_upstream({ 端口: port }) {
         头: { ...req.headers },
         体: body,
         原文: raw,
-        // 网关不该把 messages 弄丢或弄乱，所以整份原文也留着，出问题能逐字比
+        // the gateway must not lose or scramble messages, so the raw text is kept too and can be compared character by character
       });
       const resp = {
         id: "假上游-固定回应",
@@ -44,7 +47,7 @@ async function start_fake_upstream({ 端口: port }) {
       };
       const payload = Buffer.from(JSON.stringify(resp), "utf8");
       if (compress) {
-        // 真上游就是这么回的：gzip 过的身子 + content-encoding + **压缩后**的 content-length
+        // exactly how a real upstream answers: a gzipped body + content-encoding + the **compressed** content-length
         const gzipped = zlib.gzipSync(payload);
         res.writeHead(200, {
           "Content-Type": "application/json; charset=utf-8",
@@ -60,7 +63,7 @@ async function start_fake_upstream({ 端口: port }) {
 
   await new Promise((resolve, reject) => {
     server.once("error", reject);
-    // 只听 127.0.0.1：不给局域网留任何一个口子
+    // listen on 127.0.0.1 only: no opening left for the local network
     server.listen(port, "127.0.0.1", resolve);
   });
 
@@ -71,15 +74,15 @@ async function start_fake_upstream({ 端口: port }) {
     清账() { received.length = 0; },
     最后一笔() { return received[received.length - 1]; },
     设压缩(on) { compress = Boolean(on); },
-    /** 上游那份回应正文的原样（没压缩时客户端应该逐字拿到这个） */
+    /** The upstream response body verbatim (uncompressed, the client should receive exactly this) */
     应该拿到的正文: JSON.stringify({
       id: "假上游-固定回应",
       object: "chat.completion",
       choices: [{ index: 0, message: { role: "assistant", content: "假上游收到了。" }, finish_reason: "stop" }],
     }),
     async 关() {
-      // closeAllConnections：网关那边是 keep-alive，光 close() 会一直等着那条连接
-      // 自己断，测试就卡在收尾里不退出了。
+      // closeAllConnections: the gateway side is keep-alive, so a bare close() waits
+      // forever for that connection to drop on its own and the test hangs in teardown.
       server.closeAllConnections?.();
       await new Promise((resolve) => server.close(resolve));
     },

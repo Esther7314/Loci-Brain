@@ -1,70 +1,85 @@
 // ============================================================
-// gateway/tests/fake_loci.js —— 冒充记忆系统的那一头
+// gateway/tests/fake_loci.js — the end that impersonates the memory system
 //
-// 🔴 **必须是假的。** 真的 Loci 在 18002（她的记忆库），跑测试绝不许碰它：
-//    一来 recall 一次要几秒、结果还跟着库变，断言没法写死；
-//    二来那是她的东西，测试不该有任何理由去敲它的门。
-//    这个假货返回一份**写死的、可预测的**检索结果，断言就照着这份对。
+// 🔴 **It has to be fake.** The real Loci is on 18002 (the real memory library), and the
+//    tests must never touch it: one recall takes seconds and its result moves with the
+//    library, so no assertion could be pinned down; and it holds someone's own data,
+//    which the tests have no business knocking on.
+//    This impostor returns a **hard-coded, predictable** search result, and the
+//    assertions are written against exactly that.
 //
-// 它冒充两个面（真 Loci 这两个口挂在同一个端口上，网关也是照这个假设来的）：
-//   · `POST /mcp`            MCP streamable-http，auto_attach.js 的 recall 走这儿
-//   · `GET  /api/loci/poke`  普通 REST，poke_delivery.js 走这儿（这一单不测它，
-//                            但它跟被测路径同一个请求里，所以也得记账 ——
-//                            「谁都没漏出去」这句话要能拿账本证明）
+// It impersonates two faces (the real Loci hangs both on the same port, which is what
+// the gateway assumes too):
+//   · `POST /mcp`            MCP streamable-http; auto_attach.js's recall goes here
+//   · `GET  /api/loci/poke`  ordinary REST; poke_delivery.js goes here. Not covered by
+//                            this suite, but it rides in the same request as the path
+//                            that is, so it has to be booked as well — "nothing leaked"
+//                            is a claim that must be provable from the ledger.
 //
-// 四种脾气（设模式 切）：
-//   正常   —— 老老实实返回那份写死的检索结果
-//   五百   —— 握手正常，tools/call 回 HTTP 500（Loci 活着但坏了）
-//   断连   —— 任何 /mcp 请求直接掐断连接（Loci 压根没起）
-//   慢     —— tools/call 故意拖过网关的超时（就是那个「5 秒 bug」的现场）
-//   换排版 —— 内容一样、排版换了（Loci 哪天改了 recall 的渲染就是这样）
-//   空库   —— 查成功了，但一条相关的都没有（**新装的人第一天就是这个样子**）
+// Six moods (switched with 设模式):
+//   正常    — returns that hard-coded search result, honestly
+//   五百    — the handshake is fine, tools/call answers HTTP 500 (Loci alive but broken)
+//   断连    — any /mcp request has its connection cut (Loci is not running at all)
+//   慢      — tools/call deliberately drags past the gateway's timeout (the scene of
+//             that "5 second bug")
+//   换排版  — same content, different layout (what it looks like the day Loci changes
+//             its recall render)
+//   空库    — the lookup succeeds, but nothing relevant exists (**exactly what day one
+//             looks like for a fresh install**)
 // ============================================================
 
 const http = require("node:http");
 
-// ——— 写死的检索结果：抄 Loci recall 的渲染排版（auto_attach.js parse_score_line 认这个格式）———
-// `{score:5.1f}  [🧠]{摘要}  ({短id})  {MM-DD}`，分数是 0~100 的尺度。
-// 故意放一条 12.7 分的在里面：**它必须被分数线挡掉**，不然「过线才算」就是假的。
+// ——— The hard-coded search result: copies Loci recall's render layout, which is the
+//     format auto_attach.js's parse_score_line recognises ———
+// `{score:5.1f}  [🧠]{摘要}  ({短id})  {MM-DD}`, with the score on a 0~100 scale.
+// One 12.7 entry sits in there on purpose: **the score floor must block it**, or else
+// "only counts if it clears the floor" is a lie.
 const RENDERED_TEXT = [
   "找到 4 条：",
-  " 88.4  上次她把网关的超时从 5 秒提到 12 秒。  (aa11bb22)  08-19",
-  " 71.0  今晚她连上了 Loci，第一次睁眼。  (cc33dd44)  08-03",
-  " 63.2  🧠 她要的不是我少犯错，是我别装。  (ee55ff66)  08-05",
+  " 88.4  上次把网关的超时从 5 秒提到 12 秒。  (aa11bb22)  08-19",
+  " 71.0  今晚第一次把 Loci 接了上来。  (cc33dd44)  08-03",
+  " 63.2  🧠 判据不是有没有报错，是说的和做的是不是同一件事。  (ee55ff66)  08-05",
   " 12.7  一条不该过线的旧事。  (99aa88bb)  07-11",
   "另有 12 条在线下。",
 ].join("\n");
 
-// 上面那份渲染文本按「≥50 分才算」应该得出的结论 —— 断言拿这几个数去对，
-// 而不是在测试里另抄一遍魔法数字（抄两遍就会有一天对不上）。
+// What the rendered text above should come out to under "only ≥50 counts". The
+// assertions compare against these, rather than copying the magic numbers a second time
+// into the test file — copy them twice and one day the two copies disagree.
 const EXPECTED_PASSING_IDS = ["aa11bb22", "cc33dd44", "ee55ff66"];
 
-// **同样的内容，换一种排版** —— 日期挪到前面、id 从圆括号换成方括号。
-// Loci 那边哪天改一下 recall 的渲染就是这个样子。auto_attach.js 的 parse_score_line 是照着
-// 旧排版写死的正则，换了就一条都认不出来 —— 用来把那个「静默失明」照出来。
+// **The same content in a different layout** — the date moved to the front, the id from
+// round brackets to square ones. This is what it looks like the day Loci changes its
+// recall render. auto_attach.js's parse_score_line is a regex hard-coded to the old
+// layout, so after such a change it recognises nothing at all — which is what makes that
+// "silent blindness" visible.
 const RELAYOUT_RENDERED_TEXT = [
   "找到 4 条：",
-  " 08-19  88.4  上次她把网关的超时从 5 秒提到 12 秒。  [aa11bb22]",
-  " 08-03  71.0  今晚她连上了 Loci，第一次睁眼。  [cc33dd44]",
-  " 08-05  63.2  🧠 她要的不是我少犯错，是我别装。  [ee55ff66]",
+  " 08-19  88.4  上次把网关的超时从 5 秒提到 12 秒。  [aa11bb22]",
+  " 08-03  71.0  今晚第一次把 Loci 接了上来。  [cc33dd44]",
+  " 08-05  63.2  🧠 判据不是有没有报错，是说的和做的是不是同一件事。  [ee55ff66]",
   " 07-11  12.7  一条不该过线的旧事。  [99aa88bb]",
 ].join("\n");
-const EXPECTED_EVENT_COUNT = 2;   // 88.4 / 71.0，没戴 🧠 牌
-const EXPECTED_MIND_COUNT = 1;   // 63.2 戴了 🧠 牌
+const EXPECTED_EVENT_COUNT = 2;   // 88.4 / 71.0, no 🧠 badge
+const EXPECTED_MIND_COUNT = 1;   // 63.2 wears the 🧠 badge
 const BLOCKED_ID = "99aa88bb";
-// 查成功了，但库里就是没有相关的东西 —— 这不是坏，这是新装的人的第一天。
-// 它在日志里留下的痕迹跟「Loci 换了排版」**一模一样**（triggered、recall_called、
-// 0 条、injected=false、没有 error），健康口分不出这两者，见测试第八节。
+// The lookup succeeded, the library simply holds nothing relevant — that is not a fault,
+// that is day one for a fresh install.
+// The trace it leaves in the log is **identical** to "Loci changed its layout"
+// (triggered, recall_called, 0 entries, injected=false, no error), and the health
+// endpoint cannot tell the two apart — see section eight of the test file.
 const EMPTY_RENDERED_TEXT = "找到 0 条。";
 
-// 真正的记忆正文 —— **一个字都不许出现在贴回去的那行里**（「只报数量不报正文」）
-const MEMORY_BODY_SAMPLES = ["上次她把网关的超时从 5 秒提到 12 秒。", "她要的不是我少犯错，是我别装。"];
+// The actual memory text — **not one character of it may show up in the line pasted back** ("counts only, never content")
+const MEMORY_BODY_SAMPLES = ["上次把网关的超时从 5 秒提到 12 秒。", "判据不是有没有报错，是说的和做的是不是同一件事。"];
 
 async function start_fake_loci({ 端口: port }) {
-  const received = [];        // 每一个 HTTP 请求都记一笔（每条测试开头清账）
-  const tool_calls = [];    // 只记 tools/call：{ 工具, 参数 }
-  // 全程账：**清账清不掉**。用来在最后对总账 ——「整套跑下来某条路一次都没出声」
-  // 这种话，只有一份从头记到尾的账本才说得出口。
+  const received = [];        // one entry per HTTP request (each test clears the books at its start)
+  const tool_calls = [];    // tools/call only: { 工具, 参数 }
+  // The whole-run ledger: **清账 cannot clear this one.** It is what the final
+  // reconciliation reads — a claim like "that path never made a sound across the whole
+  // run" can only be made from a ledger kept from beginning to end.
   const all_received = [];
   let mode = "正常";
   let slow_ms = 3000;
@@ -89,23 +104,24 @@ async function start_fake_loci({ 端口: port }) {
       received.push(entry);
       all_received.push(entry);
 
-      // ——— 断连：Loci 压根没起，连接建了立刻断 ———
+      // ——— 断连: Loci is not running at all, so the connection is cut the moment it is made ———
       if (mode === "断连" && route === "/mcp") { req.socket.destroy(); return; }
 
-      // ——— MCP 面 ———
+      // ——— The MCP face ———
       if (req.method === "POST" && route === "/mcp") {
         const rpc = body?.method;
         if (rpc === "initialize") {
           return send_sse(res, {
             jsonrpc: "2.0", id: body.id,
             result: { protocolVersion: "2024-11-05", capabilities: {}, serverInfo: { name: "假loci", version: "0" } },
-          // 🔴 会话 id 必须从头里给，不给的话客户端握手会自己判失败。
-          //    而且**只能是 ASCII** —— HTTP 头的值是 latin-1，写成中文的话
-          //    Node 会 ERR_INVALID_CHAR，握手直接崩（这儿踩过一次）。
+          // 🔴 The session id has to come back in a header, or the client's handshake
+          //    judges itself failed. And it **must be ASCII** — HTTP header values are
+          //    latin-1, so a Chinese one earns an ERR_INVALID_CHAR from Node and the
+          //    handshake dies on the spot (stepped in this once).
           }, "fake-session-1");
         }
         if (rpc === "notifications/initialized") {
-          res.writeHead(202); return res.end();     // 通知无 id，202 空身子（真 MCP 就这么回）
+          res.writeHead(202); return res.end();     // a notification has no id: 202 with an empty body, exactly what real MCP answers
         }
         if (rpc === "tools/call") {
           tool_calls.push({ 工具: body?.params?.name, 参数: body?.params?.arguments || {} });
@@ -121,13 +137,14 @@ async function start_fake_loci({ 端口: port }) {
               : RENDERED_TEXT }] },
           };
           if (mode === "慢") {
-            // 拖过网关的超时再回。回的时候对面多半已经 abort 了，写不进去很正常，
-            // 所以整段包起来 —— 假货自己不许把测试进程搞崩。
+            // Answer only after dragging past the gateway's timeout. By then the other
+            // side has usually aborted and the write fails, which is entirely normal —
+            // hence the wrapper: the impostor must never take the test process down.
             const timer = setTimeout(() => {
               timers.delete(timer);
-              try { send_sse(res, resp); } catch { /* 对面早走了，正常 */ }
+              try { send_sse(res, resp); } catch { /* the other side left long ago; normal */ }
             }, slow_ms);
-            if (timer.unref) timer.unref();   // 别让它拖着进程不退出
+            if (timer.unref) timer.unref();   // do not let it hold the process open
             timers.add(timer);
             return;
           }
@@ -136,7 +153,7 @@ async function start_fake_loci({ 端口: port }) {
         res.writeHead(400); return res.end();
       }
 
-      // ——— REST 面：这一单里**它一次都不该被敲响**，敲了就是账本上的证据 ———
+      // ——— The REST face: in this suite **it should never once be knocked on**, and if it is, the ledger holds the evidence ———
       if (route === "/api/loci/poke") {
         res.writeHead(200, { "Content-Type": "application/json" });
         return res.end(JSON.stringify({ dreams: [], muse_pending: 0 }));
@@ -152,7 +169,7 @@ async function start_fake_loci({ 端口: port }) {
 
   await new Promise((resolve, reject) => {
     server.once("error", reject);
-    server.listen(port, "127.0.0.1", resolve);   // 只听回环
+    server.listen(port, "127.0.0.1", resolve);   // loopback only
   });
 
   return {
@@ -171,7 +188,7 @@ async function start_fake_loci({ 端口: port }) {
     async 关() {
       for (const t of timers) clearTimeout(t);
       timers.clear();
-      // 同 假上游：keep-alive 的连接不主动掐掉，close() 会挂在那儿
+      // same as the fake upstream: without actively cutting keep-alive connections, close() just hangs there
       server.closeAllConnections?.();
       await new Promise((resolve) => server.close(resolve));
     },

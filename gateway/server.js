@@ -1,38 +1,51 @@
 // ============================================================
-// gateway/server.js —— Loci 的 mini gateway（2026-08-19）
+// gateway/server.js — the mini gateway that sits in front of Loci
 //
-// **它干的事**：你的客户端把聊天请求发给它，它转发给真正的模型，
-// 转发之前拍两下 Loci，把该让 AI 知道的东西加进这一轮的消息里。
+// **What it does**: your client posts a chat request here, this layer forwards it to
+// the real model, and on the way it pokes Loci twice to put what the AI ought to know
+// into this round's messages.
 //
-// 两下，位置不一样，别搞混：
-//   · 戳戳送达（poke_delivery.js）   梦 / 发呆，贴在稳定前缀区
-//   · 相关记忆提醒（auto_attach.js） **贴真尾巴** —— 最新 user 之后、整个 messages 的最末
+// Two pokes, landing in two different places — do not mix them up:
+//   · poke delivery (poke_delivery.js)     dreams / muse, pinned in the stable prefix
+//   · relevance reminder (auto_attach.js)  **pinned at the true tail** — after the
+//                                          latest user message, at the very end of the
+//                                          whole messages array
 //
-// 🔴 提醒为什么要最后贴：位置得「离模型开口最近」。
-//    所以 build_relevance_notice() 自己不碰 messages，只把 patch 算出来还给你，
-//    等别的都插完、请求体组好了，最后一步才 attach_at_true_tail()。顺序反了位置就错了。
+// 🔴 Why the reminder has to go on last: its position has to be "as close as possible
+//    to the moment the model speaks". So build_relevance_notice() never touches
+//    messages itself — it only computes the patch and hands it back, and
+//    attach_at_true_tail() runs as the last step, once everything else is inserted and
+//    the request body is assembled. Get the order wrong and the position is wrong.
 //
-// ⛔ **这个外壳不替 AI 调 breath()。** auto_attach.js 里还有一个「开窗第一轮把 breath
-//    整段贴进 system」的函数（`attach_once`），它是她自己那套网关的做法，这儿**故意不接**：
-//    「开口之前先 breath()」是 **AI 自己该伸的那只手**，写在系统提示里
-//    （docs/系统提示-中文.md）。网关替它贴进去，它就不再是"自己想起来要睁眼"，
-//    而是"被人喂了一份摘要"——那是两种完全不同的东西。
-//    你要是就想要网关代劳，那个函数在模块里现成的，自己接一行就是。
+// ⛔ **This shell does not call breath() on the AI's behalf.** auto_attach.js also
+//    carries a function that pastes a whole breath() into the system prompt on the
+//    first turn of a window (`attach_once`), and here it is **deliberately left
+//    unwired**: "breathe before you speak" is a hand **the AI has to reach out with
+//    itself**, and it lives in the system prompt (docs/系统提示-中文.md). Have the
+//    gateway paste it in and the AI is no longer "remembering to open its eyes" —
+//    it is "being handed a summary". Those are two entirely different things.
+//    If you do want the gateway to do it for you, the function is right there in the
+//    module: wire it up in one line.
 //
-// 🔴 三条边界（跟两个模块同源，改的时候别丢）：
-//   · **失败不挡聊天**。任何一下拍空了——超时、Loci 没起、返回不是 JSON——
-//     都照常转发，只记一行日志。宁可这次没贴上，也不能让人的对话卡住。
-//   · **只读多，写极少**。碰的是 breath / recall（读）和 poke / dream.wake
-//     （只读口 + 幂等信号）。⛔ 不改任何记忆。
-//   · **不报正文，只报有什么**。B 插进去的是「有几条相关记忆」这种**数量**，
-//     判断权留给 AI 自己。
+// 🔴 Three boundaries (shared with both modules — do not lose them when you edit):
+//   · **A failure never blocks the chat.** Any poke that comes up empty — a timeout,
+//     Loci not running, a reply that is not JSON — still forwards as usual and writes
+//     one log line. Better to miss an attachment this round than to stall a human
+//     conversation.
+//   · **Nearly all reads, barely any writes.** It touches breath / recall (reads) and
+//     poke / dream.wake (a read-only endpoint plus an idempotent signal).
+//     ⛔ It never modifies a memory.
+//   · **It reports that something exists, never what it says.** What the reminder
+//     inserts is a **count** — "there are N relevant memories" — and the judgement is
+//     left to the AI itself.
 //
-// 零依赖：只用 Node 自带的 http / fetch（Node 18+）。
+// Zero dependencies: only Node's built-in http / fetch (Node 18+).
 //
-// 跑：
+// Run:
 //     LOCI_UPSTREAM=https://api.deepseek.com/v1 node gateway/server.js
-// 然后把客户端的 base_url 指到 http://127.0.0.1:3100/v1。
-// API key 照常由客户端带 —— 这一层原样转发，**不存也不看**。
+// then point the client's base_url at http://127.0.0.1:3100/v1.
+// The API key still comes from the client — this layer forwards it verbatim and
+// **neither stores nor reads it**.
 // ============================================================
 
 const http = require("http");
@@ -47,13 +60,15 @@ const LOCI = process.env.LOCI_MCP || poke.DEFAULT_ADDRESS;
 const idle_threshold_minutes = Number(process.env.POKE_IDLE_MINUTES || poke.DEFAULT_IDLE_MINUTES);
 const min_score = Number(process.env.RELEVANCE_MIN_SCORE || auto.DEFAULT_MIN_SCORE);
 const data_root = process.env.LOCI_GATEWAY_DATA || path.join(__dirname, "data");
-// ⚰️ 2026-08-19：**近期记忆视图整个撤了**（她拍的）。
-//    它做的是「隔天开窗，把 recall(when="昨天") 的原文摘录贴进去」，
-//    而她要的「昨日记忆」根本不用去 Loci 翻 —— **就是收窗时压出来的那几句话**，
-//    第二天带着它开窗就完了。多问 Loci 一次，换来的是同一件事的第二个做法。
-//    她的原话：「昨日记忆我说的就是压缩说过的话 就好了 根本就不要 recall 昨天」。
-//    思路留在 gateway/README.md 第四节（收窗压缩），代码不留 ——
-//    文档里不提、代码里还活着，就是留着一条没入口的路。
+// ⚰️ **The "recent memory view" was pulled out wholesale.**
+//    What it did: on the first turn of the next day's window, paste excerpts of
+//    recall(when="yesterday") into the context. But "yesterday's memory" never needed
+//    a trip to Loci — **it is exactly the few sentences squeezed out when the previous
+//    window closed**, and carrying those into the next window is the whole job. Asking
+//    Loci a second time only buys a second way of doing the same thing.
+//    The idea is kept in gateway/README.md section four (closing-window compression);
+//    the code is not. Something the docs never mention but the code still runs is a
+//    road with no entrance.
 const log_path = path.join(data_root, "logs", "memory-actions.jsonl");
 
 if (!upstream) {
@@ -78,27 +93,33 @@ function is_chat(req, body) {
 }
 
 // ════════════════════════════════════════════════════════════════
-// 「它在不在工作」—— 只读，从它自己已经在写的那份日志里推出来
+// "Is it actually working?" — read-only, inferred from the log it already writes
 // ════════════════════════════════════════════════════════════════
-// 🔴 2026-08-20 加的，起因就是这个网关自己：**超时设成 5 秒，于是它从上线起
-//    一次都没工作过，活了好几天没人发现**。它没崩、没报错、控制台上也看不出区别 ——
-//    `说.push("提醒无")` 这三个字，超时、500、连不上、和「这句话本来就不该查」，
-//    印出来一模一样。
-// 📌 判据：**别问「进程在不在」，问「它最近一次真的干成活是什么时候」。**
-//    前者只证明它站在那儿，后者才是它在工作的证据。
-// ⚠️ 故意**不新建一套记账**：`memory-actions.jsonl` 已经把 injected / error /
-//    triggered 一条条写下来了。多一套账就多一个「账本自己坏了而没人知道」的地方,
-//    而那正是这一段要治的病。
-const WINDOW_SIZE = 200;         // 看最近多少条**相关记忆检查**（不是多少行日志）
+// 🔴 Added because of this very gateway: **the timeout was set to 5 seconds, so from
+//    the day it shipped it never once did its job, and it stayed that way for days
+//    with nobody noticing.** It did not crash, it did not raise, and the console gave
+//    nothing away — `notes.push("提醒无")` prints exactly the same for a timeout, a
+//    500, a refused connection, and "this sentence was never meant to trigger a
+//    lookup" alike.
+// 📌 The test: **do not ask "is the process up", ask "when did it last actually get
+//    something done".** The first only proves it is standing there; the second is the
+//    evidence that it is working.
+// ⚠️ Deliberately **not a second set of books**: `memory-actions.jsonl` already writes
+//    injected / error / triggered down one line at a time. A second ledger is one more
+//    place where the books themselves can rot without anyone knowing — and that is the
+//    exact disease this section exists to treat.
+const WINDOW_SIZE = 200;         // how many recent **relevance checks** to look at, not log lines
 const MAX_READ_BYTES = 4 * 1024 * 1024;
 
 function read_recent_records(n = WINDOW_SIZE) {
   const fs = require("fs");
   try {
-    if (!fs.existsSync(log_path)) return null;   // null = 文件不在（跟「文件在但没记录」分开）
-    // 🔴 **真的只读尾巴。** 第一版注释写着「只读尾巴」，实际是 readFileSync 整个文件
-    //    读进内存再切最后 200 行 —— 日志长到几百兆时它照样慢、照样吃内存。
-    //    注释跟代码不符比没有注释更坏：**下一个人会信它。**
+    if (!fs.existsSync(log_path)) return null;   // null = no file (kept apart from "file exists, no records")
+    // 🔴 **Actually read only the tail.** The first version's comment said "reads
+    //    only the tail" while the code readFileSync'd the entire file into memory and
+    //    then sliced off the last 200 lines — at a few hundred megabytes of log it is
+    //    just as slow and just as hungry. A comment that disagrees with its code is
+    //    worse than no comment at all: **the next person will believe it.**
     const size = fs.statSync(log_path).size;
     const start = Math.max(0, size - MAX_READ_BYTES);
     const fd = fs.openSync(log_path, "r");
@@ -106,10 +127,11 @@ function read_recent_records(n = WINDOW_SIZE) {
     fs.readSync(fd, buf, 0, buf.length, start);
     fs.closeSync(fd);
     let text = buf.toString("utf8");
-    if (start > 0) text = text.slice(text.indexOf("\n") + 1);   // 头一行多半被切断了，扔掉
-    // 🔴 **先筛再切**，不是先切再筛。同一份 jsonl 里还有戳戳/做梦的记录 ——
-    //    戳戳一吵就会把相关记忆那些挤出窗口，极端情况下健康口会说
-    //    「还没有任何一次记录」，而其实上面全是。
+    if (start > 0) text = text.slice(text.indexOf("\n") + 1);   // the first line is probably cut in half, drop it
+    // 🔴 **Filter first, then slice** — not slice first and filter after. The same
+    //    jsonl also holds poke / dream records, and one noisy poke would push the
+    //    relevance records out of the window; in the extreme the health endpoint says
+    //    "no records at all yet" while the lines above it are nothing but records.
     const records = [];
     for (const l of text.trimEnd().split("\n")) {
       let r = null;
@@ -121,9 +143,11 @@ function read_recent_records(n = WINDOW_SIZE) {
 }
 
 function build_health() {
-  // 🔴 **一种形状，不管有没有日志。** 第一版在「文件不在」那支提前 return 了一个短对象，
-  //    少了那几个计数字段 —— 读的人得应付两种形状，而这口子存在的意义就是「一眼看明白」。
-  //    区分照样保留（日志档存在: false + 结论里说清楚），但字段一个不少。
+  // 🔴 **One shape, log or no log.** The first version returned early on the "no
+  //    file" branch with a short object that was missing the count fields — the reader
+  //    then had to cope with two shapes, and the entire point of this endpoint is that
+  //    you understand it at a glance. The distinction is still made (日志档存在: false,
+  //    plus 结论 spelling it out), but not one field is dropped.
   const read_records = read_recent_records();
   const log_exists = read_records !== null;
   const records = read_records || [];
@@ -137,27 +161,34 @@ function build_health() {
   const last_injected = [...records].reverse().find((r) => r.injected) || null;
   const last_error = [...records].reverse().find((r) => r.error) || null;
 
-  // 🔴 **最近一次成功「之后」又崩了几次** —— 第一版判的是「窗口里有没有成功过」，
-  //    那是会撒谎的：窗口是最后 200 条，不是最近一段时间，
-  //    **昨天的一次成功会一直待在窗口里，把今天的全面失效整个盖住**。
-  //    实测过：2 轮正常 + 4 轮连崩，它照样说「在工作」—— 那正是它最该吭声的时刻。
-  //    而且反过来想：当初那个「超时 5 秒」的 bug，只要早先有过任何一次成功，
-  //    这个口照样看不出来。**一个会撒谎的监控比没有监控更坏。**
+  // 🔴 **How many failures came AFTER the last success.** The first version asked
+  //    "was there ever a success in the window", and that answer lies: the window is
+  //    the last 200 records, not the last stretch of time, so **a single success from
+  //    yesterday sits in the window forever, covering up today's total outage**.
+  //    Measured it: 2 healthy rounds followed by 4 straight failures, and it still
+  //    said "working" — precisely the moment it most needed to speak up.
+  //    Turn it around, too: the original "5 second timeout" bug would have stayed
+  //    invisible here as long as anything at all had succeeded earlier.
+  //    **A monitor that lies is worse than no monitor.**
   const last_success_index = records.map((r) => !!r.injected).lastIndexOf(true);
   const errors_since_success = records.slice(last_success_index + 1).filter((r) => r.error).length;
 
   let verdict;
   if (!log_exists) {
-    // 「文件不在」和「文件在但还没记录」是两回事：前者八成是 LOCI_GATEWAY_DATA 配歪了，
-    // 健康口读的日志跟网关写的根本不是同一份 —— 那样它会永远说「还没有记录」，
-    // 而网关其实一直在好好干活。**这两种情况必须分得开。**
+    // "No file" and "file exists but has no records yet" are two different things.
+    // The first usually means LOCI_GATEWAY_DATA points somewhere else, so the log the
+    // health endpoint reads is not the log the gateway writes — and then it will say
+    // "no records yet" forever while the gateway is working perfectly.
+    // **These two cases have to stay distinguishable.**
     verdict = "还没有任何一次记录 —— 日志档还不存在（刚起来？还是 LOCI_GATEWAY_DATA 指错了？）";
   } else if (records.length === 0) {
     verdict = "还没有任何一次记录 —— 它可能刚起来，也可能从来没被调用过";
   } else if (triggered_records.length === 0) {
-    // ⚠️ 不报红：没人说到相关的事，本来就该一次都不触发。
-    //    但要提一句语言 —— 强档词表出厂是中文的，不说中文的人会永远停在这一句上，
-    //    而这一句还安慰他「可能正常」。**那是漏报一整类用户。**
+    // ⚠️ Not an alarm: if nobody said anything relevant, zero triggers is correct.
+    //    But say something about language — the strong-trigger word list ships in
+    //    Chinese, so anyone who does not speak Chinese would sit on this one verdict
+    //    forever while it reassures them that things are "probably fine".
+    //    **That misses an entire class of users.**
     verdict = "最近这些轮里一次都没触发（可能正常：没人说到相关的事）"
       + (records.length >= 30 ? "　⚠️ 攒了这么多轮一次都没触发，也可能是强档词表跟你说的语言对不上" : "");
   } else if (errors_since_success >= 3) {
@@ -165,17 +196,20 @@ function build_health() {
   } else if (injected_records.length > 0) {
     verdict = "在工作";
   } else if (error_records.length > 0 && triggered_records.length >= 2) {
-    // 这才是那个 bug 的形状：**触发了、报错了、一次都没贴上**。
-    // ⚠️ 要 ≥2 次才喊：README 自己写着「Loci 重启后第一次相关检查大概率超时」，
-    //    冷启动那一次报红等于每次重启都狼来了。
+    // This is the shape of that bug: **triggered, errored, never once attached.**
+    // ⚠️ Only shout at ≥2: the README itself says the first relevance check after a
+    //    Loci restart will very likely time out, and going red on that cold start
+    //    means crying wolf on every single restart.
     verdict = `🔴 触发了 ${triggered_records.length} 次，出错 ${error_records.length} 次，一次都没贴上 —— 它在安静地什么都不做`;
   } else if (error_records.length === 0) {
-    // 🔴 **不报红。** 第一版这儿会喊 🔴，而它逮到的是一个完全正常的人：
-    //    新装的、库里本来就没有相关的东西 —— 查得好好的、0 命中、一个错都没有。
-    //    开源出去第一天就有人看见这个红。
-    // ⚠️ 而这句话有天花板，得说出来：「库里真没有」和「解析瞎了」
-    //    （Loci 换了渲染排版）在日志里**长得一模一样**，谁也分不开。
-    //    所以只列可能性，**不下「一切正常」这个结论**。
+    // 🔴 **No alarm here.** The first version shouted 🔴 on this branch, and what it
+    //    caught was a perfectly healthy install: fresh setup, nothing relevant in the
+    //    library yet — the lookup ran fine, 0 hits, not one error. Ship that and
+    //    somebody sees a red light on day one.
+    // ⚠️ This verdict has a ceiling, and the ceiling has to be said out loud: "the
+    //    library really has nothing" and "the parser has gone blind" (Loci changed its
+    //    render layout) **look identical in the log**; nobody can tell them apart.
+    //    So list the possibilities and **never conclude "everything is fine"**.
     verdict = `触发了 ${triggered_records.length} 次，一条都没过线（没报错：可能库里确实没有 / 分数线太高 / Loci 改了渲染排版）`;
   } else {
     verdict = `触发了 ${triggered_records.length} 次还没贴上过，出错 ${error_records.length} 次 —— 次数还太少，再看看`;
@@ -190,8 +224,10 @@ function build_health() {
     最近一次真的贴上之后又崩了: errors_since_success,
     最近一次真的贴上: last_injected ? { 几秒前: seconds_ago(last_injected.time), 命中: (last_injected.event_count || 0) + (last_injected.mind_count || 0) } : null,
     最近一次出错: last_error ? { 几秒前: seconds_ago(last_error.time), 是什么: String(last_error.error).slice(0, 200) } : null,
-    // ⚠️ 不抄 auto_attach.js 里那个默认值（12000）—— 抄一份就多一处会漂的常量。
-    //    「没设」本身就是要看见的信息。打错字也照实说，这口子存在的意义就是逮配歪了的东西。
+    // ⚠️ Do not copy auto_attach.js's default (12000) — a copied constant is one more
+    //    constant that can drift. "Not set" is itself information worth seeing, and a
+    //    typo is reported as the typo it is: catching a misconfiguration is exactly
+    //    what this endpoint is for.
     超时设的是: number_or_raw(process.env.RELEVANCE_TIMEOUT_MS),
     相关度最低分: number_or_raw(min_score),
     日志档: log_path,
@@ -203,15 +239,20 @@ function build_health() {
 const server = http.createServer(async (req, res) => {
   const start = Date.now();
 
-  // 只读健康口。放在最前面：它不该被后面任何一步影响，也不该影响任何一步。
-  // 🔴 2026-08-20：这条路由**一开始写的是 `/健康`，敲不响** —— 客户端送来的是
-  //    转义过的 `/%E5%81%A5%E5%BA%B7`，而这儿是逐字节比的，永远对不上。
-  //    后果比"没反应"更糟：**这个健康探测会被当成普通请求转发给上游模型。**
-  //    一个用来看"它在不在工作"的口，自己不工作，还顺手把请求发出去了。
-  //    ⚠️ 修法不是在这儿 decodeURIComponent —— 那只是把问题藏起来。
-  //       **URL 里就不该有非 ASCII。** 改名 `/health`，问题从根上没有了。
+  // Read-only health endpoint. It goes first: nothing below should be able to affect
+  // it, and it should affect nothing below.
+  // 🔴 This route **was originally spelled `/健康`, and nobody could reach it** — the
+  //    client sends the percent-escaped `/%E5%81%A5%E5%BA%B7` while the comparison
+  //    here is byte-for-byte, so it never matched.
+  //    The consequence is worse than "no response": **the health probe was treated as
+  //    an ordinary request and forwarded to the upstream model.** An endpoint whose
+  //    only job is to say whether it is working did not work, and shipped the probe
+  //    off upstream on its way out.
+  //    ⚠️ The fix is not a decodeURIComponent here — that only hides the problem.
+  //       **A URL should not contain non-ASCII in the first place.** Renaming it
+  //       `/health` removes the problem at the root.
   if (req.method === "GET" && req.url.split("?")[0] === "/health") {
-    req.resume();   // GET 没身子，但别把没读走的字节留在 keep-alive 连接上顶歪下一个请求
+    req.resume();   // a GET has no body, but do not leave unread bytes on a keep-alive connection to derail the next request
     let payload = "{}";
     try { payload = JSON.stringify(build_health(), null, 2); }
     catch (err) { payload = JSON.stringify({ 结论: "健康口自己算不出来了", 错: String(err?.message || err) }); }
@@ -234,7 +275,7 @@ const server = http.createServer(async (req, res) => {
       地址: LOCI,
     };
 
-    // ---- D：戳戳送达。梦 / 发呆，贴在跟 A 同一处前缀。 ----
+    // ---- Poke delivery: dreams / muse, pinned in the same prefix as the breath paste. ----
     try {
       const d = await poke.attach_once({
         ...common,
@@ -245,8 +286,9 @@ const server = http.createServer(async (req, res) => {
         : d.calledLoci ? "戳戳无" : "戳戳没问(不够闲)");
     } catch (err) { notes.push("戳戳炸:" + (err?.message || err)); }
 
-    // ---- B：相关记忆提醒。**最后一步，贴真尾巴** ----
-    // 触发才跑（强档=关键词命中，弱档=本地判据）。没触发一次 recall 都不调。
+    // ---- Relevance reminder. **Last step, pinned at the true tail.** ----
+    // Only runs when triggered (strong = keyword hit, weak = local heuristic).
+    // No trigger, no recall call at all.
     try {
       const b = await auto.build_relevance_notice({ ...common, 最低分: min_score });
       if (b && b.patch) {
@@ -256,16 +298,21 @@ const server = http.createServer(async (req, res) => {
     } catch (err) { notes.push("提醒炸:" + (err?.message || err)); }
   } else notes.push("不是聊天，直接转发");
 
-  // 🔴 **不像 API 的路径一律本地 404。**（2026-08-20，网关测试逮到的一整类）
-  //    这一层是代理，它的默认行为是「什么都往上游转」—— 所以它**没有「不认识的地址」**
-  //    这回事。写错一个路由，在普通服务器上是 404，在这儿是**照常转发出去**。
-  //    实际后果：`/favicon.ico`、打错的 URL、扫描器的探针，
-  //    全都带着客户端那把 Authorization 转给上游。
-  //    起因是我加健康口时把路径写成了中文 `/健康`，客户端送来的是转义过的，
-  //    比不上 → 掉进这条默认路 → **一个用来看「它在不在工作」的探测被发给了上游模型**。
-  //    ⚠️ 治标的修法（在健康口那儿 decodeURIComponent）救不了：Windows 上 curl
-  //       发的是按本地代码页转的 `%BD%A1%BF%B5`，decodeURIComponent 对它直接抛异常，
-  //       还是漏。**治本是这一条：只放 API 路径出去。**
+  // 🔴 **Anything that does not look like an API path gets a local 404.** (A whole
+  //    class of bug that the gateway tests caught.)
+  //    This layer is a proxy, and a proxy's default behaviour is "forward everything
+  //    upstream" — which means it has **no such thing as an unrecognised address**.
+  //    Misspell a route and an ordinary server gives you a 404; here it is
+  //    **forwarded as usual**. In practice: `/favicon.ico`, mistyped URLs and scanner
+  //    probes all go upstream carrying the client's Authorization header.
+  //    It surfaced when the health endpoint was first spelled in Chinese as `/健康`:
+  //    the client sends the escaped form, the byte comparison fails, it falls through
+  //    to this default path → **a probe meant to check "is it working" was sent to the
+  //    upstream model.**
+  //    ⚠️ Patching the symptom (decodeURIComponent at the health endpoint) does not
+  //       save you: curl on Windows sends `%BD%A1%BF%B5`, escaped per the local
+  //       codepage, and decodeURIComponent throws outright on that — still leaking.
+  //       **The cure is this line: only API paths get out.**
   const route = req.url.split("?")[0];
   if (!route.startsWith("/v1/")) {
     req.resume();
@@ -299,16 +346,21 @@ const server = http.createServer(async (req, res) => {
   }
 
   const resp_headers = {};
-  // 🔴 `content-length` 必须跟 `content-encoding` 一起丢掉（2026-08-20 修，网关第一套测试逮到的）。
-  //    上面第 119 行 delete 了 accept-encoding，本意是「别让上游压缩」——
-  //    可 Node 自带的 fetch **自己又补了一个** `accept-encoding: gzip, deflate`，
-  //    于是上游照样 gzip。fetch 把身子解压了，而 `content-length` 还是**压缩后**的数。
-  //    只跳过 content-encoding 的话，客户端被告知「一共 N 字节」（压缩后的），
-  //    实际身子是解压后的更长的那份 —— **按 N 一刀切断，拿到半截 JSON**。
-  //    ⚠️ 为什么活到今天没被发现：聊天基本都 stream:true，流式回应是 chunked、
-  //       没有 content-length，整条路绕开了。**非流式的调用才中招**
-  //       （补全、embedding、SDK 的同步调用）—— 又是一个「平时看不出来」的失败。
-  //    丢掉之后由 Node 自己按实际身子算长度 / 走 chunked，两边就对上了。
+  // 🔴 `content-length` has to be dropped together with `content-encoding` — found by
+  //    the gateway's first test suite.
+  //    The `delete headers["accept-encoding"]` above means "do not let upstream
+  //    compress", but Node's built-in fetch **puts one back itself**,
+  //    `accept-encoding: gzip, deflate`, so upstream gzips anyway. fetch then
+  //    decompresses the body while `content-length` still describes the **compressed**
+  //    size. Skip only content-encoding and the client is told "N bytes in total" (the
+  //    compressed number) while the real body is the longer decompressed one —
+  //    **cut off at N, half a JSON document.**
+  //    ⚠️ Why it survived this long: chat calls are almost all stream:true, and a
+  //       streamed response is chunked with no content-length, so the whole path is
+  //       bypassed. **Only non-streaming calls get bitten** (completions, embeddings,
+  //       any synchronous SDK call) — another failure you never see day to day.
+  //    With both dropped, Node computes the length from the real body (or goes
+  //    chunked) and the two sides agree again.
   resp.headers.forEach((v, k) => {
     if (k !== "content-encoding" && k !== "content-length") resp_headers[k] = v;
   });
@@ -324,9 +376,11 @@ server.listen(port, () => {
   console.log(`[gateway] 上游        ${upstream}`);
   console.log(`[gateway] Loci        ${poke._internal.httpBase(LOCI)}`);
   console.log(`[gateway] 相关度最低分 ${min_score}  ·  闲时阈值 ${idle_threshold_minutes} 分钟`);
-  // 🔴 2026-08-20 补：这一行以前**偏偏没印**，而那个「超时 5 秒 → 从上线起一次没工作过」
-  //    的 bug 要是当初印在启动第一屏，**第一天就能看见**。
-  //    📌 判据：能让人一眼看出「配歪了」的数，就该印在启动的第一屏。
+  // 🔴 This line **is the one that used not to be printed**, and the "5 second timeout
+  //    → never worked once since it shipped" bug would have been **visible on day one**
+  //    had it been on the first screen at startup.
+  //    📌 The rule: any number that lets someone spot a misconfiguration at a glance
+  //    belongs on the first screen at startup.
   console.log(`[gateway] Loci 超时      ${process.env.RELEVANCE_TIMEOUT_MS || "（没设，用默认）"}`);
   console.log(`[gateway] 它在不在工作    GET http://127.0.0.1:${port}/health`);
   console.log(`[gateway] 把客户端的 base_url 指到 http://127.0.0.1:${port}/v1`);
