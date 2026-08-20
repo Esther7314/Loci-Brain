@@ -28,7 +28,10 @@ What it runs / what it doesn't
 ═══════════════════════════════════════════════════════════════════
 Runs:  · pyflakes (blocks undefined names — it pointed out those two NameErrors on 8-19 in
          three seconds)
-       · unit tests (tests/, pure functions, no disk, no network, no container)
+       · unit tests (tests/) — mostly pure functions. Two of the contract files do touch a
+         disk, under pytest's `tmp_path`, and one spawns a second interpreter to prove a
+         key is stable across processes. That is as far as it goes: no container, no model,
+         no network, and never a real memory.
        · gateway tests (gateway/tests/, fake upstream + fake Loci, not one real connection
          leaves the building)
 
