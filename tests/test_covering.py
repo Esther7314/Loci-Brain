@@ -36,13 +36,13 @@ from core import _when as W
 TAG = B.BIGEVENT_TAG
 
 
-def 桶(bid: str, when: str, content: str = "", **meta):
+def bucket(bid: str, when: str, content: str = "", **meta):
     """Minimal shape `covering()` actually reads: a metadata dict plus content."""
     m = {"id": bid, "when": when, "tags": [TAG], **meta}
     return {"id": bid, "content": content or f"period {bid}", "metadata": m}
 
 
-def 日(s: str) -> datetime:
+def day(s: str) -> datetime:
     return W.parse_date(s)
 
 
@@ -53,11 +53,11 @@ def test_overlap_not_containment_is_the_rule():
     # ends and the next begins. A period that merely *clips* the window counts.
     # If this ever tightened to containment, every long-running period would
     # silently stop covering the short windows inside it.
-    早 = 桶("a", "2026-07-01..2026-07-10")
-    中 = 桶("b", "2026-07-05..2026-07-20")
-    晚 = 桶("c", "2026-08-01..2026-08-10")
-    命中 = {t[2] for t in B.covering([早, 中, 晚], 日("2026-07-08"), 日("2026-07-09"))}
-    assert 命中 == {"a", "b"}
+    early = bucket("a", "2026-07-01..2026-07-10")
+    middle = bucket("b", "2026-07-05..2026-07-20")
+    late = bucket("c", "2026-08-01..2026-08-10")
+    hits = {t[2] for t in B.covering([early, middle, late], day("2026-07-08"), day("2026-07-09"))}
+    assert hits == {"a", "b"}
 
 
 def test_window_edges_are_half_open():
@@ -65,30 +65,30 @@ def test_window_edges_are_half_open():
     # starts exactly when the window ends does NOT count. Both boundaries are
     # exclusive on the far side, which is what keeps two adjacent windows from
     # both claiming the same period.
-    紧挨着前面 = 桶("before", "2026-07-01..2026-07-07")   # end is exclusive → 07-08 00:00
-    紧挨着后面 = 桶("after", "2026-07-10..2026-07-20")
-    命中 = {t[2] for t in B.covering([紧挨着前面, 紧挨着后面],
-                                     日("2026-07-08"), 日("2026-07-10"))}
-    assert 命中 == set()
+    ends_at_window_start = bucket("before", "2026-07-01..2026-07-07")   # end is exclusive → 07-08 00:00
+    starts_at_window_end = bucket("after", "2026-07-10..2026-07-20")
+    hits = {t[2] for t in B.covering([ends_at_window_start, starts_at_window_end],
+                                     day("2026-07-08"), day("2026-07-10"))}
+    assert hits == set()
 
 
 def test_no_window_means_now_so_finished_periods_drop_out():
     # Both bounds absent means "what is covering me right now". A period that has
     # already ended must not answer that question — this is the whole reason the
     # end date lives in the data instead of being maintained by hand.
-    结束了 = 桶("done", "2020-01-01..2020-02-01")
-    还开着 = 桶("open", "2020-01-01..")
-    命中 = {t[2] for t in B.covering([结束了, 还开着], None, None)}
-    assert 命中 == {"open"}
+    finished = bucket("done", "2020-01-01..2020-02-01")
+    still_running = bucket("open", "2020-01-01..")
+    hits = {t[2] for t in B.covering([finished, still_running], None, None)}
+    assert hits == {"open"}
 
 
 def test_newest_first():
     # The browse view takes only the first result per cell, so the ordering is not
     # cosmetic — it decides which period gets shown at all.
-    旧 = 桶("old", "2026-06-01..2026-06-30")
-    新 = 桶("new", "2026-07-01..2026-07-30")
-    出 = B.covering([旧, 新], 日("2026-06-01"), 日("2026-08-01"))
-    assert [t[2] for t in 出] == ["new", "old"]
+    older = bucket("old", "2026-06-01..2026-06-30")
+    newer = bucket("new", "2026-07-01..2026-07-30")
+    out = B.covering([older, newer], day("2026-06-01"), day("2026-08-01"))
+    assert [t[2] for t in out] == ["new", "old"]
 
 
 # ───────────────────── what must never leak through ─────────────────────
@@ -97,11 +97,11 @@ def test_only_periods_not_ordinary_memories():
     # `covering` answers "which periods span this window". An ordinary memory that
     # happens to carry a date is not a period, and letting one through would put a
     # random memory in the slot reserved for "what were we doing back then".
-    普通的 = {"id": "plain", "content": "an ordinary memory",
+    ordinary = {"id": "plain", "content": "an ordinary memory",
               "metadata": {"id": "plain", "when": "2026-07-05..2026-07-06", "tags": []}}
-    时期 = 桶("period", "2026-07-01..2026-07-10")
-    命中 = {t[2] for t in B.covering([普通的, 时期], 日("2026-07-05"), 日("2026-07-06"))}
-    assert 命中 == {"period"}
+    period = bucket("period", "2026-07-01..2026-07-10")
+    hits = {t[2] for t in B.covering([ordinary, period], day("2026-07-05"), day("2026-07-06"))}
+    assert hits == {"period"}
 
 
 def test_superseded_covered_resolved_archived_all_drop_out():
@@ -109,15 +109,15 @@ def test_superseded_covered_resolved_archived_all_drop_out():
     # together because they share one consequence: if any of them leaked, the browse
     # view would show a period the user already replaced, folded away, closed, or
     # archived — and it would look exactly like a live one.
-    活的 = 桶("live", "2026-07-01..2026-07-10")
-    换过版 = 桶("superseded", "2026-07-01..2026-07-10", superseded_by="x")
-    被盖住 = 桶("covered", "2026-07-01..2026-07-10", covered_by=["x"])
-    了结了 = 桶("resolved", "2026-07-01..2026-07-10", status="resolved")
-    归档了 = 桶("archived", "2026-07-01..2026-07-10", type="archived")
-    删掉了 = 桶("deleted", "2026-07-01..2026-07-10", deleted_at="2026-07-11")
-    命中 = {t[2] for t in B.covering(
-        [活的, 换过版, 被盖住, 了结了, 归档了, 删掉了], 日("2026-07-05"), 日("2026-07-06"))}
-    assert 命中 == {"live"}
+    live = bucket("live", "2026-07-01..2026-07-10")
+    superseded = bucket("superseded", "2026-07-01..2026-07-10", superseded_by="x")
+    covered = bucket("covered", "2026-07-01..2026-07-10", covered_by=["x"])
+    closed = bucket("resolved", "2026-07-01..2026-07-10", status="resolved")
+    archived = bucket("archived", "2026-07-01..2026-07-10", type="archived")
+    deleted = bucket("deleted", "2026-07-01..2026-07-10", deleted_at="2026-07-11")
+    hits = {t[2] for t in B.covering(
+        [live, superseded, covered, closed, archived, deleted], day("2026-07-05"), day("2026-07-06"))}
+    assert hits == {"live"}
 
 
 def test_a_period_whose_dates_are_unreadable_is_skipped_not_fatal():
@@ -125,19 +125,19 @@ def test_a_period_whose_dates_are_unreadable_is_skipped_not_fatal():
     # raise straight out of here, taking the whole recall down with it — not one
     # missing period, the entire request. It is now skipped like any other
     # unusable entry. See `_when.parse_date_or_none` for the other half of this.
-    坏的 = 桶("broken", "2026-09-31..2026-10-01")
-    好的 = 桶("fine", "2026-09-01..2026-10-01")
-    命中 = {t[2] for t in B.covering([坏的, 好的], 日("2026-09-15"), 日("2026-09-16"))}
-    assert 命中 == {"fine"}
+    malformed = bucket("broken", "2026-09-31..2026-10-01")
+    well_formed = bucket("fine", "2026-09-01..2026-10-01")
+    hits = {t[2] for t in B.covering([malformed, well_formed], day("2026-09-15"), day("2026-09-16"))}
+    assert hits == {"fine"}
 
 
 def test_limit_is_honoured_after_sorting_not_before():
     # The cap exists so a library with hundreds of periods cannot flood one cell.
     # It must be applied to the *sorted* list: capping first and sorting after
     # would return an arbitrary subset that merely looks ordered.
-    桶们 = [桶(f"p{i:02}", f"2026-{i:02}-01..2026-{i:02}-28") for i in range(1, 13)]
-    出 = B.covering(桶们, 日("2026-01-01"), 日("2027-01-01"), limit=3)
-    assert [t[2] for t in 出] == ["p12", "p11", "p10"]
+    buckets = [bucket(f"p{i:02}", f"2026-{i:02}-01..2026-{i:02}-28") for i in range(1, 13)]
+    out = B.covering(buckets, day("2026-01-01"), day("2027-01-01"), limit=3)
+    assert [t[2] for t in out] == ["p12", "p11", "p10"]
 
 
 # ─────────────── the property the refactor was actually for ───────────────
@@ -148,7 +148,7 @@ def test_the_caller_owns_the_list_so_the_function_reads_nothing_else():
     # nothing, no matter what the real library happens to contain. Any future edit
     # that quietly reaches for the global again turns this red.
     assert B.covering([], None, None) == []
-    assert B.covering([], 日("2020-01-01"), 日("2030-01-01")) == []
+    assert B.covering([], day("2020-01-01"), day("2030-01-01")) == []
 
 
 def test_it_is_not_a_coroutine_anymore():
@@ -163,56 +163,56 @@ def test_content_and_id_come_back_verbatim():
     # The browse view renders straight from what this returns, so the text must be
     # the stored text — not a summary, not a truncation. Same rule as everywhere
     # else in this system: a memory's own words do not pass through anything.
-    正文 = "The stretch where we moved the memory system onto a name of our own.\nsecond line"
-    出 = B.covering([桶("x", "2026-07-01..2026-07-10", 正文)], 日("2026-07-05"), 日("2026-07-06"))
-    assert len(出) == 1
-    meta, content, bid = 出[0]
-    assert content == 正文 and bid == "x" and meta["when"] == "2026-07-01..2026-07-10"
+    body = "The stretch where we moved the memory system onto a name of our own.\nsecond line"
+    out = B.covering([bucket("x", "2026-07-01..2026-07-10", body)], day("2026-07-05"), day("2026-07-06"))
+    assert len(out) == 1
+    meta, content, bid = out[0]
+    assert content == body and bid == "x" and meta["when"] == "2026-07-01..2026-07-10"
 
 
 def test_an_open_ended_period_covers_anything_after_its_start():
     # "Still going" is stored as an empty end, not as a far-future date. A window
     # years ahead still has to match, or an ongoing period would quietly stop
     # covering the present the moment the calendar moved past whatever we guessed.
-    开着的 = 桶("running", "2026-07-01..")
-    命中 = {t[2] for t in B.covering([开着的], 日("2030-01-01"), 日("2030-01-02"))}
-    assert 命中 == {"running"}
+    open_ended = bucket("running", "2026-07-01..")
+    hits = {t[2] for t in B.covering([open_ended], day("2030-01-01"), day("2030-01-02"))}
+    assert hits == {"running"}
 
 
 def test_a_period_starting_after_the_window_does_not_count():
     # Guards the direction of the comparison. Getting this backwards would make
     # every future period show up on every past window — and it would look like a
     # feature ("look how much context we have") rather than a bug.
-    以后的 = 桶("later", "2026-09-01..2026-09-30")
-    命中 = {t[2] for t in B.covering([以后的], 日("2026-07-01"), 日("2026-07-31"))}
-    assert 命中 == set()
+    later_on = bucket("later", "2026-09-01..2026-09-30")
+    hits = {t[2] for t in B.covering([later_on], day("2026-07-01"), day("2026-07-31"))}
+    assert hits == set()
 
 
 def test_only_the_start_bound_given():
     # Half-open windows are a real call shape from the browse view (the far cell).
     # A period that ended before the window starts drops; everything later stays.
-    早就结束 = 桶("past", "2026-01-01..2026-02-01")
-    还在里面 = 桶("inside", "2026-07-01..2026-08-01")
-    命中 = {t[2] for t in B.covering([早就结束, 还在里面], 日("2026-06-01"), None)}
-    assert 命中 == {"inside"}
+    long_finished = bucket("past", "2026-01-01..2026-02-01")
+    still_inside = bucket("inside", "2026-07-01..2026-08-01")
+    hits = {t[2] for t in B.covering([long_finished, still_inside], day("2026-06-01"), None)}
+    assert hits == {"inside"}
 
 
 def test_zero_length_window_still_matches_a_period_spanning_it():
     # `_cell_span` can hand back t0 == t1 for a single-entry cell. A period that
     # spans that instant must still be found — otherwise the thinnest cells, which
     # are exactly the ones with least context of their own, would lose their label.
-    时刻 = 日("2026-07-05")
-    时期 = 桶("span", "2026-07-01..2026-07-10")
-    assert {t[2] for t in B.covering([时期], 时刻, 时刻)} == {"span"}
+    moment = day("2026-07-05")
+    period = bucket("span", "2026-07-01..2026-07-10")
+    assert {t[2] for t in B.covering([period], moment, moment)} == {"span"}
 
 
 def test_a_period_with_no_when_at_all_falls_back_to_created():
     # Hand-written entries from before the range format existed have no `when`.
     # They are not discarded: `parse_span` falls back to `created` and treats them
     # as still running, so the oldest periods keep working.
-    老桶 = {"id": "ancient", "content": "from before the format existed",
+    old_bucket = {"id": "ancient", "content": "from before the format existed",
             "metadata": {"id": "ancient", "tags": [TAG], "created": "2026-07-01"}}
-    assert {t[2] for t in B.covering([老桶], 日("2026-08-01"), 日("2026-08-02"))} == {"ancient"}
+    assert {t[2] for t in B.covering([old_bucket], day("2026-08-01"), day("2026-08-02"))} == {"ancient"}
 
 
 def test_the_input_list_is_not_mutated():
@@ -220,16 +220,16 @@ def test_the_input_list_is_not_mutated():
     # a row. If this sorted or trimmed it in place, every later call would receive a
     # different list than the caller thinks it passed — and the bug would surface as
     # "periods go missing further down the page", nowhere near the cause.
-    桶们 = [桶("a", "2026-07-01..2026-07-10"), 桶("b", "2026-06-01..2026-06-30")]
-    原样 = [b["id"] for b in 桶们]
-    B.covering(桶们, None, None)
-    assert [b["id"] for b in 桶们] == 原样
-    assert len(桶们) == 2
+    buckets = [bucket("a", "2026-07-01..2026-07-10"), bucket("b", "2026-06-01..2026-06-30")]
+    verbatim = [b["id"] for b in buckets]
+    B.covering(buckets, None, None)
+    assert [b["id"] for b in buckets] == verbatim
+    assert len(buckets) == 2
 
 
 def test_the_far_future_window_is_not_special_cased():
     # Guards against someone "helpfully" treating an absent end date as now(),
     # which would make an ongoing period stop covering tomorrow.
-    开着的 = 桶("running", "2026-07-01..")
-    明天 = W.now() + timedelta(days=1)
-    assert {t[2] for t in B.covering([开着的], 明天, 明天 + timedelta(days=1))} == {"running"}
+    open_ended = bucket("running", "2026-07-01..")
+    tomorrow = W.now() + timedelta(days=1)
+    assert {t[2] for t in B.covering([open_ended], tomorrow, tomorrow + timedelta(days=1))} == {"running"}
