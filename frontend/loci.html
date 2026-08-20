@@ -7,47 +7,59 @@
 <link rel="icon" href="/static/favicon.svg">
 <style>
 /* ==========================================================
-   Loci · 样式表 v4（2026-08-03 夜，照她挑的「White 白岩」重做）
+   Loci — stylesheet v4
 
-   她今晚挑的七张参考共同点只有一个：**近乎无色**。
-   而她给的那八个色是一套有饱和度的暖棕 —— 这就是她一直说「奇怪」的真因：
-   我在用彩色方案凑一个无色的感觉。八个色不废，是主次全反过来：
+   THE ONE THING THE DAY PALETTE IS FOR: it should read as almost colourless.
 
-     · 强调不再是 6 号陶褐，改用她的 **1 号 #403B36**（暖黑）
-       —— 白岩量出来的强调色是 #282824，她的 1 号几乎是同一个东西，还更暖
-     · 底提亮到纸白级；**卡片比底更白**（白岩是 93% 底 / 97% 卡）
-     · 6 号陶褐降级：**只活在夜里**（暗色主题 + 星空），白天一点都不出现
-     · 4 号杏几乎不用
+   The eight source colours below are a saturated warm-brown set, and the earlier
+   versions of this file used them as a colour scheme — which is exactly why it kept
+   feeling off. The palette was never the problem; the hierarchy was inverted. Reading
+   a saturated set as "the colours to show" cannot produce a colourless surface no
+   matter how carefully each one is placed.
 
-   两套主题（她要黑色但不要那个酸绿）：
-     白天 = 纸白 + 深炭，近乎无色
-     夜里 = 纯黑 + 陶褐暖光，跟星空同一套
+   So the same eight colours, re-ranked:
+
+     · The accent is #403B36 (warm black), not the terracotta. Reference surfaces of
+       this kind measure their accent around #282824 — near enough to the same thing,
+       and this one is warmer.
+     · The background is lifted to paper-white, and the CARDS ARE LIGHTER THAN THE
+       BACKGROUND (roughly 93% ground / 97% card). Cards darker than their ground is
+       what makes an interface read as "panels", which is the opposite of paper.
+     · The terracotta is demoted to night only — dark theme and the starfield. It does
+       not appear in daylight at all.
+     · The apricot is barely used.
+
+   Two themes:
+     day    paper white + deep charcoal, almost colourless
+     night  true black + warm terracotta light, the same set the starfield uses
    ========================================================== */
 
 :root{
-  /* 她的八个色，原样留着当来源 */
+  /* The eight source colours, kept verbatim so the derivation stays visible. */
   --c1:#403B36; --c2:#8C6C51; --c3:#BF9774; --c4:#F1C3A7;
   --c5:#F1F0F3; --c6:#BF9774; --c7:#E8E8E9; --c8:#E0CAB7;
 
-  /* ---- 白天：White 白岩 ---- */
-  --paper:#F0EEE9;       /* 底：纸 */
-  --card:#FAF8F5;        /* 卡片：比纸更白（她定的「看得见一点」= 差 ~6%） */
-  --card-2:#F4F1EC;      /* 卡片里的次级块 */
-  --ink:#403B36;         /* 主字 + 强调（她的 1 号） */
-  --ink-2:#8C6C51;       /* 次级（她的 2 号） */
-  --ink-3:#A9A29A;       /* 极淡 */
-  --line:#E4E0D9;        /* 细线 */
-  --slot:#E7E3DC;        /* 分段控件的槽 */
-  --on-ink:#FAF8F5;      /* 深色块上的字 */
-  --accent:#403B36;      /* 白天没有彩色强调 —— 强调就是深炭 */
+  /* ---- Day ---- */
+  --paper:#F0EEE9;       /* the ground: paper */
+  --card:#FAF8F5;        /* cards, lighter than the paper — about 6% apart, which is
+                            the least that still reads as a separate surface */
+  --card-2:#F4F1EC;      /* secondary block inside a card */
+  --ink:#403B36;         /* body text and accent (source colour 1) */
+  --ink-2:#8C6C51;       /* secondary (source colour 2) */
+  --ink-3:#A9A29A;       /* faintest */
+  --line:#E4E0D9;        /* hairlines */
+  --slot:#E7E3DC;        /* the track behind a segmented control */
+  --on-ink:#FAF8F5;      /* text sitting on a dark block */
+  --accent:#403B36;      /* daylight has no coloured accent — the accent IS the charcoal */
   --on-accent:#FAF8F5;
   --danger:#9C5B3D;
 
-  /* 星空的夜色（两个主题下都一样，它本来就是夜） */
+  /* The starfield's own night colours. Identical under both themes on purpose: the
+     starfield is night already, so it does not follow the day/night switch. */
   --night:#332B24; --night-2:#1B1613;
   --warm:#E0C48C; --cool:#8E9BA6;
 
-  --r:18px;              /* 白岩的圆角偏大 */
+  --r:18px;              /* deliberately large — the reference surfaces round generously */
   --r-s:12px;
   --gap:18px;
   --pad:20px;
@@ -62,7 +74,8 @@
   --mono:ui-monospace,"SF Mono",Menlo,Consolas,"PingFang SC",monospace;
 }
 
-/* ---- 夜里：纯黑 + 陶褐（她：要黑色主题，但不要那个酸绿） ---- */
+/* ---- Night: true black + terracotta.
+       Black, and warm. Not the acid green a dark theme usually defaults to. ---- */
 :root[data-theme="dark"]{
   --paper:#181715;
   --card:#221F1C;
@@ -73,7 +86,7 @@
   --line:#332F2B;
   --slot:#2B2724;
   --on-ink:#181715;
-  --accent:#BF9774;      /* 陶褐在这儿当主角 —— 她那八个色里最「她」的那个 */
+  --accent:#BF9774;      /* terracotta leads here — the most characteristic of the eight */
   --on-accent:#181715;
   --danger:#C58060;
 }
@@ -89,15 +102,15 @@ button,input,select{font-family:inherit;font-size:inherit;color:inherit}
 button{cursor:pointer;border:none;background:none}
 a{color:var(--ink);text-decoration:none}
 
-/* ---------- 骨架 ---------- */
+/* ---------- Skeleton ---------- */
 .wrap{max-width:1120px;margin:0 auto;padding:28px 20px 90px}
 header.top{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:24px}
 .brand{font-family:var(--font-brand);font-size:19px;font-weight:600;
   letter-spacing:.24em;color:var(--ink)}
 .brand em{font-style:normal;font-weight:300;margin-left:.6em;color:var(--ink-3)}
 
-/* 页签 = 分段控件（白岩那个「去程清单 / 回程清单」的做法）：
-   一个浅槽，选中的那一格是更白的胶囊。没有彩色。 */
+/* Tabs are a segmented control, not a row of links: a shallow track, and the
+   selected cell is a whiter pill sitting in it. No colour anywhere. */
 nav.tabs{display:flex;gap:2px;margin-left:auto;padding:3px;
   background:var(--slot);border-radius:999px}
 nav.tabs button{
@@ -109,16 +122,29 @@ nav.tabs button.on{background:var(--card);color:var(--ink);font-weight:600;
   box-shadow:0 1px 3px rgba(0,0,0,.07)}
 
 section.page{display:none}
-/* 整理页那两块靠 hidden 切。⚠️ 必须写死这一条：坑 #1 说过 ID/类选择器能压过
-   浏览器给 [hidden] 的 display:none，少了它「切过去」就等于「两块都在」。
-   也不能把两块各自套进一个 div —— section.page.on 是靠**直接子元素**给 gap 的，
-   套一层缝就没了（坑 #5，她说了三遍才被量出来的那个 0px）。 */
+/* THE `[hidden]` OVERRIDE TRAP — this file falls into it in four places, so it is
+   named once here and referred to by name below.
+
+   An id or class selector outranks the `display:none` the browser gives `[hidden]`.
+   Any rule that sets `display` on an element also has to restore the hidden case
+   explicitly, or setting `hidden` in JS does nothing at all — and it fails silently:
+   the element simply stays visible.
+
+   Here it means "switch to the other block" would show BOTH blocks.
+
+   ⚠️ And the fix must not be "wrap each block in a div": `section.page.on` gives its
+      gap through DIRECT children, so one extra layer collapses the gap to 0px. That
+      one took three reports before anyone measured it. */
 section.page.on > [hidden]{display:none}
-/* 人名表一行：名字 · 多少条 · 最近一次 · 牌子 · 动作。
-   元信息在名字右边横排，动作靠右——名字长了不挤动作，动作多了不挤名字。 */
-/* 两栏 grid 而不是一路 flex-wrap：左边（名字/条数/牌子）自己内部换行，
-   动作永远待在右边同一行。纯 flex-wrap 的话，名字一长或者多一个牌子，
-   按钮就被顶到下一行去孤零零挂着（第一版真这样，小刀批那行就是）。 */
+/* One row of the people table: name · how many · last seen · badges · actions.
+   Metadata sits to the right of the name, actions hard right — a long name must not
+   squeeze the actions, and extra actions must not squeeze the name.
+
+   Two-column grid rather than one flex-wrap: the left side (name / count / badges)
+   wraps within itself, and the actions stay on the same line at the right. With a
+   plain flex-wrap, one long name or one extra badge pushes the buttons onto a line of
+   their own, where they hang with nothing beside them. The first version did exactly
+   that. */
 .who-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;
   gap:10px 14px;padding:13px 2px;border-bottom:1px solid var(--line)}
 .who-row .main{display:flex;align-items:center;gap:8px 12px;flex-wrap:wrap;min-width:0}
@@ -128,16 +154,22 @@ section.page.on > [hidden]{display:none}
 .who-row .acts{display:flex;gap:6px;flex:none;justify-content:flex-end}
 .who-row .who-panel{grid-column:1/-1;display:flex;align-items:center;gap:8px;flex-wrap:wrap;
   padding:10px 0 2px}
-/* ⚠️ 又是坑 #1：上面那条类选择器的 display:flex 压过浏览器给 [hidden] 的
-   display:none —— 少了这一行，JS 里 panel.hidden=true 完全没用，面板关不上。
-   8-03 夜是 #gate 上栽的（她被关在门外二十分钟），8-19 我在这儿原样栽了第二次。
-   教训还是那句：**验了「能打开」不等于验了「能关上」。** */
+/* ⚠️ The `[hidden]` override trap again: the `display:flex` above outranks the
+   browser's `display:none`, so without this line `panel.hidden = true` does nothing
+   and the panel cannot be closed.
+
+   This has now happened twice in this file. The first time it was the login gate, and
+   the gate stayed over the screen for twenty minutes after a successful login. The
+   second time was here, in exactly the same shape.
+
+   🔴 The lesson both times: **testing that it opens is not testing that it closes.** */
 .who-row .who-panel[hidden]{display:none}
 .who-row .who-panel select,.who-row .who-panel input{padding:6px 10px;font-size:var(--fs-xs)}
 .who-row .who-panel .tiny{flex-basis:100%}
 .mini.hot{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
-/* 小浮条：写口成功了得说一声，但不值得弹对话框（对话框要人点一下才走，
-   而这几个动作是连着点好几下的活）。3 秒自己淡掉。 */
+/* Toast: a write that succeeded should say so, but not with a dialog — a dialog has
+   to be dismissed, and these actions are the kind you do several of in a row. Fades
+   by itself after three seconds. */
 #toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(8px);
   z-index:90;max-width:min(520px,calc(100vw - 32px));
   padding:11px 18px;border-radius:999px;font-size:var(--fs-sm);
@@ -148,14 +180,19 @@ section.page.on > [hidden]{display:none}
 .who-row .flag{font-family:var(--mono);font-size:var(--fs-xs);
   padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--ink-2)}
 .who-row .flag.warn{border-color:var(--accent);color:var(--ink)}
-/* 卡标题右边那个「展开/收起」：h2.h 是 flex，float 在 flex 里不生效
-   （第一版写了 float:right，按钮直接掉到下一行）。改用 margin-left:auto：
-   宽屏跟标题同一行贴右边；窄屏因为 h2.h .n 是 flex:1 1 100%（副标题独占一行），
-   按钮会落到下一行——那时它靠右，看着也是刻意的。 */
+/* The expand/collapse button at the right of a card heading: `h2.h` is a flex
+   container, and `float` does nothing inside one — the first version used
+   `float:right` and the button simply dropped onto the next line. `margin-left:auto`
+   is the flex equivalent: on a wide screen it sits on the heading's line, hard right;
+   on a narrow one `h2.h .n` is `flex:1 1 100%` (the subtitle takes a line to itself)
+   so the button wraps below — and there it is still right-aligned, which reads as
+   deliberate rather than broken. */
 .who-bar{height:4px;border-radius:2px;background:var(--accent);opacity:.5;flex:none}
-/* 设置页「状态」那几行：一行三件事——是什么 · 现在什么状态 · 不对的话会怎么样。
-   第三列只在不 ok 的时候出现（没人需要被告知一切正常的后果）。 */
-#setRows[hidden]{display:none}          /* 又是坑 #1，先把这条写死 */
+/* The rows of the settings "status" block: three things per row — what it is · what
+   state it is in now · what goes wrong if it is not right. The third column appears
+   only when the row is not ok; nobody needs to be told the consequences of everything
+   being fine. */
+#setRows[hidden]{display:none}          /* the `[hidden]` override trap again — restore it up front */
 .set-row{padding:11px 0;border-bottom:1px solid var(--line)}
 .set-row:last-child{border-bottom:0}
 .set-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
@@ -169,7 +206,7 @@ section.page.on > [hidden]{display:none}
 #logBox[hidden]{display:none}
 section.page.on{display:flex;flex-direction:column;gap:var(--gap)}
 
-/* 卡片：比底更白、大圆角、无边框无阴影 */
+/* Cards: lighter than the ground, generously rounded, no border and no shadow. */
 .card{background:var(--card);border-radius:var(--r);padding:var(--pad)}
 .card + .card{margin-top:var(--gap)}
 
@@ -183,21 +220,26 @@ h2.h .n{color:var(--ink-3);font-weight:400;letter-spacing:.02em;flex:1 1 100%}
 .spin{color:var(--ink-3);padding:30px 0;text-align:center}
 .err{color:var(--danger)}
 
-/* ---------- 筛子 ---------- */
+/* ---------- Filters ---------- */
 .fline{display:flex;gap:14px;padding:14px 0;border-top:1px solid var(--line)}
-/* F1：「翻 / 找」分家的那道线——她定的：跟上面 .fline 的分割线一样就行，别通栏别加粗 */
+/* F1: the seam where browsing and searching part company. The same hairline as the
+   `.fline` dividers above — not full-bleed, not heavier: it separates two halves of
+   one card, it does not start a new section. */
 .gate-split{border-top:1px solid var(--line);margin:14px 0}
-/* F2：模糊搜 / 搜场景 分段开关——圆角跟 chips 一样圆圆的（她点的） */
+/* F2: the fuzzy / scene segmented switch — fully rounded, matching the chips. */
 .seg{display:inline-flex;background:var(--slot);border-radius:999px;padding:3px;flex:none}
 .segb{border:0;background:transparent;color:var(--ink-2);font-size:var(--fs-sm);
   padding:7px 14px;border-radius:999px;cursor:pointer;font-family:var(--font)}
 .segb.on{background:var(--card);color:var(--ink);font-weight:600;
   box-shadow:0 1px 2px rgba(0,0,0,.08)}
-/* F4：遗忘三档的小徽章（她要能看见引擎干得对不对；文字皮里一个字不提） */
+/* F4: the badge for the three stages of decay. The forgetting engine works silently,
+   so there has to be one place to see whether it is doing the right thing — while the
+   text surface never mentions decay at all. */
 .decay-b{flex:none;font-size:var(--fs-xs);color:var(--ink-3);border:1px solid var(--line);
   border-radius:6px;padding:1px 5px;margin-left:4px}
 .decay-b.sunk{color:var(--danger);border-color:var(--danger)}
-/* F3：星座列表（=大 event，一件一件往上叠，最新在上）。左边那条细竖线是她画的 */
+/* F3: the constellation list (= big events, stacked one on another, newest on top).
+   The thin rule down the left is what makes a stack of them read as a single list. */
 .const-item{border-left:2px solid var(--accent);padding-left:12px;margin:0 0 14px}
 .const-item.ongoing{border-left-color:var(--accent)}
 .const-item.over{border-left-color:var(--line)}
@@ -211,7 +253,8 @@ h2.h .n{color:var(--ink-3);font-weight:400;letter-spacing:.02em;flex:1 1 100%}
 .rrow .kind{font-size:var(--fs-xs);font-family:var(--mono);color:var(--ink-3);
   flex:none;width:40px;letter-spacing:.06em}
 
-/* 未选中 = 一圈细线，没有底色；选中 = 深炭实心 + 纸白字。全站唯一的实色块 */
+/* Unselected = a hairline ring with no fill; selected = solid charcoal with
+   paper-white text. The only solid block of colour on the whole surface. */
 .chip,.room,.pg,.sw{
   padding:6px 14px;border-radius:999px;background:transparent;color:var(--ink-2);
   font-size:var(--fs-sm);transition:.14s;border:1px solid var(--line);white-space:nowrap;
@@ -246,12 +289,13 @@ input[type=file]::file-selector-button:hover{border-color:var(--ink-3);color:var
 .mini{padding:5px 13px;border-radius:999px;font-size:var(--fs-xs);
   background:transparent;color:var(--ink-3);border:1px solid var(--line);transition:.14s}
 .mini:hover{border-color:var(--ink-3);color:var(--ink)}
-/* 唯一会动数据的按钮，默认就带上警示色的边和字，不跟别的按钮长一样 */
+/* The only button that changes data. It wears the warning colour on its border and
+   its text by default — it must not look like every other button on the page. */
 .mini.warn{color:var(--danger);border-color:var(--danger);opacity:.75}
 .mini.warn:hover{background:var(--danger);color:var(--on-accent);
   border-color:var(--danger);opacity:1}
 
-/* ---------- 结果两段式 ---------- */
+/* ---------- Results, in two parts ---------- */
 .card-txt{
   background:var(--paper);color:var(--ink);border-radius:var(--r-s);padding:16px 18px;
   font-family:var(--mono);font-size:var(--fs-mo);line-height:1.8;white-space:pre-wrap;
@@ -265,8 +309,10 @@ input[type=file]::file-selector-button:hover{border-color:var(--ink-3);color:var
 }
 .row:last-child{border-bottom:none}
 .row:hover{background:var(--card-2)}
-/* feel 的 id 是 feel_20260803…_V001 整串（后端故意不截，截了没法直查），
-   固定宽装不下就会压到正文上。这里只管显示：截断 + 省略号，完整的挂在 title 上。 */
+/* A feel id is the whole `feel_20260803…_V001` string — the backend deliberately does
+   not shorten it, because a shortened id cannot be looked up directly. It does not fit
+   the fixed width, and what overflows pushes into the body text. This is a display
+   concern only: clip with an ellipsis, and hang the full id on `title`. */
 .row .id{font-family:var(--mono);font-size:var(--fs-xs);color:var(--ink-3);flex:none;
   width:56px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .row .lab{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
@@ -284,8 +330,8 @@ input[type=file]::file-selector-button:hover{border-color:var(--ink-3);color:var
 .pg:disabled{opacity:.3;cursor:default}
 .pg-gap{color:var(--ink-3);font-size:var(--fs-xs);padding:0 2px}
 
-/* ---------- 星空 ★ 整块可搬走当别处的夜空。
-     陶褐在这儿当主角 —— 她定的：它只活在夜里 ---------- */
+/* ---------- Starfield ★ the whole block lifts out and works as a night sky
+     elsewhere. Terracotta leads here, and here only: it lives at night. ---------- */
 .sky-wrap{position:relative;border-radius:var(--r);overflow:hidden;
   background:radial-gradient(120% 90% at 50% 0%,#3D332B 0%,var(--night) 45%,var(--night-2) 100%)}
 #sky{display:block;width:100%;height:min(72vh,660px);cursor:grab;touch-action:none}
@@ -312,7 +358,7 @@ input[type=file]::file-selector-button:hover{border-color:var(--ink-3);color:var
   color:rgba(214,190,163,.55);animation:loadPulse 3s ease-in-out infinite}
 @keyframes loadPulse{0%,100%{opacity:.42}50%{opacity:.85}}
 
-/* ---------- 相似度 ---------- */
+/* ---------- Similarity ---------- */
 .slider-row{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
 input[type=range]{-webkit-appearance:none;appearance:none;flex:1;min-width:220px;height:3px;
   border-radius:2px;background:var(--line);outline:none}
@@ -347,7 +393,7 @@ input[type=range]::-moz-range-thumb{width:20px;height:20px;border:none;border-ra
 .pair{max-height:2400px}
 
 /* ---------- breath ---------- */
-/* 门口那张纸：一条左侧竖线（图1 那个 CARD 的做法） */
+/* The sheet by the door: one rule down the left, and no box drawn around it. */
 .paper{background:transparent;border-left:2px solid var(--ink);border-radius:0;
   padding:4px 0 4px 18px;white-space:pre-wrap;line-height:1.85;font-size:var(--fs-sm)}
 .rule{padding:12px 2px;background:transparent;text-align:left;width:100%;transition:.13s;
@@ -365,17 +411,22 @@ input[type=range]::-moz-range-thumb{width:20px;height:20px;border:none;border-ra
 .rem.soon{background:var(--card-2)}
 .rem.near,.rem.far{background:transparent;color:var(--ink-2)}
 .rem .d{font-family:var(--mono);font-size:var(--fs-xs);flex:none}
-/* 施工 6：压在心头一行 = .rem（陈述/问句）+ .heavy-acts（结案按钮），
-   问句那条（.rem.q）用左边一道强调条跟其余"照旧陈列"的条目区分开。 */
+/* One "weighing on me" row = `.rem` (the statement, or the question) plus
+   `.heavy-acts` (the buttons that close it out). The question row (`.rem.q`) gets an
+   accent bar down its left so it reads differently from the ones that are merely
+   being listed as usual. */
 .heavy-row{display:flex;align-items:stretch;gap:8px;margin-bottom:7px;
   transition:opacity .3s,max-height .3s}
 .heavy-row.gone{opacity:0;max-height:0;overflow:hidden;margin:0}
 .heavy-row .rem{margin-bottom:0;flex:1;min-width:0}
-/* 2026-08-19 她指的那个塌了的卡：.rem 是横排 flex，而左边那格 .d 是 flex:none，
-   「挂了 11 天，上次问过你 2026-08-18」一长，右边正文就被挤成一个字宽、竖着流下来
-   （只有短的那条「挂了 8 天」看着正常——差别就在左格有多长）。
-   她定的改法：**挂了几天 / 上次问过你 / 没定期限那句警告，三样一起提到上面**，
-   正文自己占一整行。元信息再长也挤不到正文了。 */
+/* The collapsed-card bug. `.rem` is a horizontal flex row and its left cell `.d` is
+   `flex:none`, so as soon as that cell grows long ("held 11 days · last asked
+   2026-08-18") the body on the right is squeezed to one character wide and flows
+   straight down the page. Only the short rows ("held 8 days") looked right, and the
+   only difference between them was how long the left cell happened to be.
+   The fix: lift all three pieces of metadata — days held / last asked / the
+   no-deadline warning — onto a line of their own above, and give the body a full row.
+   However long the metadata gets, it can no longer crowd the text. */
 .rem.stack{flex-direction:column;align-items:stretch;gap:7px}
 .rem.stack .meta{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;
   font-family:var(--mono);font-size:var(--fs-xs);color:var(--ink-3)}
@@ -386,12 +437,14 @@ input[type=range]::-moz-range-thumb{width:20px;height:20px;border:none;border-ra
 .heavy-acts{display:flex;flex-direction:column;gap:4px;flex:none}
 .heavy-acts .mini{padding:4px 10px;font-size:var(--fs-xs)}
 
-/* ---------- 弹窗 ---------- */
+/* ---------- Overlays ---------- */
 #gate{position:fixed;inset:0;z-index:70;background:var(--paper);
   display:flex;align-items:center;justify-content:center;padding:20px}
-/* ⚠️ 必须有这条：上面那个 #gate{display:flex} 是 ID 选择器，优先级压过浏览器
-   给 [hidden] 的 display:none —— 少了它，JS 里 gate.hidden=true 完全没用，
-   登录明明成功了，门还糊在屏幕上下不去（8-03 夜真把她关在外面过）。 */
+/* ⚠️ The `[hidden]` override trap, and this line is not optional. The
+   `#gate{display:flex}` above is an ID selector and outranks the `display:none` the
+   browser gives `[hidden]`, so without it `gate.hidden = true` does nothing at all:
+   the login succeeds and the gate stays plastered across the screen. This is the
+   first of the two times this file has locked someone out of their own panel. */
 #gate[hidden]{display:none}
 #gate .card{width:min(360px,100%)}
 #scrim{position:fixed;inset:0;background:rgba(24,23,21,.42);opacity:0;pointer-events:none;
@@ -407,8 +460,8 @@ input[type=range]::-moz-range-thumb{width:20px;height:20px;border:none;border-ra
 .dr-top{display:flex;align-items:center;gap:12px;padding:18px 22px;
   border-bottom:1px solid var(--line);flex:none}
 .dr-top strong{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* 「编辑」2026-08-19 从正文底下挪到了这儿（她指的位置）：改一条的入口该跟关闭
-   在同一个高度上，不用先滚到底才找得到。 */
+/* "Edit" lives up here rather than under the body text: the way in to changing an
+   entry belongs at the same height as the way out of it, not at the end of a scroll. */
 .dr-top #drEdit{flex:none}
 .dr-top .x{font-size:24px;color:var(--ink-3);line-height:1;padding:0 4px}
 .dr-body{overflow-y:auto;padding:20px 22px 28px;flex:1}
@@ -418,20 +471,23 @@ input[type=range]::-moz-range-thumb{width:20px;height:20px;border:none;border-ra
 .kv span.hot{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
 .body-txt{white-space:pre-wrap;line-height:1.85;font-size:var(--fs-md)}
 
-/* 主题开关 */
+/* Theme switch */
 .theme-row{display:flex;gap:8px;align-items:center}
 
 /* ==========================================================
-   动画 —— 克制那种。白岩这个风格不该有花活：
-   只做「东西是怎么来的」和「碰到它有没有反应」，不做弹跳不做滑动。
-   全部尊重系统的「减少动态效果」开关（在最下面关掉）。
+   Motion — the restrained kind. This surface should have no tricks in it: animate
+   only where something came from, and whether it answered when you touched it. No
+   bouncing, no sliding.
+   All of it defers to the system's reduce-motion setting, switched off at the bottom
+   of this block.
    ========================================================== */
 @keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 @keyframes fadeIn{from{opacity:0}to{opacity:1}}
 
-/* 换页：整页轻轻浮上来一次 */
+/* Changing page: the whole page floats up once, gently. */
 section.page.on{animation:fadeUp .26s cubic-bezier(.2,.7,.3,1) both}
-/* 卡片错开一点点，像纸一张张落下（只错前六张，再多就成了表演） */
+/* Cards land slightly staggered, the way sheets of paper do — the first six only,
+   past which it stops being a hint and turns into a performance. */
 section.page.on > *{animation:fadeUp .3s cubic-bezier(.2,.7,.3,1) both}
 section.page.on > *:nth-child(1){animation-delay:.02s}
 section.page.on > *:nth-child(2){animation-delay:.06s}
@@ -440,28 +496,30 @@ section.page.on > *:nth-child(4){animation-delay:.14s}
 section.page.on > *:nth-child(5){animation-delay:.18s}
 section.page.on > *:nth-child(n+6){animation-delay:.20s}
 
-/* 列表行、对子：出现时淡入，不做位移（几百行一起位移会晕） */
+/* List rows and pairs fade in without moving: a few hundred rows sliding at once is
+   nauseating. */
 .row,.pair,.rule{animation:fadeIn .22s ease both}
 
-/* 碰得到的东西：都给一个统一的反应速度 */
+/* Everything you can touch answers at the same speed. */
 .chip,.room,.pg,.sw,.btn,.mini,.row,.rule,nav.tabs button,.rem{
   transition:background-color .16s ease,border-color .16s ease,
              color .16s ease,opacity .16s ease,transform .16s ease}
 .btn:active,.mini:active,.chip:active,.room:active,.pg:active{transform:scale(.97)}
 .rule:active,.row:active{transform:scale(.995)}
 
-/* 分段控件那颗白胶囊：切页签时的主角，单独给个缓动 */
+/* The white pill in the segmented control is the thing you actually watch when tabs
+   change, so it gets an easing of its own. */
 nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
                            color .2s ease,box-shadow .2s ease}
 
-/* 她的系统要是开了「减少动态效果」，全部闭嘴 */
+/* If the system asks for reduced motion, all of this shuts up. */
 @media(prefers-reduced-motion:reduce){
   *,*::before,*::after{
     animation-duration:.01ms !important;animation-iteration-count:1 !important;
     transition-duration:.01ms !important;scroll-behavior:auto !important}
 }
 
-/* ---------- 手机 ---------- */
+/* ---------- Phones ---------- */
 @media(max-width:560px){
   .wrap{padding:18px 14px 70px}
   :root{--gap:14px;--pad:17px;--r:16px}
@@ -496,11 +554,13 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
     </nav>
   </header>
 
-  <!-- ============ 记忆 ============ -->
+  <!-- ============ Memories ============ -->
   <section class="page on" id="p-pool">
-    <!-- F1（2026-08-06 机制②）：「翻」和「找」分家——
-         上面是**范围**（room/when/tag，在看）；一道线；下面是**目标**（扔词，在找）。
-         她 8-06 傍晚验收：说明文字全砍（「我又不是看不懂」），线用普通细线别通栏。 -->
+    <!-- F1: browsing and searching are separated. Above the rule is SCOPE (room /
+         when / tag — you are looking); below it is TARGET (throw a word in — you are
+         searching). No explanatory copy on either half: they explain themselves, and a
+         paragraph saying so only tells the reader they were not trusted to read. The
+         divider is an ordinary hairline, not full-bleed. -->
     <div class="card">
       <div class="fline" style="border-top:0;padding-top:0">
         <span class="lb">room</span>
@@ -525,12 +585,14 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
 
       <div class="gate-split"></div>
 
-      <!-- 2026-08-19 改：原来这儿的「搜场景」走的是 **tag 门**（包含匹配、不打分），
-           而工具面真正的场景视图是 `view="scene"`（按共享场景词把命中的记忆聚成簇，
-           看这件事怎么一路过来的）—— 两件不同的事共用了一个名字，
-           而且面板从来没发过 view 这个参数，**真正的场景视图在这一页一直没有入口**。
-           她 8-18 夜定：只留模糊搜和场景搜，场景搜就是接 view=scene。
-           标签要搜就点上面那排 chips，不占这个位置。 -->
+      <!-- "Scene search" here used to go through the TAG door (substring match, no
+           scoring), while the real scene view on the tool side is `view="scene"`:
+           memories that hit are clustered by shared scene words, so you can see how one
+           thing travelled. Two different things were sharing one name — and because the
+           panel never sent the `view` parameter at all, THE REAL SCENE VIEW HAD NO WAY
+           IN from this page.
+           So: two modes only, fuzzy and scene, with scene wired to `view=scene`. To
+           search by tag, click the chips above; that does not need a slot down here. -->
       <div class="frow" style="margin-bottom:12px">
         <span class="seg" id="qMode">
           <button class="segb on" data-mode="fuzzy">模糊搜</button>
@@ -541,7 +603,8 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
         <button class="btn ghost" id="clr">全清</button>
       </div>
 
-      <!-- 关联度线：只有「模糊搜」的时候才有意义（不扔词没有分数；搜场景不打分）。 -->
+      <!-- The relevance floor only means anything in fuzzy mode: browsing produces no
+           scores, and scene search does not rank. -->
       <div class="fline" id="floorRow" style="display:none">
         <span class="lb">关联度</span>
         <div class="slider-row" style="flex:1">
@@ -556,7 +619,7 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
     <div id="poolOut"></div>
   </section>
 
-  <!-- ============ 星空 ============ -->
+  <!-- ============ Starfield ============ -->
   <section class="page" id="p-sky">
     <div class="sky-wrap" id="skyWrap">
       <canvas id="sky"></canvas>
@@ -564,7 +627,8 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
       <div id="skyLabels"></div>
       <div id="skyLoad"><canvas></canvas><p>正在把星星铺开…</p></div>
     </div>
-    <!-- 开关挪到天的下面（她定的：别压在星空上） -->
+    <!-- The switches sit below the sky rather than on it: nothing gets laid over the
+         thing you came here to look at. -->
     <div class="sky-ctl">
       <button class="sw on" id="swSpin">自转</button>
       <button class="sw on" id="swConst">星座</button>
@@ -572,16 +636,18 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
       <button class="sw" id="swSound">声音</button>
       <span class="sky-stat" id="skyStat">铺开中…</span>
     </div>
-    <!-- F3 定稿（她 8-06 傍晚拍的）：大 event 时间轴和星座**是同一个东西**，
-         合进下面星座那张卡（「星座多好听啊！非要叫主线。」）。 -->
+    <!-- F3: the big-event timeline and the constellations are THE SAME THING, so they
+         are one card below rather than two views of one list. -->
     <div class="card" id="skyNote"></div>
   </section>
 
-  <!-- ============ 相似度 ============ -->
+  <!-- ============ Similarity ============ -->
   <section class="page" id="p-sim">
-    <!-- 整理 = 「系统摆出来，人点那一下」的两件事住一起（跟 muse/fold 同一条判据）。
-         chip 一点换下面那整块，不跳路由不刷新。
-         阈值旋钮不在这页——那是「这台机器怎么跑」，8-18 夜她定了归设置页。 -->
+    <!-- "Tidy up" holds the two jobs where the system lays things out and a person
+         makes the call — the same rule muse/fold follow. A chip swaps the whole block
+         below it: no route change, no reload.
+         The threshold dials are not on this page. Those are "how this machine runs",
+         and they belong in settings. -->
     <div class="card">
       <h2 class="h">整理</h2>
       <div class="chips" id="tidyMode" style="margin-top:2px">
@@ -613,20 +679,24 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
     </div>
   </section>
 
-  <!-- ============ 档案 ============ -->
+  <!-- ============ Profile ============ -->
   <section class="page" id="p-prof">
     <div id="profOut"><div class="card spin">拿门口那张纸…</div></div>
   </section>
 
-  <!-- ============ 设置 ============ -->
-  <!-- 六组，顺序是她 2026-08-18 夜定的：**不按配置类别排，按「新手会卡在哪儿」排**。
-       ①账号打头是因为「打开设置第一眼是我的账号」才是正常人的顺序（她的直觉）；
-       ②状态紧跟着，全好的时候塌成一行、有问题自己张开——她天天看见的是一行小字，
-       新手一进来就是一片黄。
-       不用 chip：这六块是**不同的东西**，是一路往下翻着看的，不是二选一。 -->
+  <!-- ============ Settings ============ -->
+  <!-- Six blocks, ordered by WHERE SOMEONE NEW GETS STUCK rather than by configuration
+       category.
+       ① Account leads, because "the first thing I see when I open settings is my own
+          account" is the order a person expects.
+       ② Status follows: collapsed to one line when everything is fine, opened by
+          itself when something is not. On a settled install what you see day to day is
+          one line of small print; on a fresh one the same block is a wall of warnings.
+       No chips here: these six are DIFFERENT THINGS you scroll through, not options
+       you pick between. -->
   <section class="page" id="p-set">
 
-    <!-- ① 账号 -->
+    <!-- ① Account -->
     <div class="card">
       <h2 class="h">账号</h2>
       <div class="fline">
@@ -673,7 +743,7 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
       </div>
     </div>
 
-    <!-- ② 状态 -->
+    <!-- ② Status -->
     <div class="card">
       <h2 class="h">状态
         <button class="mini" id="setToggle" style="margin-left:auto" hidden>展开</button>
@@ -682,7 +752,7 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
       <div id="setRows"><div class="spin">看一眼…</div></div>
     </div>
 
-    <!-- ③ 引擎 -->
+    <!-- ③ Engines -->
     <div class="card">
       <h2 class="h">引擎 <span class="n">这台机器怎么跑</span></h2>
       <div class="fline">
@@ -740,7 +810,7 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
       </div>
     </div>
 
-    <!-- ④ 数据（导入在上、导出在下——她圈的顺序） -->
+    <!-- ④ Data -->
     <div class="card">
       <h2 class="h">数据 <span class="n">导入 · 备份</span></h2>
       <div class="fline">
@@ -766,13 +836,14 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
       </div>
     </div>
 
-    <!-- ⑤ 体检 -->
+    <!-- ⑤ Health check -->
     <div class="card">
       <h2 class="h">体检 <span class="n">这套记忆活得好不好</span></h2>
       <div id="diagOut" class="muted">…</div>
     </div>
 
-    <!-- ⑥ 日志（默认折起来：出问题才看，平时占屏幕） -->
+    <!-- ⑥ Logs — collapsed by default: you read them when something is wrong, and the
+         rest of the time they are just screen. -->
     <div class="card">
       <h2 class="h">日志
         <button class="mini" id="logToggle" style="margin-left:auto">展开</button>
@@ -790,8 +861,9 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
 
     <div class="tiny muted" id="setFacts" style="padding:2px 0 10px;line-height:1.9"></div>
   </section>
-</div><!-- /.wrap —— 2026-08-19：设置页原来在 .wrap 外面，
-       所以它的卡片比别的页宽、左右边距也不一样。搬进来对齐。 -->
+</div><!-- /.wrap — the settings page used to sit OUTSIDE .wrap, which made its cards
+       wider than every other page's and its side margins different. Moved inside so it
+       lines up. -->
 
 <div id="gate" hidden>
   <form class="card" id="gateForm">
@@ -830,15 +902,17 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
 <script>
 "use strict";
 /* ============================================================
-   小工具
+   Helpers
    ============================================================ */
 const $ = s => document.querySelector(s);
 const el = (t, cls, txt) => { const e = document.createElement(t);
   if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
 const esc = s => String(s == null ? "" : s);
-/* 记忆正文是我们自己写的 markdown，**粗体** 得渲染出来，不然星号裸在那儿
-   （她 8-03 夜在手机上截到的：准则显示成 `**【行为准则·说「我」】**`）。
-   只认 ** 一种，而且**建 DOM 节点、不拼 innerHTML**——正文是数据，不能当 HTML 执行。 */
+/* Memory bodies are markdown we wrote ourselves, so **bold** has to be rendered —
+   otherwise the asterisks sit there naked and a house rule shows up on screen with a
+   literal `**...**` wrapped around its own title.
+   Only `**` is recognised, and it BUILDS DOM NODES rather than assembling innerHTML:
+   the body is data, and data must never be executed as HTML. */
 function mdInto(node, text){
   const parts = String(text == null ? "" : text).split(/(\*\*[^*\n]+\*\*)/g);
   parts.forEach(part => {
@@ -859,8 +933,9 @@ async function api(path){
   if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
   return j;
 }
-/* 施工 6：三个新写口（结案 / 问过她 / event 改错）共用同一套 POST 皮，
-   跟 judge() 里手写的那份是同一套 fetch 参数，抽出来免得写三遍。 */
+/* The three write endpoints (close out / mark as asked / correct an event) all want
+   the same POST wrapper, which is also the fetch call judge() writes out by hand.
+   Pulled out here so it is not spelled out three more times. */
 async function apiPost(path, body){
   const r = await fetch(path, {
     method:"POST", credentials:"same-origin",
@@ -886,7 +961,8 @@ function fail(box, e){
   const c = el("div","card"); c.appendChild(el("div","err", "✗ " + e.message));
   box.appendChild(c);
 }
-/* V 冷暖：低 V 走灰蓝、高 V 走沙陶。夜也是暖的，别跳出这座宫殿。 */
+/* Valence as temperature: low V goes grey-blue, high V goes sand-terracotta. Even the
+   cold end stays warm enough to belong to this palace. */
 function vColor(v, alpha){
   const t = Math.max(0, Math.min(1, v));
   const c = [142,155,166], w = [232,196,160];
@@ -895,8 +971,10 @@ function vColor(v, alpha){
 }
 
 /* ============================================================
-   进门 —— 她要的「完全脱离他们的面板」。密码由浏览器直接发给后端，
-   走的是现成的 /auth/login（会话、限流、加密全是它那一套，这里不另造）。
+   The gate. This panel stands on its own and shares a dashboard with nothing upstream.
+   The password goes straight from the browser to the backend through the existing
+   /auth/login — sessions, rate limiting and hashing are all its business, and none of
+   it is reinvented here.
    ============================================================ */
 function openGate(){
   const g = $("#gate");
@@ -905,9 +983,10 @@ function openGate(){
   fetch("/api/loci/auth/state", {credentials:"same-origin"})
     .then(r => r.json())
     .then(st => {
-      // 没设过安全问题的人（开源版默认就是这样）忘了密码就没路了 ——
-      // 所以这儿必须给出自救的办法。这是自托管，机器就在他自己手上，
-      // 删掉那个文件重新设一把是完全正当的一条路。
+      // Someone who never set a security question — which is the default — has no way
+      // back in once the password is forgotten, so this line has to hand them one.
+      // This is self-hosted: the machine is in their own hands, and deleting that file
+      // to set a fresh password is a perfectly legitimate route, not a hole.
       $("#gateHint").textContent = st.env_locked
         ? "忘了的话：密码在 docker-compose 那行环境变量里。进来之后可以在「设置」里换成自己的。"
         : (st.question
@@ -916,7 +995,8 @@ function openGate(){
     }).catch(() => {});
   setTimeout(() => $("#gatePw").focus(), 60);
 }
-/* 忘记密码 —— 走系统自带的安全问题急救（之前只有后端有，前端没入口） */
+/* Forgot password — the built-in security-question recovery. The backend has had it
+   all along; there was simply no way to reach it from the front end. */
 $("#gateForgot").onclick = async () => {
   const box = $("#gateRecover");
   box.hidden = !box.hidden;
@@ -961,20 +1041,24 @@ $("#gateForm").addEventListener("submit", async e => {
   }catch(err){ msg.textContent = "✗ " + err.message; }
 });
 
-/* ---- 设置：改密码 / 登出 ---- */
-/* 两根滑块的默认值。2026-08-19：本来在设置页做了一组「开页默认」（存 localStorage），
-   她看完说这个其实不需要 —— 她真正想要的是**做梦/发呆那种触发阈值**，那个以后再加。
-   所以这儿收回成两个常量，设置页那一块删了，localStorage 那套也一起删干净：
-   留着一个没有入口的持久化，下一个人只会以为是自己没找到。 */
+/* ---- Settings: change password / log out ---- */
+/* Defaults for the two sliders. There used to be a settings block that let you choose
+   your own opening values and persisted them to localStorage. It was taken back out:
+   the thing actually worth tuning is the trigger threshold for dreaming and musing,
+   not where a slider starts. So this collapsed to two constants, and the localStorage
+   code went with it — leaving persistence behind with nothing to reach it only makes
+   the next person assume they failed to find the control. */
 const LOCAL_DEF = {sim: 88, floor: 35};
 function localDef(k){ return LOCAL_DEF[k]; }
 
 async function loadSet(){
   try{
     const st = await api("/api/loci/auth/state");
-    // 2026-08-19：这一行原来那段长解释下架了。锁装回来之后它就是面板的密码，
-    // 不需要再解释「这把密码到底管什么」；安全问题那条路也没做进设置流程，
-    // 写出来只会让人去找一个不存在的输入框。留三样：设没设过、两个框、一个按钮。
+    // The long explanation that used to sit on this line is gone. With the lock back
+    // in place, this simply IS the panel's password and there is nothing left to
+    // explain; and the security-question route was never wired into the settings flow,
+    // so describing it only sends people hunting for an input that does not exist.
+    // Three things remain: whether one is set, two fields, one button.
     $("#pwState").textContent = st.env_locked
       ? "现在的密码来自环境变量，它优先。要换成自己的，存完还得删掉那一行、重启。"
       : (st.has_file_password ? "设过了。" : "还没设过 —— 设一把，面板的锁就生效了。");
@@ -985,10 +1069,12 @@ async function loadSet(){
   loadSetup(); loadCfg(); loadDiag();
 }
 
-/* ---- 状态：把静默的变成看得见的 ----
-   每行三件事：是什么 · 现在什么状态 · **不对的话会怎么样**。
-   第三列是关键：写「未设置」他会跳过，写「你俩的名字会混进标签」他才懂。
-   全好的时候整块塌起来——她天天看见的该是一行小字，不是五行体检报告。 */
+/* ---- Status: turning the silent failures into visible ones ----
+   Three things per row: what it is · what state it is in · WHAT GOES WRONG IF IT IS NOT.
+   The third column is the one that does the work. "Not configured" gets skipped past;
+   "both of your names will be swept into the tags" gets understood.
+   The whole block collapses when everything is fine — day to day this should be one
+   line of small print, not a five-line health report. */
 let setupOpen = false;
 async function loadSetup(){
   const box = $("#setRows");
@@ -1033,7 +1119,7 @@ async function loadSetup(){
   }catch(e){ fail(box, e); }
 }
 
-/* ---- 引擎 ---- */
+/* ---- Engines ---- */
 let cfgEOn = false;
 async function loadCfg(){
   try{
@@ -1051,15 +1137,17 @@ async function loadCfg(){
     drawLock(c);
     const mt = c.merge_threshold != null ? c.merge_threshold : 75;
     $("#cfgMT").value = mt; $("#cfgMTVal").textContent = mt;
-    // 名字：只读。它们是容器的环境变量，不是 config.yaml 里的东西 ——
-    // 在这儿放个能编辑的框，等于骗人（存了也不生效）。所以只显示 + 说清改哪儿。
+    // Names: read-only. They come from the container's environment variables, not from
+    // config.yaml — an editable field here would be a lie, because saving it would not
+    // take effect. So: show them, and say plainly where they are changed.
     $("#cfgAiName").value = c.ai_name === "AI" ? "" : (c.ai_name || "");
     $("#cfgOwnerName").value = c.owner_name || "";
     $("#setNamesHint").textContent =
       "这两个名字会被挡在标签外面。不填的话，你俩的名字会被当成普通词抽进标签，把搜索淹掉。";
-    // 密码这一行：说清它到底管什么，别的都删掉。
-    // E2 之后面板 /api/* 不再鉴权，这把密码只剩 MCP 授权页一个用处；
-    // 而 MCP 鉴权关着的时候，那个页面也不启用 —— 那就是**一处都没用上**。
+    // The password row: say exactly what it controls, and cut everything else.
+    // Since the panel's /api/* stopped requiring auth, this password has one remaining
+    // use — the MCP authorisation page. And when MCP auth is switched off, that page is
+    // not served either, which means it is used NOWHERE AT ALL.
     const mcpOn = !!c.mcp_require_auth_effective;
     $("#pwWhat").textContent = mcpOn
       ? "给 MCP 远程连接的授权页用的。不是这一屏的门。"
@@ -1098,10 +1186,12 @@ $("#cfgSave").onclick = async () => {
   }catch(e){ msg.className = "tiny err"; msg.textContent = "没成：" + e.message; }
   finally{ btn.disabled = false; }
 };
-/* 面板的锁。两件事要说清楚，因为它们不是一回事：
-   开关（panel_auth）= 你想不想锁；到底锁没锁（panel_locked）= 还得有密码。
-   没密码的时候开关开着也锁不住 —— 那条硬线在后端（锁一个没钥匙的门
-   只会把主人关在外面，8-03 夜真发生过）。所以这儿要把两个状态分开显示。 */
+/* The panel lock. Two things have to be spelled out, because they are not the same
+   thing: the switch (`panel_auth`) is whether you WANT it locked; whether it is
+   ACTUALLY locked (`panel_locked`) additionally requires a password to exist.
+   With no password, the switch being on still locks nothing. That hard rule lives in
+   the backend, because locking a door that has no key only shuts the owner out — which
+   this project has actually done. So the two states are shown separately here. */
 function drawLock(c){
   const on = !!c.panel_auth, locked = !!c.panel_locked;
   const b = $("#cfgLock");
@@ -1159,7 +1249,8 @@ async function cfgTest(which, box){
 $("#cfgDTest").onclick = () => cfgTest("dehydration", "#cfgDMsg");
 $("#cfgETest").onclick = () => cfgTest("embedding", "#cfgEMsg");
 
-/* ---- 日志：默认折起来（出问题才看，平时白占屏幕） ---- */
+/* ---- Logs: collapsed by default — read when something breaks, screen-filler the rest
+   of the time ---- */
 let logOpen = false;
 $("#logToggle").onclick = () => {
   logOpen = !logOpen;
@@ -1172,7 +1263,7 @@ function openLogs(){
   $("#logBox").scrollIntoView({behavior:"smooth", block:"center"});
 }
 
-/* ---- 日志 ---- */
+/* ---- Logs ---- */
 let LOG_LEVEL = "WARNING";
 function renderLogLevels(){
   const box = $("#logLevels"); box.innerHTML = "";
@@ -1196,11 +1287,11 @@ async function loadLogs(){
   }catch(e){ out.textContent = "✗ " + e.message; }
 }
 $("#logGo").onclick = loadLogs;
-// 「清错误计数」2026-08-19 删了：它打的 /api/errors/clear 跟 web/system.py 一起
-// 在 E2 脱壳那天被砍了，而那个错误计数器本来就是上游的概念，我们这套没有。
-// 留一个点了没反应的按钮，比没有更糟。
+// The "clear error count" button is gone: the /api/errors/clear it called was removed
+// along with web/system.py, and that error counter was an upstream concept this system
+// never had. A button that does nothing when clicked is worse than no button at all.
 
-/* ---- 体检 ---- */
+/* ---- Health check ---- */
 function flat(obj, prefix, into){
   Object.entries(obj || {}).forEach(([k, v]) => {
     const key = prefix ? prefix + "." + k : k;
@@ -1209,18 +1300,21 @@ function flat(obj, prefix, into){
   });
   return into;
 }
-/* 体检：/api/system/diagnostics 吐的是 {ok, summary, checks:[...]}，
-   checks 是 47 项的**数组**，每项 {id,label,status,message,details,action}。
-   之前拿展平函数硬来，数组被 join 成一坨 [object Object] —— 她截图里那块空白就是这么来的。
-   默认只列出不 ok 的；全好的时候折起来，别拿 47 行没问题的东西占屏幕。 */
+/* The health endpoint returns {ok, summary, checks:[...]}, where `checks` is an ARRAY
+   of 47 entries, each {id,label,status,message,details,action}.
+   An earlier version forced it through the flatten helper above, which joined the array
+   into one lump of [object Object] — that is where the blank patch on screen came from.
+   By default only the entries that are not ok are listed; when everything is fine the
+   block folds away rather than spending 47 rows saying nothing is wrong. */
 let DIAG_ALL = false;
 async function loadDiag(){
   const box = $("#diagOut"); box.innerHTML = "";
   try{
-    const d = await api("/api/loci/health");   // 我们自己的体检，不是上游那套发布合规检查
+    const d = await api("/api/loci/health");   // our own health check, not the upstream release-compliance one
     const checks = Array.isArray(d.checks) ? d.checks : [];
-    // note 不算「要看一下」：那一档是「你还没开始」/「这东西不强制」，不是坏了。
-    // 报警报多了，真警报会跟着一起被无视。
+    // `note` does not count as "needs a look": that tier means "you have not started
+    // this yet" or "this one is optional", not "this is broken". Raise enough false
+    // alarms and the real ones get ignored along with them.
     const isBad = c => !["ok","note"].includes(String(c.status||"").toLowerCase());
     const bad = checks.filter(isBad);
     const head = el("div","frow");
@@ -1260,8 +1354,9 @@ async function loadDiag(){
         const a = el("div","tiny err", "→ " + c.action);
         a.style.marginTop = "2px"; mid.appendChild(a);
       }
-      // 不 ok 的那条底下直接给一个进日志的口：体检是结论，日志是证据，
-      // 不该让人自己去想「那我现在该去哪儿看」（她 8-18 夜定的从属关系）。
+      // Every failing check gets a way straight into the logs. The health check is the
+      // conclusion and the log is the evidence; nobody should have to work out for
+      // themselves where to go looking next.
       if (isBad(c)){
         const lk = el("button","mini","看日志");
         lk.style.marginTop = "6px";
@@ -1276,7 +1371,7 @@ async function loadDiag(){
   }catch(e){ box.textContent = "✗ " + e.message; }
 }
 
-/* ---- 备份 ---- */
+/* ---- Backup ---- */
 $("#expGo").onclick = async () => {
   try{
     const r = await fetch("/api/export", {credentials:"same-origin"});
@@ -1290,7 +1385,7 @@ $("#expGo").onclick = async () => {
   }catch(e){ alert("导不出来：" + e.message); }
 };
 
-/* ---- 导入 ---- */
+/* ---- Import ---- */
 let impTimer = null;
 function impSay(t, bad){
   const m = $("#impMsg"); m.className = "tiny " + (bad ? "err" : "muted"); m.textContent = t;
@@ -1304,8 +1399,9 @@ async function impSend(path){
   if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
   return j;
 }
-// 「先看一眼」那个按钮 2026-08-19 她让删了（东西太多）。
-// 路由 /api/import/preflight 留着 —— 它是纯读的，将来想要预览随时接回来。
+// The "preview first" button was removed: this card had too much in it.
+// The /api/import/preflight route stays — it is read-only, so a preview can be wired
+// back in whenever one is wanted.
 $("#impGo").onclick = async () => {
   if (!confirm("开始导入？会往记忆库里真的写东西。\n建议先「备份」一份，再「先看一眼」确认解析对了。")) return;
   impSay("传上去了，开始跑…");
@@ -1360,7 +1456,8 @@ $("#logout").onclick = async () => {
   location.reload();
 };
 
-/* ---- 主题：白天纸白 / 夜里纯黑+陶褐（她定的，酸绿不要） ---- */
+/* ---- Themes: paper white by day, true black plus terracotta by night — never the
+   acid green a dark theme defaults to ---- */
 const THEMES = [["auto","跟随系统"],["light","白岩"],["dark","黑"]];
 const SYS_DARK = matchMedia("(prefers-color-scheme: dark)");
 function applyTheme(t){
@@ -1382,7 +1479,7 @@ function applyTheme(t){
   let t = "auto";
   try{ t = localStorage.getItem("loci-theme") || "auto"; }catch(e){}
   applyTheme(t);
-  // 系统在白天/夜里之间切了，跟着走（只在「跟随系统」时）
+  // Follow the system when it moves between light and dark — only while set to auto.
   SYS_DARK.addEventListener("change", () => {
     let cur = "auto";
     try{ cur = localStorage.getItem("loci-theme") || "auto"; }catch(e){}
@@ -1407,13 +1504,14 @@ document.querySelectorAll("nav.tabs button").forEach(b => {
 });
 
 /* ============================================================
-   原文抽屉：点哪儿都能进来看逐字原文
+   The verbatim drawer: whatever you click, this is the way in to the original text
    ============================================================ */
 async function openBucket(id){
   $("#scrim").classList.add("on"); $("#drawer").classList.add("on");
   $("#drTitle").textContent = id;
-  // 每次开抽屉先把顶上那个「编辑」收起来：上一条能改不代表这一条能改
-  // （mind 和归档桶都不给改），留着就是一个点了没反应的按钮。
+  // Hide the "edit" button every time the drawer opens: the previous entry being
+  // editable says nothing about this one — mind entries and archived buckets are not —
+  // and leaving it up would be a button that does nothing when clicked.
   const dE = $("#drEdit"); dE.hidden = true; dE.onclick = null;
   $("#drBody").innerHTML = '<div class="spin">拿原文…</div>';
   try{
@@ -1440,10 +1538,11 @@ async function openBucket(id){
     }
     box.appendChild(mdInto(el("div","body-txt"), b.content));
     const links = [];
-    // 二改 E 件：后端 /api/loci/bucket/{id} 早就把这个键改叫 `from`
-    // 了（老名字 triggered_by 只在落盘层兼容读），这儿还读老键名，
-    // 于是"从这儿来"这栏永远静默是空的——跟 freq_i/freq_you 同一种病：
-    // 不报错、不崩，就是那份数据永远显示不出来。
+    // The backend's /api/loci/bucket/{id} renamed this key to `from` a long time ago;
+    // the old `triggered_by` survives only as a compatibility read in the storage
+    // layer. Reading the old name here left the "came from" section silently empty —
+    // the same illness as freq_i/freq_you: no error, no crash, that data simply never
+    // reaches the screen.
     (b.from||[]).forEach(x => links.push(["从这儿来", x]));
     (b.supersedes||[]).forEach(x => links.push(["换掉了", x]));
     if (b.superseded_by) links.push(["新版在", b.superseded_by]);
@@ -1457,13 +1556,17 @@ async function openBucket(id){
         box.appendChild(r);
       });
     }
-    // 施工 6 · C 件（§8.2）：她只能改 event（mind 那儿 b.can_edit 永远是 false，
-    // 这不是省事不画，是流程本身就不给这个入口——mind 是我的判断，只能我自己改）。
-    // 改错**不覆盖原文**：另存一条修正、from 指回这条，这儿点了之后一路走
-    // /api/loci/event/correct，原文一个字不会被这个抽屉动到。
+    // Only events can be corrected from this panel: for mind entries `b.can_edit` is
+    // always false. That is not a shortcut in the UI — the flow itself refuses the
+    // entry point, because a mind entry is a judgement, and a judgement is revised only
+    // by whoever formed it.
+    // A correction NEVER overwrites the original: it is stored as a separate entry
+    // whose `from` points back at this one. Clicking here goes to
+    // /api/loci/event/correct, and the drawer does not touch a character of the
+    // original text.
     if (b.can_edit){
       const editWrap = el("div"); editWrap.style.marginTop = "20px";
-      const editBtn = $("#drEdit");          // 8-19：入口挪到抽屉顶栏了
+      const editBtn = $("#drEdit");          // the way in now lives in the drawer's top bar
       editBtn.hidden = false;
       const form = el("div"); form.style.display = "none"; form.style.marginTop = "10px";
       const ta = document.createElement("textarea");
@@ -1478,8 +1581,8 @@ async function openBucket(id){
       form.appendChild(hint);
       const submitRow = el("div"); submitRow.style.marginTop = "10px";
       const submit = el("button","mini","存这条修正");
-      // 「算了」2026-08-19 删了（她定的）：右上角那个 × 本来就是取消，
-      // 两个意思一样的出口摆在一起，只会让人多想一下该点哪个。
+      // The "never mind" button is gone: the × in the top right already IS cancel, and
+      // two exits meaning the same thing only cost a moment deciding between them.
       submit.onclick = async () => {
         if (!ta.value.trim() || ta.value === b.content){
           alert("正文没变，没什么好存的"); return;
@@ -1510,12 +1613,13 @@ $("#drX").onclick = closeDrawer; $("#scrim").onclick = closeDrawer;
 addEventListener("keydown", e => { if (e.key === "Escape") closeDrawer(); });
 
 /* ============================================================
-   一 · 大池子
+   One · The pool
    ============================================================ */
 const WHENS = ["今天","昨天","本周","上周","本月","上月","今年","48h","7d"];
-let F = {when:"", room:"", tag:"", query:"", view:""};   // view 8-19 补上——工具面有、面板一直没发过
-// 开页从「这台机器的默认」起（设置页 → 引擎 → 开页默认那两根滑块定的）。
-// 页面上这根是当场拖着看的，那儿定的是「以后开页从哪儿起」——两个不是一个东西。
+let F = {when:"", room:"", tag:"", query:"", view:""};   // `view` added here: the tool side always had it, the panel never sent it
+// The page opens at the machine default rather than wherever the slider was left: the
+// slider on the page is for looking around right now, and where it STARTS is a
+// separate decision.
 $("#floor").value = localDef("floor");
 $("#floorVal").textContent = localDef("floor");
 F.floor = localDef("floor");
@@ -1534,12 +1638,16 @@ async function loadRooms(){
   try{
     const d = await api("/api/loci/rooms");
     box.innerHTML = "";
-    // E1（2026-08-17）：房间十间改四间，门也从 I/YOU 换成 EVENT/MIND——
-    // 后端 build_rooms() 8-16 就已经在返回 {doors:{EVENT:[...2条], MIND:[...2条]}}，
-    // 这段是纯显示欠账：原来这里读的是老的 d.doors.I / d.doors.YOU（十间时代
-    // 「我/她」两扇门各五间），新结构里这两个键根本不存在，`[...d.doors.I, ...]`
-    // 展开 undefined 会直接炸。「关于谁」不再由房间承担，搬去了 subjects，
-    // 所以「整边一起看：我/她」那一块也跟着房间一起砍了，不是漏写。
+    // Ten rooms became four, and the doors changed from I/YOU to EVENT/MIND. The
+    // backend's build_rooms() had already been returning
+    // {doors:{EVENT:[...2], MIND:[...2]}} for a while, so this stretch was pure display
+    // debt: it used to read the old d.doors.I / d.doors.YOU — two doors of five rooms
+    // each, from when a room carried "who this is about" — keys that do not exist in the
+    // new shape at all, and spreading undefined with `[...d.doors.I, ...]` throws
+    // outright.
+    // "Who it is about" is no longer a room's job; it moved to `subjects`. So the
+    // "look at one whole side at once" block went out with the rooms. Deliberate, not
+    // an omission.
     [["event","事", d.doors.EVENT], ["mind","想", d.doors.MIND]].forEach(([kind, cn, list]) => {
       const row = el("div","rrow");
       row.appendChild(el("span","kind", kind));
@@ -1568,7 +1676,8 @@ async function loadRooms(){
       c.appendChild(document.createTextNode(t.tag));
       c.appendChild(el("span","n", t.n));
       c.dataset.tag = t.tag;
-      // F2：点 chip = 填进「搜场景」（tag 门：包含匹配、那一类全部、不打折）
+      // F2: clicking a chip fills the scene box — the tag door: substring match, the
+      // whole category, no decay discount applied.
       c.onclick = () => {
         F.tag = (F.tag === t.tag ? "" : t.tag);
         setQMode("scene");
@@ -1601,7 +1710,8 @@ async function run(){
   try{
     const d = await api("/api/loci/recall?" + qs);
     out.innerHTML = "";
-    // 关联度线只在「找」的时候露面（浏览没有分数，摆一根线在那儿是骗人的）
+    // The relevance floor only appears while searching: browsing produces no scores,
+    // and showing a threshold over unscored results is a lie.
     const searching = !!F.query;
     $("#floorRow").style.display = searching ? "" : "none";
     $("#floorNote").style.display = searching ? "" : "none";
@@ -1614,12 +1724,13 @@ async function run(){
       const c = el("div","card muted");
       c.textContent = "这儿没有东西。门再开大一点试试。"; out.appendChild(c); return;
     }
-    // 上面：给 AI 的那张卡（跟它睁眼看到的是同一份统计）
+    // Top: the card the AI gets — the same figures it sees when it opens its eyes.
     const c1 = el("div","card");
     c1.appendChild(el("h2","h","给{{AI_NAME}}的那张卡"));
     c1.appendChild(el("pre","card-txt", d.card));
     out.appendChild(c1);
-    // 下面：给人看的详细列表 —— 分页（她定的：几百条不能让人一路划到底）
+    // Below: the detailed list for a person to read, paginated — a few hundred rows
+    // must not turn into one endless scroll.
     const c2 = el("div","card");
     const h = el("h2","h","逐条");
     const hn = el("span","n");
@@ -1645,7 +1756,8 @@ async function run(){
         const idEl = el("span","id", e.short); idEl.title = e.id;
       r.appendChild(idEl);
         r.appendChild(el("span","lab", e.label));
-        // F4：遗忘状态她要能看见（判断引擎干得对不对）。淡出/沉底才有徽章，活着不标。
+        // F4: decay has to be visible, so the engine's work can be judged. Only faded
+        // and sunk get a badge; a live entry is left unmarked.
         if (e.decay === "faded") r.appendChild(el("span","decay-b","淡出"));
         if (e.decay === "sunk")  r.appendChild(el("span","decay-b sunk","沉底"));
         r.appendChild(el("span","rm", e.room_cn));
@@ -1662,7 +1774,8 @@ async function run(){
         pager.appendChild(b);
       };
       go(page-1, "‹");
-      // 页码多了只出头尾和当前附近，别铺一长条数字
+      // With many pages, show the two ends and the neighbourhood of the current one —
+      // never a long ribbon of numbers.
       const nums = new Set([1, pages, page, page-1, page+1]);
       if (pages <= 7) for (let i=1;i<=pages;i++) nums.add(i);
       let last = 0;
@@ -1676,9 +1789,10 @@ async function run(){
     draw();
   }catch(e){ fail(out, e); }
 }
-/* 模糊搜（query 门，按时间＋分数排：找那件事）/
-   场景搜（query + view=scene，按共享场景词聚成簇：这件事怎么一路过来的）。
-   两个都走 query 门，差别只在 view —— 跟工具面 recall 的参数账逐字一样。 */
+/* Fuzzy (the query door, ordered by time and score: find that one thing) versus scene
+   (query + view=scene, clustered by shared scene words: how this thing travelled).
+   Both go through the query door and differ only in `view` — word for word the same
+   parameter contract as recall on the tool side. */
 let qMode = "fuzzy";
 function setQMode(m){
   qMode = m;
@@ -1691,8 +1805,9 @@ document.querySelectorAll("#qMode .segb").forEach(b =>
 $("#go").onclick = () => {
   const v = $("#q").value.trim();
   F.query = v;
-  // 空着的时候不给 view：后端那边 view 没有 query 会直接回一句「簇是按命中的记忆聚的」，
-  // 那是给工具面看的解释，摆在页面上等于一句报错。
+  // No `view` when the box is empty: given `view` and no query, the backend answers
+  // with a sentence explaining that clusters are formed from the memories that hit.
+  // That explanation is meant for the tool side; on a page it just reads as an error.
   F.view = (qMode === "scene" && v) ? "scene" : "";
   run();
 };
@@ -1707,11 +1822,12 @@ $("#clr").onclick = () => {
   F = {when:"", room:"", tag:"", query:"", view:""};
   $("#q").value = ""; $("#d0").value = ""; $("#d1").value = "";
   const _fd = localDef("floor");
-  $("#floor").value = _fd; $("#floorVal").textContent = String(_fd);   // 线也跟着回默认
+  $("#floor").value = _fd; $("#floorVal").textContent = String(_fd);   // the floor returns to the default too
   setQMode("fuzzy");
   renderWhenChips(); markRooms(); markTags(); run();
 };
-/* 关联度线：拖的时候只改数字（不打后端），松手才重查 —— 跟相似度那页一个手感 */
+/* Dragging the floor only moves the number; the backend is left alone until you let
+   go — the same feel as the similarity page. */
 $("#floor").addEventListener("input", () => {
   $("#floorVal").textContent = $("#floor").value;
 });
@@ -1726,24 +1842,25 @@ $("#floorDef").onclick = () => {
 renderWhenChips(); loadRooms(); run();
 
 /* ============================================================
-   二 · 星空 —— 只留一个桥。真身在页面末尾那个 <script type="module">
-   （three.js 要 ESM，跟这个普通 script 分开跑）。
+   Two · Starfield — only a bridge lives here. The real thing is the
+   <script type="module"> at the end of the page: three.js needs ESM, so it runs
+   separately from this classic script.
    ============================================================ */
 const sky = { resize(){ window.LociSky && window.LociSky.resize(); } };
 function loadSky(){
-  // 模块可能还没解析完（module 默认 defer），排队等它
+  // The module may not have parsed yet — type=module is deferred — so queue behind it.
   if (window.LociSky) window.LociSky.open();
   else addEventListener("locisky:ready", () => window.LociSky.open(), {once:true});
 }
-window.openBucket = openBucket;   // 星空模块点星要用
+window.openBucket = openBucket;   // the starfield module needs this when a star is clicked
 window.vColor = vColor;
 window.lociEl = el;
 window.lociFail = fail;
 window.lociApi = api;
-/* ===== 星空桥接结束 ===== */
+/* ===== end of the starfield bridge ===== */
 
 /* ============================================================
-   三 · 相似度检查
+   Three · Duplicate check
    ============================================================ */
 let SIM = null, judged = {};
 function drawHist(hist, th){
@@ -1752,17 +1869,19 @@ function drawHist(hist, th){
   cv.width = W*dpr; cv.height = H*dpr;
   const c = cv.getContext("2d"); c.setTransform(dpr,0,0,dpr,0,0);
   c.clearRect(0,0,W,H);
-  // 颜色从 CSS 变量拿，换主题跟着变（原来写死的，黑主题下会看不见）
+  // Colours come from the CSS variables so the histogram follows the theme. They used
+  // to be hard-coded, which made it invisible in dark.
   const v = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
-  const AXIS = 18;   // 底下那行分数刻度占的高
-  const CAP  = 16;   // 顶上给数字留的高 —— 少了这个，最高那根柱子的数字会被画布切掉
-  const from = 12, bars = hist.slice(from);   // 只画 60 分往上
+  const AXIS = 18;   // height of the score scale along the bottom
+  const CAP  = 16;   // headroom for the counts — without it the tallest bar's number is clipped by the canvas
+  const from = 12, bars = hist.slice(from);   // only draw 60 and above
   const max = Math.max(1, ...bars);
   const bw = W / bars.length;
   const usable = Math.max(10, H - AXIS - CAP);
   bars.forEach((n, i) => {
     const lo = (from+i)*5;
-    // 对数刻度：不然 60~65 那一格把 90+ 的十几对压成看不见
+    // Log scale: otherwise the 60–65 bucket flattens the dozen-odd pairs above 90 into
+    // nothing.
     const h = n ? Math.max(2, (Math.log(n+1)/Math.log(max+1)) * usable) : 0;
     c.fillStyle = lo >= th ? v("--accent") : v("--line");
     c.fillRect(i*bw+1.5, H-AXIS-h, bw-3, h);
@@ -1781,7 +1900,7 @@ function drawHist(hist, th){
   c.strokeStyle = v("--ink"); c.lineWidth = 2;
   c.beginPath(); c.moveTo(x, 2); c.lineTo(x, H-AXIS); c.stroke();
 }
-/* ---- 整理页：两块 chip 切换 ---- */
+/* ---- Tidy page: two chips swap the block below ---- */
 let tidyTab = "dup";
 let whoLoaded = 0;
 function setTidy(t){
@@ -1795,11 +1914,13 @@ function setTidy(t){
 document.querySelectorAll("#tidyMode .chip").forEach(c =>
   c.onclick = () => setTidy(c.dataset.t));
 
-/* ---- 都有谁（人名表）----
-   数据来自 GET /api/loci/subjects（只读口，只数数）。
-   三个动作走 POST /api/loci/subjects/action（写 aliases.yaml）。
-   🔴 判据：**系统只负责摆出来，改哪个是你点的那一下。** 没有任何自动整理。
-   条形是按次数的相对长度——次数差三个数量级的时候，光看数字看不出谁是主角。 */
+/* ---- Who turns up (the name table) ----
+   The data comes from GET /api/loci/subjects — read-only, it only counts.
+   The three actions go to POST /api/loci/subjects/action, which writes aliases.yaml.
+   🔴 The rule: the system only lays things out; which one changes is the click you
+   made. Nothing is ever tidied automatically.
+   The bars are relative to the counts — when counts span three orders of magnitude,
+   the numbers alone do not show who the main characters are. */
 async function loadWho(){
   const out = $("#whoOut");
   out.innerHTML = '<div class="spin">数着…</div>';
@@ -1825,24 +1946,25 @@ async function loadWho(){
       const meta = el("div","meta");
       meta.appendChild(el("span",null, x.n + " 条"));
       if (x.last) meta.appendChild(el("span",null, "最近 " + x.last));
-      // 盘上还留着的老写法：合并只管以后，这行是「历史上它还叫过什么」
+      // Older spellings still on disk: a merge only governs what comes next, so this
+      // line is "what it has also been called".
       if ((x.variants||[]).length)
         meta.appendChild(el("span",null, "盘上还写着 " + x.variants.join("、")));
       main.appendChild(meta);
-      // 牌子：只在「有话要说」的时候出现，正常的那些行保持干净
+      // Badges appear only when there is something to say; ordinary rows stay clean.
       if (x.pronoun) main.appendChild(el("span","flag warn","代词漏进来了"));
       else if (!x.canonical) main.appendChild(el("span","flag","不在别名表里"));
       r.appendChild(main);
 
       const acts = el("div","acts");
-      const panel = el("div","who-panel");   // 需要填东西的动作在这儿展开（占满一行）
+      const panel = el("div","who-panel");   // actions that need input expand here, across the full row
       panel.hidden = true;
 
       const send = async (body, btn) => {
         btn.disabled = true;
         try{
           const res = await apiPost("/api/loci/subjects/action", body);
-          whoLoaded = 0; await loadWho();          // 重新数一遍：并没并上当场就看得见
+          whoLoaded = 0; await loadWho();          // count again, so whether it landed is visible at once
           toast((body.action === "not_person"
                  ? "「" + body.name + "」记成不是人了，从这一屏收起来"
                  : "「" + body.name + "」归到「" + body.target + "」底下了")
@@ -1850,19 +1972,22 @@ async function loadWho(){
         }catch(e){ alert("没成：" + e.message); btn.disabled = false; }
       };
 
-      // ① 这不是人 —— 一下就走。
-      // 🔴 2026-08-19 改回来的：本来我加了「两下才发」，第一下把字变成「真不是人？」。
-      //    结果她点了一下就以为生效了 —— 日志里根本没有那个请求。
-      //    「按钮的字变了」看起来就是「已经做了」，而不是「再点一次」。
-      //    她本来的想法是「点了就隐藏」，中间加一道她没要的关卡，
-      //    只会造出「以为点了其实没点」这种最难查的失败。
-      //    这个动作本身是可逆的（把 aliases.yaml 里那一行删掉就回来了），
-      //    可逆的动作不配一道确认。做完弹小浮条说清楚做了什么，那才是该给的东西。
+      // ① Not a person — one click and it is done.
+      // 🔴 Reverted from a two-click version, where the first click changed the label
+      //    to "really not a person?". People clicked once and believed it had happened,
+      //    and the request was never in the log at all: a button whose text has changed
+      //    reads as "already done", not as "press me again".
+      //    The behaviour asked for was "click and it hides". A checkpoint nobody asked
+      //    for in the middle only manufactures the hardest failure there is to trace —
+      //    the kind where you think you clicked and you did not.
+      //    The action is reversible anyway: delete that line from aliases.yaml and the
+      //    name comes back. A reversible action does not deserve a confirmation. What
+      //    it does deserve is a toast afterwards saying plainly what happened.
       const notP = el("button","mini","这不是人");
       notP.onclick = () => send({action:"not_person", name:x.name}, notP);
       acts.appendChild(notP);
 
-      // ② 跟谁是一个人 —— 从现有的名字里挑一个当规范名
+      // ② Same person as — pick one of the existing names to be the canonical one
       if (allNames.length > 1){
         const mg = el("button","mini","跟谁是一个人");
         mg.onclick = () => {
@@ -1886,7 +2011,7 @@ async function loadWho(){
         acts.appendChild(mg);
       }
 
-      // ③ 给他个正式名字
+      // ③ Give them a formal name
       const rn = el("button","mini","正式名字");
       rn.onclick = () => {
         panel.hidden = !panel.hidden;
@@ -1913,12 +2038,14 @@ async function loadWho(){
       out.appendChild(r);
     });
 
-    // 标成「不是人」的**一个字都不在这一屏上出现**（她 8-19 定的）：
-    // 「隐藏」就是隐藏，把它们再列一遍等于没隐藏，还让人以为那也是个人。
-    // 怎么反悔不写在这儿，写在 aliases.yaml 那个块上面的注释里 ——
-    // 要反悔的人本来就得去开那个文件。
-    // （口还是照旧返回 blocked，只是这一屏不摆它：将来真需要一个「回收站」，
-    //  数据现成的，加一屏就是了。）
+    // Anything marked "not a person" does not appear on this screen AT ALL. Hidden
+    // means hidden; listing them again somewhere else is not hiding, and it leaves
+    // people thinking those are names too.
+    // How to undo it is documented above that block in aliases.yaml rather than here —
+    // anyone undoing it has to open that file anyway.
+    // (The endpoint still returns them as `blocked`; this screen simply does not lay
+    //  them out. If a recycle bin is ever genuinely wanted, the data is already there
+    //  and it is one more screen.)
   }catch(e){ fail(out, e); }
 }
 
@@ -1941,8 +2068,10 @@ function renderSim(){
     `${d.n} 条记忆 · ${d.total_pairs.toLocaleString()} 个对子比过了 · ` +
     `≥ ${th} 分的有 ${d.matched} 对` + (d.truncated ? `（只列前 ${d.pairs.length} 对）` : "");
   drawHist(d.hist, th);
-  // 「情绪种子那十三颗根」8-19 从这句里删了：seed 8-17 就退役了，
-  // 留在页面上只会让人去找一个已经不存在的东西。归档区那半句留着——它还在。
+  // The clause about the thirteen emotional seed roots was cut from this sentence:
+  // seeds were retired, and leaving them in the copy only sends people looking for
+  // something that no longer exists. The half about the archive stays — that is
+  // still true.
   $("#histNote").textContent =
     "纵轴是对数的（不然 60 分那一格会把 90 分的十几对压成看不见）。" +
     "归档区没算进来——已经沉过一次的，别再问一遍。";
@@ -1956,7 +2085,7 @@ function renderSim(){
   const h = el("h2","h","重复项裁定");
   h.appendChild(el("span","n","「沉一个」= 软删进归档，id 直查永远捞得回，不是抹掉"));
   wrap.appendChild(h);
-  // 分页 —— 跟记忆页同一套（她 8-03 夜发现相似度这边漏了）
+  // Pagination — the same as the memory page, which this screen was missing.
   const live = d.pairs.filter(p => !judged[p.a.id + "|" + p.b.id]);
   const PER = 8;
   const pages = Math.max(1, Math.ceil(live.length / PER));
@@ -1992,11 +2121,12 @@ function renderSim(){
   out.appendChild(wrap);
   afterJudge();
 }
-/* 裁完一组它就走了；全裁完这一屏该说句话，不然剩个空卡片很怪 */
+/* A judged pair leaves the screen. When the last one goes, the card has to say
+   something — otherwise it is left standing there empty. */
 function afterJudge(){
   const wrap = $("#simOut .card");
   if (!wrap || wrap.querySelector(".pair")) return;
-  if (wrap.querySelector(".pager .pg")) return;   // 还有别的页，别急着说裁完了
+  if (wrap.querySelector(".pager .pg")) return;   // other pages remain — do not announce that everything is judged
   const done = el("div","muted");
   done.style.padding = "6px 0";
   done.textContent = "这条线上面裁完了。往左拉滑块看更多，或者就这样。";
@@ -2039,8 +2169,9 @@ function pairCard(p){
   box.appendChild(sides);
   return box;
 }
-// a/b 是这一对的两端 —— 服务端拿它俩核对「这一对真的存在」，
-// 不再只凭一个 id 就删（2026-08-04 codex 复核 #2：原来给任意 id 都会照删）。
+// `a` and `b` are the two ends of this pair: the server uses them to confirm the pair
+// really exists rather than deleting on the strength of a single id. A review caught the
+// earlier behaviour, which would happily delete whatever id it was handed.
 async function judge(action, id, box, key, p){
   try{
     const r = await fetch("/api/loci/similar/action", {
@@ -2063,7 +2194,7 @@ $("#th").addEventListener("change", loadSim);
 $("#thDef").onclick = () => { $("#th").value = localDef("sim"); loadSim(); };
 
 /* ============================================================
-   四 · 档案（门口那张纸的网页版）
+   Four · Profile — the web version of the sheet by the door
    ============================================================ */
 async function loadProf(){
   const out = $("#profOut");
@@ -2075,7 +2206,8 @@ async function loadProf(){
     out.appendChild(c);
     return c;
   };
-  // 一条一行（她说准则看着多——多的是行数不是条数），点开看全文
+  // One rule per line: what makes the list look long is the number of LINES, not the
+  // number of rules. Click through for the full text.
   const line = (txt, sub, id) => {
     const b = el("button","rule");
     b.appendChild(mdInto(el("div","rtxt"), String(txt).split(String.fromCharCode(10))[0]));
@@ -2087,9 +2219,11 @@ async function loadProf(){
     const d = await api("/api/loci/profile");
     out.innerHTML = "";
 
-    // 顺序是她定的：档案 · (提醒) · 压在心头 · 中期 · 忽然想起 · 准则 · 我和她的判断
-    // ——跟 breath() 睁眼那一屏逐块对齐（8-19 扔掉「长期」之后两边又对上了）
-    // （提醒只在真有临近的日子时插在档案后面，跟 AI 睁眼那一屏一致）
+    // Order: profile · (reminders) · weighing on me · mid-term · sudden recollection ·
+    // rules — block for block the same as what breath() shows when it opens its eyes.
+    // Dropping "long-term" is what brought the two back into line.
+    // (Reminders are slotted in after the profile only when a date is actually near,
+    //  which is what the eyes-open screen does too.)
     const c1 = card("档案", d.facts_warning || "名字两面");
     if (d.facts_warning) c1.querySelector(".n").classList.add("err");
     if (!d.facts.length) c1.appendChild(el("div","muted","（事实格空着）"));
@@ -2114,17 +2248,23 @@ async function loadProf(){
       });
     }
 
-    // 🫀 压在心头（她 2026-08-08 要的「我也能看到」）：挨着提醒摆——
-    // 提醒是「快到日子了」，这块是「一直压着」。越挂越大声，跟提醒的越近越大声对称。
-    // 施工 6 · A/B/C 件：三类钟只换 loud 怎么算（后端算好直接读 h.loud）；
-    // 只有最久那条（h.is_question）陈述换问句，其余照旧陈列；
-    // 每条都给结案按钮——她本来就是知道「这事了了没」的人，不该等我问。
+    // 🫀 Weighing on me. It sits next to the reminders on purpose: a reminder is "the
+    // date is nearly here", this block is "this has been pressing all along". The
+    // longer something hangs the louder it gets, mirroring the way a reminder grows
+    // louder as it nears.
+    // It is on this page at all so that what the AI is carrying can be seen from the
+    // outside, not only from behind its own eyes.
+    // The three kinds of clock differ only in how `loud` is computed, and the backend
+    // has already done that — read h.loud. Only the oldest one (h.is_question) turns
+    // its statement into a question; the rest are listed as usual.
+    // Every row gets a close-out button: whoever lives with these already knows which
+    // ones are finished, and should not have to wait to be asked.
     if ((d.heavy||[]).length){
       const c = card("压在心头", "挂着还没了结的");
       d.heavy.forEach(h => {
         const row = el("div","heavy-row");
         const b = el("button","rem stack " + h.loud + (h.is_question ? " q" : ""));
-        // 顶上一行：挂了几天 · 上次问过你 · 没定期限那句（她 8-18 定的摆法）
+        // Top line: days held · last asked · the no-deadline warning
         const meta = el("div","meta");
         meta.appendChild(el("span",null,
           (h.is_question ? "❓ " : "") + "挂了 " + h.held + " 天"));
@@ -2132,13 +2272,15 @@ async function loadProf(){
           h.last_asked ? "上次问过你 " + h.last_asked.slice(0,10) : "从来没问过你"));
         if (h.clock_note) meta.appendChild(el("span","warn", "⚠️ " + h.clock_note));
         b.appendChild(meta);
-        // 正文：自己占一整行，元信息再长也挤不着它
+        // Body: a full row to itself, so however long the metadata gets it cannot
+        // crowd the text.
         b.appendChild(el("div","body",
           h.label + (h.is_question ? " —— 这条还算数吗？" : "")));
         b.onclick = () => openBucket(h.id);
         row.appendChild(b);
 
-        // 结案按钮：走 /api/loci/want/resolve，记"她结的案"。
+        // Close-out buttons: /api/loci/want/resolve, recorded as closed by the owner
+        // rather than by the system.
         const acts = el("div","heavy-acts");
         const mkBtn = (label, status) => {
           const bt = el("button","mini", label);
@@ -2158,14 +2300,15 @@ async function loadProf(){
         row.appendChild(acts);
         c.appendChild(row);
 
-        // 问句真的画出来给她看这一刻，盖一次"上次问过她"的戳（只对最久那条盖，
-        // 一次页面加载只盖一次——不是每次重渲染都盖，fire-and-forget 不挡渲染）。
+        // The moment the question is actually drawn on screen, stamp "last asked" —
+        // only for the oldest one, and only once per page load rather than on every
+        // re-render. Fire-and-forget, so it never holds up rendering.
         if (h.is_question) apiPost("/api/loci/want/asked", {id: h.id}).catch(() => {});
       });
     }
 
-    // 施工 6 · C 件（§8）：她改过的 event——这儿只是给她自己回看，
-    // 真正的"通知我"走 breath()（core.profile.她改过()，同一份数据）。
+    // Events corrected from the outside. This block exists only for looking back over
+    // them; the actual notification path is breath(), reading the same data.
     if ((d.edited||[]).length){
       const c = card("你改过", "还没被{{AI_NAME}}看过/收下的修正");
       d.edited.forEach(e0 => {
@@ -2176,14 +2319,18 @@ async function loadProf(){
 
     if (d.mid) card("中期","这三天").appendChild(el("pre","card-txt", d.mid));
 
-    // 「长期」2026-08-19 扔了（她定的）。判据不是「这块不好看」，是**后端睁眼那一屏
-    // 早就没有它了** —— 现在是 档案 → 压在心头 → 中期 → 忽然想起。前端还画着一格
-    // 后端不再给的东西，这一页就不再是「他睁眼看到的那一屏」了。
-    // （d.big_events 后端照旧返回，只是这一页不再摆它。）
+    // The "long-term" block was dropped. Not because it looked bad: THE BACKEND'S
+    // EYES-OPEN SCREEN HAD ALREADY STOPPED HAVING ONE — it is now profile → weighing on
+    // me → mid-term → sudden recollection. The moment the front end draws a section the
+    // backend no longer produces, this page stops being "the screen it sees when it
+    // opens its eyes".
+    // (d.big_events is still returned; this page simply does not lay it out.)
 
-    // 忽然想起 —— 睁眼六样里唯一「不是我要的、自己冒出来的」那样。
-    // 不排序不加权（build_recollect 里就是 random.sample）：**没来由正是它像脑子的地方**，
-    // 一旦按重要度/时间排，它就退回成一个「最近热门」列表了。
+    // Sudden recollection — the one item on the eyes-open screen that nobody asked for
+    // and that simply surfaces on its own.
+    // Not sorted, not weighted (build_recollect is a plain random.sample): HAVING NO
+    // REASON BEHIND IT IS EXACTLY WHAT MAKES IT FEEL LIKE A MIND. Rank it by importance
+    // or recency and it collapses back into a "recently popular" list.
     if (d.recollect && d.recollect.length){
       const c = card("忽然想起", "没来由 · 从 " + d.recollect_pool + " 件事里");
       const again = el("button","mini","再来一个");
@@ -2192,7 +2339,7 @@ async function loadProf(){
         [...c.querySelectorAll(".rule")].forEach(x => x.remove());
         list.forEach(r => c.appendChild(
           line(r.label, r.short + " · " + r.room_cn + " · " + r.created, r.id)));
-        c.appendChild(again);          // appendChild 会把它挪到最后，不用先摘
+        c.appendChild(again);          // appendChild moves it to the end; no need to detach first
       };
       again.onclick = async () => {
         again.disabled = true;
@@ -2224,9 +2371,10 @@ async function loadProf(){
 
 <script type="module">
 /* ============================================================
-   ★★★ 星空真身 —— 整块可搬走当别处的夜空。
-   对外只要三样：一个 <canvas id="sky">、/api/loci/graph 那份 JSON、
-   window.openBucket(id)。除此之外不碰页面上任何东西。
+   ★★★ The starfield itself — the whole block lifts out and works as a night sky
+   somewhere else. It needs exactly three things from the outside: a
+   <canvas id="sky">, the JSON from /api/loci/graph, and window.openBucket(id).
+   Beyond those it touches nothing on the page.
    ============================================================ */
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -2239,7 +2387,8 @@ const tipEl = document.getElementById('tip');
 const labelBox = document.getElementById('skyLabels');
 const loadEl = document.getElementById('skyLoad');
 
-/* ---- 铺开时那圈会呼吸的粒子（quintic 缓入，学它的 loading）---- */
+/* ---- The ring of breathing particles shown while the sky is being laid out
+     (quintic ease-in) ---- */
 (function loading(){
   const c = loadEl.querySelector('canvas'), x = c.getContext('2d');
   let t = 0, alive = true;
@@ -2272,10 +2421,11 @@ const renderer = new THREE.WebGLRenderer({canvas: cv, antialias: true});
 renderer.setPixelRatio(Math.min(2, devicePixelRatio || 1));
 renderer.setSize(W, H, false);
 renderer.setClearColor(0x1B1613, 1);
-/* ⚠️ 走 EffectComposer 时输出色彩空间必须设成线性，否则 sRGB 会被编码两次：
-   一次在合成器最后那道 pass 里、一次在 canvas 的绘制缓冲上。夜底 27 会被抬到 91，
-   整片天变成灰板、星星全糊在里面。8-03 夜实测过四种接法，只有这个跟
-   renderer.render() 的基准完全对得上（平均 29/23/20、峰值 212）。 */
+/* ⚠️ With EffectComposer in the chain the output colour space MUST be linear, or sRGB
+   is encoded twice: once in the composer's final pass and once in the canvas drawing
+   buffer. A night floor of 27 gets lifted to 91, the whole sky turns into a grey board
+   and the stars smear into it. Four wirings were measured; only this one matches the
+   renderer.render() baseline exactly (means of 29/23/20, peak 212). */
 renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
 
 const controls = new OrbitControls(camera, cv);
@@ -2284,17 +2434,18 @@ controls.minDistance = 60; controls.maxDistance = 2600;
 
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
-/* 真辉光。她喜欢的就是这个——亮的地方会往外烧开。 */
+/* Real bloom. This is the whole point of the sky: bright places burn outwards. */
 const bloom = new UnrealBloomPass(new THREE.Vector2(W,H), 0.55, 0.32, 0.52);
 composer.addPass(bloom);
 
-/* ---- 星的贴图：一团中间实、边上化开的光 ---- */
+/* ---- Star texture: a solid core dissolving at the edge ---- */
 function starTexture(){
   const c = document.createElement('canvas'); c.width = c.height = 64;
   const x = c.getContext('2d');
   const g = x.createRadialGradient(32,32,0,32,32,32);
-  // 真星星是「极小极亮的一点 + 一圈很淡的晕」。核只占半径的 7%，
-  // 之后急剧衰减 —— 原来内圈 22% 是 0.92 的白，等于一个大平盘，糊就糊在这儿
+  // A real star is a tiny, very bright point plus a faint halo. The core is 7% of the
+  // radius and falls away sharply after that. The old curve held 0.92 white out to
+  // 22%, which is a large flat disc — that is where the smearing came from.
   g.addColorStop(0,   'rgba(255,255,255,1)');
   g.addColorStop(.07, 'rgba(255,255,255,1)');
   g.addColorStop(.16, 'rgba(255,255,255,.45)');
@@ -2306,7 +2457,8 @@ function starTexture(){
 }
 const TEX = starTexture();
 
-/* ---- 底噪：远处的银河尘（跟记忆无关，纯粹为了天不是空的）---- */
+/* ---- Background noise: distant galactic dust. Nothing to do with memories — purely
+     so the sky is not empty. ---- */
 (function dust(){
   const n = 2600, pos = new Float32Array(n*3), col = new Float32Array(n*3);
   const cl = Array.from({length:9}, () => ({
@@ -2329,7 +2481,7 @@ const TEX = starTexture();
     const tier = Math.random();
     const b = tier<.04 ? .42+Math.random()*.26 : tier<.24 ? .13+Math.random()*.13
                                                           : .03+Math.random()*.07;
-    col[i*3]=b*1.0; col[i*3+1]=b*.86; col[i*3+2]=b*.68;   // 暖尘，不是蓝的
+    col[i*3]=b*1.0; col[i*3+1]=b*.86; col[i*3+2]=b*.68;   // warm dust, not blue
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(pos,3));
@@ -2339,10 +2491,12 @@ const TEX = starTexture();
     transparent:true, depthWrite:false, blending:THREE.AdditiveBlending})));
 })();
 
-/* ---- V 冷暖 → 颜色 ----
-   直接拿 V 当 0~1 会全是一个色：655 条里大半 V∈[.55,.8]，铺出来一片同样的暖。
-   所以按**这批数据真实的分位**拉开——冷的还是冷、暖的还是暖，只是把中间那段撑满，
-   看得出差别。V 本身一个字没改（点开原文看到的还是原来的数）。 */
+/* ---- Valence → colour ----
+   Feeding V straight in as 0..1 gives one colour: most entries land in V∈[.55,.8], so
+   the whole sky comes out the same warmth. Instead it is stretched across the actual
+   percentiles of THIS data — cold stays cold, warm stays warm, and the crowded middle
+   is pulled apart until the differences are visible. V itself is not altered by a
+   digit: open the entry and the original number is still there. */
 let V_LO = 0.35, V_HI = 0.85;
 function calibrateV(nodes){
   const v = nodes.map(n => n.v).sort((a,b) => a-b);
@@ -2352,7 +2506,7 @@ function calibrateV(nodes){
   if (V_HI - V_LO < 0.06){ V_LO -= 0.03; V_HI += 0.03; }
 }
 function starColor(d){
-  if (d.pinned) return new THREE.Color(0xEBD08E);        // 钉着的：金（偏黄不偏橙）
+  if (d.pinned) return new THREE.Color(0xEBD08E);        // pinned: gold, leaning yellow rather than orange
   const t = Math.max(0, Math.min(1, (d.v - V_LO) / (V_HI - V_LO)));
   const c = new THREE.Color(0x7E93A8), w = new THREE.Color(0xE0C48C);
   return c.clone().lerp(w, t);
@@ -2368,7 +2522,9 @@ let show = {edge:false, weak:false, cons:true, spin:true, sound:false};
 let selected = null, hovered = null;
 const _v3 = new THREE.Vector3(), _q = new THREE.Quaternion();
 
-/* ---- 3D 力导向：先算完再交给自转。O(n²) 用网格近似，654 颗一秒出头 ---- */
+/* ---- 3D force-directed layout: solved in full before the spin takes over. The O(n²)
+     pass is approximated with a grid, so a few hundred nodes settle in a little over a
+     second. ---- */
 function layout3d(iters){
   const n = NODES.length; if (!n) return;
   const R = 52, springs = [];
@@ -2436,7 +2592,8 @@ function buildScene(data){
   calibrateV(NODES);
   layout3d(260);
 
-  // 星：Sprite + 加色混合。叠在一起的光晕会烧成一片，这就是它好看的一半
+  // Stars: sprites with additive blending. Overlapping halos burn into one another,
+  // which is half of why this reads as a sky.
   SPR = NODES.map(d => {
     const col = starColor(d);
     const bright = d.pinned ? logMap(d.importance, 1.1, 2.2) : logMap(d.importance, .26, 1.05);
@@ -2452,7 +2609,8 @@ function buildScene(data){
     return s;
   });
 
-  // 弱边：一整条 LineSegments，暗到几乎看不见（2600 多根，分开画会卡）
+  // Weak edges: one LineSegments, dim almost to invisibility. There are 2600-odd of
+  // them, and drawing them separately stutters.
   const wp = [];
   WEAK.forEach(e => {
     const a = NODES[IDX.get(e.from)], b = NODES[IDX.get(e.to)];
@@ -2465,7 +2623,8 @@ function buildScene(data){
     blending: THREE.AdditiveBlending, depthWrite: false}));
   weakLines.visible = false; weakLines.frustumCulled = false; scene.add(weakLines);
 
-  // 真边：默认藏起来。点中一颗星，线才从它身上长出去（学它的，也正好治我们的稀）
+  // Real edges: hidden by default. Lines only grow out of a star once it is selected —
+  // which also happens to hide how sparse the graph is.
   const rp = [];
   REAL.forEach(e => {
     const a = NODES[IDX.get(e.from)], b = NODES[IDX.get(e.to)];
@@ -2478,7 +2637,8 @@ function buildScene(data){
     blending: THREE.AdditiveBlending, depthWrite: false}));
   realLines.visible = false; realLines.frustumCulled = false; scene.add(realLines);
 
-  // 星座：把一群星按时间串起来，加一个投影到屏幕上的名字
+  // Constellations: thread a group of stars in time order, plus a name projected onto
+  // the screen.
   CONSTS.forEach(c => {
     const pts = c.members.map(m => NODES[IDX.get(m)]).filter(Boolean)
                  .sort((a,b) => a.ts < b.ts ? -1 : 1);
@@ -2497,7 +2657,8 @@ function buildScene(data){
   labels = constLines;
 }
 
-/* ---- 选中一颗星：连着它的线长出去、连着的星亮起来 ---- */
+/* ---- Selecting a star: its edges grow outwards and whatever it connects to
+     brightens ---- */
 let grow = 0;
 function select(d){
   selected = d;
@@ -2525,7 +2686,7 @@ function growGeo(){
 }
 let growLines = null;
 
-/* ---- 🌠 流星 = 井里的一个梦浮上来（划过一次就没了）---- */
+/* ---- 🌠 A meteor is a dream surfacing from the well: it crosses once and is gone ---- */
 let meteorCount = 0, meteor = null, nextMeteor = 0;
 function fireMeteor(){
   const g = new THREE.BufferGeometry();
@@ -2544,7 +2705,7 @@ function fireMeteor(){
   meteor = {line:m, geo:g, head, from, dir, t:0};
 }
 
-/* ---- 主循环 ---- */
+/* ---- Main loop ---- */
 const ray = new THREE.Raycaster();
 ray.params.Sprite = {};
 const mouse = new THREE.Vector2(-9,-9);
@@ -2565,7 +2726,7 @@ function frame(){
       SPR[i].position.set(n.x,n.y,n.z);
     }
   }
-  // 24h 内的微闪 · 钉着的慢呼吸
+  // entries from the last 24h flicker · pinned ones breathe slowly
   for (let i=0;i<SPR.length;i++){
     const s = SPR[i], d = s.userData.d;
     let k = 1;
@@ -2574,7 +2735,7 @@ function frame(){
     if (hovered === d) k *= 1.45;
     if (k !== 1 || d.fresh || d.pinned || hovered === d) s.scale.setScalar(s.userData.base*k);
   }
-  // 选中的线往外长
+  // the selected star's lines grow outwards
   if (selected){
     grow = Math.min(1, grow + 0.045);
     const pts = growGeo();
@@ -2592,7 +2753,7 @@ function frame(){
     } else if (growLines) growLines.visible = false;
   } else if (growLines) growLines.visible = false;
 
-  // 星座线随自转更新 + 名字投影到屏幕
+  // constellation lines follow the spin; names are projected onto the screen
   if (show.cons) for (const c of constLines){
     const arr = c.geo.attributes.position.array;
     let cx=0, cy=0, cz=0;
@@ -2606,7 +2767,7 @@ function frame(){
     c.lb.style.top  = ((-_v3.y*.5+.5) * cv.clientHeight) + 'px';
   }
 
-  // 流星
+  // meteor
   if (meteorCount > 0){
     if (!meteor && clock*1000 > nextMeteor) fireMeteor();
     if (meteor){
@@ -2629,7 +2790,7 @@ function frame(){
   composer.render();
 }
 
-/* ---- 鼠标：悬停出玻璃条，点开抽屉 ---- */
+/* ---- Pointer: hover raises the glass strip, a click opens the drawer ---- */
 function pick(ev){
   const r = cv.getBoundingClientRect();
   mouse.x = ((ev.clientX-r.left)/r.width)*2-1;
@@ -2674,7 +2835,7 @@ function resize(){
 }
 addEventListener('resize', resize);
 
-/* ---- 开门 ---- */
+/* ---- Opening ---- */
 let opened = false;
 async function open(){
   if (opened) return; opened = true;
@@ -2689,7 +2850,7 @@ async function open(){
       `${d.counts.nodes} 颗 · 真边 ${d.counts.edges} · 暗线 ${d.counts.weak}`;
     if (window.__skyLoadStop) window.__skyLoadStop();
     loadEl.classList.add('gone');
-    composer.render();      // 首帧同步渲染：页面在后台时 rAF 是停的，别留一片黑
+    composer.render();      // First frame rendered synchronously: rAF is paused while the page is in the background, and this must not be left as a black rectangle.
     frame();
     renderNote(noteBox, d);
   }catch(e){
@@ -2701,8 +2862,9 @@ async function open(){
 function renderNote(box, d){
   const el = window.lociEl;
   box.innerHTML = '';
-  // 她 8-06 傍晚定稿：大 event 时间轴和星座是同一个东西，就叫星座。
-  // 一件一件往上叠（最新的在上面），每座左边一条细竖线，副行写范围。
+  // The big-event timeline and the constellations are the same thing, and the name it
+  // goes by is "constellation". Stacked one on another, newest on top, each with a thin
+  // rule down its left and its range on the second line.
   box.appendChild(el('h2','h','星座'));
   if (!d.constellations.length){
     box.appendChild(el('div','muted','还没有星座。存一条大 event 就多一座。'));
@@ -2727,13 +2889,14 @@ function renderNote(box, d){
   tip.style.marginTop = '10px';
   tip.textContent = '一座星座 = 一条大 event 照亮的那片天：起止就在它的 when 里，'
     + '正文里可以再写一行「过滤：tag=xxx」收窄到哪一类。点一座看那句话。'
-    // 2026-08-17 night_fall 退役：不再是「井里潜伏、共振才浮」，
-    // 而是「盘上还剩几个，时间到了自己就没了」。
+    // Since night_fall was retired this is no longer "lurking in the well until
+    // something resonates" — it is "this many are left on disk, and they expire by
+    // themselves".
     + (d.meteors ? `　🌠 盘上还剩 ${d.meteors} 个梦，时间到了自己会没。` : '');
   box.appendChild(tip);
 }
 
-/* ---- 开关 ---- */
+/* ---- Switches ---- */
 const sw = (id, key, after) => {
   const b = document.getElementById(id);
   b.onclick = () => { show[key] = !show[key]; b.classList.toggle('on', show[key]);
@@ -2743,13 +2906,16 @@ sw('swConst','cons', v => {
   constLines.forEach(c => { c.line.visible = v; c.lb.style.display = v ? '' : 'none'; });
 });
 sw('swSpin','spin');
-/* ---- 声音 ----
-   不用音频文件：Web Audio 现合成。一层很低的持续音 + 偶尔一颗铃。
-   铃的音高来自**真的那颗星**的 V（冷的音低、暖的音高），落在五声音阶上，
-   所以它跟这片天是同一份数据长出来的，不是随便配的背景乐。
-   浏览器不许自动播放，必须她点一下才响 —— 正好，它本来就该是可选的。 */
+/* ---- Sound ----
+   No audio files: it is all synthesised live with Web Audio. One very low drone plus
+   the occasional bell.
+   A bell's pitch comes from the valence of AN ACTUAL STAR — cold sounds low, warm
+   sounds high — quantised onto a pentatonic scale. So it grows out of the same data as
+   the sky rather than being background music laid over it.
+   Browsers refuse to autoplay, so it takes a click to start. Which is right: this was
+   always meant to be optional. */
 let AC = null, master = null, drone = null, bellTimer = null;
-const PENT = [0,2,4,7,9];        // 五声音阶：随便撞都不难听
+const PENT = [0,2,4,7,9];        // pentatonic: any two of them can collide and still sound fine
 function noteHz(step){ return 220 * Math.pow(2, step/12); }
 function startSound(){
   if (AC) return;
@@ -2757,17 +2923,19 @@ function startSound(){
   master = AC.createGain();
   master.gain.value = 0;
   master.connect(AC.destination);
-  master.gain.linearRampToValueAtTime(0.20, AC.currentTime + 4);   // 慢慢淡进来
+  master.gain.linearRampToValueAtTime(0.20, AC.currentTime + 4);   // fade in slowly
 
-  // 白噪音底（她 8-04 要的）：白噪 → 低通滤到只剩「风声」那一段 →
-  // 再挂一个极慢的 LFO 推着截止频率走，听起来像远处有风在动，不是死的嘶声
+  // The noise floor: white noise → low-passed down to the band that reads as wind →
+  // then a very slow LFO pushing the cutoff around, so it sounds like wind moving in
+  // the distance rather than a dead hiss.
   {
-    const LEN = 4;                                   // 4 秒一段，循环播放
+    const LEN = 4;                                   // a four-second buffer, looped
     const buf = AC.createBuffer(1, AC.sampleRate * LEN, AC.sampleRate);
     const ch = buf.getChannelData(0);
     let last = 0;
     for (let i = 0; i < ch.length; i++){
-      // 粉噪比白噪耳朵舒服（白噪高频太扎）：一阶低通把它压成粉的
+      // Pink is easier on the ear than white, whose top end is piercing: a one-pole
+      // filter turns it pink.
       const white = Math.random() * 2 - 1;
       last = (last + 0.02 * white) / 1.02;
       ch[i] = last * 3.5;
@@ -2778,12 +2946,12 @@ function startSound(){
     lp.type = "lowpass"; lp.frequency.value = 620; lp.Q.value = 0.4;
     const ng = AC.createGain(); ng.gain.value = 0.30;
     const sweep = AC.createOscillator(); sweep.frequency.value = 0.021;
-    const sg = AC.createGain(); sg.gain.value = 240;   // 截止频率在 380~860 之间慢慢晃
+    const sg = AC.createGain(); sg.gain.value = 240;   // the cutoff drifts slowly between 380 and 860
     sweep.connect(sg); sg.connect(lp.frequency); sweep.start();
     src.connect(lp); lp.connect(ng); ng.connect(master); src.start();
   }
 
-  // 再压一层几乎听不见的低音垫（两个略微失谐的正弦，会自己缓慢起伏）
+  // A barely audible bass pad underneath: slightly detuned sines that swell on their own.
   drone = AC.createGain(); drone.gain.value = 0.34; drone.connect(master);
   [55, 55.3, 82.5].forEach((f, i) => {
     const o = AC.createOscillator(); o.type = "sine"; o.frequency.value = f;
@@ -2796,15 +2964,15 @@ function startSound(){
 
   const ring = () => {
     if (!AC) return;
-    // 从天上随便挑一颗真星，用它的 V 定音高
+    // pick a real star out of the sky at random and let its valence set the pitch
     const star = NODES.length ? NODES[(Math.random() * NODES.length) | 0] : null;
     const v = star ? Math.max(0, Math.min(1, star.v)) : Math.random();
     const step = PENT[(v * PENT.length) | 0 % PENT.length] + 12 * (v > .66 ? 2 : v > .33 ? 1 : 0);
     const t = AC.currentTime, o = AC.createOscillator(), g = AC.createGain();
     o.type = "sine"; o.frequency.value = noteHz(step);
     g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(0.22, t + 0.02);      // 敲一下
-    g.gain.exponentialRampToValueAtTime(0.0001, t + 4.5); // 长长地散掉
+    g.gain.linearRampToValueAtTime(0.22, t + 0.02);      // the strike
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 4.5); // a long decay into nothing
     o.connect(g); g.connect(master); o.start(t); o.stop(t + 5);
     bellTimer = setTimeout(ring, 3500 + Math.random() * 6500);
   };
@@ -2818,7 +2986,8 @@ function stopSound(){
   setTimeout(() => ac.close().catch(()=>{}), 1600);
 }
 sw('swSound','sound', on => { on ? startSound() : stopSound(); });
-// 切走别的页签就闭嘴（她在看别的东西，不该还有声音）
+// Switching to another tab silences it: you are looking at something else, and the sky
+// should not still be playing behind you.
 document.querySelectorAll('nav.tabs button').forEach(b => b.addEventListener('click', () => {
   if (b.dataset.tab !== 'sky' && AC){
     stopSound();
