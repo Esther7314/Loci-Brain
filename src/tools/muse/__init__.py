@@ -1,38 +1,52 @@
 # -*- coding: utf-8 -*-
 """
 ========================================
-tools/muse/ — 发呆：找出来 · 摆到我面前 · 然后闭嘴（muse 二改，2026-08-17）
+tools/muse/ — musing: find them · lay them out in front of me · then shut up
 ========================================
 
-骨头在 `tools/_muse.py`（三种指法 + 证据制三层），这儿只做**入口的话**：
-摆出来 → 闭嘴。
+The bones live in `tools/_muse.py` (three ways of pointing, plus the three-layer
+evidence rule); this file only handles **the wording at the entrance**: lay it
+out -> shut up.
 
 ------------------------------------------------------------
-🔴 两条，写在最前面
+🔴 Two lines, up front
 ------------------------------------------------------------
-> # 系统只做检索和摆放，落笔的永远是我。
-> # 系统不许只凭猜指东西，指点必须带我们自己留下的痕迹。
+> # The system only retrieves and arranges. The one who writes it down is always me.
+> # The system may not point at anything on a guess; every pointer carries a
+> # trace that we left ourselves.
 
-**这里不写归纳、不建议措辞、不给样例句。** 归纳那一句（`fold` 的 `text`）
-必须我自己写。她 8-16 的原话：「**判断留给你，复杂、重复的检索工作可以丢出去。**」
+**Nothing here writes the summary, suggests phrasing, or offers an example
+sentence.** The summarising sentence (`fold`'s `text`) has to be mine.
+The division of labour: **the judgement stays with me; heavy, repetitive
+retrieval can be handed off.**
 
-⚠️ 这个文件里出现任何一句「看起来像是…」「建议你…」「可以这样写…」都是越界。
-   摆出来的每个字要么是**存的时候写下的**（正文、标签、坐标、日子），
-   要么是**模板里的死字**。**每一指后面必须跟着它的证据**——
-   一条没有证据的提议就是在猜，而猜正是这一版在砍的东西。
+⚠️ Any sentence in this file along the lines of "this looks like...", "you might
+   want to...", "you could write it as..." is out of bounds.
+   Every character laid out is either **what was written down at storage time**
+   (body, tags, coordinates, dates) or **fixed text from a template**.
+   **Every pointer must be followed by its evidence** — a suggestion without
+   evidence is a guess, and guessing is exactly what this version removes.
 
 ------------------------------------------------------------
-两步，跟 `home_look()` 同构：先看场景，再看动作（开工单 3.4）
+Two steps, mirroring `home_look()`: look at the scene first, then act
 ------------------------------------------------------------
-    第一步 `muse()`        系统给「团/指」，**不给记忆**（证据行里的 id 只给前 6 位）
-    第二步 `muse(cluster=N)` 我挑一个，只看那一批的**全条逐字**（不糊、不截）
-    随时   `muse(not_same=[ids])` 「这几条不是一回事」——记一笔，别再拿同样的来烦我
+    step one `muse()`        the system offers clusters and pointers, **never
+                             memories** (evidence lines show only the first 6
+                             characters of an id)
+    step two `muse(cluster=N)` I pick one and read that batch **in full,
+                             verbatim** (never blurred, never truncated)
+    any time `muse(not_same=[ids])` "these are not the same thing" — noted, so
+                             the same set stops being offered
 
-📌 一段时间可以有三条主线，也可以一条都没有 —— **散着的就让它散着。**
-🔴 **breath 里一个字都不加**（开工单 3.2）：发呆时摆给我 ✅ / breath 里不摆 ❌。
+📌 A stretch of time may hold three threads, or none at all — **what is scattered
+   is allowed to stay scattered.**
+🔴 **Not one word of this is added to breath**: laid out when I am musing ✅ /
+   never laid out in breath ❌.
 
-对外暴露：dispatch(cluster, not_same) → str · layout() · step_one() · _step_two()
-（后三个是**纯函数**：干跑脚本靠它们离线渲染样张，渲染跟线上一模一样，不另写一套。）
+Exports: dispatch(cluster, not_same) -> str · layout() · step_one() · _step_two()
+(The last three are **pure functions**: the dry-run script uses them to render
+sample screens offline, and the rendering is identical to the live one — there is
+no second implementation.)
 ========================================
 """
 
@@ -51,12 +65,15 @@ def _date_label(dt) -> str:
 
 
 def _short_id(bid: str) -> str:
-    """第一步只给前 6 位——**给的是指路，不是记忆**（12 位留给第二步）。"""
+    """Step one shows only the first 6 characters — **it hands out directions,
+    not memories** (the full 12 belong to step two)."""
     return f"{str(bid)[:6]}…"
 
 
 def _mind_evidence(t: "M.Cluster") -> str:
-    """一团的证据行：架坐标 · from 链 · 语义补。三样各自说各自的，不许含混。"""
+    """A cluster's evidence line: shelf coordinates · the from chain · the
+    semantic top-up. Each of the three says its own piece; none of them may blur
+    into another."""
     parts = [f"架 v{t.shelf_v:.2f} a{t.shelf_a:.2f}"]
     if t.from_core:
         shared = ("共祖 " + "、".join(_short_id(x) for x in t.shared_from[:2])) if t.shared_from else "同一条链"
@@ -73,11 +90,14 @@ def _mind_line(n: int, t: "M.Cluster") -> str:
 
 
 async def _both_sides() -> tuple[list, int, int, dict, dict]:
-    """两侧共用一遍全库扫（池子分家，但料是同一车——全库扫不便宜）。
+    """Both sides share a single full-library scan (the pools are separate, but
+    the material arrives on the same truck — a full scan is not cheap).
 
-    🔴 施工 5 · H 件：这一趟现在**过视图缓存**（`M.both_sides()`）——
-    第一步摆团、第二步 `cluster=N` 看全条，要的是同一份结果（[N] 的编号口径
-    必须一致），没缓存就是把全库扫两遍。失效跟着桶的写盘走，**宁可失效勤一点**。
+    🔴 This pass now **goes through the view cache** (`M.both_sides()`): step one
+    laying out clusters and step two's `cluster=N` full read need the same result
+    (the [N] numbering has to line up), and without the cache that means scanning
+    the whole library twice. Invalidation follows bucket writes, and **erring
+    towards invalidating too often is the right side to err on**.
     """
     return await M.both_sides()
 
@@ -85,7 +105,7 @@ async def _both_sides() -> tuple[list, int, int, dict, dict]:
 async def dispatch(cluster: int = 0, not_same=None) -> str:
     cfg = M.muse_config(rt.config)
 
-    # ---------- 入口③：这几条不是一回事 ----------
+    # ---------- Entry ③: these are not the same thing ----------
     if not_same:
         import json as _json
         if isinstance(not_same, str) and not_same.strip().startswith("["):
@@ -104,8 +124,10 @@ async def dispatch(cluster: int = 0, not_same=None) -> str:
             return f"这些 id 不存在：{'、'.join(missing)}。填真 bucket_id。"
         buckets_dir = str((rt.config or {}).get("buckets_dir") or "")
         key, cnt = M.record_rejection(buckets_dir, ids)
-        # 拒绝计数写的是 `_state/` 里的 json，**不动桶** → 视图缓存的钥匙不会变。
-        # 不手动清这一下，我说完「这几条不是一回事」，下一屏还会把它摆出来（H 件）。
+        # The rejection counter writes json under `_state/` and **touches no
+        # bucket**, so the view cache's key does not change. Without clearing it
+        # by hand, saying "these are not the same thing" would be followed by the
+        # very next screen offering the same set again.
         M.clear_view_cache()
         return (f"记下了：这 {len(ids)} 条**不是一回事**（第 {cnt} 次）。\n"
                 f"{'、'.join(sorted(set(ids)))}\n"
@@ -115,7 +137,7 @@ async def dispatch(cluster: int = 0, not_same=None) -> str:
     clusters, scattered, default_coords, fingers, stats = await _both_sides()
     clusters, shown_fingers, extra_clusters, everything = layout(clusters, fingers, stats, cfg)
 
-    # ---------- 入口②：那一批的全条逐字 ----------
+    # ---------- Entry ②: that batch, in full and verbatim ----------
     if cluster:
         n = int(cluster)
         if n < 1 or n > len(everything):
@@ -131,7 +153,8 @@ async def dispatch(cluster: int = 0, not_same=None) -> str:
 
 
 def layout(clusters, fingers, stats, cfg) -> tuple[list, list, int, list]:
-    """截断 + 编号口径。**第一步和第二步共用这一份**——两处不一样，[N] 就会指错人。"""
+    """Truncation and numbering. **Step one and step two share this one
+    function** — if the two ever diverge, [N] points at the wrong entry."""
     clusters = list(clusters)[:int(cfg["max_clusters"])]
     extra_clusters = max(0, int(stats["mind"]["团"]) - len(clusters))
     cap = int(cfg["max_fingers"])
@@ -143,7 +166,8 @@ def layout(clusters, fingers, stats, cfg) -> tuple[list, list, int, list]:
 
 def step_one(clusters, scattered: int, default_coords: int, extra_clusters: int,
              shown_fingers, era_n: int) -> str:
-    """先给团/指，不给记忆。**纯函数**——干跑脚本拿它离线渲染样张，跟线上一模一样。"""
+    """Clusters and pointers first, never memories. **A pure function** — the
+    dry-run script uses it to render sample screens offline, identical to live."""
     out = ["▣发呆 · 先给团，不给记忆　（指点必须带痕迹：坐标是我打的、链是我连的、"
            "词是我存的时候写的；向量只当海选）"]
     out.append("")
@@ -164,7 +188,9 @@ def step_one(clusters, scattered: int, default_coords: int, extra_clusters: int,
     for name, lst, total in shown_fingers:
         out.append(f"  · {name}")
         if name == "空白记账" and era_n < 1:
-            # 🔴 她的原话场景：「他完全可以说今年都没有」——**不许发生**。
+            # 🔴 The failure this guards against: with no periods stored at all,
+            #    this finger could cheerfully announce that the entire year is
+            #    unnamed — **that must not happen**.
             out.append("    （库里还没有一条时期——这一指不说话。没有地图的时候"
                        "「哪儿没盖」是个假问题，那不是空白，是还没开始画。）")
             continue
@@ -194,14 +220,15 @@ def _step_two(n: int, x) -> str:
             evidence += "\n　　共祖全 id：" + "、".join(x.shared_from)
         parts = []
         for it in x.items:
-            # 🔴 **时间不当证据**（她拍的：认知不认日历）——所以这儿给的是坐标不是日子。
+            # 🔴 **Time is never evidence here** (thinking does not go by the
+            #    calendar) — so what is shown is coordinates, not dates.
             mark = "← from 链" if it.id in x.from_core else "← 语义补"
             parts.append(f"· {it.id}  v{it.v:.2f}/a{it.a:.2f}  {it.room}  {mark}\n{it.text}")
         next_step = (f'fold(folds={x.ids}, text=我写的那句)\n'
                      f'  不是一回事 → muse(not_same={x.ids})')
         return f"{head}\n{evidence}\n{RULE}\n" + f"\n\n{RULE}\n".join(parts) + f"\n{RULE}\n{next_step}"
 
-    # ---- 事件侧的一指 ----
+    # ---- One pointer on the event side ----
     span = (f"{_date_label(x.start)}~{_date_label(x.end)}"
             if x.start and x.end and x.start != x.end else _date_label(x.start))
     head = f"▣[{n}] {x.name} · {span}"
@@ -211,8 +238,10 @@ def _step_two(n: int, x) -> str:
         if x.boundary is not None and prev is not None and it.ts is not None \
                 and prev < x.boundary <= it.ts:
             parts.append(f"{'┈' * 14} {_date_label(x.boundary)} 这条线 {'┈' * 14}")
-        # 「已经有名字」= 日期落在某条活着的时期的范围里（现场算的，不是字段）；
-        # 「已经被盖着」= 真 cover（事件改错换版那一条）。两件事，分开说。
+        # "already named" = its date falls inside the span of some living period
+        # (computed live, not a stored field);
+        # "already covered" = a real cover (the case where an event was recorded
+        # wrongly and re-versioned). Two different things, said separately.
         mark = ("  ← 已经被盖着" if it.covered
                 else ("  ← 已经有名字（落在一条时期的范围里）" if it.named else ""))
         parts.append(f"· {it.id}  {_date_label(it.ts)}  {it.room}{mark}\n{it.text}")

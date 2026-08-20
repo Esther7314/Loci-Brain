@@ -1,81 +1,111 @@
 # -*- coding: utf-8 -*-
 """
-tools/recall/core.py — 回想主逻辑：筛 → 缩放 → 渲染
+tools/recall/core.py — the main remembering logic: filter -> zoom -> render
 
-全部是统计（分组/占比/平均/取最大），零 LLM 调用、零预存。
-「事多了容易忘」不是 bug 是缩放的正确行为：条目多的塌成主色调，异的留名字。
+All of it is statistics (grouping, proportions, averages, maxima); zero LLM
+calls, nothing precomputed.
+"the more there is, the easier it is to forget" is not a bug but the correct
+behaviour of zooming: where there are many entries they collapse into the
+dominant colour, and the odd one out keeps its name.
 """
 
 import re
 from collections import Counter
 from datetime import datetime, timedelta
 
-from core import _bigevent as _big    # 大 event：盖在一段时间上的一句话
-from core import _fold as _F          # fold / gist：被盖的不再独立冒头（施工 3）
+from core import _bigevent as _big    # a big event: one sentence laid over a stretch of time
+from core import _fold as _F          # fold / gist: what is covered no longer surfaces on its own
 from .. import _runtime as rt
-from core import _when as _w          # 「她的今天」（本地时区）—— 别再直接用 datetime.now()
+from core import _when as _w          # "today" as the user lives it (local timezone) — never call datetime.now() directly
 from core._rooms import (ALL_ROOMS, check_gate, is_mind_room, normalize_room,
                       room_matches)
 from utils import read_from_ids
 
-# 缩放目标：每次返回的格数（她 8-02 定 12~20；≤ _LIST_MAX 条就不缩了直接列）
+# The zoom target: how many cells each call returns (12-20; at or below _LIST_MAX
+# entries it does not zoom at all and simply lists them)
 _CELL_MAX = 20
 _LIST_MAX = 20
 _HIGHLIGHT_MAX = 3
 
-# ── 浏览 / 搜索两条路（她 8-05 晚定的）─────────────────────────
-# 判据只有一条：**有没有 query**。when/room/tag 是**范围**，query 是**目标**。
-#   浏览（无 query）：在看，想不起来有什么 → 远端**狠砍**，按时间排，没有分数
-#   搜索（有 query）：在找，知道要什么   → 远端**多给**（砍了就是漏），按相关度排，分数是重点
-# 岔路口代码里早就有（没走 query 门就没有 score），只是两条路的输出长得一样。
-_BROWSE_NEAR_DAYS = 3     # 「三天内还是按 recall 的办法输出」——她的原话
-_BROWSE_REP_DAYS = 21     # 「给 2~3 条前 2~3 周的」——更远的挑出来给也没意义
+# ── Two paths: browsing and searching ────────────────────────
+# There is exactly one criterion: **is there a query**. when/room/tag are a
+# **range**; query is a **target**.
+#   browsing (no query): I am looking, I cannot recall what is there -> **cut the
+#     far end hard**, order by time, no scores
+#   searching (with a query): I am looking for something, I know what -> **give
+#     more at the far end** (cutting here means missing), order by relevance, and
+#     the score is the point
+# The fork has always existed in the code (no query gate means no score); what was
+# missing is that the two paths produced identically shaped output.
+_BROWSE_NEAR_DAYS = 3     # "within three days it still comes out the way recall does"
+_BROWSE_REP_DAYS = 21     # "give 2-3 entries from 2-3 weeks back" — picking out anything older is pointless
 _BROWSE_REP_MAX = 3
 
-# 搜索路一次最多认多少条（top-k）。**收紧到 30**（施工 5 · D 件，她 8-15 的判据）：
-# 「query 词多 = 向量平均 = 找不准」——k 给大了，找不准的时候它就用一屏沾边的把真的埋掉。
-# ⚠️ 砍掉的条数**必须报出来**（`_collect` 的第三个返回值 → 渲染时末尾一行）：
-#    悄悄砍 30 条正是 codex 二轮 P1-5 骂过的那种「名额被浪费、第 61 名永久消失」。
+# How many entries the search path accepts at most (top-k). **Tightened to 30**:
+# more words in a query = an averaged vector = a poorer aim — and with a large k,
+# a poor aim buries the real hit under a screenful of near-misses.
+# ⚠️ The number of entries cut **must be reported** (`_collect`'s third return
+#    value -> a final line at render time): quietly dropping 30 is exactly the
+#    "the slots were wasted and number 61 disappeared forever" failure that
+#    review complained about.
 _SEARCH_TOPK = 30
 
-# 关联度线：低于它的多半只是沾边。
-# 她 8-05 搜「调理身体」（本意是推拿、喝中药）捞回一堆「身体·亲密」之后说的：
-# 「如果说没有直接关联那不如就不弹出来，说没有相关记忆。」
-# 打分砍成两维（semantic 2.5 + bm25 1.5，2026-08-06 机制②）后分数绝对值整个变小，
-# 线重新量过（C3，8-06 实测六个查询）：
-#   有关键词/字面撑着的查询：真相关 50~80，干净。
-#   纯语义短查询（如「你怕我死」）：真相关 ~36，沾边 31~33，「调理身体」的噪音顶到 34.2
-#   —— 线 35 恰好把两边分开，但边距只有 1~2 分（余弦的动态范围本来就窄）。
-#   宁缺不滥：掉线下的末尾报一行（多少条·最高几分·最早哪条），看得见、钻得进。
-# ⚠️ 这是**综合分**（0~100），不是余弦；底层那个 _VECTOR_RECALL_THRESHOLD=0.65
-# 是**向量入场**门槛，两回事。字面命中的条目由 max(分数, 线) 托底，不受此线挡。
-# 环境变量 LOCI_RELEVANCE_FLOOR 可覆盖（dashboard 记忆页那根滑条走的是 URL 参数）。
+# The relevance floor: below it, most results are merely adjacent.
+# It came out of a search for a term meaning "taking care of one's health" (in the
+# sense of massage and herbal medicine) that dredged up a pile of entries about
+# the body and intimacy: if there is no direct connection, better not to show
+# anything and say there is no relevant memory.
+# After scoring was cut to two dimensions (semantic 2.5 + bm25 1.5) the absolute
+# values all shrank, so the line was measured again (six real queries):
+#   queries with keyword/literal support: genuinely relevant 50-80, clean.
+#   purely semantic short queries: genuinely relevant around 36, adjacent 31-33,
+#   and the noise from the health query peaked at 34.2
+#   —— a line at 35 separates the two exactly, but with a margin of only 1-2
+#   points (cosine has a narrow dynamic range to begin with).
+#   Better too few than too many: what falls below the line is reported in one
+#   final line (how many, the highest score, the earliest entry) — visible, and
+#   drillable.
+# ⚠️ This is the **combined score** (0-100), not a cosine; the underlying
+# _VECTOR_RECALL_THRESHOLD=0.65 is the **admission threshold for vectors**, a
+# different thing. Entries with a literal hit are floored at max(score, line) and
+# are never blocked by this.
+# The LOCI_RELEVANCE_FLOOR environment variable overrides it (the slider on the
+# dashboard's memory page goes through a URL parameter).
 try:
     RELEVANCE_FLOOR = float(__import__("os").environ.get("LOCI_RELEVANCE_FLOOR", "") or 35.0)
 except (TypeError, ValueError):
     RELEVANCE_FLOOR = 35.0
-# 系统标签前缀：不进任何给人看的标签行（B8：「疑似同件:xxx」原来会混进去）
+# System tag prefixes: never allowed onto any tag line a human reads (「疑似同件:xxx」
+# used to leak through)
 _SYS_TAG_PREFIXES = ("__", "aspect:", "疑似同件:", "相似认知:")
-# 机器腔标签一律**滤掉别上脸**（施工 5 · B 件，她 8-17 凌晨在 muse 首屏逮的教训）：
-# 前缀表只挡得住已经出现过的那几种，`xx:yy` 这个**形状**才是判据。
-# 「脸」只配人话场景词——`aspect:patterns` 这类结构化标签是旧 om 退役时留下的渣。
-# 判据跟 tools/_muse.py 的 `is_scene_word()` 同一条，别两处各写一套。
+# Machine-voiced tags are **filtered out and never shown**, a lesson caught on
+# muse's first screen:
+# a prefix table can only stop the kinds already seen; the **shape** `xx:yy` is
+# the real criterion.
+# What faces a reader deserves plain-language scene words — structured tags like
+# `aspect:patterns` are residue left behind when the old system was retired.
+# The criterion is the same one as `is_scene_word()` in tools/_muse.py; do not
+# write a second version of it here.
 _MACHINE_TAG_RE = re.compile(r"^[^:：]{1,12}[:：]")
 
 
 def is_human_tag(tag: str) -> bool:
-    """这个标签配不配上脸。系统前缀 + `xx:yy` 机器腔都不配。"""
+    """Whether this tag deserves to be shown. System prefixes and the machine-voiced
+    `xx:yy` shape do not."""
     t = str(tag)
     return bool(t) and not t.startswith(_SYS_TAG_PREFIXES) and not _MACHINE_TAG_RE.match(t)
 
 _SEED_RE = re.compile(r"\[\[([a-z_]+)\]\]")
-# 底色只认情绪种子（七情+六欲的英文键），别的 [[wikilink]]（[[项目名]][[人名]]…）不是种子
+# The ground tone recognises emotion seeds only (the English keys of the seven
+# emotions and six desires); any other [[wikilink]] (a project name, a person's
+# name, ...) is not a seed
 _SEED_NAMES = frozenset({
     "joy", "anger", "sorrow", "fear", "love", "aversion", "desire",
     "lust", "sound", "scent", "taste", "touch", "dharma", "greed",
 })
 
-# 粒度阶梯（秒）。密度定粒度：从细到粗试，取第一个非空格数 ≤ _CELL_MAX 的
+# The granularity ladder (in seconds). Density decides granularity: try from fine
+# to coarse and take the first one whose non-empty cell count is <= _CELL_MAX
 _LADDER = [
     ("小时", 3600),
     ("半天", 12 * 3600),
@@ -89,23 +119,30 @@ _LADDER = [
 
 
 # ============================================================
-# 说人话 = **壳，不是芯**（开工单 5.3 · 施工 5 B 件）
+# Plain language is **the shell, not the core**
 # ============================================================
-# 🔴 **记忆正文一个字不动、不过模型。** 这一节只管**结构提示语**——
-#    房间比例、V/A 这种机器读数换成一句人话；标签**原词直接用**。
-#    每个字要么是**存的时候写下的**（标签原词），要么是**这张表里的死字**。
-#    模型每次换个说法反而不像「我的记忆」（8-12 B1 定的模板拼装，一直没做）。
+# 🔴 **The body of a memory is never altered and never goes through a model.**
+#    This section only handles **the structural phrasing** — machine readouts like
+#    room proportions and V/A become a sentence a person can read, while tags are
+#    **used as the exact words they were stored as**.
+#    Every character is either **what was written down at storage time** (the tag
+#    words) or **fixed text from these tables**.
+#    A model rephrasing it differently every time makes it read less like "my
+#    memory", not more.
 #
-# ⚠️ 换掉的只有「怎么读出来」，**不是「读到什么」**：精确的百分比和 V/A
-#    照旧一个数不少地待在 `recall_data()` 那张皮里（dashboard 要拿它画分布）。
-#    要数字的地方给数字，要一眼看懂的地方给人话——两张皮同一份统计。
+# ⚠️ Only **how it is read out** changes, **not what is read**: the exact
+#    percentages and V/A remain, to the number, in the `recall_data()` skin (the
+#    dashboard needs them to draw distributions).
+#    Numbers where numbers are wanted, plain language where an instant read is
+#    wanted — two skins over one set of statistics.
 #
-# 📌 她给的对照表（5.3 原文，这四行就是验收样张）：
+# 📌 The reference table (these four lines are the acceptance sample):
 #      I/EVENT/SELF/WHAT 37%   → 「多半是我自己在做事」
 #      MIND/TRAITS 19%         → 「想得也不少」
-#      青岛6 交接单5 火车4      → 「围着青岛、交接单转」（标签原词直用）
+#      青岛6 交接单5 火车4      → 「围着青岛、交接单转」(tag words used verbatim)
 #      V0.62 / A0.50           → 「心里还行，不算绷着」
-#    ⏳@她 词儿归我调，**她看到不对味有权改**——改这四张表就行，逻辑一行不用动。
+#    The wording is tunable: anything that reads wrong is fixed by editing these
+#    four tables, without touching a line of logic.
 
 _ROOM_PHRASES = {
     "EVENT/SELF":  ("多半是我自己在做事",   "几乎都是我自己在做事"),
@@ -113,15 +150,17 @@ _ROOM_PHRASES = {
     "MIND/TRAITS": ("多半在想我是个什么样的人", "几乎都在想我是个什么样的人"),
     "MIND/VIEWS":  ("多半在想我怎么看一件事",  "几乎都在想我怎么看一件事"),
 }
-# 副句：主句在事件那边、认知又占了一小半时补一句（她的第二个例子「想得也不少」）
+# The subclause: added when the main clause is on the event side and thinking
+# still takes up a sizeable minority (the second example above, 「想得也不少」)
 _SUBCLAUSE_GATE = 0.15
 
 
 def rooms_in_words(rooms: Counter, n: int) -> str:
-    """房间比例 → 一句人话。**只认四间**（老名字先 normalize 过）。
+    """Room proportions -> one plain sentence. **Only the four rooms count** (old
+    names are normalised first).
 
-    比例是**结果**不是配额（5.2）：这句话说的就是「最近我在干什么」，
-    浮上来的是她占多数还是我占多数，都照实说。
+    A proportion is a **result, not a quota**: this sentence says what I have been
+    doing lately, and whatever comes out on top is reported as it is.
     """
     if not rooms or not n:
         return ""
@@ -137,7 +176,8 @@ def rooms_in_words(rooms: Counter, n: int) -> str:
     else:
         sentence = "做的和想的一半一半"
         return sentence
-    # 另一半够 _副句门 就补一句——她的例子里 MIND/TRAITS 19% 就是这一句
+    # If the other half clears the subclause gate, add a clause — MIND/TRAITS at
+    # 19% in the sample above is exactly this case
     if top_room.startswith("EVENT") and _SUBCLAUSE_GATE <= mind_n / n < 0.5:
         sentence += "，想得也不少"
     elif top_room.startswith("MIND") and _SUBCLAUSE_GATE <= event_n / n < 0.5:
@@ -146,7 +186,7 @@ def rooms_in_words(rooms: Counter, n: int) -> str:
 
 
 def mood_in_words(v, a) -> str:
-    """V/A → 「心里还行，不算绷着」。两个刻度各说一句，中间一个逗号。"""
+    """V/A -> 「心里还行，不算绷着」. One clause per axis, joined by a comma."""
     if v is None:
         return ""
     if v >= 0.7:
@@ -173,11 +213,14 @@ def mood_in_words(v, a) -> str:
 
 
 def tags_in_words(tags: list, k: int = 2, with_counts: bool = False, framed: bool = True) -> str:
-    """标签 → 「围着青岛、交接单转」。**标签原词一个字不改**，框子才是模板。
+    """Tags -> 「围着青岛、交接单转」. **Not one character of a tag is changed**;
+    only the frame around them is a template.
 
-    `带数=True`（她 8-05 点破的：`床 3` 和 `床 30` 是两种日子，没有数量那两行
-    长得一模一样）。`框=False` 给**行头已经说了人话**的地方用（卡上那行
-    `围着什么   代码 3 · 交接单 3`）——同一句话说两遍反而更难读。
+    Use with_counts=True where the numbers matter: `床 3` and `床 30` describe two
+    completely different stretches of life, and without counts those two lines
+    look identical. Use framed=False where **the row label already says it in
+    plain language** (the card line `围着什么   代码 3 · 交接单 3`) — saying the
+    same thing twice only makes it harder to read.
     """
     items = [(t, n) for t, n in (tags or []) if is_human_tag(t)][:max(1, k)]
     if not items:
@@ -189,27 +232,34 @@ def tags_in_words(tags: list, k: int = 2, with_counts: bool = False, framed: boo
 
 
 def kind_badge(meta: dict) -> str:
-    """逐条那一行前面的牌子（她 8-17 傍晚拍的终稿）：**mind 戴 🧠、事件不戴牌。**
+    """The badge in front of an item line: **a mind wears 🧠, an event wears
+    nothing.**
 
-    🔴 **房间码撤掉**：`EVENT/SELF` 这种码是给机器看的，一行里出现三次
-    就把「发生了什么」和「我想过什么」这个唯一要分清的事实糊掉了。
-    她点的真病是「混排、不标身份，读的人只能靠内容猜」——
-    数据上 room 一直分得清清楚楚，**是显示层没把它们分开**。
-    ⚠️ 别做成分两块（旧稿「事件当主体摆、认知另起一小块」8-17 作废）：
-       混排保留，一眼能分身份就够了。
+    🔴 **The room code is gone**: a code like `EVENT/SELF` is written for a
+    machine, and three of them in one line blur the single fact that has to stay
+    clear — "what happened" versus "what I thought".
+    The real ailment was mixed listing with no marker of identity, leaving the
+    reader to guess from the content — in the data, room has always been perfectly
+    distinct; **it was the display layer that failed to separate them**.
+    ⚠️ Do not solve this by splitting into two blocks (an earlier draft put events
+       as the main body with thinking in a separate little section; it was
+       dropped): keep them interleaved, since telling them apart at a glance is
+       enough.
     """
     return "🧠" if is_mind_room((meta or {}).get("room")) else ""
 
 
 # ------------------------------------------------------------
-# when 解析：人话时间刻度（日历刻度自动算；生活刻度靠锚点，批 2b）
+# Parsing when: plain-language time scales (calendar scales are computed
+# automatically; life-scale expressions wait on anchors)
 # ------------------------------------------------------------
 
 def _parse_when(when: str) -> tuple[datetime | None, datetime | None, str]:
-    """返回 (起, 止, 错误)。空串 = 不筛时间。
+    """Returns (start, end, error). An empty string = no time filter.
 
-    ⚠️ 全程走 `tools/_when`（本地时区）。原来用的是容器里的 `datetime.now()`，
-    那是 UTC —— 她凌晨两点问「今天」，容器答的是前一天下午（codex 复核 #4）。
+    ⚠️ Everything here goes through `tools/_when` (local timezone). It used to use
+    the container's `datetime.now()`, which is UTC — ask for 「今天」 at 2 a.m. and
+    the container answers with the previous afternoon.
     """
     w = when.strip()
     if not w:
@@ -239,7 +289,8 @@ def _parse_when(when: str) -> tuple[datetime | None, datetime | None, str]:
         a, b = words[w]
         return a, b, ""
 
-    # 下面这些都是「哪一天/哪个月」—— 日历刻度，按本地日历算，不是 UTC 时刻
+    # Everything below is "which day / which month" — calendar scales, computed
+    # against the local calendar rather than a UTC instant
     m = re.fullmatch(r"(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})", w)
     if m:
         try:
@@ -264,7 +315,7 @@ def _parse_when(when: str) -> tuple[datetime | None, datetime | None, str]:
                  else datetime(y, mo + 1, 1, tzinfo=_w.LOCAL_TZ))
             return a, b, ""
         except ValueError:
-            pass  # 2026-99 这类非法月份落到下面的「看不懂」（codex 二轮 P2-8）
+            pass  # an impossible month like 2026-99 falls through to the "not understood" branch below
 
     return None, None, (
         f"when 看不懂：{w}。认识的写法：48h / 7d / 今天 / 昨天 / 本周 / 上周 / 本月 / 上月 / 今年 / "
@@ -274,20 +325,23 @@ def _parse_when(when: str) -> tuple[datetime | None, datetime | None, str]:
 
 
 # ------------------------------------------------------------
-# 取数与筛
+# Fetching and filtering
 # ------------------------------------------------------------
 
 def _ts_of(meta: dict) -> datetime | None:
-    """一条记忆的时间坐标：**when 优先、created 兜底**。就这一套口径，没有第二套。
+    """A memory's time coordinate: **when first, created as fallback**. This is
+    the only definition; there is no second one.
 
-    ⚠️ 2026-08-17（施工 5 · C 件）：原来还有一支 `by="touched"` 走 `last_active`
-    （「按最近碰过的排，消化用」）。**`by` 整个砍了**——她的话：「我们没有『消化』
-    这个动作，所有的事件、认知都长新」。判据在 5.4：**每个参数必须对得上一句
-    我心里真会冒出来的话**，而「按最近碰过的排」不是我心里会冒出来的句子。
+    ⚠️ There used to be a `by="touched"` branch reading `last_active` ("order by
+    most recently touched, for digesting"). **`by` was cut entirely** — there is
+    no such act as "digesting" here; every event and every thought grows anew.
+    The rule: **every parameter must map onto a sentence that actually surfaces in
+    the mind**, and "order by most recently touched" is not such a sentence.
 
-    返回**带时区的本地时间**。原来是 `datetime.fromisoformat(s[:19])` ——
-    那个切片会把 `Z` / `+08:00` 一起切掉，等于把说清楚了时区的时间戳
-    硬掰成「不知道哪个时区」，再拿去和 UTC 的 now() 比（codex 复核 #4）。
+    Returns **a timezone-aware local time**. It used to be
+    `datetime.fromisoformat(s[:19])` — that slice cuts off `Z` / `+08:00` along
+    with everything else, forcing a timestamp that stated its timezone into "no
+    idea which timezone", and then comparing it against a UTC now().
     """
     for k in ("when", "created"):
         ts = _w.parse_stamp(meta.get(k))
@@ -299,54 +353,74 @@ def _ts_of(meta: dict) -> datetime | None:
 def _visible(meta: dict) -> bool:
     t = str(meta.get("type") or "")
     if t in ("letter", "archived", "i"):
-        # letter 搬 Home；archived 沉底；i 并进 MIND 前先不掺和（还没迁的老 I 条目）
+        # letters moved to Home; archived sinks; i stays out until it is merged
+        # into MIND (old I entries that have not been migrated yet)
         return t == "i" and bool(meta.get("room"))
-    # type=plan 刻意**留在**时间轴上（codex 二轮 P2-10 问过）：plan 工具停了，
-    # 但那 21 条是「想发生的记忆」，正是 tense=want 的前身——想过什么也是历史。
-    # ⚠️ 这儿**不再**因为 `superseded_by` 就整个排掉（施工 5 · F 件，2026-08-17）。
+    # type=plan is deliberately **kept** on the timeline: the plan tool is retired,
+    # but those entries are "memories of what was wanted", the direct ancestor of
+    # tense=want — what was once wanted is history too.
+    # ⚠️ This used to **stop** excluding an entry outright just because it had a
+    # `superseded_by`.
     # ------------------------------------------------------------
-    # 两个字段一个动作，待遇却不一样：`covered_by`（fold 盖住的）只是**不占行**，
-    # 条数/房间/标签/V·A 一个字不少；`superseded_by`（regrow 换版的）以前在这儿
-    # 被**整个排掉**——于是「盖一条」反而比「盖两条」丢信息，跟开工单 2.3 的验收判据
-    # （**任何 recall 能看到的信息量只能变多不能变少**）正着劲。
-    # 🔴 **统一成 covered_by 的待遇**：旧版照旧不独立冒头，但它**算进统计**，
-    #    而且换版那条新版会以「▣… 盖着这里 1 条」的形式在原地出头。
-    # ⚠️ 别把这一行加回来。要加之前先读 2.3。
+    # Two fields, one action, but different treatment: `covered_by` (folded away)
+    # only meant **not taking up a line**, with the count, room, tags and V/A all
+    # intact; `superseded_by` (re-versioned by regrow) used to be **excluded
+    # entirely** here — so covering one entry lost more information than covering
+    # two, which runs against the acceptance rule that **the amount of information
+    # any recall can show may only grow, never shrink**.
+    # 🔴 **Unify it with covered_by's treatment**: the old version still does not
+    #    surface on its own, but it **counts in the statistics**, and the new
+    #    version appears in its place as "▣... covering 1 entry here".
+    # ⚠️ Do not add this line back. Read the rule above before trying.
     #
-    # ⚰️ ——以上整段 2026-08-19 被她推翻了，下面那行就是「加回来的那一行」。
-    #    **推翻它的不是新口味，是前提没了**：8-17 这么定的理由是「regrow 就是
-    #    fold 的 n=1，两者待遇要一致」；而 8-18 B1/B2 之后 fold 只管收好几条、
-    #    regrow 只管换版，**「一致」这个要求本身不存在了**。
-    #    她当场看见的症状：浏览面里一排「▣…盖着这里 1 条」，那根本不是 fold，
-    #    是换版。她的原话：「**recall 出来其实要看的是 event**」。
-    #    关于 2.3（信息量只能变多不能变少）：旧版的字一个没少，id 直查逐字原文、
-    #    版本链两头、搜索全都够得到 —— **少的是它在浏览面上占的那一行和那个计数**。
-    #    2.3 管的是「别把东西弄丢」，不是「所有东西都得挤进同一屏」。
-    # 🔴 2026-08-19 她定：**regrow 换过版的旧版不算进条数**（也就不进浏览面）。
-    #    event 换版 =「我记错了」——那件事只发生过一次，记错的那版不是另一件事；
-    #    mind 换版 =「我以前那么想，现在不这么想了」——想法变了不是又想了一遍，
-    #    是同一条认知的上一版。两种理由不同，结论一样：**一条换了版还是一条**，
-    #    同一件事换三次版在计数里变成三条，那个数就开始撒谎了。
-    #    ⚰️ 这一条推翻的是 8-17（施工 5 · F 件）那个决定——当时把 superseded_by
-    #    和 covered_by 统一待遇，理由是「regrow 就是 fold 的 n=1」。
-    #    **8-18 B1/B2 之后那个前提没了**：fold 只管收好几条，regrow 只管换版。
-    #    ⚠️ 旧版没有消失：id 直查逐字原文都在，版本链两头（换掉了谁 / 被谁换掉）
-    #    照旧列出来，搜索也够得到。它只是不再占浏览面的一行、不再被数一遍。
-    #    ⚠️ **被 fold 盖住的照旧算进条数**（那是几条真记忆被收起来，不是同一条的旧版）。
+    # ⚰️ —— all of the above was later overturned, and the line below is exactly
+    #    "the line that was added back".
+    #    **What overturned it was not a change of taste but the loss of its
+    #    premise**: the reasoning was "regrow is fold's n=1, so the two must be
+    #    treated alike"; once fold became solely about collecting several entries
+    #    and regrow solely about re-versioning, **the requirement to treat them
+    #    alike stopped existing**.
+    #    The symptom, seen directly: a row of "▣... covering 1 entry here" across
+    #    the browse view, none of which was a fold at all — they were all
+    #    re-versions. **What recall is there to show is events.**
+    #    On the rule that information may only grow: not one word of the old
+    #    version is lost. A direct id lookup returns it verbatim, both ends of the
+    #    version chain are listed, and search reaches it — **what it loses is the
+    #    line it occupied in the browse view and its place in the count**.
+    #    That rule is about not losing things, not about cramming everything onto
+    #    one screen.
+    # 🔴 The decision: **a version superseded by regrow does not count towards the
+    #    number of entries** (and therefore does not appear in the browse view).
+    #    Re-versioning an event = "I remembered it wrong" — the thing happened
+    #    once, and the mistaken version is not a second thing;
+    #    re-versioning a mind = "I used to think that and no longer do" — a
+    #    changed view is not a second act of thinking, it is the previous version
+    #    of the same thought. Two different reasons, one conclusion: **an entry
+    #    that has been re-versioned is still one entry**, and if re-versioning the
+    #    same thing three times turned it into three in the count, that number
+    #    would start lying.
+    #    ⚠️ The old version has not disappeared: a direct id lookup still returns
+    #    it verbatim, both ends of the version chain (what it replaced / what
+    #    replaced it) are still listed, and search still reaches it. It simply no
+    #    longer occupies a line in the browse view and is no longer counted twice.
+    #    ⚠️ **Entries folded away by fold still count** (those are several real
+    #    memories collected together, not earlier versions of one entry).
     if meta.get("superseded_by"):
         return False
     if (meta.get("domain") or [""])[0] == "seed":
         return False
     tags = [str(t) for t in (meta.get("tags") or [])]
     if "__档案事实__" in tags or "__大event__" in tags:
-        return False  # 门口那张纸和大 event 是工具件，不是时间轴上的事件
+        return False  # the note by the door and big events are tooling, not events on the timeline
     return True
 
 
 async def _collect(when, room, tag, query) -> tuple[list[dict], str, dict]:
-    """筛出这次要看的那些。返回 `(条目, 错误, 账)`。
+    """Filter down to what is being looked at this time. Returns
+    `(entries, error, ledger)`.
 
-    `账` 现在只记一样：top-k 砍掉了几条（`topk砍掉`）——**挡了什么必须看得见**。
+    The ledger currently records exactly one thing: how many entries top-k cut
+    (`topk砍掉`) — **whatever was blocked has to stay visible**.
     """
     ledger: dict = {"topk砍掉": 0, "topk": _SEARCH_TOPK}
     t0, t1, err = _parse_when(when)
@@ -358,10 +432,12 @@ async def _collect(when, room, tag, query) -> tuple[list[dict], str, dict]:
         return [], gate_err, ledger
     tag = tag.strip()
 
-    # query 门：多取（300）→ 过完所有门再截相关度前 _SEARCH_TOPK（codex 二轮 P1-5：
-    # 原来先截再过门，名额被不合格命中浪费、第 k+1 名的合格记忆永久消失）
+    # The query gate: fetch generously (300) -> pass every gate -> only then keep
+    # the top _SEARCH_TOPK by relevance. (It used to truncate before filtering, so
+    # the slots were wasted on hits that failed the gates and the qualifying
+    # memory at rank k+1 disappeared forever.)
     scores: dict[str, float] = {}
-    literals: set[str] = set()   # 字面命中的桶：关联度线对它们是 max(分数, 线) 托底
+    literals: set[str] = set()   # buckets with a literal hit: the relevance floor treats them as max(score, floor)
     if query.strip():
         try:
             hits = await rt.bucket_mgr.search(query.strip(), limit=300)
@@ -388,17 +464,24 @@ async def _collect(when, room, tag, query) -> tuple[list[dict], str, dict]:
         meta = b.get("metadata", {}) or {}
         if not _visible(meta):
             continue
-        # 机制①：淡出/沉底的**翻不出现**（「我不去找，它也会自己出现」只属于活着的）。
-        # 搜（有 query）照样够得到，只是分数被打了折——悄然发生，这儿不标、不报数。
+        # Faded or sunk entries **do not turn up while browsing** ("it surfaces on
+        # its own even when I am not looking for it" belongs to what is still
+        # alive).
+        # A search (with a query) still reaches them, only at a discounted score —
+        # forgetting happens quietly, so nothing is marked or counted here.
         if browsing and str(meta.get("decay_stage") or "") in ("faded", "sunk"):
             continue
-        # 房间门在**归一之后**比：盘上还躺着旧十间的名字（迁移只交了脚本没跑真库），
-        # room="MIND" 必须筛得到老的 I/MIND/TRAITS，否则这个门在真库上等于是空的。
+        # The room gate compares **after normalisation**: the old ten-room names
+        # are still on disk (the migration shipped a script but was never run
+        # against the real library), and room="MIND" has to match a legacy
+        # I/MIND/TRAITS, or this gate matches nothing at all in practice.
         if room and not room_matches(meta.get("room"), room):
             continue
-        # tag 门＝**包含匹配**（2026-08-06 C4）：打「床」要能筛出「床上」「床头」。
-        # 原来是完全相等——而 tags 一定不全（「床」在 16 条正文里出现，只有 1 条进
-        # 了 tags），相等匹配把本来就稀的标签又漏掉一半。
+        # The tag gate is a **containment match**: searching 「床」 has to find
+        # 「床上」 and 「床头」 too.
+        # It used to be exact equality — and tags are never complete (「床」 appears
+        # in 16 bodies but made it into the tags of only one), so equality matching
+        # dropped half of an already sparse signal.
         if tag and not any(tag in str(t) for t in (meta.get("tags") or [])):
             continue
         ts = _ts_of(meta)
@@ -411,12 +494,14 @@ async def _collect(when, room, tag, query) -> tuple[list[dict], str, dict]:
         bid = str(meta.get("id") or b.get("id") or "")
         out.append({"id": bid, "meta": meta, "ts": ts,
                     "content": str(b.get("content") or ""),
-                    # score 只在走了 query 门时才有；None = 这条是按 when/room/tag 筛进来的
+                    # score exists only when the query gate ran; None = this entry came in via when/room/tag
                     "score": scores.get(bid),
                     "literal": bid in literals})
     if scores and len(out) > _SEARCH_TOPK:
-        # 过完门再按相关度收口：留分数最高的 k 条，再回到时间轴。
-        # 砍掉几条记在账上——**挡了什么看得见**（渲染时末尾报一行）。
+        # Only after every gate does relevance close it down: keep the k
+        # highest-scoring entries, then return to the timeline.
+        # How many were cut goes into the ledger — **whatever was blocked stays
+        # visible** (reported in a final line at render time).
         out.sort(key=lambda x: scores.get(x["id"], 0.0), reverse=True)
         ledger["topk砍掉"] = len(out) - _SEARCH_TOPK
         out = out[:_SEARCH_TOPK]
@@ -425,25 +510,33 @@ async def _collect(when, room, tag, query) -> tuple[list[dict], str, dict]:
 
 
 # ------------------------------------------------------------
-# 统计一格
+# Statistics for one cell
 # ------------------------------------------------------------
 
 def _short_id(bucket_id: str) -> str:
-    """12 位 hex 截 6 位当把手；feel_… 这类可读 id 整个给（截了就废了）。"""
+    """A 12-hex id is cut to 6 as a handle; a readable id like feel_... is given
+    in full (cutting it would make it useless)."""
     return bucket_id[:6] if re.fullmatch(r"[0-9a-f]{12}", bucket_id) else bucket_id
 
 
 def _score_tag(e: dict) -> str:
-    """把相关度露在把手旁边。只有走了 query 门的条目有分数。
+    """Show relevance next to the handle. Only entries that went through the query
+    gate have a score.
 
-    为什么要露（2026-08-05 她提的）：她搜「调理身体」（本意是推拿、喝中药），
-    捞回来的大半是「身体·亲密」——太牵强。查下来根因是分数一直躺在 _collect()
-    里，只在结果 >60 条时用来截断，**从没当过门槛**，而且这个数她从头到尾看不见，
-    没法判断系统凭什么捞出这条。
+    Why show it: a search for a term meaning "taking care of one's health" (in the
+    sense of massage and herbal medicine) came back mostly with entries about the
+    body and intimacy — far too much of a stretch. The root cause turned out to be
+    that the score had been sitting inside _collect() all along, used only to
+    truncate when there were more than 60 results, **never as a threshold** — and
+    the number was invisible from outside, so there was no way to judge on what
+    grounds the system had dredged an entry up.
 
-    ⚠️ 这一步刻意只做「可见」，不加阈值。底层 _VECTOR_RECALL_THRESHOLD=0.65
-    对中文可能偏松（两段没关系的中文余弦到 0.7 很常见），但松多少得先看真实分布
-    ——在见过分布之前定的任何阈值都是拍脑袋。先用几天，再定。
+    ⚠️ This step deliberately does nothing but make it visible; it adds no
+    threshold. The underlying _VECTOR_RECALL_THRESHOLD=0.65 may be loose for
+    Chinese (two unrelated Chinese passages hitting a cosine of 0.7 is common),
+    but how loose has to be judged against the real distribution — any threshold
+    chosen before seeing that distribution is a guess. Live with it for a few days
+    first, then decide.
     """
     s = e.get("score")
     if not isinstance(s, (int, float)) or not s:
@@ -452,7 +545,8 @@ def _score_tag(e: dict) -> str:
 
 
 def _label_of(e: dict) -> str:
-    """一条记忆的展示文字：摘要 > 名字（去时间戳）> 正文头。全是存的时候写下的字。"""
+    """The display text for a memory: gist > name (timestamp stripped) > the start
+    of the body. Every one of them is text written down at storage time."""
     meta = e["meta"]
     s = str(meta.get("summary") or "").strip()
     if s:
@@ -470,13 +564,14 @@ def _cell_stats(entries: list[dict]) -> dict:
     v_sum = a_sum = v_n = 0.0
     for e in entries:
         meta = e["meta"]
-        # 统计按**新四间**归口：老数据显示成新名字，屏幕上的词汇表才只有一套
+        # Statistics are grouped under the **four new rooms**: old data is shown
+        # under the new names, so the screen has only one vocabulary
         r = normalize_room(meta.get("room"))
         if r:
             rooms[r] += 1
         for t in (meta.get("tags") or []):
             t = str(t)
-            if is_human_tag(t):     # 机器腔的一律不上脸（B 件）
+            if is_human_tag(t):     # machine-voiced tags are never shown
                 tags[t] += 1
         for s in _SEED_RE.findall(e["content"]):
             if s in _SEED_NAMES:
@@ -488,7 +583,8 @@ def _cell_stats(entries: list[dict]) -> dict:
         except (TypeError, ValueError):
             pass
 
-    # 突出的点 = 异的（tags 与主色调标签无交集，importance 最高）+ 重的（arousal×importance）
+    # What stands out = the odd one (its tags share nothing with the dominant
+    # tags, highest importance) + the heavy one (arousal x importance)
     top_tags = {t for t, _ in tags.most_common(3)}
     def _imp(e):
         try:
@@ -500,10 +596,13 @@ def _cell_stats(entries: list[dict]) -> dict:
             return float(e["meta"].get("arousal", 0.3)) * _imp(e)
         except (TypeError, ValueError):
             return 0.0
-    # 🔴 施工 3：**被盖住的不进「突出的点」**——那是逐条区，被盖的不再独立冒头。
-    #    但它们**照样算进上面的统计**（条数/房间/标签/V·A 一个字不少）：
-    #    验收判据写死了「任何 recall 能看到的信息量只能变多不能变少」，
-    #    gist 只是把成分表里的那几条**换成一句话**，不是把它们从账上抹掉。
+    # 🔴 **Covered entries never appear in "what stands out"** — that is the
+    #    per-entry area, and a covered entry no longer surfaces on its own.
+    #    But they **still count in the statistics above** (count, room, tags, V/A
+    #    all intact): the acceptance rule is fixed at "the amount of information
+    #    any recall can show may only grow, never shrink", and a gist merely
+    #    **replaces those entries with one sentence** in the breakdown; it does not
+    #    erase them from the books.
     surfacing = [e for e in entries if not _F.is_covered(e["meta"])]
     odd = [e for e in surfacing
            if top_tags and not (set(map(str, e["meta"].get("tags") or [])) & top_tags)]
@@ -520,7 +619,7 @@ def _cell_stats(entries: list[dict]) -> dict:
         if e["id"] not in seen:
             highlights.append(("★", e))
             seen.add(e["id"])
-    # 重的排前、异的殿后阅读更顺
+    # Heavy first, odd last — it reads better that way
     highlights.sort(key=lambda p: p[0] == "◇")
 
     v_avg = (v_sum / v_n) if v_n else None
@@ -528,13 +627,17 @@ def _cell_stats(entries: list[dict]) -> dict:
     return {
         "n": len(entries),
         "rooms": rooms.most_common(2),
-        # 人话那两句（B 件）：**从整个 Counter 算**，不是从 most_common(2) ——
-        # 「多半是我自己在做事」问的是这一格的全貌，只看前两名会算错分母。
+        # The two plain-language sentences are computed **from the whole
+        # Counter**, not from most_common(2) — 「多半是我自己在做事」 is a claim
+        # about the whole cell, and looking at only the top two gets the
+        # denominator wrong.
         "房间话": rooms_in_words(rooms, len(entries)),
         "情绪话": mood_in_words(v_avg, a_avg),
-        # 6 而不是 4（2026-08-05 夜她点破的）：**标签不是「这条记忆的属性」，
-        # 是「一堆记忆的分布」** —— 单条的 tag 信息量极低（正文本来就在那儿），
-        # 它的价值全在塌缩那一刻。所以塌得越狠，越需要多给几个、并且带上数量。
+        # Six rather than four: **a tag is not an attribute of one memory, it is
+        # the distribution across a pile of them** — a single entry's tags carry
+        # almost no information (the body is right there anyway), and their value
+        # is entirely in the moment of collapse. So the harder it collapses, the
+        # more of them are needed, and with counts attached.
         "tags": tags.most_common(6),
         "v": v_avg,
         "a": a_avg,
@@ -544,24 +647,28 @@ def _cell_stats(entries: list[dict]) -> dict:
 
 
 # ------------------------------------------------------------
-# 缩放与渲染
+# Zooming and rendering
 # ------------------------------------------------------------
 
 def _split_cells(entries: list[dict], max_cells: int = _CELL_MAX) -> tuple[str, list[tuple[str, list[dict]]]]:
-    """**粒度由跨度定，不由密度定**（E5，2026-08-06 机制② 第 6 条）。
+    """**Granularity is set by span, not by density.**
 
-    她一直否的就是「按数量分」：5 条跨一个月和 500 条跨一个月，**都该按周分**
-    ——粒度回答的是「这段时间该用什么刻度看」，跟里面装了多少条没关系。
-    从最细的阶梯往粗试，取第一个「整个跨度切出来 ≤ max_cells 格」的刻度；
-    空格子照旧丢弃（不渲染），但**选刻度时不看密度**。
-    （8-04 codex 纠过一版「按密度」，当时治的是『两条隔半年被切成俩半月格』——
-    按跨度选同样治它：隔半年的跨度本来就选到月/季刻度。）
+    What was rejected over and over is splitting by count: 5 entries spanning a
+    month and 500 entries spanning a month **should both be split by week** —
+    granularity answers "what scale should this stretch of time be viewed at",
+    which has nothing to do with how many entries are inside it.
+    Try the ladder from finest to coarsest and take the first scale that cuts the
+    whole span into <= max_cells cells; empty cells are still discarded (never
+    rendered), but **density plays no part in choosing the scale**.
+    (An earlier version did choose by density, to cure "two entries six months
+    apart cut into two half-month cells" — choosing by span cures that just as
+    well: a six-month span naturally lands on the month or quarter scale.)
     """
     base = entries[0]["ts"].timestamp()
     span = max(1.0, entries[-1]["ts"].timestamp() - base)
     for gname, gsec in _LADDER:
         if span / gsec > max_cells:
-            continue  # 这个刻度把整个跨度切出太多格——刻度太细，换粗一档
+            continue  # this scale cuts the span into too many cells — too fine, go one coarser
         slices: dict[int, list[dict]] = {}
         for e in entries:
             slices.setdefault(int((e["ts"].timestamp() - base) // gsec), []).append(e)
@@ -572,7 +679,8 @@ def _split_cells(entries: list[dict], max_cells: int = _CELL_MAX) -> tuple[str, 
             a, b = cell[0]["ts"], cell[-1]["ts"]
             day_a = a.strftime("%m-%d") if a.year == this_year else a.strftime("%Y-%m-%d")
             if gsec < 24 * 3600:
-                # 小时/半天格：同一天会出好几格，标签必须带时间（codex 复现过全叫 01-01）
+                # Hour / half-day cells: one day produces several, so the label
+                # must carry the time (otherwise they all read as the same date)
                 label = f"{day_a} {a.strftime('%H:%M')}"
             elif a.date() == b.date():
                 label = day_a
@@ -584,7 +692,8 @@ def _split_cells(entries: list[dict], max_cells: int = _CELL_MAX) -> tuple[str, 
 
 
 def _fmt_header(label: str, st: dict) -> str:
-    """一格一行（slices=N 的概览路）。**B 件：机器读数换人话，标签原词直用。**"""
+    """One line per cell (the overview path of slices=N). **Machine readouts
+    become plain language; tag words are used exactly as stored.**"""
     bits = [f"{label} · {st['n']}条"]
     for x in (st["房间话"], tags_in_words(st["tags"], 2), st["情绪话"]):
         if x:
@@ -594,11 +703,14 @@ def _fmt_header(label: str, st: dict) -> str:
 
 
 def _fmt_highlights(st: dict) -> str:
-    """突出的点，**一行一个**、摘要给全。
+    """What stands out, **one per line**, with the gist given in full.
 
-    2026-08-05 夜她连问三遍「摘要依然也是不完整的，那你看什么呢？」——
-    原来三个挤一行、各截 26 字，看完只知道有这么件事、不知道是什么事。
-    截断是我的疏漏不是设计：塌缩塌的是**条数**，不该塌**每条讲了什么**。
+    The question that ended the old layout, asked three times over: "the gist is
+    still incomplete, so what exactly are you looking at?" — three of them used to
+    be crammed onto one line, each cut to 26 characters, and reading it told you
+    only that something had happened, never what.
+    The truncation was an oversight, not a design: collapsing collapses **how many
+    entries there are**, never **what each one says**.
     """
     return "\n".join(f"   {mark}{kind_badge(e['meta'])}{_label_of(e)}"
                      f"({_short_id(e['id'])}{_score_tag(e)})"
@@ -606,12 +718,14 @@ def _fmt_highlights(st: dict) -> str:
 
 
 def _split_calendar(entries: list[dict], unit: str) -> list[tuple[str, list[dict]]]:
-    """按**自然周 / 自然月**分段（时间梯度视图的周段、月段用）。
+    """Split by **calendar week / calendar month** (used by the week and month
+    bands of the time-gradient view).
 
-    原来是 `_split_cells_fixed(gsec)`：从最老那条起算的 7 天块 / 30 天块。
-    结果是 1 月 31 日和 2 月 1 日可能落进同一个「月」，
-    而 1 月 1 日和 1 月 31 日反倒分成两个（codex 复核 #8）。
-    人说「按周」「按月」指的是日历上的周和月，不是「从某条记忆起算的 168 小时」。
+    It used to be `_split_cells_fixed(gsec)`: 7-day / 30-day blocks counted from
+    the oldest entry. The result was that 31 January and 1 February could land in
+    the same "month" while 1 January and 31 January were split into two.
+    When a person says "by week" or "by month" they mean weeks and months on the
+    calendar, not "168 hours counted from some particular memory".
     """
     keyf = _w.year_week if unit == "week" else _w.year_month
     slices: dict[tuple, list[dict]] = {}
@@ -631,48 +745,64 @@ def _split_calendar(entries: list[dict], unit: str) -> list[tuple[str, list[dict
     return labeled
 
 
-# ⚰️ 2026-08-18（E3）：这儿原来硬写着两个人的名字（_ME_NAMES / _HER_NAMES）。
-#    房间砍成四间之后 room_implied_tags() 已经恒返回空集，这两个集合**一处没人用**
-#    ——连着名字一起删了。要挡名字的那条路在 dehydrator._person_tags()，读配置。
+# ⚰️ Two people's names used to be hard-coded here (_ME_NAMES / _HER_NAMES).
+#    Once the rooms were cut down to four, room_implied_tags() returns an empty
+#    set unconditionally, so **nothing used those two sets any more** — and they
+#    were deleted along with the names. The path that still filters names is
+#    dehydrator._person_tags(), which reads them from configuration.
 
 
 def room_implied_tags(room: str) -> set[str]:
-    """筛了房间之后，**房间定义里已经包含的人**，标签里再出现就是零信息。
+    """Once a room has been filtered on, **the people the room's definition
+    already implies** carry zero information if they show up again in the tags.
 
-    2026-08-05 她一句话点破：「我们之间的事不就是AI和主人。**room 里面就有，
-    又算在 tag 里面了**」。所以那三行 75/46/31 条的标签全是「主人·AI·爱」——
-    不是它们高频，是它们在**重复房间已经说过的东西**。
+    What made it obvious: filtering to the room for "things between us" means
+    every entry is about the same two people — **the room already says it, and the
+    tags then say it again**. Which is why three rows of 75/46/31 entries all had
+    the same tags. It was not that those tags were frequent; it was that they were
+    **repeating what the room had already said**.
 
-    这跟她 8-04 纠我的是同一条（「筛过的维度不再重复说」），当时纠的是每行后面
-    重复几十遍的 `I/EVENT/SELF/WHO 100%`；这次是从房间名延伸到**房间隐含的人**。
+    This is the same rule as "never repeat a dimension you have already filtered
+    on", which earlier removed the `I/EVENT/SELF/WHO 100%` repeated dozens of
+    times at the end of every row; this extends it from the room name to **the
+    people the room implies**.
 
-    ⚠️ 没筛房间时一个都不去 —— 那时候「主人」是真有信息的（它在区分这条是关于谁）。
+    ⚠️ With no room filter, none of them is removed — in that case a person tag
+    genuinely carries information (it distinguishes who the entry is about).
 
     ------------------------------------------------------------
-    🔴 二改 A 件之后这个函数**暂时退化成空集**，别当成它坏了：
-    房间砍成四间以后，房间名里**再也不隐含任何人**（`EVENT/SELF` 只说「我在场」，
-    没说跟谁）。「关于谁」整个搬去了 `subjects` 字段。
-    所以这条去重的正确落点也跟着搬家：等第 5 步 subjects 接上检索之后，
-    改成「筛了 subjects=主人，标签里的『主人』就是零信息」——**同一条判据，换个字段**。
-    在那之前返回空集是对的：现在去掉名字反而会**误删真信息**
-    （房间已经不保证那个人在场了）。
+    🔴 This function currently **degenerates to an empty set on purpose**; it is
+    not broken:
+    once the rooms were cut down to four, a room name **no longer implies any
+    person** (`EVENT/SELF` says only "I was there", not who with). "Who it is
+    about" moved wholesale into the `subjects` field.
+    So the right home for this deduplication moves with it: once subjects is wired
+    into retrieval, this becomes "if subjects was filtered on, that same name in
+    the tags carries zero information" — **the same rule, a different field**.
+    Until then, returning an empty set is correct: removing names now would
+    **delete real information** (the room no longer guarantees that person was
+    present).
     """
     return set()
 
 
 def common_tags(entries: list[dict], ratio: float = 0.55) -> set[str]:
-    """这批结果里**几乎人人都有**的标签 —— 它们是这批的定义，不是某一格的特征。
+    """Tags that **almost every entry in this batch has** — they define the batch
+    rather than characterise any one cell.
 
-    2026-08-05 她指出来的：筛 room=I/EVENT/SELF/WHO（我们之间）之后，每一格的
-    标签都是「主人·AI·爱」——那是这个房间的定义，零信息。75 条压成的那一行，
-    看完等于没看。
+    What made it obvious: after filtering to the room meaning "things between us",
+    every cell carried the same handful of tags — the definition of that room,
+    carrying zero information. A row collapsing 75 entries told the reader nothing
+    at all.
 
-    这跟她 8-04 纠过的是同一个毛病：当时纠的是 room（每行后面跟一个
-    `I/EVENT/SELF/WHO 100%`，重复几十遍），我们把 room 去重了，**tag 漏了**。
-    ⚠️ 这一支只当兜底（阈值保守）。真正管用的是 room_implied_tags()——
-    她 8-05 一句话点破：按频率永远抓不准（「主人」只在 50% 的记忆里，
-    却在几乎每一格都排第一），因为问题根本不是"高频"。
-    纯统计，不过模型。
+    It is the same ailment as before: that time it was the room (every row
+    followed by `I/EVENT/SELF/WHO 100%`, repeated dozens of times) — the room got
+    deduplicated and **the tags were missed**.
+    ⚠️ This branch is only a backstop (its threshold is conservative). What
+    actually works is room_implied_tags() — frequency can never catch it: a tag
+    present in only 50% of memories can still rank first in nearly every cell,
+    because the problem was never "frequent".
+    Pure statistics; nothing goes through a model.
     """
     cnt = Counter()
     for e in entries:
@@ -683,20 +813,23 @@ def common_tags(entries: list[dict], ratio: float = 0.55) -> set[str]:
 
 
 def _pick_tags(st: dict, drop: set[str], k: int = 2) -> list[str]:
-    """挑 k 个有区分度的标签；全被 drop 掉就退回原样（宁可重复也别空着）。"""
+    """Pick k tags that actually distinguish; if all of them were dropped, fall
+    back to the originals (better repetitive than empty)."""
     kept = [t for t, _ in st["tags"] if t not in drop]
     return (kept or [t for t, _ in st["tags"]])[:k]
 
 
 def _pick_tags_n(st: dict, drop: set[str], k: int = 2) -> list[tuple[str, int]]:
-    """同 _pick_tags 但带数量（E3：`床 3` 和 `床 30` 是两种日子，没有数量看不出来）。"""
+    """Same as _pick_tags but with counts (`床 3` and `床 30` describe two
+    different stretches of life, and without the number you cannot tell)."""
     kept = [(t, n) for t, n in st["tags"] if t not in drop]
     return (kept or list(st["tags"]))[:k]
 
 
 def _far_line(label: str, st: dict, fixed_room: bool = False,
               drop: set[str] | None = None) -> str:
-    """一段塌成一句。她筛过的维度、以及这批共有的标签，都不再重复说。"""
+    """A stretch collapsed into one sentence. Neither the dimension that was
+    filtered on nor the tags common to the whole batch are repeated."""
     drop = drop or set()
     bits = [f"{label} · {st['n']}条"]
     if not fixed_room and st["房间话"]:
@@ -709,18 +842,22 @@ def _far_line(label: str, st: dict, fixed_room: bool = False,
     line = " ▏".join(bits)
     if st["highlights"]:
         mark, e = st["highlights"][0]
-        # 22 → 40：这一行确实要塞统计+标签+情绪+一个代表，不能完全不截；
-        # 但 22 字等于没给内容（8-06 傍晚一起放宽的）
+        # 22 -> 40: this line really does have to fit stats + tags + mood + one
+        # representative, so it cannot go entirely uncut; but 22 characters is the
+        # same as giving no content at all
         line += (f" {mark}{kind_badge(e['meta'])}{_label_of(e)[:40]}"
                  f"({_short_id(e['id'])}{_score_tag(e)})")
     return line
 
 
 def _fmt_far_line(label: str, st: dict) -> str:
-    """远处一段一句（她 8-03 定的梯度：近处逐条清晰，远处塌成一句印象）。
+    """One sentence per distant stretch (the gradient: nearby is clear entry by
+    entry, distance collapses into a single impression).
 
-    ⚠️ 现在没有调用方（浏览路的远端 8-05 改成整段不分格了）——留着当那一档的形状，
-    B 件顺手把它的机器读数也换成人话，别让死代码把旧词汇表带回来。
+    ⚠️ Nothing calls this any more (the far end of the browse path was changed to
+    treat the whole stretch as one block) — it is kept as the shape of that tier,
+    and its machine readouts were converted to plain language along with
+    everything else, so that dead code cannot drag the old vocabulary back in.
     """
     bits = [f"{label} · {st['n']}条"]
     for x in (st["房间话"], tags_in_words(st["tags"], 2), st["情绪话"]):
@@ -735,15 +872,17 @@ def _fmt_far_line(label: str, st: dict) -> str:
 
 
 def _fmt_card(label: str, st: dict) -> str:
-    """一张卡（1~3 格那一档，也是 breath 中期那一块）。**B 件：三行全说人话。**
+    """One card (the 1-3 cell tier, and also breath's middle-term block).
+    **All three lines speak plain language.**
 
-    行头的词儿也跟着换：`房间/标签/底色` 是数据库的分栏名，
-    「在做什么 / 围着什么转 / 心里」是人在说的话。
+    The row labels changed with it: `房间/标签/底色` are database column names,
+    while 「在做什么 / 围着什么转 / 心里」 is how a person says it.
     """
     lines = [f"{label} · {st['n']}条 " + "─" * 24]
     lines.append("在做什么   " + (st["房间话"] or "-"))
-    # 标签这一行**带数量**（她 8-05：`床 3` 和 `床 30` 是两种日子）；
-    # 行头已经说了「围着什么」，值里就不再套一遍「围着…转」
+    # This tag line **carries counts** (`床 3` and `床 30` are two different
+    # stretches of life); the row label already says 「围着什么」, so the value does
+    # not wrap itself in 「围着…转」 a second time
     lines.append("围着什么   " + (tags_in_words(st["tags"], 6, with_counts=True, framed=False) or "-"))
     lines.append("心里       " + (st["情绪话"] or "-")
                  + ("  " + " ".join(f"[[{s}]]" for s in st["seeds"]) if st["seeds"] else ""))
@@ -751,10 +890,12 @@ def _fmt_card(label: str, st: dict) -> str:
         first = True
         for mark, e in st["highlights"]:
             prefix = "扎眼的     " if first else "           "
-            # 摘要**不截**（她 2026-08-06 傍晚在手机上抓到的）：这张卡就是 breath 的
-            # 「中期」那一块（走 slices=1），原来截在 46 字，三条里两条断在半截
-            # （「…她验收提五刀全对，并」）。
-            # 📌 判据：**塌缩塌的是条数，不该塌「每条讲了什么」**。摘要本来就只有 60 字上下。
+            # The gist is **never cut**: this card is breath's middle-term block
+            # (it goes through slices=1), and it used to truncate at 46
+            # characters — two lines out of three broke off mid-sentence.
+            # 📌 The rule: **collapsing collapses how many entries there are, never
+            #    what each one says.** A gist is only about 60 characters to begin
+            #    with.
             lines.append(f"{prefix}{mark} {kind_badge(e['meta'])}{_label_of(e)} "
                          f"({_short_id(e['id'])}{_score_tag(e)})")
             first = False
@@ -762,17 +903,18 @@ def _fmt_card(label: str, st: dict) -> str:
 
 
 def _fmt_list(entries: list[dict]) -> str:
-    """逐条列（C 档）。**房间码撤掉、mind 戴 🧠**（D 件的显示形态终稿）。"""
+    """The per-entry list (tier C). **No room code; a mind wears 🧠.**"""
     lines = []
     for e in entries:
-        # 同上：逐条列就是给内容的地方，不截
+        # As above: a per-entry list is the place that gives content, so no cutting
         lines.append(f"{_short_id(e['id'])}{_score_tag(e)}  {kind_badge(e['meta'])}{_label_of(e)}  "
                      f"{e['ts'].strftime('%m-%d')}")
     return "\n".join(lines)
 
 
-# 四间房的中文名。查之前先 normalize_room()——老数据的十间名字翻成新的再查，
-# 屏幕上就只有一套词汇表（用 _room_cn() 而不是直接 .get()）。
+# The Chinese display names of the four rooms. Always normalize_room() before
+# looking one up — old data's ten room names are translated to the new ones first,
+# so the screen carries only one vocabulary (use _room_cn(), never a bare .get()).
 ROOM_CN: dict[str, str] = {
     "EVENT/SELF":  "我亲历的",
     "EVENT/WORLD": "我听说看到的",
@@ -782,7 +924,8 @@ ROOM_CN: dict[str, str] = {
 
 
 def _room_cn(room) -> str:
-    """房间的中文名，新旧名字都认；不认识的原样回显（别把它变成空白）。"""
+    """A room's Chinese display name, accepting both old and new names; anything
+    unrecognised is echoed back as-is (never turned into a blank)."""
     r = normalize_room(room)
     if r:
         return ROOM_CN.get(r, r)
@@ -790,7 +933,8 @@ def _room_cn(room) -> str:
 
 
 def entry_json(e: dict) -> dict:
-    """一条记忆的前端形状。字全是存的时候写下的，这里只搬不改。"""
+    """A memory's shape for the front end. Every character was written down at
+    storage time; this only moves it, never edits it."""
     meta = e["meta"]
     def _f(key, default):
         try:
@@ -798,7 +942,8 @@ def entry_json(e: dict) -> dict:
         except (TypeError, ValueError):
             return default
     tags = [str(t) for t in (meta.get("tags") or [])]
-    # 前端一律拿到**新四间**的名字（老数据在这儿归一），否则面板上会同时出现两套房名
+    # The front end always receives the **four new** room names (old data is
+    # normalised here), or the panel would show two sets of room names at once
     room = normalize_room(meta.get("room")) or str(meta.get("room") or "")
     return {
         "id": e["id"],
@@ -812,14 +957,16 @@ def entry_json(e: dict) -> dict:
         "v": _f("valence", 0.5),
         "a": _f("arousal", 0.3),
         "pinned": bool(meta.get("pinned")),
-        # 遗忘三档（D7）：只给 dashboard 那张皮看（她得判断引擎干得对不对）；
-        # 文字皮（breath/recall 输出）一个字都不提——遗忘是悄然发生的
+        # The three decay stages are for the dashboard skin only (someone has to
+        # be able to judge whether the engine is doing its job right); the text
+        # skin (breath/recall output) never mentions them — forgetting happens
+        # quietly
         "decay": str(meta.get("decay_stage") or "") or "alive",
         "kind": "mind" if is_mind_room(meta.get("room")) else "event",
         "status": str(meta.get("status") or ""),
         "when": str(meta.get("when") or ""),
         "tags": [t for t in tags if not t.startswith(_SYS_TAG_PREFIXES)],
-        # 相关度：只有走 query 门时才有；None = 按 when/room/tag 筛进来的（见 _score_tag）
+        # Relevance: present only when the query gate ran; None = filtered in via when/room/tag (see _score_tag)
         "score": e.get("score"),
         "dup_of": [t.split(":", 1)[1] for t in tags if t.startswith("疑似同件:")],
         "seeds": sorted({s for s in _SEED_RE.findall(e["content"]) if s in _SEED_NAMES}),
@@ -827,11 +974,14 @@ def entry_json(e: dict) -> dict:
 
 
 def _stats_json(st: dict) -> dict:
-    """_cell_stats 的 JSON 形状（highlights 里的 entry 换成 id+文字）。"""
+    """The JSON shape of _cell_stats (each entry inside highlights becomes an id
+    plus its text)."""
     return {
         "n": st["n"],
-        # 人话两句也给前端（B 件）：文字皮和面板说的是**同一句话**，
-        # 但面板照旧拿到精确的百分比和 V/A —— 要数字的地方数字一个不少。
+        # The two plain-language sentences go to the front end as well: the text
+        # skin and the panel say **the same sentence**, while the panel still gets
+        # the exact percentages and V/A — wherever numbers are wanted, every one
+        # of them is there.
         "房间话": st["房间话"],
         "情绪话": st["情绪话"],
         "rooms": [{"room": r, "room_cn": _room_cn(r), "n": n,
@@ -846,15 +996,19 @@ def _stats_json(st: dict) -> dict:
 
 
 # ============================================================
-# 两条路：浏览（无 query）· 搜索（有 query）
+# Two paths: browsing (no query) · searching (with a query)
 # ============================================================
 
 def _pick_reps(far: list[dict], k: int = _BROWSE_REP_MAX) -> list[tuple[str, dict]]:
-    """远端整段挑 k 条代表。
+    """Pick k representatives from the whole distant stretch.
 
-    她 8-05 的原话：「更远的就写**前段时间**，给 2~3 条前 2~3 周的。」
-    所以优先在最近三周里挑；三周内一条都没有（查的是老早以前）才退回整段。
-    挑法沿用现成的「异的 + 重的」（_cell_stats 的 highlights），不另起一套。
+    The rule: anything further back is labelled "some time ago" and given 2-3
+    entries from 2-3 weeks back.
+    So the last three weeks are preferred; only when there is nothing at all in
+    those three weeks (the query is about something long ago) does it fall back to
+    the whole stretch.
+    The picking reuses the existing "the odd one + the heavy one" (the highlights
+    from _cell_stats) rather than inventing a second method.
     """
     cutoff = _w.today() - timedelta(days=_BROWSE_REP_DAYS)
     pool = [e for e in far if e["ts"] >= cutoff] or far
@@ -862,17 +1016,20 @@ def _pick_reps(far: list[dict], k: int = _BROWSE_REP_MAX) -> list[tuple[str, dic
 
 
 def _rep_line(mark: str, e: dict) -> str:
-    # 60 而不是 30：她 8-05 夜说「recall 返回的摘要不是完整的」——代表条目是那段时间
-    # 唯一给出内容的地方，截一半等于没给。日期留着当把手（钻进去用），不是分类。
+    # 60 rather than 30: the gists recall returned were coming back incomplete —
+    # and a representative entry is the only place that stretch of time gives any
+    # content at all, so cutting it in half is the same as giving nothing. The
+    # date stays as a handle (for drilling in), not as a classification.
     return (f"  {mark}{kind_badge(e['meta'])}{_label_of(e)[:60]}({_short_id(e['id'])}) "
             f"{e['ts'].strftime('%m-%d')}")
 
 
 def _big_line(meta: dict, content: str, bid: str) -> str:
-    """时期一行。
+    """One line for a period.
 
-    🔴 2026-08-19 她定：符号 `◈` 换成「时期」两个字。
-       符号要人先学会它是什么意思才读得懂，而这一行本来就该一眼看明白。
+    🔴 The `◈` symbol was replaced by the word 「时期」.
+       A symbol has to be learned before it can be read, and this line was
+       supposed to be understood at a glance.
     """
     span = _big.fmt_span(meta)
     return (f"  时期 {_big.first_line(content)[:38]}({_short_id(bid)})"
@@ -880,32 +1037,41 @@ def _big_line(meta: dict, content: str, bid: str) -> str:
 
 
 def _cell_span(cell: list[dict]) -> tuple[datetime, datetime]:
-    """一格的时间范围，**半开区间**：右边界推到最后那条的第二天。
+    """One cell's time range, as a **half-open interval**: the right edge is pushed
+    to the day after the last entry.
 
-    🔴 两个都是坑，都踩过：
-    ① `entries` 是**新→旧**排的，所以 `cell[0]` 是最新那条、`cell[-1]` 是最旧那条——
-       直接当 `(t0, t1)` 传给 `covering()` 就是把起止**倒过来**给，结果只有
-       「完整包住整段」的时期才露头（8-17 修：这是 8-05 起就在的静默漏显示）。
-    ② 一条 `when=2026-12-25` 的记忆，`ts` 是那天**零点**。右边界取 `max(ts)` 的话
-       区间退化成一个点，而 `covering()` 判的是重叠（`s >= t1` 就跳），
-       起点正好在那天零点的时期会被自己盖着的那天挡在外面。
+    🔴 Both of these are pits, and both were fallen into:
+    ① `entries` is ordered **newest to oldest**, so `cell[0]` is the newest entry
+       and `cell[-1]` the oldest — passing them straight to `covering()` as
+       `(t0, t1)` hands over the start and end **reversed**, and the only periods
+       that then surface are the ones fully containing the whole stretch (a silent
+       display failure that had been there for a long time before it was found).
+    ② For a memory with `when=2026-12-25`, `ts` is **midnight** on that day. Taking
+       `max(ts)` as the right edge collapses the interval to a single point, and
+       since `covering()` tests for overlap (skipping when `s >= t1`), a period
+       starting exactly at that midnight would be excluded from the very day it
+       covers.
     """
     ts = [e["ts"] for e in cell]
     return min(ts), max(ts) + timedelta(days=1)
 
 
 def _big_lines(all_buckets: list, t0, t1, seen: set[str]) -> list[str]:
-    """跟这一格有重叠的**时期**，一行标题（`时期 那阵子在做什么 (id) 8-13~8-16`）。
+    """The **periods** overlapping this cell, one title line each
+    (`时期 <name> (id) 8-13~8-16`).
 
-    🔴 8-17 14:30 终稿之后时期是**纯命名层**：它不写 `covered_by`，所以走不了
-    `_gist_lines` 那条「谁被盖了」的路——它的成员是**现场按日期算**的，
-    显示层也就该现场算：`_bigevent.covering()`（老机制，一行没改）。
-    ⚠️ 一条时期在一次渲染里只出头一次（`seen`）：它盖着三天不等于该说三遍。
-    ⚠️ 这是**只多一行**：底下逐条区和统计一个字不少（时期不塌任何行）——
-       开工单 2.3「信息量只能变多不能变少」的落点。
-    🔴 2026-08-19 她定：**一格只留一条**（原来最多 3 条）。时期会越攒越多，
-       而浏览要的是梯度不是清单。`covering()` 是新的在前，取第一条就是跟这一格
-       贴得最近的那个。
+    🔴 A period is a **pure naming layer**: it never writes `covered_by`, so it
+    cannot go down `_gist_lines`' "who got covered" path — its members are
+    **computed live by date**, and the display layer should therefore compute them
+    live too: `_bigevent.covering()` (the original mechanism, unchanged).
+    ⚠️ A period surfaces only once per render (`seen`): covering three days does
+       not mean saying it three times.
+    ⚠️ This **only ever adds a line**: the per-entry area and the statistics below
+       lose nothing (a period collapses no rows) — which is where the rule
+       "information may only grow, never shrink" lands.
+    🔴 **Only one per cell** (it used to be up to 3). Periods accumulate over time,
+       and browsing wants a gradient, not a list. `covering()` returns newest
+       first, so taking the first one gives the period closest to this cell.
     """
     out: list[str] = []
     for meta, content, bid in _big.covering(all_buckets, t0, t1):
@@ -913,24 +1079,29 @@ def _big_lines(all_buckets: list, t0, t1, seen: set[str]) -> list[str]:
             continue
         seen.add(bid)
         out.append(_big_line(meta, content, bid))
-        break          # 一格一条
+        break          # one per cell
     return out
 
 
 async def _gist_lines(entries: list[dict], skip: set[str] | None = None) -> list[str]:
-    """这一格里被盖住的那些，是被哪几条 gist 盖的 → 每条 gist 一行标题。
+    """Which gists cover the covered entries in this cell -> one title line per
+    gist.
 
-    **这就是「多一行」那一行**（开工单 2.3）：
-        08-13~08-16  「那几天在青岛做讲义」   ← gist（新增）
-          56条 · 房间… · 标签… · 突出…        ← 原来有什么，一个字不少
+    **This is the "one extra line"**:
+        08-13~08-16  「那几天在青岛做讲义」   <- the gist (newly added)
+          56条 · 房间… · 标签… · 突出…        <- everything that was there before,
+                                                to the character
 
-    🔴 判据：被盖的单条不在逐条区单独出现，但**它们去哪儿了必须看得见** ——
-    所以这一行带着 gist 的 id（下钻的把手）和「盖着这格里的几条」。
-    信息量只能变多不能变少：少了 N 行单条，多了一行标题 + 一个能钻的 id。
+    🔴 The rule: a covered entry does not appear on its own in the per-entry area,
+    but **where it went has to stay visible** — so this line carries the gist's id
+    (the handle for drilling in) and how many entries in this cell it covers.
+    Information may only grow, never shrink: N single lines are gone, and a title
+    line plus a drillable id has appeared.
     """
     covered: dict[str, int] = {}
     for e in entries:
-        # 交叉（她 8-05 第六条）：一条可以同时被两条主线盖着 → 两条 gist 标题都数它
+        # Crossing: one entry can be covered by two threads at once -> both gist
+        # titles count it
         for gid in _F.covers_of(e["meta"]):
             if gid and gid not in (skip or set()):
                 covered[gid] = covered.get(gid, 0) + 1
@@ -950,33 +1121,43 @@ async def _gist_lines(entries: list[dict], skip: set[str] | None = None) -> list
 
 
 async def _render_browse(entries, gates, room, tag) -> str:
-    """浏览：在看，想不起来有什么。**远端狠砍**——三天内照旧，更远的整段一句「前段时间」。
+    """Browsing: I am looking, and cannot recall what is there. **The far end is
+    cut hard** — the last three days stay as they were, everything older collapses
+    into one stretch labelled "some time ago".
 
-    她 8-05 晚指出 `07-13~07-19` 这种精确日期段别扭：**那是机器的分法，人只会想
-    「前段时间」**。所以远端**直接取消分格**，整段挑 2~3 条代表。
-    顺带治了另一个毛病：改之前 **1 条和 75 条占同样大的位置**。
+    Precise date bands like `07-13~07-19` read wrong: **that is a machine's way of
+    dividing time; a person only thinks "some time ago"**. So the far end
+    **stops being divided into cells at all** and 2-3 representatives are picked
+    from the whole stretch.
+    That also cured another ailment: before the change, **1 entry and 75 entries
+    took up exactly the same amount of space**.
     """
     now = _w.now()
     today = _w.today()
-    # 🔴 **整份浏览只捞这一次库。** 底下时期那几行原来是各调各的
-    #    （每格一次、每天一次、远端一次 —— 一次浏览七八遍），
-    #    而那几遍**藏在 `covering()` 里面，调用方一遍都看不见**。
-    #    现在名单在这儿，谁用谁伸手拿，多捞一遍会摆在脸上。
-    #    ⚠️ 时期要的是**整个库**，不是这次筛出来的 entries ——
-    #       一个时期盖不盖得住这一格，跟它自己有没有过筛子无关。
+    # 🔴 **The whole browse fetches the library exactly once here.** The period
+    #    lines below used to fetch it themselves (once per cell, once per day,
+    #    once for the far end — seven or eight times in a single browse), and
+    #    those fetches were **hidden inside `covering()`, invisible to every
+    #    caller**.
+    #    Now the list lives here and whoever needs it reaches for it, so one extra
+    #    fetch would be right there in plain sight.
+    #    ⚠️ Periods need **the whole library**, not the entries this call filtered
+    #       down to — whether a period covers this cell has nothing to do with
+    #       whether the period itself passed the filters.
     try:
         span_buckets = await rt.bucket_mgr.list_all(include_archive=False)
     except Exception as e:
         rt.logger.warning(f"时期那半的库没捞到，这次浏览不盖时期: {e}")
         span_buckets = []
-    dn = today - timedelta(days=_BROWSE_NEAR_DAYS - 1)   # 今天/昨天/前天
+    dn = today - timedelta(days=_BROWSE_NEAR_DAYS - 1)   # 今天 / 昨天 / 前天
     tomorrow = today + timedelta(days=1)
 
     future = [e for e in entries if e["ts"] >= tomorrow]
     near = [e for e in entries if dn <= e["ts"] < tomorrow]
     far = [e for e in entries if e["ts"] < dn]
 
-    # 她筛掉的维度就是常量，别再说一遍（8-04 纠的）；这批共有的标签同理（8-05 补的）。
+    # A dimension that was filtered on is a constant — do not say it again; the
+    # same goes for the tags common to the whole batch.
     fixed_room = bool(room.strip())
     drop = (room_implied_tags(room)
             | common_tags(entries)
@@ -986,9 +1167,11 @@ async def _render_browse(entries, gates, room, tag) -> str:
         bits = [f"── {label} · {st['n']}条"]
         if not fixed_room and st["房间话"]:
             bits.append(st["房间话"])
-        # E3：近端标签也带数量（`床 3` 和 `床 30` 是两种日子）。
-        # 带了数量就**不套「围着…转」那个框**——「围着烟 1、尖塔 2转」读起来是坏的，
-        # 词和数字本来就是原样给的，框子只在不带数的地方帮忙。
+        # Near-end tags carry counts too (`床 3` and `床 30` are two different
+        # stretches of life).
+        # With counts attached the 「围着…转」 frame is **dropped** — wrapping
+        # numbers in it reads badly, the words and numbers are already given
+        # exactly as stored, and the frame only helps where there are no counts.
         tags = _pick_tags_n(st, drop)
         if tags:
             bits.append(tags_in_words(tags, 2, with_counts=True, framed=False))
@@ -998,17 +1181,20 @@ async def _render_browse(entries, gates, room, tag) -> str:
         return " ▏".join(bits) + (" " + seeds if seeds else "")
 
     lines = [f"〔{gates}〕{len(entries)} 条 · 新→旧"]
-    # 一次渲染里每条时期只出头一次（近端出过了，远端那段就不再重复）
+    # Each period surfaces only once per render (once it has appeared at the near
+    # end, the far stretch does not repeat it)
     spans_shown: set[str] = set()
 
-    # 还没到的日子：按自然月塌，多远都只占几行
+    # Days that have not arrived yet: collapsed by calendar month, so however far
+    # ahead they are they take only a few lines
     if future:
         lines.append("— 还没到的 —")
         for label, cell in reversed(_split_calendar(future, "month")):
             lines.append(_far_line(label, _cell_stats(cell), fixed_room, drop))
             lines.extend(_big_lines(span_buckets, *_cell_span(cell), spans_shown))
 
-    # 三天内：照旧（一天一行 + 突出的点另起一行）
+    # Within three days: unchanged (one line per day, with what stands out on its
+    # own line)
     if near:
         days: dict[str, list] = {}
         for e in near:
@@ -1016,32 +1202,43 @@ async def _render_browse(entries, gates, room, tag) -> str:
         for label in sorted(days, reverse=True):
             st = _cell_stats(days[label])
             lines.append(_head(label, st))
-            # 时期/gist 标题在突出的点**上面**：先说这几天叫什么，再说里面哪条扎眼
+            # The period/gist title goes **above** what stands out: say what these
+            # days are called first, then which entry inside them jumps out
             lines.extend(_big_lines(span_buckets, *_cell_span(days[label]), spans_shown))
             hl = _fmt_highlights(st)
             if hl:
                 lines.append(hl)
 
-    # 更远的：**不分格**，整段一句「前段时间」+ 2~3 条代表（有大 event 就换成大 event）
+    # Anything older: **no cells at all**, one sentence for the whole stretch
+    # ("some time ago") plus 2-3 representatives (replaced by a big event where
+    # there is one)
     if far:
         st = _cell_stats(far)
         a = far[0]["ts"]
-        # 标题里**不再报精确日期段**（她 8-05 夜：说了「前段时间」还挂个 `08-01~08-02`，
-        # 自相矛盾——那还是机器的分法）。日期只留在每条代表后面，那是把手不是分类。
-        # ⚠️ 例外（E4，机制② 第 6 条）：筛了 room/tag = 在**追一件事**——
-        # 「这件事从什么时候到什么时候」正是要问的东西，跨度要给。
+        # The title **no longer reports a precise date band**: saying "some time
+        # ago" and then hanging `08-01~08-02` off it contradicts itself — that is
+        # still a machine's way of dividing time. The date stays only after each
+        # representative, where it is a handle rather than a classification.
+        # ⚠️ The exception: if room/tag was filtered on, the user is **following
+        # one thing** — "from when to when did this run" is exactly the question
+        # being asked, so the span has to be given.
         if fixed_room or tag.strip():
             span_txt = f"{a.strftime('%m-%d')} ~ {far[-1]['ts'].strftime('%m-%d')}"
             bits = [f"— 前段时间（{span_txt}）· {len(far)}条"]
         else:
             bits = [f"— 前段时间 · {len(far)}条"]
-        # 🔴 **带数量的标签分布**（她 8-05 夜点破的，这一行是远端唯一给「那阵子在过什么日子」
-        # 的地方）：`亲密关系 30 · 接纳 12` 和 `亲密关系 3 · 接纳 2` 意思完全相反，
-        # 而没有数量时这两行长得一模一样。数量 breath 一直有，是这儿把它扔了。
+        # 🔴 **The tag distribution carries counts** — this line is the far end's
+        # only answer to "what were those days like": `亲密关系 30 · 接纳 12` and
+        # `亲密关系 3 · 接纳 2` mean opposite things, and without the counts the
+        # two lines look identical. breath has always had the counts; it was this
+        # path that threw them away.
         #
-        # ⚠️ 这儿**只 drop 房间隐含的人**，不 drop common_tags（高频词）——
-        # 高频词在别处是噪音（每格都是「主人·AI·爱」），但在这一行**它就是答案**。
-        # 她自己说过「按频率永远抓不准」：带上数量之后，频率不再是抓手，是内容。
+        # ⚠️ Here **only the people a room implies are dropped**, never
+        # common_tags (the frequent ones) — a frequent tag is noise elsewhere
+        # (every cell showing the same three words), but on this line **it is the
+        # answer**.
+        # Frequency can never catch it on its own: once the counts are attached,
+        # frequency stops being the handle and becomes the content.
         drop_lite = room_implied_tags(room) | ({tag.strip()} if tag.strip() else set())
         dist = tags_in_words([(t, n) for t, n in st["tags"] if t not in drop_lite],
                              5, with_counts=True, framed=False)
@@ -1050,28 +1247,39 @@ async def _render_browse(entries, gates, room, tag) -> str:
         if st["情绪话"]:
             bits.append(st["情绪话"])
         lines.append(" ▏".join(bits) + " —")
-        # 她的原话：「给 2~3 条前 2~3 周的，**如果有大事件就换成大事件**。」
-        # 大 event 先占位，剩下的位置才用代表条目补 —— 少于 3 条时不空着。
-        # （第 5 条：盖，不替代 —— 上面那行统计和突出的点一个都没少，只是多一句话。）
+        # The rule: give 2-3 entries from 2-3 weeks back, **and where there is a
+        # big event, use that instead**.
+        # Big events take the slots first, and representatives fill whatever is
+        # left — fewer than 3 never leaves a gap.
+        # (It covers, it does not replace: the statistics line above and what
+        # stands out lose nothing; there is simply one more sentence.)
         covering_spans = _big.covering(span_buckets, *_cell_span(far))
         covers = [x for x in covering_spans if x[2] not in spans_shown]
-        for meta, content, bid in covers[:1]:      # 一格一条时期（8-19 她定）
+        for meta, content, bid in covers[:1]:      # one period per cell
             spans_shown.add(bid)
             lines.append(_big_line(meta, content, bid))
-        # ⚰️ 2026-08-19：**gist 的 mind 行从浏览面撤掉**（她定的）。
-        #    原来这儿会把「盖住这段里某几条的 gist」逐条列出来，一条一行。
-        #    🔴 她的判据：**recall 出来要看的是 event。** 认知可以在「突出的点」
-        #       那儿露面，但不该跟 event、时期挤在同一个位置上——
-        #       而且 gist 一多，这一格就全是标题行了（时期卡了 3 条，它没有上限）。
-        #    ⚠️ 被 fold 盖住的那些**照旧不逐条出现、照旧算进统计**，
-        #       要看是哪条 gist 盖的：`recall(query=完整id)` 或搜索路照旧给。
+        # ⚰️ **The gist's mind lines were pulled out of the browse view.**
+        #    This used to list, one per line, every gist covering some of the
+        #    entries in this stretch.
+        #    🔴 The rule: **what recall is there to show is events.** Thinking can
+        #       appear under "what stands out", but it should not be crowded into
+        #       the same position as events and periods —
+        #       and once there are a few gists, the cell becomes nothing but title
+        #       lines (periods are capped at 3; gists had no cap at all).
+        #    ⚠️ Entries folded away **still do not appear individually and still
+        #       count in the statistics**; to see which gist covers one, use
+        #       `recall(query=<full id>)` or the search path, both unchanged.
         for mark, e in _pick_reps(far, _BROWSE_REP_MAX - len(covers[:1])):
             lines.append(_rep_line(mark, e))
-        # 第 9 条：触发点挂在「recall 一段时间」上 —— 这一刻我本来就在回看，
-        # 材料摊在眼前，「这阵子好像在做一件什么事」是自然浮上来的，
-        # 不需要我刻意记得去想。所以提示只在**真没人盖着**的时候出现一次。
-        # ⚠️ 判据是 `盖这段的`（真的有没有时期），不是 `covers`（这一格还没出头的那些）——
-        #    近端已经把那条时期说过了不等于「这段没人盖」。
+        # The trigger point hangs off "recall a stretch of time" — at that moment
+        # I am looking back anyway, with the material spread out in front of me,
+        # and "it feels like I was doing one particular thing back then" surfaces
+        # naturally; I do not have to remember to go looking for it. So the prompt
+        # appears once, and only when **nothing genuinely covers this stretch**.
+        # ⚠️ The criterion is whether any period covers this stretch at all, not
+        #    `covers` (the ones that have not yet surfaced in this cell) — a period
+        #    already mentioned at the near end does not mean the stretch is
+        #    uncovered.
         if not covering_spans and (now - a).days >= 7:
             lines.append("  （这段时间上没有时期盖着。真觉得是在做一件什么事就写下来："
                          'grow(kind="big", room=…, text=…, when="起..止")）')
@@ -1081,10 +1289,12 @@ async def _render_browse(entries, gates, room, tag) -> str:
 
 
 def _topk_line(ledger: dict | None) -> str:
-    """top-k 砍掉了几条 —— **挡了什么看得见**（D 件收紧 top-k 的配套）。
+    """How many entries top-k cut — **whatever was blocked stays visible**. This
+    line is the counterpart to tightening top-k.
 
-    她 8-15 的判据：query 词多 = 向量平均 = 找不准。所以这一行不光报数，
-    还把出路说清楚：**用一两个核心词、她当时的原话**。
+    The rule behind it: more words in a query = an averaged vector = a poorer aim.
+    So this line does not just report a number, it spells out the way forward:
+    **use one or two core words, in the wording actually used at the time**.
     """
     n = int((ledger or {}).get("topk砍掉") or 0)
     if n <= 0:
@@ -1095,31 +1305,40 @@ def _topk_line(ledger: dict | None) -> str:
 
 
 def _eff_score(e: dict, floor: float) -> float:
-    """有效分：字面命中 → max(分数, 线)。保底不是加分——低的托上来、高的不动。
+    """The effective score: a literal hit becomes max(score, floor). This is a
+    floor, not a bonus — it lifts the low ones and leaves the high ones alone.
 
-    它在家底表里的名字就叫「字面命中保底」，要的是**别漏掉**不是排第一（机制② C2）。
+    Its whole purpose is **not missing things**, not putting them first.
     """
     s = e.get("score") or 0.0
     return max(s, floor) if e.get("literal") else s
 
 
 def _render_search(entries, gates, floor: float = None, ledger: dict | None = None) -> str:
-    """搜索：在找，知道要什么。**这是有 query 时的默认视图**（施工 5 · D 件）。
+    """Searching: I am looking for something and I know what. **This is the
+    default view whenever there is a query.**
 
-    过线的按时间排（新→旧）、每条带分数（E1）。
-    🔴 **8-17 默认视图翻回这一条**：query 单独原来会切到画面簇，
-    「找那件事」反而要多绕一道。她 5.5 定的：**默认按时间＋分数排，场景簇显式要**
-    （`view="scene"`）。顺带治死了「`when` 一给就换一种视图形态」那个
-    「一个参数管两件事」——现在 `when` 只管范围，形态只由 `view` 说。
+    Whatever clears the line is ordered by time (newest first) with its score
+    attached.
+    🔴 **The default view was turned back to this one**: a bare query used to
+    switch to scene clusters, so "find that one thing" had to take a detour. The
+    rule: **order by time plus score by default, and ask for scene clusters
+    explicitly** (`view="scene"`). That also killed off "supplying `when` changes
+    the shape of the view", another case of one parameter doing two jobs — `when`
+    now governs range only, and shape is decided by `view` alone.
 
-    2026-08-06 改：分数只管过滤不管顺序——「找一件事」的结果摊开在时间轴上
-    才看得出它是怎么一路过来的；相关度排序把 7 月和 8 月的搅在一起。
-    时间是打折不是门（机制② 第 5 条）：老的默认不出来靠遗忘打折实现，
-    真在找它、撞得准，它扛得住打折冲上来。
+    A later change made the score govern filtering only, never ordering: the
+    results of "find one thing" only show how it got here when they are laid out
+    along the timeline; sorting by relevance stirs July and August together.
+    Time is a discount, not a gate: older entries stay out of the way by default
+    through the decay discount, and when you really are looking for one and hit it
+    accurately, it survives the discount and comes up anyway.
 
-    线以下的不列——她 8-05 的原话：「如果说没有直接关联那不如就不弹出来」。
-    但它们**不是消失**，末尾一行带上「还有多少 · 最高几分 · 最早哪条讲什么」（E2）
-    ——顺带回答了「这件事什么时候开始」。
+    Anything below the line is not listed — if there is no direct connection,
+    better not to show it at all.
+    But those entries **have not disappeared**: a final line carries how many
+    there are, the highest score, and what the earliest one says — which
+    incidentally answers "when did this start".
     """
     floor = RELEVANCE_FLOOR if floor is None else float(floor)
     hit = [e for e in entries if _eff_score(e, floor) >= floor]
@@ -1134,9 +1353,12 @@ def _render_search(entries, gates, floor: float = None, ledger: dict | None = No
 
     lines = [f"〔{gates}〕{len(hit)} 条 · 按时间 新→旧（线 {floor:.0f}，分数只管过滤）"]
     for e in sorted(hit, key=lambda x: x["ts"], reverse=True):
-        # 搜索路的摘要**不截**（她 8-05 夜指出来的：截了就判断不出这条是不是要找的，
-        # 而搜索的整个意义就是判断）。浏览路继续截——那儿要的是印象不是内容。
-        # 🧠 = 认知；不戴牌的就是发生的事（房间码撤掉，D 件终稿）。
+        # The search path **never cuts the gist**: cut it and you cannot tell
+        # whether this is the entry you were after, and telling is the entire
+        # point of searching. The browse path still cuts — there the goal is an
+        # impression, not content.
+        # 🧠 = thinking; wearing no badge means it is something that happened (the
+        # room code is gone).
         lines.append(f"{_eff_score(e, floor):5.1f}  {kind_badge(e['meta'])}{_label_of(e)}"
                      f"  ({_short_id(e['id'])})  {e['ts'].strftime('%m-%d')}")
     if below:
@@ -1150,18 +1372,25 @@ def _render_search(entries, gates, floor: float = None, ledger: dict | None = No
 
 
 def _render_scene_clusters(entries, gates, floor: float = None, ledger: dict | None = None) -> str:
-    """画面式回忆（G2，机制② 第 7 条）：这件事是怎么一路过来的。
+    """Recall as scenes: how this thing got from there to here.
 
-    🔴 **2026-08-17 起要显式要**（施工 5 · D 件）：`recall(query=…, view="scene")`。
-    原来它是「query 单独」的默认视图，于是同一个 query 加不加 `when` 会换一种
-    视图形态——**一个参数管两件事**，正是 5.5 点的那个乱源。
-    默认翻回「按时间＋分数」（找那件事），画面簇留给「这件事怎么一路过来的」。
+    🔴 **It has to be asked for explicitly**: `recall(query=…, view="scene")`.
+    It used to be the default view for a bare query, which meant the same query
+    changed shape depending on whether `when` was supplied — **one parameter doing
+    two jobs**, and the source of the confusion.
+    The default went back to "time plus score" (find that one thing), and scene
+    clusters are reserved for "how this thing got here".
 
-    她脑子里的结构不是平铺列表，是**有主有次的簇**——代表底下还能挂从属画面
-    （她的例子：学代码 → ①做表格那天讲代码 ②机场和 GPT 聊怎么系统学
-    （副画面：飞机座位上让 GPT 出文档）③电脑桌前拿 Mac 看讲义）。
-    簇的抓手就是场景锚点（tags 现在只装它）：同一簇 = 命中的记忆里共享画面词的。
-    簇按最早那条的时间排（「一路过来」是从头讲起）；簇里代表 = 分数最高的。
+    The structure a mind actually holds is not a flat list but **clusters with a
+    main scene and subordinate ones** — a representative can carry sub-scenes
+    hanging off it (for instance, learning to code -> ① the day of making a
+    spreadsheet, talking about code ② talking with a chatbot at the airport about
+    how to learn it systematically (sub-scene: asking it for a document from an
+    aeroplane seat) ③ reading the notes on a laptop at a desk).
+    What clusters grip is the scene anchors (which is all tags now hold): one
+    cluster = the hits that share scene words.
+    Clusters are ordered by their earliest entry ("how it got here" is told from
+    the beginning); the representative inside a cluster is the highest-scoring one.
     """
     floor = RELEVANCE_FLOOR if floor is None else float(floor)
     hit = [e for e in entries if _eff_score(e, floor) >= floor]
@@ -1174,11 +1403,13 @@ def _render_scene_clusters(entries, gates, floor: float = None, ledger: dict | N
                 "真觉得该有：换她说过的原话当 query（别造词），或者用 when/room 直接翻。")
 
     def _vis_tags(e) -> set[str]:
-        # 簇的抓手也只认人话场景词：机器腔标签（`aspect:patterns` 那类）
-        # 会把毫不相干的记忆硬串成一个「画面」（8-17 凌晨的教训）
+        # Clustering also grips plain-language scene words only: machine-voiced
+        # tags (the `aspect:patterns` kind) will string completely unrelated
+        # memories into a single false "scene"
         return {str(t) for t in (e["meta"].get("tags") or []) if is_human_tag(t)}
 
-    # 贪心成簇：按分数从高到低认主画面，把跟它共享场景词的收作从属画面
+    # Greedy clustering: take the main scene in descending score order, and gather
+    # whatever shares its scene words as subordinate scenes
     ranked = sorted(hit, key=lambda e: _eff_score(e, floor), reverse=True)
     unassigned = list(ranked)
     clusters: list[list[dict]] = []
@@ -1196,7 +1427,7 @@ def _render_scene_clusters(entries, gates, floor: float = None, ledger: dict | N
             unassigned = rest
         clusters.append(members)
 
-    clusters.sort(key=lambda c: min(e["ts"] for e in c))  # 一路过来：从头讲起
+    clusters.sort(key=lambda c: min(e["ts"] for e in c))  # how it got here: tell it from the beginning
     lines = [f"〔{gates}〕{len(hit)} 条 · {len(clusters)} 个画面 · 一路过来（线 {floor:.0f}）"]
     for c in clusters[:8]:
         rep = max(c, key=lambda e: _eff_score(e, floor))
@@ -1225,17 +1456,20 @@ def _render_scene_clusters(entries, gates, floor: float = None, ledger: dict | N
 
 async def recall_text_and_data(when: str, room: str, tag: str, query: str,
                                floor=None, view: str = "", max_cells: int = 0) -> dict:
-    """一次采集，两张皮都给。**面板专用**。
+    """Collect once, serve both skins. **For the panel only.**
 
-    🔴 2026-08-19：面板那个口原来是 `recall_data()` + `recall_core()` 各调一次，
-       而这两个函数各自都会走一遍 `_collect` —— 也就是**同一次搜索算了两遍**。
-       实测带 query 时工具面 3 秒、面板 8.6 秒，差的就是这一遍。
-       ⚠️ 讽刺的是 `recall_data` 的 docstring 一直写着「两张皮共用底下同一份收集，
-          **绝不各算各的**」—— 那句话说的是设计意图，代码从来没兑现过。
-       现在真的只采一次。
+    🔴 The panel's endpoint used to call `recall_data()` and `recall_core()`
+       separately, and each of those runs its own `_collect` — meaning **the same
+       search was computed twice**. Measured with a query: 3 seconds through the
+       tool face, 8.6 through the panel, and that extra pass was the difference.
+       ⚠️ The irony: `recall_data`'s docstring had always said the two skins share
+          one collection underneath and **never compute their own**. That sentence
+          described the intent; the code had never honoured it.
+       Now it really does collect once.
 
-    ⚠️ 两张皮各拿一份 entries 的**浅拷贝**：渲染那边会排序/切片，
-       共用同一个 list 的话谁先跑谁说了算。
+    ⚠️ Each skin gets its own **shallow copy** of entries: rendering sorts and
+       slices, and sharing one list would mean whoever ran first decided the
+       outcome.
     """
     collection = await _collect(when, room, tag, query)
     entries, err, ledger = collection
@@ -1254,11 +1488,15 @@ async def recall_text_and_data(when: str, room: str, tag: str, query: str,
 
 async def recall_data(when: str, room: str, tag: str, query: str,
                       floor=None, view: str = "", collected=None) -> dict:
-    """recall 的**另一张皮**：同样的四个门、同样的 _collect/_cell_stats，吐 dict 给前端。
+    """recall's **other skin**: the same four gates, the same _collect/_cell_stats,
+    returning a dict for the front end.
 
-    文字那张皮是 recall_core()。两张皮共用底下同一份收集+统计，绝不各算各的——
-    页面上看到的「主色调」和AI睁眼看到的必须是同一个数，不然就是两个系统了。
-    ⚠️ `by` 2026-08-17 砍了（C 件）；`view` 只影响文字皮的形态，这张皮照旧给全量。
+    The text skin is recall_core(). Both skins share one collection and one set of
+    statistics underneath and must never compute their own — the dominant colour
+    shown on the page and the one the AI sees on waking have to be the same
+    number, or there are two systems.
+    ⚠️ `by` was cut; `view` affects only the text skin's shape, and this skin still
+    returns everything.
     """
     entries, err, ledger = collected if collected is not None else await _collect(
         when, room, tag, query)
@@ -1269,15 +1507,18 @@ async def recall_data(when: str, room: str, tag: str, query: str,
                 "gates": {"when": when, "room": room, "tag": tag, "query": query,
                           "view": view}}
     st = _cell_stats(entries)
-    # 关联度线：搜索时才有意义（没走 query 门就没有分数）。
-    # 她要在 dashboard 上自己拖着看 —— 所以线是**每次请求带进来的**，
-    # 不写死也不落库。在见过真实分布之前定的任何阈值都是拍脑袋（8-05 的教训）。
+    # The relevance floor only means anything while searching (no query gate, no
+    # score).
+    # It is meant to be dragged around on the dashboard, so the floor is **passed
+    # in with each request** — never hard-coded and never stored. Any threshold
+    # chosen before seeing the real distribution is a guess.
     fl = RELEVANCE_FLOOR if floor is None else float(floor)
     payload = []
-    for e in reversed(entries):  # 新→旧，跟文字皮同一个方向
+    for e in reversed(entries):  # newest first, the same direction as the text skin
         j = entry_json(e)
         if e.get("score") is not None:
-            # 字面命中保底（C2）：max(分数, 线)，前端看到的就是生效的分
+            # The literal-hit floor: max(score, floor), so what the front end sees
+            # is the score that actually took effect
             j["score"] = round(_eff_score(e, fl), 2)
             j["literal"] = bool(e.get("literal"))
         payload.append(j)
@@ -1289,7 +1530,8 @@ async def recall_data(when: str, room: str, tag: str, query: str,
         "gates": {"when": when, "room": room, "tag": tag, "query": query, "view": view},
         "floor": fl,
         "floor_default": RELEVANCE_FLOOR,
-        # top-k 砍掉几条：面板上也得看得见（文字皮末尾那行的同一个数）
+        # How many top-k cut: the panel has to see it too (the same number as the
+        # text skin's final line)
         "topk": ledger.get("topk"),
         "topk_dropped": ledger.get("topk砍掉", 0),
         "below": sum(1 for e in entries
@@ -1300,13 +1542,17 @@ async def recall_data(when: str, room: str, tag: str, query: str,
 async def recall_core(when: str, room: str, tag: str, query: str,
                       max_cells: int = _CELL_MAX, floor=None, view: str = "",
                       collected=None) -> str:
-    """文字那张皮。**参数账（5.4）**：when / room / tag / query / slices / view，就这六个。
+    """The text skin. **The full parameter list**: when / room / tag / query /
+    slices / view — those six and no more.
 
-    🔪 **`by` 2026-08-17 整个砍了**（C 件，代码和工具描述一起）：
-       `by="touched"` —— 她：「我们没有『消化』这个动作」；
-       `by="回看"`   —— `slices` 覆盖（slices=N 就是「那段我要看多粗／多细」）。
-       判据：**每个参数必须对得上一句我心里真会冒出来的话。**
-    🆕 `view="scene"`（D 件）：场景簇从默认变成**显式要**。
+    🔪 **`by` was cut entirely** (from the code and the tool description alike):
+       `by="touched"` — there is no such act as "digesting" here;
+       `by="回看"`   — superseded by `slices` (slices=N is "how coarse or fine I
+       want that stretch").
+       The rule: **every parameter must map onto a sentence that actually surfaces
+       in the mind.**
+    🆕 `view="scene"`: scene clusters went from the default to something you
+       **ask for explicitly**.
     """
     view = str(view or "").strip()
     if view and view != "scene":
@@ -1318,11 +1564,15 @@ async def recall_core(when: str, room: str, tag: str, query: str,
                 "没有 query 就没有命中，也就没有画面。"
                 "只想翻一段时间：recall(when=…)（要更粗/更细加 slices=N）。")
 
-    # --- id 直查：query 就是一个完整 bucket_id → 返回这一条的逐字原文 + 全部元数据 ---
-    # 这就是「点进去看原文」那扇门（C 档列表给摘要，拿 id 从这儿进）。
+    # --- Direct id lookup: the query is itself a full bucket_id -> return that
+    # entry's verbatim text plus all of its metadata ---
+    # This is the "click through to the original" door (the tier C list gives
+    # gists; you come in here with an id).
     q = query.strip()
     if re.fullmatch(r"[0-9a-f]{6,11}", q):
-        # 半截 id：唯一前缀匹配；多个候选就列出来；没有就明说（不落语义搜索）
+        # A partial id: match a unique prefix; list the candidates when there are
+        # several; say so plainly when there are none (never fall through to
+        # semantic search)
         allb = await rt.bucket_mgr.list_all(include_archive=True)
         cand = [str((bb.get("metadata") or {}).get("id") or "") for bb in allb]
         cand = sorted({cid for cid in cand if cid.startswith(q)})
@@ -1348,10 +1598,12 @@ async def recall_core(when: str, room: str, tag: str, query: str,
             tags_ = [str(t) for t in (meta.get("tags") or []) if not str(t).startswith("__")]
             if tags_:
                 info.append("标签:" + ",".join(tags_[:6]))
-            # E7 / 机制④ 第 2 条：from 不能只给 id——mind 只留思考产物，事件在
-            # from 里，读的时候要把来源的摘要一并带出来，认知才有脚可站。
+            # from must never be reduced to bare ids: a mind holds only the
+            # product of thinking, the events live in from, and reading it has to
+            # bring the sources' gists along or the thinking has nothing to stand
+            # on.
             src_lines: list[str] = []
-            for fid in read_from_ids(meta):   # from 优先、triggered_by 兼容（E 件）
+            for fid in read_from_ids(meta):   # from wins; triggered_by is the compatible fallback
                 src = await rt.bucket_mgr.get_including_archive(fid)
                 if src:
                     smeta = src.get("metadata", {}) or {}
@@ -1364,8 +1616,10 @@ async def recall_core(when: str, room: str, tag: str, query: str,
                 info.append(f"换掉了:{meta['supersedes']}")
             if meta.get("superseded_by"):
                 info.append(f"⚠️已被换版:{meta['superseded_by']}（这是旧版）")
-            # 施工 3 · 下钻的另一头：**被谁盖着**（可以是好几条——交叉，她 8-05 第六条）。
-            # 换版（n=1）那一档 superseded_by 上面那行已经说清楚了，不再重复。
+            # The other end of drilling down: **who covers this** (possibly
+            # several — entries can cross).
+            # The re-versioning case (n=1) is already stated by the superseded_by
+            # line above and is not repeated here.
             _sup = str(meta.get("superseded_by") or "")
             _cbs = [c for c in _F.covers_of(meta) if c != _sup]
             if _cbs:
@@ -1377,12 +1631,15 @@ async def recall_core(when: str, room: str, tag: str, query: str,
             if src_lines:
                 lines.append("来源:")
                 lines.extend(src_lines)
-            # 施工 3 · **这就是 unfold，不做单独的工具**（说明书 §3 D）：
-            # 一条 gist 盖着谁，在这儿一条一行（id + 摘要）摊开。
-            # 为什么不另起一个工具：下钻的动作已经有了（拿 id 搜），
-            # 再加一个 unfold 等于给同一件事两个入口，而我只会记住其中一个。
-            # 时期（时间圈法）没有名单可查——它只落名字 + 范围，成员**现场算**
-            # （8-17 14:30 终稿）。下钻照样有：这儿把此刻落在范围里的那些摊开。
+            # **This is unfold, and it is not a separate tool**: what a gist
+            # covers is laid out here, one line each (id + gist).
+            # Why not a separate tool: the drilling-down action already exists
+            # (search by id), and adding an unfold would give one thing two entry
+            # points — of which I would only ever remember one.
+            # A period (the time-circling form) has no member list to consult — it
+            # stores only a name and a span, and its members are **computed live**.
+            # Drilling down still works: what currently falls inside the span is
+            # laid out here.
             if _big.is_big(meta) and str(meta.get("when") or ""):
                 _t0, _t1, _serr = _F.check_span(str(meta.get("when")))
                 if not _serr:
@@ -1408,15 +1665,18 @@ async def recall_core(when: str, room: str, tag: str, query: str,
                                    str(cmeta.get("summary") or cmeta.get("name") or "").strip())[:60]
                     if not cb:
                         chint = "（查无此桶——可能被硬删过）"
-                    # 交叉之后 covered_by 是名单：还挂着这条 gist 就不用标；
-                    # 名单里没有它（被人工改动过）才标出来现在归谁
+                    # With crossing, covered_by is a list: if this gist is still on
+                    # it, nothing needs marking; only when it is absent (someone
+                    # edited it by hand) is the current owner marked
                     now_by = _F.covers_of(cmeta)
                     mark = ("" if (not cb or q in now_by)
                             else f"  ↑现在归 {'、'.join(now_by) or '（没人盖）'}")
                     lines.append(f"  ▣ {cid}  {chint}{mark}")
                 if len(cov) > 30:
                     lines.append(f"  …… 还有 {len(cov) - 30} 条")
-            # G3 反向链：谁从这条长出过认知/想法——「被 from」是消化程度的直接证据
+            # The reverse chain: what thinking has grown out of this entry —
+            # "being pointed at by from" is direct evidence of how far something
+            # has been digested
             try:
                 refs = await rt.bucket_mgr.referenced_by(q)
             except Exception:
@@ -1430,9 +1690,10 @@ async def recall_core(when: str, room: str, tag: str, query: str,
                                    str(rmeta.get("summary") or rmeta.get("name") or "").strip())[:60]
                     lines.append(f"  → {rid}  {rhint}")
             lines.append("─" * 30)
-            lines.append(str(b.get("content") or ""))  # 逐字，不截
+            lines.append(str(b.get("content") or ""))  # verbatim, never cut
             return "\n".join(lines)
-        # id 形状但查无此桶 → 落回普通搜索（可能是半截 id 或已物理删除）
+        # id-shaped but no such bucket -> fall back to an ordinary search (it may
+        # be a partial id, or the bucket may have been physically deleted)
     if not (when.strip() or room.strip() or tag.strip() or query.strip()):
         return ("recall 至少给一个门：when（时间）/ room（房间）/ tag（标签）/ query（扔词搜）。"
                 "例：recall(when=\"上周\") · recall(room=\"MIND\") · recall(when=\"本月\", tag=\"Home\")")
@@ -1450,21 +1711,28 @@ async def recall_core(when: str, room: str, tag: str, query: str,
                                  tag and f"tag={tag}", query and f"query={query}",
                                  view and f"view={view}"] if x)
 
-    # ── 「今天」逐条（她 2026-08-08 定）：今天的事我人还在里面，不塌缩。
-    #    ⚠️ 8-17 砍掉的 `by="回看"` 跟它不是一回事：那个是旧→新读一段历史
-    #    （被 slices=N 覆盖了），这个是新→旧看刚发生的。
+    # ── 「今天」 listed entry by entry: today's events still have me inside them,
+    #    so they do not collapse.
+    #    ⚠️ The `by="回看"` that was cut is a different thing: that read a stretch
+    #    of history oldest-to-newest (and slices=N covers it), while this views
+    #    what just happened newest-to-oldest.
     async def _render_today(es: list[dict], g: str) -> str:
-        # 🔴 时刻用 `created`（真落盘那一刻），不用 `ts`：ts 在有 `when` 时是**那天零点**，
-        #    而今天存的大多带 when=今天，全列成 00:00 等于没显示。
-        #    created 无后缀=UTC，parse_stamp 会转本地。
-        # 🔴 **排序必须跟显示同一个口径**：先按 ts 排、再按 created 显示，
-        #    今天的 event 全挤在 00:00，列出来时刻就是乱的（8-08 当场踩到）。
+        # 🔴 The time of day comes from `created` (the moment it actually hit
+        #    disk), never from `ts`: whenever a `when` exists, ts is **midnight on
+        #    that day**, and most of today's entries carry when=今天, so listing
+        #    them all as 00:00 shows nothing at all.
+        #    created has no suffix, meaning UTC; parse_stamp converts it to local.
+        # 🔴 **Ordering must use the same definition as the display**: sort by ts
+        #    and then display created and today's events all pile up at 00:00, so
+        #    the listed times come out scrambled.
         def _hm(e: dict):
             return _w.parse_stamp(e["meta"].get("created")) or e["ts"]
 
         lines = [f"〔{g}〕{len(es)} 条 · 今天（全列，不塌缩）· 新→旧"]
-        # 施工 3：被盖的今天也不单列，换成上面那一行 gist 标题。
-        # **条数还是 len(es)**（一条没少），少的只是行——这是 2.3 判据的落点。
+        # Covered entries are not listed individually today either; they are
+        # replaced by the gist title line above.
+        # **The count is still len(es)** (nothing was lost); only lines were
+        # saved — which is where the "information may only grow" rule lands.
         lines.extend(await _gist_lines(es))
         for e in sorted(es, key=_hm, reverse=True):
             if _F.is_covered(e["meta"]):
@@ -1474,34 +1742,40 @@ async def recall_core(when: str, room: str, tag: str, query: str,
         lines.append("（看原文：拿 id 搜；要昨天/上周那种概览就换 when）")
         return chr(10).join(lines)
 
-    # ── 岔路口（她 8-05 晚定的）：**判据只有一条，有没有 query。**
-    #    when/room/tag 是**范围**（在看），query 是**目标**（在找）。
-    #    分数早就拿到了（没走 query 门就没有 score），缺的只是两条路输出长得不一样。
-    #    显式 slices=N 是「我要按格数看」，两条路都不走，落到下面的老缩放。
+    # ── The fork: **there is exactly one criterion, whether there is a query.**
+    #    when/room/tag are a **range** (I am looking); query is a **target** (I am
+    #    looking for).
+    #    The score has always been available (no query gate means no score); what
+    #    was missing is that the two paths produced identically shaped output.
+    #    An explicit slices=N means "I want to see it by cells", takes neither
+    #    path, and falls through to the older zoom below.
     if max_cells == _CELL_MAX:
         if query.strip():
-            # 🔴 D 件（她 8-17 定）：**默认按时间＋分数排**（找那件事）。
-            #    画面式要显式要 `view="scene"` —— 而且 `when` 从此只管范围，
-            #    加不加 when 视图形态一个字不变（「一个参数管两件事」那条修掉了）。
+            # 🔴 **The default is time plus score** (find that one thing).
+            #    Scenes have to be asked for with `view="scene"` — and `when` now
+            #    governs range only, so supplying it does not change the shape of
+            #    the view at all (that "one parameter doing two jobs" is fixed).
             if view == "scene":
                 return _render_scene_clusters(entries, gates, floor, ledger)
             return _render_search(entries, gates, floor, ledger)
-        # 「今天」不塌缩（她 2026-08-08 定）：今天的事我人还在里面，
-        # 塌成「前段时间 + 2~3 条代表」等于把刚发生的推远。
-        # 🔴 **只认「今天」**——昨天、前天照旧塌缩，那些已经是历史了。
+        # 「今天」 never collapses: today's events still have me inside them, and
+        # collapsing them into "some time ago + 2-3 representatives" pushes what
+        # just happened far away.
+        # 🔴 **Only 「今天」 counts** — 昨天 and 前天 collapse as before; those are
+        # already history.
         if when.strip() == "今天":
             return await _render_today(entries, gates)
         return await _render_browse(entries, gates, room, tag)
 
     gname, slices = _split_cells(entries, max_cells)
 
-    # B · 1~3 格：完整卡
+    # B · 1-3 cells: the full card
     if len(slices) <= 3:
         blocks = [_fmt_card(label, _cell_stats(cell)) for label, cell in reversed(slices)]
         return f"〔{gates}〕{len(entries)} 条 · 粒度:{gname}\n\n" + "\n\n".join(blocks) + \
             "\n\n（钻：缩小 when / 加 room·tag；看原文：拿 id 搜）"
 
-    # A · 概览：每格两行
+    # A · overview: two lines per cell
     lines = [f"〔{gates}〕{len(entries)} 条 · {len(slices)} 格 · 粒度:{gname} · 新→旧"]
     for label, cell in reversed(slices):
         st = _cell_stats(cell)

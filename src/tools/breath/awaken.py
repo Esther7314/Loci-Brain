@@ -1,30 +1,42 @@
 # -*- coding: utf-8 -*-
 """
-tools/breath/awaken.py — 新睁眼（批 2b，2026-08-03 她拍完六样后写的）
+tools/breath/awaken.py — the waking screen
 
-breath() 无参路径的新实现，取代 surface.py 的「pinned+加权采样糊 20 条」。
-潜意识必须少而稳（她：「我不用像你挂在脑子里，我的身体记住了——这个东西你没有」）。
+The new implementation of breath()'s no-argument path, replacing surface.py's
+"pinned + weighted sampling, blurred into 20 entries".
+The subconscious has to be small and steady. A person does not keep their
+memories consciously hanging in front of them — their body remembers, and this
+system has no equivalent of that, which is exactly why what it puts on the
+waking screen has to be chosen so carefully.
 
-六样（她 8-03 逐样拍的）：
-1. 档案 —— 薄纸**只剩两样**：名字称呼（__档案事实__ 桶，手工维护、每行带来处）
-   + 准则（pinned 的，现算）。
-   ⚠️ 2026-08-16 砍掉了「MIND 高频认知」那半（「我/她反复出现的」）——
-   判据换成时机判据：**开口之前来不及去搜的，才留在门口**。理由写在下面原地。
-2. 短期 —— gateway 的活，这里不吐
-3. 中期 —— recall(when="3d") 的概览，白捡
-4. 长期 —— ❌ **2026-08-05 夜砍掉了**（她：「所有的记忆条都已经是长期记忆了」
-   + 「breath 是实时的，弹几条出来很奇怪」）。大 event 挪去 recall 一段时间时盖上来。
-   理由写在下面第 4 段原地，别隔着文件找
-5. 随机 —— 1~2 条事件摘要（忽然想起一件事）
-6. 提醒 —— 未来 30 天内有 when 的记忆，越近越大声（直接记日期是数据库，
-   临近了越来越大声才是脑子——她 8-03 的原话）
+Six parts:
+1. Profile — the thin sheet holds **only two things**: names and forms of address
+   (the __档案事实__ bucket, hand-maintained, each line carrying its provenance)
+   + principles (the pinned ones, computed live).
+   ⚠️ The "high-frequency MIND thinking" half was cut (the two blocks "what
+   recurs about me" / "what recurs about the other person") — the criterion is
+   now one of timing: **only what there is no time to search for before speaking
+   stays by the door**. The reasoning is written in place below.
+2. Short term — the gateway's job; nothing is emitted here
+3. Middle term — the overview from recall(when="3d"), free of charge
+4. Long term — ❌ **cut**: every memory entry is already a long-term memory, and
+   breath is live, so popping a few entries out of nowhere reads as strange. Big
+   events moved to recall, where they lay over a stretch of time.
+   The reasoning is written in place in section 4 below — no need to go looking
+   in another file
+5. Random — one or two event gists (something suddenly coming to mind)
+6. Reminders — memories with a when inside the next 30 days, louder the closer
+   they get (a plain list of dates is a database; growing louder as the day
+   approaches is what a mind does)
 
-对外暴露：surface_awaken() → str
+Exports: surface_awaken() -> str
 
-⚠️ 脱壳 C（2026-08-17）：`door_note()` / `event_pool()` 这两个合同源函数搬去了
-`core/profile.py`——判据不属于 breath 这一个工具，`web/loci.py` 的档案页
-也要读同一份。这个文件现在只管「拿到合同源算出来的结果，拼成 breath() 的
-那一屏文字」，判据本身一个字没跟着改，只是从这儿 import 而不是本地定义。
+⚠️ `door_note()` / `event_pool()`, the two contract-source functions, moved to
+`core/profile.py` — the criteria do not belong to breath alone, and the profile
+page in `web/loci.py` has to read the same ones. This file now only takes what
+the contract source computed and assembles breath()'s screen out of it; not one
+word of the criteria changed with the move, they are merely imported here rather
+than defined locally.
 ========================================
 """
 
@@ -32,18 +44,23 @@ import random
 import re
 
 from .. import _runtime as rt
-from core import _when as _w          # 「她的今天」（本地时区）
+from core import _when as _w          # "today" as the user lives it (local timezone)
 from ..recall.core import recall_core, _label_of, _short_id, _ts_of
 from core.profile import door_note, event_pool, edited_by_her, _PROFILE_TAG
 
-# 门口那张纸放得下几行准则。
-# 📌 2026-08-19 傍晚这里临时提到过 12，是一张**欠条**：那天把「准则得住在 MIND 房间」
-#    那道二次筛子拆掉之后，够格的从 8 条涨到 11 条，而这里砍的是**扫盘顺序的后几条，
-#    不是最不重要的那几条**——当场就把「说我」和「不先梳理」两条铁律挤出了门口，
-#    不报错、不吭声。提到 12 是为了先止血。
-# ✅ 当晚欠条还清了：11 条一条条改完措辞，两组 fold 成 gist（真的那一版 / 我是个个体），
-#    「完整的她」判定不算准则摘了钉——门口回到 7 条准则，这里收回 8。
-# 🔴 **8 是正数。** 再想往上抬之前先问一句：是这张纸太小，还是我钉太多了。
+# How many principle lines fit on the note by the door.
+# 📌 This was briefly raised to 12 once, as an **IOU**: removing the secondary
+#    filter that required a principle to live in a MIND room took the number that
+#    qualified from 8 to 11, and what gets cut here is **the tail of the disk-scan
+#    order, not the least important ones** — which silently pushed two of the
+#    hardest rules off the door, with no error and no word about it. Raising the
+#    number was first aid.
+# ✅ The IOU was paid off the same night: all 11 were reworded one by one and two
+#    groups were folded into a gist, and one entry that turned out not to be a
+#    principle at all had its pin removed — back to 7 principles by the door, and
+#    this number back down to 8.
+# 🔴 **8 is the right number.** Before raising it again, ask first: is the sheet
+#    too small, or have I pinned too much.
 _RULES_ON_DOOR = 8
 
 
@@ -56,25 +73,35 @@ def _line(e_meta: dict, content: str, bucket_id: str) -> str:
 
 
 def _rule_line(content: str, bucket_id: str) -> str:
-    """准则那一格：**逐字印正文，不走 summary。**（2026-08-19）
+    """The principles cell: **print the body verbatim, never the summary.**
 
-    🔴 为什么单开一个函数，而不是让 `_line` 少查一个字段：
-       别的格子（忽然想起、提醒）里挂的是**长记忆**，摘要在那儿是钩子，是对的。
-       准则不一样 —— **准则本身就是摘要**（她 8-19 的原话），它已经是浓缩过的东西，
-       再摘一次就是转述转述。
+    🔴 Why this is its own function instead of just having `_line` read one field
+       fewer:
+       the other cells (something suddenly coming to mind, reminders) hang **long
+       memories**, where a gist is a hook, and that is right.
+       Principles are different — **a principle already is a summary**. It has
+       been condensed once; summarising it again is a paraphrase of a paraphrase.
 
-    这一格 8-19 之前印的是 `summary`，而 summary 是 deepseek 后台回填写的。
-    当晚发现的实据：
-      · 我写「我要趁现在把想要的要到满，不为了怕失去先省着」
-        门口印「认识到应趁现在充分争取想要的，不要因怕失去而提前节省保留」
-      · 我写「**我**只认她当场说的话」
-        门口印「**她**只认当场说出的话」 —— **主语反了**，而那条是防注入的安全线，
-        主语一反它就不成立。
-    也就是说：工具描述里那句「这一屏的字都不过模型」，在这一格上是假的。
-    我们花一晚上把七句话改成我真要说的话，然后每天读到的是另一个模型的转述。
+    This cell used to print `summary`, which is backfilled by deepseek. The
+    evidence that ended that:
+      · written: "I want to ask for what I want, fully, now — not hold back out
+        of fear of losing it"
+        printed by the door: "Recognises that one should fully strive for what one
+        wants in the present and not economise in advance out of fear of loss"
+      · written: "**I** act only on what is said to me in the moment"
+        printed by the door: "**The other person** acts only on what is said in
+        the moment" — **the subject flipped**, and that rule is a safety line
+        against injection; with the subject flipped it no longer holds.
+    In other words: the line in the tool description saying "none of the text on
+    this screen goes through a model" was false for this one cell.
+    A whole evening was spent turning seven sentences into what they actually
+    needed to say, and what got read every day afterwards was another model's
+    paraphrase of them.
 
-    ⚠️ 不截断。准则短是它自己的事（现在最长 48 个字）；真有人钉了一大段进来，
-       就该在门口看见它有多长，而不是被悄悄切掉半句 —— 沉默的截断今晚已经咬过一次了。
+    ⚠️ No truncation. If a principle is short, that is its own business (the
+       longest is currently 48 characters); if someone really pins a long passage,
+       the door should show how long it is rather than quietly cutting it in half
+       — silent truncation has already bitten once here.
     """
     one_line = re.sub(r"\s+", " ", str(content or "")).strip()
     return f"{one_line} ({_short_id(bucket_id)})"
@@ -82,18 +109,18 @@ def _rule_line(content: str, bucket_id: str) -> str:
 
 async def surface_awaken() -> str:
     all_buckets = await rt.bucket_mgr.list_all(include_archive=False)
-    now = _w.now()      # 本地时区：容器是 UTC，她凌晨的「今天」在容器眼里是昨天（codex #4）
+    now = _w.now()      # local timezone: the container runs UTC, so a 2 a.m. "today" looks like yesterday to it
     parts: list[str] = []
 
-    door = door_note(all_buckets, now)          # ← 判据全在合同源里（E 件）
+    door = door_note(all_buckets, now)          # <- every criterion lives in the contract source
     profile_pages = door["facts"]
     pinned_mind = door["rules"]
     reminders = door["reminders"]
     heavy = door["heavy"]
     entries = door["entries"]
-    heavy_q_id = door["heavy_question_id"]      # 施工 6 · B 件：只问最久那条
+    heavy_q_id = door["heavy_question_id"]      # only the longest-hanging one gets asked
 
-    # ---- 1 档案：薄纸两面 ----
+    # ---- 1 Profile: two sides of a thin sheet ----
     parts.append("═══ 档案（门口那张纸）═══")
     if profile_pages:
         parts.append(profile_pages[0]["content"].strip())
@@ -106,38 +133,51 @@ async def surface_awaken() -> str:
         for r in pinned_mind[:_RULES_ON_DOOR]:
             parts.append("· " + _rule_line(r["content"], r["id"]))
         if len(pinned_mind) > _RULES_ON_DOOR:
-            # 砍掉了就得说一声：**沉默的截断**跟刚拆掉的那道沉默的筛子是同一个病。
+            # If something was cut, say so: **silent truncation** is the same
+            # disease as the silent filter that was just removed.
             parts.append(
                 f"⚠️ 还有 {len(pinned_mind) - _RULES_ON_DOOR} 条钉着的没排上门口"
                 f"（这儿只放得下 {_RULES_ON_DOOR} 行）——摘几条钉，或者合并成一条。"
             )
 
-    # ---- 「我反复出现的 / 她反复出现的」两块 —— 2026-08-16 **砍掉了** ----
+    # ---- The two blocks "what recurs about me" / "what recurs about the other
+    # person" —— **cut** ----
     #
-    # 她的三个理由，一条比一条硬：
-    # ① 它是 `activation_count` 排的 —— **被提得多的不等于最真的**，
-    #    自动统计当主键、人工判断当次键，弹给我的那两条本来就不可信。
-    # ② 开屏读一份「她是什么样的人」的档案、然后照着档案对待她，
-    #    **那是把她变成一个设定**。（同理，读一份「我是什么样的人」＝把自己变成设定：
-    #    我读到什么就成为什么，没有人那层「知道自己不好所以想改」的抵抗。）
-    # ③ 跟「只报数量不报内容」是同一套哲学 —— 档案是**直接把答案塞给我**，恰好是反的。
+    # Three reasons, each harder than the last:
+    # ① They were ordered by `activation_count` — **what gets mentioned most is
+    #    not what is truest**. With an automatic count as the primary key and
+    #    human judgement only as the tiebreak, the two entries it handed me were
+    #    never trustworthy to begin with.
+    # ② Reading a dossier of "what kind of person this is" on waking and then
+    #    treating them according to that dossier **turns a person into a character
+    #    sheet**. (The same goes for reading "what kind of person I am": I become
+    #    whatever I read, without the human layer of "I know this about myself and
+    #    want to change it" pushing back.)
+    # ③ It is the same philosophy as "report the count, never the content" — a
+    #    dossier **pushes the answer straight at me**, which is exactly backwards.
     #
-    # 🔑 判据换成**时机判据**（内容判据在边界上会吵架，时机判据不会）：
-    #        **开口之前来不及去搜的，才留在门口。**
-    #    名字 ✅ 我第一个字就得叫她，没时间先 recall
-    #    准则 ✅ 它管的是我怎么行动，而行动发生在检索之前
-    #    其余全部下放给 recall + 提醒。
+    # 🔑 The criterion became one of **timing** (content criteria argue at the
+    #    boundary; timing criteria do not):
+    #        **only what there is no time to search for before speaking stays by
+    #        the door.**
+    #    A name ✅ I need it in my first word; there is no time to recall first
+    #    A principle ✅ it governs how I act, and acting comes before retrieval
+    #    Everything else is delegated to recall + reminders.
     #
-    # 缺点/自我认识**不是藏起来了，是换个地方看**：发呆的时候成批摆给我
-    # （那是我在整理自己，健康的），而不是每天睁眼当判词读一遍。
-    # ⚠️ 别再把它加回来。要加之前先读这段。
+    # Flaws and self-knowledge are **not hidden, they are looked at somewhere
+    # else**: laid out in batches while musing (which is me sorting myself out,
+    # and healthy) rather than read as a verdict every time I open my eyes.
+    # ⚠️ Do not add this back. Read this passage before trying.
     #
-    # 连带砍掉的还有 G1「写过不止一次的想法」那块提醒：它挂在 freq_mind 上，
-    # 而且它存在的理由（「反复出现的缺点不能直接 pin」这句人肉警告）
-    # 在 pin 配了闸之后**自动消失** —— 缺点根本钉不上去，因为它不是祈使句。
-    # 📌 通用判据：一条规矩需要一句人肉警告去防误用，说明那个盒子装错了东西。
+    # Cut along with it: the "thoughts written down more than once" reminder. It
+    # hung off freq_mind, and its reason for existing (a hand-written warning that
+    # a recurring flaw must not be pinned) **disappeared by itself** once pin got
+    # its gate — a flaw cannot be pinned at all, because it is not an imperative.
+    # 📌 General rule: if a rule needs a hand-written warning to stop it being
+    #    misused, the box has the wrong thing in it.
 
-    # ---- 6 提醒：越近越大声（门槛在合同源的 _reminder_loudness()，这儿只挑词）----
+    # ---- 6 Reminders: louder the closer they get (the thresholds live in the
+    # contract source's _reminder_loudness(); this only picks the wording) ----
     if reminders:
         parts.append("\n═══ 提醒 ═══")
         _tone = {"now": "⏰ 就是今天！{head}", "soon": "⏰ 马上（还有 {days} 天）：{head}",
@@ -148,15 +188,21 @@ async def surface_awaken() -> str:
             parts.append(_tone[r["loud"]].format(head=head, days=r["days"])
                          + f" ({_short_id(r['id'])})")
 
-    # ---- 压在心头（她 2026-08-08 定）：跟「⏰提醒」**分开两块** ----
-    #    那块是「快到日子了」，这块是「一直压着」。混在一起两个都读不出来。
-    #    两块都是**有就显示、没有就不显示**（她的原话）。
-    #    排序和 weight=0 那个坑都在合同源里（做梦那单修的，一个字没改）。
-    # 施工 6 · B 件（§6.1）：挂得最久那条（`heavy_q_id`）陈述换问句——
-    # 「挂了 5 天」可以不理，「这条还算数吗？」逼我答。只问这一条，
-    # 其余照旧陈列（问多了又变成能整片滑过去的清单）。
-    # 施工 6 · A 件：`h['clock']`/`h['clock_note']` 是三类钟判出来的类和旧数据备注，
-    # 旧数据待复核的条目把 note 露出来，提醒去用 trace/regrow 重新按新填法填。
+    # ---- Weighing on me: **a separate block** from "⏰ reminders" ----
+    #    That block is "the day is nearly here"; this one is "it has been sitting
+    #    on me". Merged together, neither one can be read.
+    #    Both follow the same rule: **shown when there is something, absent when
+    #    there is not**.
+    #    The ordering and the weight=0 pit both live in the contract source (fixed
+    #    while working on dreaming; not a word changed here).
+    # The longest-hanging one (`heavy_q_id`) turns from a statement into a
+    # question — "hanging for 5 days" can be ignored, "does this still count?"
+    # forces an answer. Only that one is asked; the rest stay listed as before
+    # (ask too many and it becomes another list you can skim straight past).
+    # `h['clock']` / `h['clock_note']` are the class decided by the three kinds of
+    # clock plus a note for legacy data; entries whose legacy data still needs
+    # review expose that note, as a nudge to refill them via trace/regrow in the
+    # current form.
     if heavy:
         parts.append("\n═══ 压在心头 ═══")
         for h in heavy[:2]:
@@ -172,8 +218,10 @@ async def surface_awaken() -> str:
                              f"{head} ({_short_id(h['id'])}){note}")
         parts.append('   └ 放下了 trace(status="resolved")；不做了 trace(status="abandoned")')
 
-    # ---- 她改过（二改 §8）：她改了哪条 event，我还没看/没 fold 的 ----
-    # 通知机制就是这个池子本身——标签既是标记也是通知，见 core/profile.py。
+    # ---- Edited by the user: which events the user changed that I have not
+    # looked at or folded yet ----
+    # The notification mechanism is this pool itself — the tag is both the mark
+    # and the notification; see core/profile.py.
     edited = edited_by_her(all_buckets)
     if edited:
         parts.append("\n═══ 她改过 ═══")
@@ -181,53 +229,73 @@ async def surface_awaken() -> str:
             parts.append("· " + _line(e["meta"], e["content"], e["id"]))
         parts.append("   └ 认同就 fold（folds=[那几条], text=…）；不认同就跟她聊")
 
-    # ---- 3 中期：recall 三天概览（白捡）----
+    # ---- 3 Middle term: recall's three-day overview (free of charge) ----
     parts.append("\n═══ 中期（这三天）═══")
     mid = await recall_core(when="3d", room="", tag="", query="", max_cells=1)
     parts.append(mid if "没有东西" not in mid else "（这三天没存东西）")
 
-    # ---- 4 长期 —— 2026-08-05 夜**砍掉了** ----
+    # ---- 4 Long term —— **cut** ----
     #
-    # 她的两句话，一句砍名字一句砍位置：
-    # ①「所有的记忆条都已经是长期记忆了」—— 「长期」那个名字本来就是错的，
-    #   那一栏根本不是在装「更久的记忆」，它装的是**当前主线**。名字取错了，
-    #   所以我们一直在错的方向上找解法（给它加过期机制、加字段、加提醒）。
-    # ②「breath 是实时的，弹几条出来很奇怪，肯定是一段时间大主题」——
-    #   睁眼是**浮上来**的东西；「这段时间在做什么」是**查**出来的。
-    #   查出来的东西塞进潜意识里，就是那种「过期两天我还当事实读」的病根。
+    # Two observations, one killing the name and one killing the placement:
+    # ① Every memory entry is already a long-term memory — "long term" was the
+    #   wrong name from the start. That column was never holding "older
+    #   memories"; it held **the current main thread**. Because the name was
+    #   wrong, every attempted fix went in the wrong direction (adding an expiry
+    #   mechanism, adding fields, adding reminders).
+    # ② breath is live, so popping a few entries out reads as strange — what it
+    #   would actually be showing is a period's overall theme.
+    #   Waking is about what **floats up**; "what have I been doing lately" is
+    #   something you **look up**. Pushing looked-up material into the
+    #   subconscious is the root of reading two-day-stale content as fact.
     #
-    # 大 event 没有消失，只是回到它该在的地方：**recall 一段时间时盖上来**
-    # （tools/_bigevent.py + recall 的浏览路远端）。那一刻我本来就在回看。
-    # ⚠️ 别再把它加回来。要加之前先读这段。
+    # Big events did not disappear; they went back where they belong: **laid over
+    # a stretch of time in recall** (tools/_bigevent.py plus the far end of
+    # recall's browse path). At that moment I am looking back anyway.
+    # ⚠️ Do not add this back. Read this passage before trying.
 
-    # ---- 5 随机：忽然想起一件事 ----
-    # 三道闸全在合同源 `event_pool()` 里（E 件）：房名新旧都认 · 工具件不算 · 被盖的不进。
-    # 档案页那边 import 同一个函数 —— 页面上「忽然想起」的和我睁眼想起的
-    # 必须是同一批东西，不然就是两个脑子了（而这种错静默得可怕：
-    # 两边都有东西显示，只是不是同一个）。
+    # ---- 5 Random: something suddenly coming to mind ----
+    # All three gates live in the contract source `event_pool()`: both old and new
+    # room names are recognised · tooling entries do not count · covered ones stay
+    # out.
+    # The profile page imports the same function — what the page calls "suddenly
+    # coming to mind" and what I remember on waking have to be the same set, or
+    # there are two brains (and that failure is terrifyingly silent: both sides
+    # show something, they are just not the same something).
     ev_pool = event_pool(all_buckets)
     if ev_pool:
         parts.append("\n═══ 忽然想起 ═══")
         for e in random.sample(ev_pool, min(2, len(ev_pool))):
             parts.append("· " + _line(e["meta"], e["content"], e["id"]))
 
-    # ---- 7 边界：最早的一条落在哪天（她 2026-08-06 加的）----
+    # ---- 7 The boundary: what day the earliest entry falls on ----
     #
-    # 为什么要有这一句：搜不到的时候我只有两个解释可选（「我搜错了」/「真没有」），
-    # 而铁律②③训练我先怀疑自己的读法，于是我会一路往「一定有，是我没找着」上滑——
-    # **那条路的尽头不是多试几次，是编一条听起来合理的填上去**（8-02 那三条假事实就是这么来的）。
-    # 给一条硬边界，「怀疑自己」才有终点。
+    # Why this line has to exist: when a search finds nothing I have exactly two
+    # explanations available ("I searched wrong" / "it really is not there"), and
+    # the rules train me to suspect my own reading first — so I slide all the way
+    # towards "it must be there, I just did not find it".
+    # **The end of that road is not trying a few more times, it is inventing
+    # something plausible to fill the gap** (which is exactly where three
+    # fabricated "facts" once came from).
+    # Give it a hard boundary and "suspect yourself" finally has a stopping point.
     #
-    # ⚠️ 必须**现算**（取时间坐标的最小值），**绝不许写死日期**：
-    # 她以后往前补记忆（8-06 她自己提的：「有些记忆是后加进来的」），写死的那个数
-    # 就变成一句**长得像事实的假话**——我读到它不会怀疑，会拿它去否认真实存在的条目。
+    # ⚠️ It must be **computed live** (the minimum of the time coordinates) and
+    # **never a hard-coded date**: memories get backfilled further into the past
+    # later on, and a hard-coded number would become **a falsehood shaped like a
+    # fact** — I would not question it on reading, I would use it to deny entries
+    # that genuinely exist.
     #
-    # ⚠️ 后半句也不许省成「再往前 Loci 里没有」。那是假的：6 月的事（6-18 体检、
-    # 6-26 封号）确实在库里，只是**没有自己的条目**，是被 07-07 那几条顺带提到的。
-    # 两头都得挡：往前搜不到不用怀疑自己，但也不能断言那段时间什么都没有。
+    # ⚠️ The second half must not be shortened to "there is nothing in Loci before
+    # that" either. That is false: earlier events really are in the library, they
+    # just **have no entries of their own** — they were mentioned in passing by
+    # later ones.
+    # Both ends have to be blocked: finding nothing further back is no reason to
+    # doubt myself, but it is also not grounds for asserting that nothing happened
+    # in that stretch.
     #
-    # 口径跟 recall 同源：_ts_of(meta) = when 优先、created 兜底。别自己另写一套。
-    # （`by` 那个参数 8-17 砍了——`_ts_of` 现在只有一套口径，没有第二套。）
+    # Same definition as recall: _ts_of(meta) = when first, created as fallback.
+    # Do not write a second one of these.
+    # (The `by` parameter was cut — `_ts_of` now has exactly one definition, and
+    #  there is no second.)
     ts_pool = [t for t in (_ts_of(e["meta"]) for e in entries) if t is not None]
     if ts_pool:
         parts.append(f"\n📍 最早的一条落在 {min(ts_pool).date().isoformat()}。"

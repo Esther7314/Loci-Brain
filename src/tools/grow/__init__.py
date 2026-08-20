@@ -1,21 +1,22 @@
 """
 ========================================
-tools/grow/__init__.py — grow 工具入口
+tools/grow/__init__.py — grow tool entry point
 ========================================
 
-grow 是「我把一段长内容整理进记忆」。短内容（<30 字）走 shortpath，
-⚰️ 2026-08-18 起工具面不再收长文（见 dispatch 末尾那段碑文）；shortpath/core 两条老路径代码留着不删档，只是没有入口了
-独立事件桶。
+grow is "I file something into memory". Short content (<30 chars) took the
+shortpath,
+⚰️ the tool face no longer accepts long prose (see the epitaph at the end of dispatch); the two old paths, shortpath and core, are kept in the archive but no longer have an entry point
+a standalone event bucket.
 
-关键行为：
-- 入口做 items 校验
-- 按 strip 后长度 < 30 字判断走哪个分支
+Key behaviour:
+- The entry point validates items
+- Which branch to take is decided by stripped length < 30 characters
 
-不做什么（边界）：
-- 不做 token 级别预算（grow 关心的是「拆几条」而不是「展示多少」）
-- 不返回结构化数据，统一中文短句
+What this file deliberately does not do:
+- No token-level budgeting (grow cares about "how many pieces", not "how much to show")
+- Returns no structured data; always one short sentence
 
-对外暴露：dispatch(items=… / kind+text) → str
+Exports: dispatch(items=... / kind+text) -> str
 ========================================
 """
 
@@ -23,15 +24,18 @@ from typing import Optional
 
 from .. import _runtime as rt
 from .._common import check_grow_input_size, check_grow_items_payload
-# ⚰️ 长文切分那两条老路径（grow_shortpath / grow_core）2026-08-18 连代码一起删了。
-#    「停用不删档」说的是**数据**（她的记忆、seed 那十三颗），不是代码——
-#    发出去的仓库里留一堆没人调的死代码，只会让读的人以为它还活着。
+# ⚰️ The two old long-prose splitting paths (grow_shortpath / grow_core) were
+#    deleted, code and all.
+#    "Retire it, don't delete the archive" is about **data** (memories, the
+#    thirteen seeds) — not about code. Leaving a pile of uncalled dead code in a
+#    repository that ships only makes the next reader think it is still alive.
 from .core import grow_items
 from .rooms_path import (grow_event, grow_mind, backfill_sweep,
                          _retired_fields_msg)
 
-# 每个进程第一次 grow 调用时跑一次自愈扫描（codex 复核第 3 条）：
-# 上次重启时在飞的后台回填会丢，sweep 把「room 有值但 summary 缺」的桶补回来。
+# A self-healing scan runs once, on the first grow call in each process:
+# background backfills still in flight are lost across a restart, and the sweep
+# repairs buckets that have a room but are missing their summary.
 _sweep_started = False
 
 
@@ -50,7 +54,8 @@ async def dispatch(
 ) -> str:
     await rt.decay_engine.ensure_started()
 
-    # GLM 这类客户端有时把列表序列成 JSON 字符串——宽容地接（8-03 手机实测踩到）
+    # Clients like GLM sometimes serialise the list as a JSON string — accept it
+    # leniently (hit for real on a phone client)
     import json as _json
     if isinstance(items, str):
         try:
@@ -63,14 +68,18 @@ async def dispatch(
         except (ValueError, TypeError):
             pass
 
-    # --- 批 1（2026-08-03）：kind=event|mind 新路径 ---
-    # 正文先落盘立刻返回真 id，打标/摘要/起名后台回填，不走合并。
-    # 详见 rooms_path.py 顶部注释与工单 §5。
+    # --- The kind=event|mind path ---
+    # The body lands on disk first and the real id comes back immediately; tags,
+    # gist and naming are backfilled in the background, and nothing is merged.
+    # See the comment at the top of rooms_path.py.
     kind = (kind or "").strip().lower()
 
-    # ⚰️ 2026-08-18：`importance` / `meaning` 两个退役形参**整个删了**（她拍的）。
-    #    原来留着是为了「传了能报出人话」，现在那件事交给工具面的 extra="forbid"
-    #    （server.py 里 grow 那块）——传了直接被参数校验拒掉，比留一对假形参干净。
+    # ⚰️ The two retired parameters `importance` / `meaning` were **removed
+    #    entirely**. They used to be kept so that passing one produced a
+    #    human-readable complaint; that job now belongs to extra="forbid" on the
+    #    tool face (the grow block in server.py) — passing one is rejected by
+    #    parameter validation, which is cleaner than keeping a pair of fake
+    #    parameters around.
     if kind in ("event", "mind", "big"):
         global _sweep_started
         if not _sweep_started:
@@ -84,10 +93,12 @@ async def dispatch(
         return await grow_mind(room, text, from_, v, a, tense=tense,
                                weight=weight, test_data=test_data)
     if kind == "big":
-        # ⚰️ 2026-08-18：`kind="big"` 从工具面撤了（她拍的）。
-        #    它底下调的就是 fold 的骨头（`_F.save_gist`），是个**纯别名**——
-        #    立一个「时期」有两个入口，而两个入口迟早说两套话。
-        #    撤完只剩 fold(when="起..止") 一条路。grow_big 的实现留着，没人调而已。
+        # ⚰️ `kind="big"` was pulled from the tool face.
+        #    Underneath it called fold's own bones (`_F.save_gist`) — it was a
+        #    **pure alias**. Naming a stretch of time had two entry points, and
+        #    two entry points sooner or later tell two different stories.
+        #    What is left is the single path fold(when="起..止"). The grow_big
+        #    implementation is still there; nothing calls it.
         return ('立一个「时期」（给一段日子起个名字）用 fold：\n'
                 '  fold(when="2026-08-15..2026-08-18", room="EVENT/SELF", '
                 'text="那阵子在做什么", v=…, a=…)\n'
@@ -97,21 +108,28 @@ async def dispatch(
                 '"mind"（我从中看出什么）。'
                 '给一段日子起名字是 fold 的活。')
 
-    # --- 以下是老路径，批 1 原样保留（批 2 收掉）---
-    # 预拆分模式：上层 AI 已拆好 N 条最终正文 → 逐字入库，跳过 digest 的二次改写。
-    # 传了 items（非空列表）即走此路；不传则行为与旧版完全一致（向后兼容）。
+    # --- Everything below is the old path, kept verbatim ---
+    # Pre-split mode: the calling model has already produced N final bodies ->
+    # store them verbatim, skipping digest's second round of rewriting.
+    # Passing items (a non-empty list) takes this path; omitting it behaves
+    # exactly like the old version (backward compatible).
     if isinstance(items, list) and len(items) > 0:
         err = check_grow_items_payload(items)
         if err:
             return err
         return await grow_items(items)
 
-    # ⚰️ 2026-08-18：`content`（丢一段长文进来、让系统替你拆成几条）砍了。
-    #    她的判据：**那是整套里唯一一处「系统替我决定这是几件事」的入口**，
-    #    跟「落笔的永远是我」正着劲；而 `items=[...]` 本来就完全覆盖它——
-    #    收工时自己想清楚这一摊是几件事，然后一次存进去，才是这套东西要的姿势。
-    #    （长文切分那两条路 `grow_core` / `grow_shortpath` 连同 dehydrator.cut()
-    #      **代码留着不删档**，只是工具面不再有入口。）
+    # ⚰️ `content` (throw in a long passage and let the system split it into
+    #    several) was cut.
+    #    The rule behind it: **that was the one place in the whole system where
+    #    the system decided for me how many things this was**, which runs against
+    #    "the one who writes it down is always me"; and `items=[...]` already
+    #    covers the case completely — working out for yourself, at the end of a
+    #    stretch, how many things happened and then storing them in one call is
+    #    the posture this system is built around.
+    #    (The two splitting paths `grow_core` / `grow_shortpath`, along with
+    #     dehydrator.cut(), **stay in the archive**; they simply have no entry
+    #     point on the tool face any more.)
     return ("grow 现在只收拆好的：items=[{room,text,v,a},...] 存多条，"
             "或 kind=\"mind\"/\"big\" + text 存一条。"
             "长文丢进来让系统替你拆成几条那条路已经撤了——"

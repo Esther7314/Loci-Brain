@@ -1,27 +1,35 @@
 """
 ========================================
-tools/_common.py — 跨工具共享的辅助逻辑
+tools/_common.py — helper logic shared across tools
 ========================================
 
-这个文件收纳被多个工具同时复用的、与具体工具语义无关的小工具：
-配额检查（单桶字节上限 / pinned 数量上限）、合并或新建（hold/grow 共用）、
-新桶疑似重复扫描、新事件触发的 plan 自动闭环判定。
+This file collects the small helpers reused by several tools that carry no
+tool-specific meaning of their own: quota checks (per-bucket byte ceiling /
+pinned count ceiling), merge-or-create (shared by hold and grow), the
+suspected-duplicate scan for a new bucket, and the automatic plan-closing check
+triggered by a new event.
 
-关键行为：
-- check_content_size / check_pinned_quota：读取 config.limits，超限返回中文提示串
-- merge_or_create：先用语义检索找近似桶；超过阈值则合并（hold 用原文拼接，
-  grow 用 LLM 压缩），否则新建；写完投递 embedding 队列并刷新脱水缓存
-- iter 2.0：merge_or_create 接受 ``source_tool`` / ``grow_batch_id``，
-  新建时写入 frontmatter；合并时不动原桶 source_tool，只追加 ``last_merged_by``
-- check_duplicate_for：fire-and-forget 标记疑似重复对（不自动合并）
-- check_plan_resolution：fire-and-forget 用关键词/向量双通道预筛 + LLM 保守判断
-  来把已完成的 active plan 标为 resolved
+Key behaviour:
+- check_content_size / check_pinned_quota: read config.limits and return a
+  human-readable message string when a limit is exceeded
+- merge_or_create: semantic retrieval first to find a near bucket; above the
+  threshold it merges (hold concatenates the original text, grow compresses with
+  an LLM), otherwise it creates; after writing it posts to the embedding queue
+  and refreshes the dehydration cache
+- merge_or_create accepts ``source_tool`` / ``grow_batch_id`` and writes them
+  into the frontmatter when creating; when merging it leaves the existing
+  bucket's source_tool alone and only appends ``last_merged_by``
+- check_duplicate_for: fire-and-forget marking of suspected duplicate pairs
+  (never merges automatically)
+- check_plan_resolution: fire-and-forget prefiltering through both the keyword
+  and vector channels plus a conservative LLM judgement, to mark a finished
+  active plan as resolved
 
-不做什么（边界）：
-- 不持有任何全局对象，所有依赖都从 _runtime 取
-- 不做日志格式化以外的副作用包装；调用方自行决定是否 await
+What this file deliberately does not do:
+- Holds no global objects; every dependency comes from _runtime
+- Wraps no side effects beyond log formatting; the caller decides whether to await
 
-对外暴露：limits_cfg / max_bucket_bytes / max_pinned / check_content_size /
+Exports: limits_cfg / max_bucket_bytes / max_pinned / check_content_size /
          count_pinned / check_pinned_quota / merge_or_create /
          check_duplicate_for / check_plan_resolution
 ========================================
@@ -51,46 +59,48 @@ _EMBED_WARN = (
 )
 
 # ============================================================
-# 常量 / Named constants
+# Named constants
 # ------------------------------------------------------------
-# rule.md §①：禁止裸魔法数字。下面这些原本散在 helper 默认参数与
-# 业务逻辑中，集中后：①调参一眼看完；②哲学阈值（importance≥9 上限）
-# 明确可追。改这些值前请读 rule.md §1.0：“importance 稀缺才有意义”。
+# No bare magic numbers. These used to be scattered across helper defaults and
+# business logic; collected here, ① every tunable can be read at a glance and
+# ② the thresholds that encode a principle (the importance>=9 ceiling) are
+# traceable. Before changing any of them, remember what the ceiling is for:
+# importance only means anything while it is scarce.
 # ============================================================
 
-# --- 桶与配额默认值 ---
-_DEFAULT_MAX_BUCKET_BYTES = 50 * 1024  # 50 KB 单桶上限（超过建议走 grow 拆存）
-_DEFAULT_MAX_PINNED = 20               # pinned 桶上限（哲学边界：重要必须稀缺）；与 config.example.yaml limits.max_pinned 同步
+# --- Bucket and quota defaults ---
+_DEFAULT_MAX_BUCKET_BYTES = 50 * 1024  # 50 KB ceiling per bucket (above that, split it up with grow)
+_DEFAULT_MAX_PINNED = 20               # ceiling on pinned buckets (a principle, not a technical limit: importance must stay scarce); kept in sync with limits.max_pinned in config.example.yaml
 _DEFAULT_MAX_GROW_INPUT_BYTES = 2 * 1024 * 1024
 _DEFAULT_MAX_QUERY_BYTES = 16 * 1024
 _DEFAULT_MAX_METADATA_BYTES = 16 * 1024
 _DEFAULT_MAX_GROW_ITEMS = 100
 
-# --- importance≥9 配额（rule.md §1.0 哲学） ---
-_HIGH_IMP_THRESHOLD = 9                # importance 达到该值算“高重要度”
-_HIGH_IMP_HARD_CAP = 24                # 高重要度桶硬上限
-_HIGH_IMP_SOFT_WARN = 22               # 达该数开始推 OB-W003 提醒
-_HIGH_IMP_DEGRADE_TO = 8               # 超限时自动降到的 importance
+# --- The importance>=9 quota (scarcity is the point) ---
+_HIGH_IMP_THRESHOLD = 9                # importance at or above this counts as "high importance"
+_HIGH_IMP_HARD_CAP = 24                # hard ceiling on high-importance buckets
+_HIGH_IMP_SOFT_WARN = 22               # from here on, push the OB-W003 reminder
+_HIGH_IMP_DEGRADE_TO = 8               # the importance an over-quota bucket is degraded to
 _HIGH_IMP_EXEMPT_TYPES = frozenset({"feel", "plan", "letter", "archived"})
 
-# --- pinned 软阈值 ---
-_PINNED_SOFT_GAP = 2                   # “软阈值 = cap - GAP”；cap=20 → soft=18
+# --- The pinned soft threshold ---
+_PINNED_SOFT_GAP = 2                   # "soft threshold = cap - GAP"; cap=20 -> soft=18
 
 # --- check_duplicate_for / check_plan_resolution ---
-_DUP_DEFAULT_THRESHOLD = 0.95          # 向量相似 >= 该值 → 标为疑似重复
-_DUP_TOPK = 10                         # 检索前 N 个候选以判重复
-_PLAN_VECTOR_TOPK = 20                 # plan 判定的向量预筛范围
-_PLAN_VECTOR_THRESHOLD = 0.7           # 超过才交给 LLM 判定是否已完成
-_PLAN_LLM_CONFIDENCE_MIN = 0.7         # LLM judgement.confidence 下限
-_SAME_EVENT_CONFIDENCE_MIN = 0.85      # 自动合并必须高置信，疑似时新建
-_PLAN_FALLBACK_CAP = 10                # 无向量时直接送 LLM 的 plan 上限（防止过多 LLM 调用）
+_DUP_DEFAULT_THRESHOLD = 0.95          # vector similarity >= this -> mark as a suspected duplicate
+_DUP_TOPK = 10                         # how many top candidates to retrieve when judging duplicates
+_PLAN_VECTOR_TOPK = 20                 # the vector prefilter width for plan judgement
+_PLAN_VECTOR_THRESHOLD = 0.7           # only above this does the LLM get asked whether it is done
+_PLAN_LLM_CONFIDENCE_MIN = 0.7         # floor on the LLM's judgement.confidence
+_SAME_EVENT_CONFIDENCE_MIN = 0.85      # automatic merging demands high confidence; when in doubt, create
+_PLAN_FALLBACK_CAP = 10                # ceiling on plans sent straight to the LLM without vectors (guards against a flood of LLM calls)
 
-# --- 字段截断长度（下游存储 / 日志可读性）---
-_RESOLUTION_REASON_MAX = 200           # 写入桶 frontmatter 的理由上限
-_LOG_REASON_PREVIEW = 60               # 日志里预览的理由长度
+# --- Field truncation lengths (downstream storage / log readability) ---
+_RESOLUTION_REASON_MAX = 200           # ceiling on the reason written into a bucket's frontmatter
+_LOG_REASON_PREVIEW = 60               # how much of the reason to preview in the log
 
-# --- content lock 哈希 key 长度 ---
-_CONTENT_LOCK_KEY_HEX = 16             # 64 bit 空间，碰撞概率徽不足道
+# --- Length of the content lock's hash key ---
+_CONTENT_LOCK_KEY_HEX = 16             # a 64-bit space; collision probability is negligible
 _CONTENT_LOCK_POLL_SECONDS = 0.01
 _CONTENT_LOCK_STALE_MIN_SECONDS = 180.0
 _CONTENT_LOCK_STALE_GRACE_SECONDS = 60.0
@@ -230,18 +240,21 @@ async def _quota_turn(name: str):
 
 
 def _push_warning_safe(code: str, msg: str) -> None:
-    """安全调用 errors.push_warning；import 失败时静默降级。
+    """Call errors.push_warning safely; degrade silently if the import fails.
 
-    原因：push_warning 在两个 quota helper 里被调 4 次，每次都要重复
-    “三层 try/except import”的定位代码。集中后：
-      ① 业务代码变成干净的一行调用；
-      ② import 后退逻辑只需调一处；
-      ③ 测试打档只需 patch 本函数。
+    Why: push_warning is called four times across the two quota helpers, and each
+    call site used to repeat the same three-layer try/except import dance.
+    Centralised here:
+      ① the calling code becomes one clean line;
+      ② the import fallback logic exists in exactly one place;
+      ③ a test only needs to patch this function.
 
-    路径优先级（跟 imports.md 一致）：
-      1. from errors        —— src/ 在 sys.path 顶层的生产/测试环境
-      2. from ..errors      —— 包内相对导入的兑底
-      3. 均失败 → 静默跳过（不能因 warning 传递失败让业务报错）
+    Path priority:
+      1. from errors        —— production/test environments where src/ is at the
+                               top of sys.path
+      2. from ..errors      —— the in-package relative import as a fallback
+      3. both fail -> skip silently (a failure to deliver a warning must never
+         make the actual operation fail)
     """
     try:
         from core.errors import push_warning  # type: ignore
@@ -253,12 +266,12 @@ def _push_warning_safe(code: str, msg: str) -> None:
     try:
         push_warning(code, msg)
     except Exception:  # pragma: no cover
-        # 警告通道崩了也不能拖垃业务路径
+        # Even if the warning channel breaks, it must not drag the real path down
         pass
 
 
 def limits_cfg() -> dict:
-    """读 config.limits 段；缺省值与 1.6 spec §5 一致：50KB 单桶 / 20 pinned。"""
+    """Read the config.limits section; the defaults are 50KB per bucket / 20 pinned."""
     config = rt.config if isinstance(rt.config, dict) else {}
     return config.get("limits", {}) or {}
 
@@ -297,7 +310,7 @@ def max_grow_items() -> int:
 
 
 def check_content_size(content: str) -> str | None:
-    """超过单桶上限返回中文提示串；否则返回 None。"""
+    """Returns a message string when the per-bucket ceiling is exceeded, else None."""
     cap = max_bucket_bytes()
     if cap <= 0:
         return None
@@ -379,10 +392,12 @@ def check_grow_items_payload(items: list) -> str | None:
 
 
 async def count_pinned() -> int:
-    """统计当前 pinned 桶数量。失败时返回 0（保守，不阻断）。
+    """Count the pinned buckets right now. On failure it returns 0 (conservative:
+    never block).
 
-    配额的唯一真相是 metadata.pinned。type=permanent 是正式固化类型，
-    不等同于 pinned=True，也不占用 pinned 配额。
+    The single source of truth for the quota is metadata.pinned. type=permanent
+    is a first-class bucket type; it is not the same as pinned=True and does not
+    consume the pinned quota.
     """
     try:
         all_b = await rt.bucket_mgr.list_all(include_archive=False)
@@ -421,12 +436,14 @@ def _is_pinned_orphan(meta: dict) -> bool:
 
 
 async def repair_pinned_desync(bucket_mgr, apply: bool = False) -> dict:
-    """扫描 pinned/type 脱钩项；当前不会自动降级 permanent。
+    """Scan for pinned/type desync; permanent is currently never auto-demoted.
 
-    type=permanent 现在是正式固化类型。仅凭 metadata 无法安全地区分
-    历史取消钉选残留和用户显式创建的 permanent 桶，所以自动降级已禁用。
+    type=permanent is now a first-class bucket type. Metadata alone cannot safely
+    distinguish the residue of a historical unpin from a permanent bucket the
+    user created deliberately, so automatic demotion is disabled.
 
-    返回 dict：{total, pinned, orphans:[{id,name,importance}], applied, demoted, failed}。"""
+    Returns a dict: {total, pinned, orphans:[{id,name,importance}], applied,
+    demoted, failed}."""
     buckets = await bucket_mgr.list_all(include_archive=False)
     unique_buckets: list[dict] = []
     seen_ids: set[str] = set()
@@ -482,10 +499,12 @@ async def repair_pinned_desync(bucket_mgr, apply: bool = False) -> dict:
 
 
 async def check_pinned_quota() -> str | None:
-    """到达 pinned 上限返回提示串；否则返回 None。
+    """Returns a message string once the pinned ceiling is reached, else None.
 
-    （store_pinned 在严格模式下用此函数硬拒绝；新的"自动降级"路径请改用
-    enforce_pinned_quota，达到上限时返回 (False, msg) 让调用方走普通桶。）"""
+    (store_pinned uses this for a hard rejection in strict mode; the newer
+    "automatic degradation" path should use enforce_pinned_quota instead, which
+    returns (False, msg) at the ceiling so the caller falls back to an ordinary
+    bucket.)"""
     cap = max_pinned()
     if cap <= 0:
         return None
@@ -499,11 +518,14 @@ async def check_pinned_quota() -> str | None:
 
 
 # ============================================================
-# 配额 helpers（统一错误体系 OB-W003/W004 + OB-I001/I002）
+# Quota helpers (the unified error scheme: OB-W003/W004 + OB-I001/I002)
 # ------------------------------------------------------------
-# 设计：把"配额预警"和"自动降级"两步分开，分别对应 W 与 I。
-# 业务代码调用前者拿到提示后，自动经 _push_warning_safe 送去 MCP 返回末尾。
-# 阈值常量定义在文件顶部"常量"区，与 importance 哲学边界放在一起。
+# Design: "quota warning" and "automatic degradation" are two separate steps,
+# corresponding to W and I respectively.
+# Calling code gets the message from the former and it is automatically delivered
+# to the end of the MCP response via _push_warning_safe.
+# The threshold constants live in the "Named constants" block at the top of this
+# file, next to the importance ceiling they encode.
 # ============================================================
 
 
@@ -594,11 +616,13 @@ async def enforce_high_importance_quota(
     *,
     bucket_mgr=None,
 ) -> int:
-    """importance≥9 配额检查 + 自动降级。
+    """The importance>=9 quota check plus automatic degradation.
 
-    - 当前数 ≥ 硬上限 → push OB-I001 并把 importance 降为 _HIGH_IMP_DEGRADE_TO
-    - 当前数 ≥ 软阈值 → push OB-W003（仅提醒，不动数据）
-    返回最终生效的 importance。
+    - current count >= hard cap -> push OB-I001 and lower importance to
+      _HIGH_IMP_DEGRADE_TO
+    - current count >= soft threshold -> push OB-W003 (a reminder only; no data
+      is touched)
+    Returns the importance that actually takes effect.
     """
     if importance < _HIGH_IMP_THRESHOLD:
         return importance
@@ -628,17 +652,20 @@ async def enforce_high_importance_quota(
 
 
 async def enforce_pinned_quota(pinned: bool) -> bool:
-    """pinned 配额检查 + 自动退出。
+    """The pinned quota check plus automatic bail-out.
 
-    - 当前数 ≥ 硬上限 → push OB-I002 并返回 False（走普通桶）
-    - 当前数 ≥ 软阈值 → push OB-W004（仅提醒，不动数据）
-    传入 pinned=False 时直接返回 False。
+    - current count >= hard cap -> push OB-I002 and return False (fall back to an
+      ordinary bucket)
+    - current count >= soft threshold -> push OB-W004 (a reminder only; no data is
+      touched)
+    Passing pinned=False returns False immediately.
     """
     if not pinned:
         return False
     cap = max_pinned()
     cur = await count_pinned()
-    # 软阈值 = cap - GAP；cap=20、GAP=2 → soft=18。cap 太小（≤GAP）退化为硬上限。
+    # soft threshold = cap - GAP; cap=20, GAP=2 -> soft=18. If cap is too small
+    # (<= GAP) this degenerates to the hard cap.
     soft = max(1, cap - _PINNED_SOFT_GAP) if cap > _PINNED_SOFT_GAP else cap
     if cap > 0 and cur >= cap:
         rt.logger.info(
@@ -674,22 +701,30 @@ async def merge_or_create(
     test_data: bool = False,
 ) -> Tuple[str, bool, str]:
     """
-    检查是否有相似桶可合并，有则合并，无则新建。返回 (桶ID或名称, 是否合并, embed警告信息)。
+    Look for a similar bucket to merge into; merge if there is one, create if
+    there is not. Returns (bucket id or name, whether it merged, embedding
+    warning text).
 
-    raw_merge=True (hold)：原文追加，不调 LLM 压缩。
-    raw_merge=False (grow)：LLM 压缩老+新内容。
+    raw_merge=True (hold): append the original text; no LLM compression.
+    raw_merge=False (grow): the LLM compresses old + new content together.
 
-    iter 2.0 来源追踪：
-    - source_tool: "hold" | "grow"，作为新建桶的 source_tool 写入；
-      合并路径下保留原桶 source_tool 不变，但写 last_merged_by=source_tool。
-    - grow_batch_id: 仅 grow 路径会传，新建时写入；合并路径不覆盖原桶的 batch_id
-      （原桶可能来自上一次 grow 或 hold，硬覆盖会丢失最初批次信息）。
+    Provenance tracking:
+    - source_tool: "hold" | "grow", written as the new bucket's source_tool; on
+      the merge path the existing bucket's source_tool is left untouched and
+      last_merged_by=source_tool is written instead.
+    - grow_batch_id: only ever passed on the grow path, written on creation; the
+      merge path does not overwrite the existing bucket's batch_id (that bucket
+      may come from an earlier grow or hold, and overwriting would lose which
+      batch it originally belonged to).
 
-    Miss：meaning/media 是我自己的体验锚定，不是摘要。新建时直接写入；
-    合并到老桶时两条 meaning 都保留（拼接），media 追加而不是覆盖。
+    Note: meaning/media are my own anchors to the experience, not a summary. On
+    creation they are written directly; when merging into an existing bucket both
+    meanings are kept (concatenated) and media is appended rather than replaced.
 
-    F-01 / F-08 fix：整个 search→create 路径在 per-content-hash Lock 下串行执行。
-    同内容并发调用时后到的协程会阻塞，等前者写完后直接走合并分支，不产生重复桶。
+    The whole search->create path runs serialised under a per-content-hash lock.
+    On concurrent calls with the same content the later coroutine blocks, and
+    once the first has written it takes the merge branch — so no duplicate bucket
+    is produced.
     """
     async with _content_turn(content):
         return await _merge_or_create_inner(
@@ -717,7 +752,8 @@ async def _merge_or_create_inner(
     media: list | str | None = None,
     test_data: bool = False,
 ) -> Tuple[str, bool, str]:
-    """实际的 search→merge/create 逻辑，由 merge_or_create 在 Lock 保护下调用。"""
+    """The actual search->merge/create logic, called by merge_or_create under the
+    protection of the lock."""
     exact_storage_match = False
     try:
         existing = await rt.bucket_mgr.search(content, limit=1, domain_filter=domain or None)
@@ -943,7 +979,8 @@ async def _merge_or_create_inner(
             meaning=meaning,
             media=media,
             test_data=test_data,
-            # hold 的铁律：正文优先落盘。打标/embedding 可降级，但绝不压缩或撤销记忆。
+            # hold's iron rule: the body reaches disk first. Tagging and embedding
+            # may degrade, but a memory is never compressed or taken back.
             allow_embedding_fallback=(raw_merge and source_tool == "hold"),
         )
 
@@ -956,9 +993,12 @@ async def _merge_or_create_inner(
             bucket_id = await create_bucket(importance)
     else:
         bucket_id = await create_bucket(importance)
-    # create() 已在原文落盘后投递 embedding outbox，此处无需重复生成。
-    # Managed runtime 下 queued 是正常成功态，不应在网络请求真正完成前误报
-    # “向量失败”；没有 outbox 的兼容运行时才检查同步尝试的结果。
+    # create() already posted to the embedding outbox once the original text hit
+    # disk; there is no need to generate again here.
+    # Under the managed runtime, queued is a normal success state and must not be
+    # misreported as "embedding failed" before the network request has actually
+    # completed; only a compatibility runtime without an outbox checks the result
+    # of the synchronous attempt.
     embed_warn = ""
     embedding_state = "disabled"
     outbox = getattr(rt.bucket_mgr, "embedding_outbox", None)
@@ -1072,10 +1112,12 @@ async def _merge_or_create_inner(
 
 
 async def check_duplicate_for(new_bucket_id: str, new_text: str, threshold: float = _DUP_DEFAULT_THRESHOLD) -> None:
-    """fire-and-forget：新桶写完后，向量相似 > threshold 的旧桶标为疑似重复。
+    """fire-and-forget: after a new bucket is written, any older bucket whose
+    vector similarity exceeds threshold is marked as a suspected duplicate.
 
-    iter 1.6 §4：不自动合并，只在两边各写 dup_candidate=<对端 id> + dup_score=<0~1>，
-    Dashboard 在桶详情里显示「疑似重复」提示，由她/他手动确认是否合并。
+    Nothing is merged automatically. Both sides get dup_candidate=<the other id>
+    + dup_score=<0~1>, the Dashboard shows a "suspected duplicate" note in the
+    bucket detail view, and a human decides whether to merge them.
     """
     try:
         if not rt.embedding_engine or not getattr(rt.embedding_engine, "enabled", False):
@@ -1098,7 +1140,7 @@ async def check_duplicate_for(new_bucket_id: str, new_text: str, threshold: floa
                 )
             except Exception as e:
                 rt.logger.warning(f"dup mark failed: {e}")
-            break  # 只标最相似的一对
+            break  # only mark the single most similar pair
     except Exception as e:
         rt.logger.warning(f"check_duplicate_for outer error: {e}")
 
@@ -1107,7 +1149,7 @@ async def _rank_active_plans_by_query(
     new_event_text: str,
     active_plans: list[dict],
 ) -> list[dict]:
-    """用 BucketManager 的关键词/BM25 通道排序 active plan，不调用向量。"""
+    """Rank active plans through BucketManager's keyword/BM25 channel; no vectors."""
     active_by_id = {str(plan.get("id") or ""): plan for plan in active_plans}
     try:
         ranked = await rt.bucket_mgr.search(
@@ -1126,7 +1168,8 @@ async def _rank_active_plans_by_query(
 
 
 async def check_plan_resolution(new_event_text: str, source_bucket_id: str = "") -> None:
-    """新事件触发 active plan 关键词/向量召回，再由 LLM 保守判断是否闭环。"""
+    """A new event triggers keyword/vector recall over active plans, and an LLM
+    then judges conservatively whether any of them has been closed."""
     try:
         all_b = await rt.bucket_mgr.list_all(include_archive=False)
         active_plans = [
@@ -1149,8 +1192,10 @@ async def check_plan_resolution(new_event_text: str, source_bucket_id: str = "")
                         vector_candidates.append(p)
             except Exception as e:
                 rt.logger.warning(f"plan resolution: vector pre-filter failed, falling back: {e}")
-        # 关键词是不可缺失的基础召回；向量只补充语义候选。去重后仍限制
-        # 小模型调用数，避免 active plan 很多时一次写入触发无界 API 请求。
+        # Keywords are the indispensable base recall; vectors only add semantic
+        # candidates. Even after deduplication the number of small-model calls is
+        # capped, so that a single write cannot trigger unbounded API requests
+        # when there are many active plans.
         plan_candidates = []
         seen_plan_ids: set[str] = set()
         for candidate in keyword_candidates + vector_candidates + active_plans:
@@ -1183,25 +1228,31 @@ async def check_plan_resolution(new_event_text: str, source_bucket_id: str = "")
 
 
 # ============================================================
-# 显式 plan→bucket 联动（人工/AI 路径）
+# Explicit plan -> bucket propagation (the human / AI path)
 # ------------------------------------------------------------
-# 当 plan 桶被「人工或 AI 显式」标为 resolved 时，把它指向的
-# related_bucket / resolved_by 两个普通桶也同步标 status="resolved"。
-# 这是 rule.md §1 哲学落地：plan 是承诺，承诺被放下，承载这条承诺
-# 的事件桶也不该再浮上来。
+# When a plan bucket is marked resolved *explicitly*, by a human or by the AI,
+# the two ordinary buckets it points at (related_bucket / resolved_by) are also
+# marked status="resolved".
+# This is the principle made concrete: a plan is a promise, and when a promise is
+# set down, the event buckets carrying it should stop surfacing too.
 #
-# 不联动的路径：check_plan_resolution（LLM 自动二判）—— 自动判定
-# 的可信度低于人工/AI 显式动作，避免把活的事件桶意外打沉。
+# The path that does NOT propagate: check_plan_resolution (the LLM's automatic
+# second judgement) — an automatic verdict is less trustworthy than an explicit
+# human or AI action, and this avoids accidentally sinking a live event bucket.
 #
-# 反向不做：bucket trace(resolved=1) 不联动 plan（plan 是独立承诺，
-# 单条事件结束不等于承诺达成）。
+# Not done in reverse: bucket trace(resolved=1) does not propagate to the plan (a
+# plan is an independent promise, and one event ending is not the promise being
+# kept).
 # ============================================================
 async def cascade_plan_resolved_to_buckets(plan_meta: dict, plan_id: str) -> list[str]:
-    """把 plan_meta 里 related_bucket / resolved_by 指向的普通桶标 resolved。
+    """Mark the ordinary buckets pointed at by related_bucket / resolved_by in
+    plan_meta as resolved.
 
-    入参：plan 桶的 metadata + plan_id（仅用于日志）。
-    出参：实际被联动到的 bucket_id 列表（已存在、未删除、未本来就 resolved）。
-    异常：单个桶失败不影响其他；外层异常仅记日志、返回已联动列表。
+    In: the plan bucket's metadata + plan_id (used only for logging).
+    Out: the list of bucket_ids actually propagated to (existing, not deleted, and
+    not already resolved).
+    Errors: one bucket failing does not affect the others; an outer exception is
+    only logged, and the list propagated so far is returned.
     """
     linked: list[str] = []
     if not isinstance(plan_meta, dict):
@@ -1209,7 +1260,7 @@ async def cascade_plan_resolved_to_buckets(plan_meta: dict, plan_id: str) -> lis
     candidates: list[str] = []
     for key in ("related_bucket", "resolved_by"):
         val = (plan_meta.get(key) or "").strip() if isinstance(plan_meta.get(key), str) else ""
-        # resolved_by 可能是 "manual" / "llm_judge"，不是 bucket_id，跳过
+        # resolved_by may be "manual" / "llm_judge" rather than a bucket_id: skip
         if not val or val in ("manual", "llm_judge"):
             continue
         if val not in candidates:
@@ -1220,13 +1271,14 @@ async def cascade_plan_resolved_to_buckets(plan_meta: dict, plan_id: str) -> lis
             if not b:
                 continue
             meta = b.get("metadata", {})
-            # 已经了结就不重复操作（避免无意义 touch）
+            # Already closed: do not act again (avoids a pointless touch)
             if is_closed(meta):
                 continue
-            # plan 不联动 plan；letter 也跳过（永久保留）
+            # A plan never propagates to a plan; letters are skipped too (kept forever)
             if meta.get("type") in ("plan", "letter"):
                 continue
-            # 终点只认 status；resolved 布尔不再有新写入（二改第0节）
+            # An ending is recorded in status only; the resolved boolean is never
+            # newly written any more
             ok = await rt.bucket_mgr.update(bid, status="resolved")
             if ok:
                 linked.append(bid)
@@ -1240,6 +1292,7 @@ async def cascade_plan_resolved_to_buckets(plan_meta: dict, plan_id: str) -> lis
     return linked
 
 
-# 向后兼容：保留下划线别名（部分历史调用点用 _ 前缀）
+# Backward compatibility: keep the underscore aliases (some historical call sites
+# use the _ prefix)
 _check_duplicate_for = check_duplicate_for
 _check_plan_resolution = check_plan_resolution

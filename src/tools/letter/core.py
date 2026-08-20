@@ -1,26 +1,30 @@
 """
 ========================================
-tools/letter/core.py — letter_write / letter_read 实现
+tools/letter/core.py — letter_write / letter_read implementation
 ========================================
 
-plan 桶记录我答应过、答应自己或想完成的事；letter 桶是她/他与 OB
-之间的长信件。它们都是独立类型，永久保存、不衰减、不出现在普通
-breath 中。
+A plan bucket records something promised — to someone else, to myself, or just
+meant to be finished; a letter bucket holds a long letter between the two sides
+of this conversation. Both are their own type: kept forever, never decayed, and
+never surfacing in an ordinary breath.
 
-关键行为：
-- plan_create：去重（同正文 + status=active 已存在 → 直接返回原 ID），
-  写入 type=plan + status + weight + change_log 起点
-- letter_write：原文永久保存，author 接受任意字符串署名（"ai" 或等于
-  ai_name 时统一存为 ai_name 的值，其它字符串原样存为署名；"user" 为
-  用户侧），写入 type=letter + author/title/letter_date 元数据
-- letter_read：默认按时间倒序；带 query 时走向量近邻；支持 author /
-  date_from / date_to 过滤；author 字段原样返回存储的署名，不做转换
+Key behaviour:
+- plan_create: deduplicates (same body + an existing status=active -> the
+  original ID is returned straight away), and writes type=plan + status +
+  weight + the first change_log entry
+- letter_write: the text is kept forever; author accepts any string as a
+  signature ("ai", or a value equal to ai_name, is stored as ai_name's value,
+  any other string is stored verbatim as the signature, and "user" means the
+  user's side); writes type=letter plus author/title/letter_date metadata
+- letter_read: newest first by default; with a query it goes through vector
+  neighbours; supports author / date_from / date_to filtering, and the author
+  field is returned exactly as stored, never converted
 
-不做什么（边界）：
-- plan 不做向量去重，只做精确文本去重
-- letter 永不合并、永不压缩、永不被衰减归档
+What this file deliberately does not do:
+- plan does no vector deduplication, only exact text deduplication
+- letters are never merged, never compressed, never archived by decay
 
-对外暴露：plan_create / letter_write / letter_read
+Exports: plan_create / letter_write / letter_read
 ========================================
 """
 
@@ -48,7 +52,8 @@ async def letter_write(
         title = ""
     if date is None:
         date = ""
-    # ai_name：显式传入优先，否则取环境变量 AI_NAME（回退 "AI"）。
+    # ai_name: an explicit argument wins, otherwise the AI_NAME environment
+    # variable (falling back to "AI").
     ai = (ai_name or "").strip() or get_ai_name()
     if not author or not author.strip():
         return "author 不能为空。"
@@ -67,10 +72,12 @@ async def letter_write(
     if metadata_err:
         return metadata_err
 
-    # 署名归一化：
-    #   - "user" → 用户侧，存 "user"（用户名另存 user_name，逻辑不变）
-    #   - "ai" / 等于 ai_name / 旧值 "claude"（历史兼容）→ 统一存 ai_name 的值
-    #   - 其它任意字符串 → 原样作为署名
+    # Signature normalisation:
+    #   - "user" -> the user's side, stored as "user" (the user name is stored
+    #     separately in user_name; that logic is unchanged)
+    #   - "ai" / a value equal to ai_name / the legacy value "claude" (kept for
+    #     compatibility) -> all stored as ai_name's value
+    #   - any other string -> kept verbatim as the signature
     raw = author.strip()
     low = raw.lower()
     if low == "user":
@@ -103,8 +110,9 @@ async def letter_write(
         await rt.bucket_mgr.update(bucket_id, **extra_meta)
     except Exception as e:
         rt.logger.warning(f"letter_write update meta failed: {e}")
-    # 注意：bucket_mgr.create() 已在 content 落盘后投递 embedding outbox
-    # 向量，这里不需要也不应该重复调用 generate_and_store。
+    # Note: bucket_mgr.create() already posted the vector to the embedding
+    # outbox once content hit disk. Calling generate_and_store again here is
+    # unnecessary and would be wrong.
     return f"💌letter→{bucket_id} [{a}]"
 
 
@@ -151,11 +159,11 @@ async def letter_read(
         if af_low == "user":
             letters = [b for b in letters if b["metadata"].get("author") == "user"]
         elif af_low in ("ai", "claude") or af == ai:
-            # AI 侧：匹配新署名 ai_name + 历史遗留的 "claude"
+            # The AI side: match the current ai_name signature plus the legacy "claude"
             ai_aliases = {ai, "claude"}
             letters = [b for b in letters if b["metadata"].get("author") in ai_aliases]
         else:
-            # 任意自定义署名：精确匹配存储值
+            # Any custom signature: match the stored value exactly
             letters = [b for b in letters if b["metadata"].get("author") == af]
 
     def _within(b):

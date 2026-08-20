@@ -1,68 +1,82 @@
 """
 ========================================
-tools/_pin.py — pin 的闸（二改 D 件 2026-08-16 立；2026-08-19 松闸）
+tools/_pin.py — the gate in front of pin
 ========================================
 
-`pin` 的语义没变，还是：
+The meaning of `pin` has not changed. It is still:
 
-    从「这条重要」  →  「这条是我要怎么做」
+    from "this one matters"  ->  "this one is how I mean to act"
 
-变的是**这道闸的力度**：从「当场拒」改成「照钉，附一句提醒」。
-
-------------------------------------------------------------
-🔴 为什么松（她 2026-08-19 的原话）
-------------------------------------------------------------
-   「pin 的闸可以不要那么紧，甚至可以说松一点。
-     这个闸靠代码没办法做好，我只能这么讲。」
-
-她是对的，而且理由比「词表太窄」深一层：
-
-  这道闸真正要挡的是**把缺点钉成准则**（钉「我总是心急」= 我要犯这个错）。
-  可「我总是心急」和「我看重的东西向来是慢慢长出来的」**都是描述句**——
-  一个该挡，一个该留。**正则在这两句上分不出高下，它认的是句式不是内容。**
-  一道对真正要挡的东西零分辨力的闸，紧起来只会误伤：
-  「不先梳理」那条钉了两三个星期的真准则，8-19 被它拒了，
-  我只好把措辞挪成它认识的形状才钉回去 —— 那一刻被改的是我的话，不是我的判断。
-
-📌 8-16 立闸时长出来的那条通用判据（「一条规矩需要一句人肉警告去防误用，
-   说明那个盒子装错了东西」）**没有被推翻**，它在这里的结论只是换了个方向：
-   盒子没装错，**是这件事根本不该交给代码判**。
-   所以警告不回 CLAUDE.md 那面墙上去，它贴在**动作发生的那一刻**——
-   钉的时候当场读到，比挂在墙上有用。
+What changed is **how hard this gate pushes**: from "reject on the spot" to
+"pin it anyway, and add one line of reminder".
 
 ------------------------------------------------------------
-现在这道闸做什么
+🔴 Why it was loosened
 ------------------------------------------------------------
-· 不再拦任何东西。pinned=1 一律放行。
-· 正文读起来不像「我要怎么做」时，在 trace 的成功回执后面**附一句提醒**：
-  说清门口那张纸是干嘛的、说清唯一真该挡的是什么、给出反悔的路（pinned=0）。
-· 判断留给我。上限（max_pinned）还在，稀缺性由配额守着，不由句式守着。
+   The gate does not need to be tight. It can be loose. **This is not a
+   judgement code can make well** — that is the whole of it.
 
-⚠️ 已经钉住的存量不动。
+And the reason runs one layer deeper than "the word list is too narrow":
 
-对外暴露：pin_note(content) → str | None（None = 看着像准则，不必多嘴）
-        looks_imperative(content) → bool
+  What this gate is actually there to stop is **pinning a flaw as a principle**
+  (pinning "I am always impatient" = I intend to keep making this mistake).
+  But "I am always impatient" and "the things I value have always grown slowly"
+  are **both descriptive sentences** — one should be stopped, one should be kept.
+  **A regex cannot tell those two apart; it matches sentence shape, not content.**
+  A gate with zero resolution on the thing it exists to stop can only do damage
+  when it is tight: a genuine principle that had been pinned for weeks was
+  rejected by it, and the only way to pin it back was to bend the wording into a
+  shape the regex recognised — at that moment what got edited was the sentence,
+  not the judgement behind it.
+
+📌 The general rule that came out of building this gate in the first place ("if a
+   rule needs a hand-written warning to stop it being misused, the box has the
+   wrong thing in it") **has not been overturned**; here it just points the other
+   way: the box is fine, **this is simply not something code should be judging.**
+   So the warning does not go back up on the wall of CLAUDE.md — it is attached
+   to **the moment the action happens**. Read at the instant of pinning, it is
+   worth more than the same words hanging on a wall.
+
+------------------------------------------------------------
+What the gate does now
+------------------------------------------------------------
+· It blocks nothing. pinned=1 always goes through.
+· When the body does not read as "how I mean to act", it **appends one reminder**
+  after trace's success receipt: what the note by the door is for, what the one
+  thing genuinely worth stopping is, and the way back out (pinned=0).
+· The judgement stays with me. The ceiling (max_pinned) is still there — scarcity
+  is guarded by the quota, not by sentence shape.
+
+⚠️ Anything already pinned is left alone.
+
+Exports: pin_note(content) -> str | None (None = reads like a principle, no need
+         to say anything)
+         looks_imperative(content) -> bool
 ========================================
 """
 
 import re
 
-# 正文前多少字之内要出现祈使的形状。
-# 为什么是「前 N 字」而不是全文：一条准则的祈使句一定在开头——
-# 「我要怎么做」写在第三段的，那是一条认知顺带提了一句该怎么办，不是准则。
+# How far into the body the imperative shape has to appear.
+# Why "the first N characters" and not the whole text: a principle's imperative is
+# always up front — an "how I mean to act" buried in the third paragraph belongs to
+# a piece of thinking that happens to mention what to do, not to a principle.
 _HEAD_CHARS = 60
 
-# 认得的说法。8-19 松闸后这张表**只决定要不要多嘴一句**，不再决定钉不钉得上，
-# 所以它宽一点窄一点都不会再改我写下的话——照 8-19 踩到的几种真准则补了几条：
-#   我要 / 我不      —— 最直接的朝向
-#   先…再            —— 顺序型（「先跑基线再动代码」）
-#   别(?!人)         —— 禁止型；(?!人) 挡掉「别人」这个高频误命中
-#   不准 / 不许       —— 禁止型的另一种说法
-#   必须 / 就说 / 就停 —— 硬约束
-#   停下 / ——停       —— 中断型（「发现自己在把话说圆的时候——停」，8-19 被老词表拒过）
-#   每次 / 遇到…就     —— 触发型
-#   发现…立即         —— 条件触发型
-#   记得 / 宁可 / 优先 —— 弱一点但确实是朝向
+# The forms it recognises. Since the gate was loosened this table **only decides
+# whether to add a remark**, not whether the pin lands, so widening or narrowing it
+# can no longer edit what I wrote. A few entries were added after real principles
+# tripped over the older list:
+#   我要 / 我不      —— the most direct statement of intent
+#   先…再            —— sequencing ("baseline first, then touch the code")
+#   别(?!人)         —— prohibition; (?!人) rules out 「别人」, a frequent false hit
+#   不准 / 不许       —— another way of saying the same prohibition
+#   必须 / 就说 / 就停 —— hard constraints
+#   停下 / ——停       —— interruption ("the moment I catch myself smoothing an
+#                       answer over — stop"), which the old list used to reject
+#   每次 / 遇到…就     —— triggers
+#   发现…立即         —— conditional triggers
+#   记得 / 宁可 / 优先 —— weaker, but genuinely a statement of intent
 _IMPERATIVE_RE = re.compile(
     r"我要|我不|先.*再|别(?!人)|不准|不许|必须|就说|就停|停下|——\s*停|"
     r"每次|遇到.*就|发现.*立即|记得|宁可|优先"
@@ -70,14 +84,16 @@ _IMPERATIVE_RE = re.compile(
 
 
 def looks_imperative(content: str) -> bool:
-    """正文前 60 字里有没有「我要怎么做」的形状。"""
+    """Does the shape of "how I mean to act" appear in the first 60 characters?"""
     return bool(_IMPERATIVE_RE.search(str(content or "")[:_HEAD_CHARS]))
 
 
 def pin_note(content: str) -> str | None:
-    """pin 的提醒。看着像准则返回 None；不像就返回一句附在成功回执后面的话。
+    """pin's reminder. Returns None when it reads like a principle; otherwise a
+    line to append after the success receipt.
 
-    🔴 它**不拦**。返回值不是错误，调用方必须照钉，只把这段话跟在回执后面。
+    🔴 It **does not block**. The return value is not an error — the caller must
+    pin regardless and merely trail this text after the receipt.
     """
     if looks_imperative(content):
         return None

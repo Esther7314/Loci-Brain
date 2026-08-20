@@ -1,67 +1,83 @@
 """
 ========================================
-tools/grow/rooms_path.py — 批 1 新 grow：kind=event|mind（2026-08-03）
+tools/grow/rooms_path.py — the newer grow: kind=event|mind
 ========================================
 
-设计出处：D:\\lento\\交接\\工单-om接口层-给fable5.md §5。
+The core principle in one line: **the body hits disk first, metadata is filled in
+afterwards.**
+The body is what the caller wrote; lose it and it is gone. Metadata (tags, gist,
+naming, vectors) is derived, and arriving ten seconds late hurts nobody.
 
-核心原则一句话：**正文先落盘，元数据后补。**
-正文是调用方写的，丢了就没了；元数据（标签/摘要/起名/向量）是派生的，
-晚十秒补上没人受伤。
+Key behaviour:
+- event: several at a time, each going straight to bucket_mgr.create(), **never
+  through merge_or_create** (no search, no judge_same_event, no LLM merge — that
+  chain was the root cause of the timeouts, and the culprit behind "different
+  things merged into one bucket")
+- The real list of bucket_ids comes back immediately (target: under 3 seconds);
+  tagging, gist and naming go to background backfill
+- mind: its own bucket + triggered_by (structure copied from feel), and v/a must
+  be supplied by the caller
+- event's v/a became mandatory too; background backfill **never touches any
+  bucket's v/a**; importance/meaning are passed by the caller (optional);
+  tags are scene anchors, while broadenings go into aliases and feed bm25 only
+- tense="want" -> after create, an update(status="want", weight=...) follows
+- With tense="want", when accepts one more form: a duration marker (3w/10d/2m/1y)
+  which, together with absolute dates, makes up a want's "three kinds of clock";
+  the third is waiting for a trigger (when is left empty and the condition is
+  written into the body). How the three are read belongs to
+  `core/profile._want_clock`; this file only validates that they can be stored
+- Validation comes first: if any single item is invalid the whole call errors and
+  no bucket is created
 
-关键行为：
-- event：一次多条，逐条直接 bucket_mgr.create()，**不走 merge_or_create**
-  （不 search、不 judge_same_event、不 LLM 合并——那一串就是超时的根因，
-  也是「把不同事情并进一个桶」的元凶）
-- 立刻返回真 bucket_id 列表（目标 < 3 秒），打标/摘要/起名走后台回填
-- mind：独立的桶 + triggered_by（结构照抄 feel），v/a 必须调用方传
-- 2026-08-06（机制③）：event 的 v/a 也必填了；后台回填**永不碰任何桶的 v/a**；
-  importance/meaning 由调用方传（可选）；tags=场景锚点，引申词进 aliases 只喂 bm25
-- tense="want" → create 后补 update(status="want", weight=…)
-- 施工 6（二改 §6）：tense="want" 时 when 多认一种写法——时长记号
-  （3w/10d/2m/1y），跟绝对日期一起构成 want 的"三类钟"；正文是等触发（when 留空，
-  条件写在正文里）；怎么读三类归 `core/profile._want_clock`，这儿只管校验存不存得进去
-- 校验先行：任何一条不合法 → 整个调用报错，不创建任何桶
+What this file deliberately does not do:
+- No merging (fixed by the spec: every item in items becomes its own bucket)
+- room is never generated or modified by a model (tools/_rooms.py validates; the
+  caller decides)
+- A failed background backfill only logger.warning()s — no rollback, no retrying
+  to death
 
-不做什么（边界）：
-- 不做合并（规格定死：items 每条独立成桶）
-- room 永远不由模型生成或修改（tools/_rooms.py 校验，调用方判断）
-- 后台回填失败只 logger.warning，不回滚、不重试到死
-
-对外暴露：grow_event(items, tense, weight, test_data) → str
-         grow_mind(room, text, from_ids, v, a, tense, weight, test_data) → str
+Exports: grow_event(items, tense, weight, test_data) -> str
+         grow_mind(room, text, from_ids, v, a, tense, weight, test_data) -> str
 ========================================
 """
 
 import asyncio
 import uuid
 
-from core import _fold as _F       # 大 event = fold 的时间圈法（施工 3）
+from core import _fold as _F       # a big event = fold's way of circling time
 from .. import _runtime as rt
 from core._bigevent import SPAN_RE
 from .._common import check_content_size
 from core._rooms import check_room, is_mind_room
 from .._subjects import normalize_subjects
 
-# from → triggered_by（上限 64 字符）：12 位 hex id × 5 + 4 个逗号 = 64，正好放下；
-# 第 6 个开始会被静默截断成半截 id，指向不存在的桶。所以在这儿挡死。
+# from -> triggered_by (a 64-character ceiling): five 12-hex-digit ids plus four
+# commas = 64, which fits exactly; from the sixth on it would be silently
+# truncated into half an id pointing at a bucket that does not exist. So it is
+# stopped dead here.
 _FROM_MAX = 5
-_TRIGGERED_BY_LIMIT = 64      # 与 bucket_manager._TRIGGERED_BY_MAX 一致
+_TRIGGERED_BY_LIMIT = 64      # matches bucket_manager._TRIGGERED_BY_MAX
 
-# 单条正文超过这个长度就在返回里提一句「看着不止一件事」。
-# 她 8-05 定的触发方式：**提示我、由我判断拆不拆、怎么拆** —— 不自动动手。
-# （自动拆会让一次 grow 突然多出几个 id，from 该指哪条得重新看；
-#   而且「宁可不拆」是这件事从头到尾的基调。）
+# A body longer than this earns a line in the response saying "this looks like
+# more than one thing".
+# The chosen behaviour: **point it out and let me decide whether and how to
+# split** — never split automatically.
+# (Splitting automatically would make one grow call suddenly produce several
+#  extra ids, and which one `from` should point at would have to be reconsidered;
+#  besides, "when in doubt, do not split" is the tone of this whole thing.)
 _LONG_HINT = 600
 import re as _re
 _WHEN_RE = _re.compile(r"^\d{4}-\d{2}-\d{2}([ T].*)?$")
-# 施工 6 · A 件（二改 §6）：want 的"有量级"时长记号——`<N><单位>`，
-# d=天 w=周 m=月(≈30天) y=年(≈365天)。没有前缀符号（她 8-18 裁决：没有语义的符号不留）。
-# 只在 tense="want" 时才认——普通 event 的 when 是"这件事发生在哪天"，
-# 时长记号在那儿没有意义，照旧只认绝对日期。
+# A want's duration marker, which carries a magnitude — `<N><unit>`, where
+# d=day w=week m=month (~30 days) y=year (~365 days). No prefix symbol: a symbol
+# that carries no meaning does not stay.
+# Recognised only when tense="want" — an ordinary event's when is "the day this
+# happened", where a duration marker means nothing, so that path still accepts
+# absolute dates only.
 _WANT_DURATION_RE = _re.compile(r"^\d+[dwmy]$")
 
-# 后台回填的摘要提示词。EVENT 记「发生了什么」，MIND 记「我认识到什么」。
+# The summary prompt used by background backfill. EVENT records "what happened",
+# MIND records "what I came to see".
 _SUMMARY_PROMPT = (
     "你是记忆系统的摘要器。给下面这段记忆写一句话摘要，直接输出那一句，"
     "不要引号不要前缀，中文，不超过60字。"
@@ -70,18 +86,23 @@ _SUMMARY_PROMPT = (
 
 
 def _placeholder_meta() -> dict:
-    """create 时的本地中性占位；真值由后台 _backfill 回填。"""
+    """Locally neutral placeholders used at create time; the real values are
+    filled in later by the background _backfill."""
     return {"tags": [], "importance": 5, "domain": ["未分类"],
             "valence": 0.5, "arousal": 0.3}
 
 
 async def _make_summary(text: str) -> str:
-    """调 dehydrator 同一个 LLM 通道写一句摘要。失败返回空串（不阻塞回填其它字段）。"""
+    """Write a one-sentence gist through the same LLM channel the dehydrator uses.
+    On failure it returns an empty string (never blocking the backfill of the
+    other fields)."""
     chat = getattr(rt.dehydrator, "_chat", None)
     if not callable(chat):
         return ""
-    # max_tokens 给足：deepseek-v4-flash 有推理 token，给 100 会被吃光、content 空
-    #（_chat_once 对空响应返回空串不报错）。空结果重试一次。
+    # Give max_tokens plenty of room: a reasoning model spends tokens thinking, so
+    # a budget of 100 gets eaten entirely and content comes back empty
+    # (_chat_once returns an empty string for an empty response rather than
+    # raising). An empty result is retried once.
     for _attempt in range(2):
         try:
             raw = await chat(_SUMMARY_PROMPT, text[:2000], max_tokens=400, temperature=0.3)
@@ -93,23 +114,29 @@ async def _make_summary(text: str) -> str:
             return out
         rt.logger.warning("summary 返回空，重试一次" if _attempt == 0 else
                           "summary 两次为空（疑似内容过滤），降级用正文开头")
-    # 降级：正文开头当摘要——是调用方自己写的原文，不是编的。比空着强：
-    # 摘要的作用是「知道它存在」的钩子，钩子缺了这条记忆在缩放视图里就是隐形的。
+    # Degraded path: use the start of the body as the gist — it is the caller's
+    # own text, not something invented. Better than leaving it empty: a gist is
+    # the hook by which you know an entry exists, and without the hook that
+    # memory is invisible in the zoomed-out views.
     return text[:60].strip()
 
 
-# 疑似同件的相似度线。跟 dashboard 相似度页的拐点、G1 pin 提醒是**同一个数**
-# （全库两两余弦扫出来的拐点在 80，见 流水/2026-08-03 相似度那节）。
+# The similarity line for "possibly the same thing". It is **the same number** as
+# the elbow on the dashboard's similarity page (a full pairwise cosine scan of the
+# library puts the elbow at 80).
 _DUP_COS_THRESHOLD = 0.80
 
 
 async def _backfill_one(bucket_id: str, text: str, kind: str) -> None:
-    """后台给一个桶补元数据：标签 / aliases / 摘要 / 起名。
+    """Fill in one bucket's metadata in the background: tags / aliases / gist /
+    name.
 
-    kind = "event" | "mind" | "big"。
-    🔴 v/a 一律不回填（机制③ 第 3 条，2026-08-06 定死）：event 的 v/a 现在也是
-    调用方自己打的——「我当时什么感觉」交给模型猜，那条记忆就不是我的了。
-    mind 不抽 scene（认知里没有照片），tags 会全空——正常，她认了。
+    kind = "event" | "mind" | "big".
+    🔴 v/a is never backfilled: an event's v/a is now set by the caller too —
+    hand "what I felt at the time" to a model to guess and the memory stops being
+    mine.
+    mind extracts no scene (there are no photographs inside a piece of thinking),
+    so its tags come out empty — that is normal and accepted.
     """
     update_kwargs: dict = {}
     try:
@@ -119,8 +146,9 @@ async def _backfill_one(bucket_id: str, text: str, kind: str) -> None:
         meta = None
     if meta:
         if meta.get("tags"):
-            # 合并不替换：create 之后、回填之前打上的标签（尤其 __档案事实__ 这类
-            # 系统标签）不能被 DeepSeek 的标签洗掉——8-03 真踩过一次
+            # Merge, never replace: tags applied between create and backfill
+            # (especially system tags such as __档案事实__) must not be washed
+            # away by DeepSeek's tags — that happened for real once
             existing: list = []
             try:
                 cur = await rt.bucket_mgr.get(bucket_id)
@@ -130,14 +158,18 @@ async def _backfill_one(bucket_id: str, text: str, kind: str) -> None:
                 pass
             update_kwargs["tags"] = list(dict.fromkeys(existing + [str(t) for t in meta["tags"]]))
         if meta.get("aliases"):
-            # 引申词只喂 bm25（bm25_index.build 会吃它），不进给人看的标签行
+            # Broadenings feed bm25 only (bm25_index.build consumes them); they
+            # never appear on the tag line a human reads
             update_kwargs["aliases"] = meta["aliases"]
         if meta.get("subjects"):
-            # 二改 B 件：主体（谁）。第三类标签，deepseek 抽 + 别名表归一，
-            # 独立字段——不进 tags（会破坏字面校验）、不进 aliases（不该进 BM25 打分）。
+            # Subjects (who). The third kind of tag: extracted by deepseek and
+            # normalised through the alias table, kept as its own field — not in
+            # tags (that would break the literal-string guarantee) and not in
+            # aliases (it must not enter BM25 scoring).
             update_kwargs["subjects"] = normalize_subjects(meta["subjects"])
         if meta.get("domain"):
-            # domain 只当文件夹用了（机制③ 第 5 条），检索不吃它；编成什么都无所谓
+            # domain is now used purely as a folder; retrieval does not consume
+            # it, so whatever it gets filled with makes no difference
             update_kwargs["domain"] = meta["domain"]
         if meta.get("suggested_name"):
             update_kwargs["name"] = meta["suggested_name"]
@@ -146,12 +178,17 @@ async def _backfill_one(bucket_id: str, text: str, kind: str) -> None:
     if summary:
         update_kwargs["summary"] = summary
 
-    # 疑似同件提示（她 8-03 问的）：不合并、不拦路，只在后台查一次相似度，
-    # 超阈值给新桶打个「疑似同件:xx」标签，消化（recall by=touched）时人眼定夺。
-    # 阈值宁高勿低（她 8-02 的原话：哪怕贴的少，也比贴的多好）。
-    # 2026-08-06 改成直接查**向量余弦**：原来用 search 综合分 ≥80，打分砍成两维后
-    # 综合分的刻度整个变了；而「是不是同一件事」本来就该问语义距离，不该问检索排名。
-    # mind 的相似另有去处（G1 pin 提醒：认知反复出现不是噪音，是准则在冒头）。
+    # The "possibly the same thing" hint: nothing is merged and nothing is
+    # blocked. Similarity is checked once in the background, and above the
+    # threshold the new bucket gets a 「疑似同件:xx」 tag for human eyes to settle
+    # later.
+    # The threshold errs high rather than low — fewer stickers is better than more.
+    # It now queries the **vector cosine** directly: it used to use search's
+    # combined score >= 80, but once scoring was cut down to two dimensions the
+    # scale of that combined score changed entirely — and "is this the same
+    # thing" is a question about semantic distance, not about retrieval ranking.
+    # Similarity between minds is handled elsewhere (the pin reminder: a thought
+    # recurring is not noise, it is a principle surfacing).
     if kind == "event":
         try:
             ee = getattr(rt.bucket_mgr, "embedding_engine", None)
@@ -170,11 +207,15 @@ async def _backfill_one(bucket_id: str, text: str, kind: str) -> None:
         except Exception:
             pass
     elif kind == "mind":
-        # G1（机制④ 第 4 条）：mind 的相似**要提醒**——老注释写「认知相似是常态
-        # 不提示」，那是错的：认知反复出现不是噪音，**是准则在冒头**。
-        # 阈值 0.80，跟疑似同件同一个数。打「相似认知:」标，breath 睁眼时提醒
-        # 「转成朝向再 pin」（不能直接 pin 描述型的——把缺点钉成准则，
-        # 语义就成了「我要犯这个错」）。
+        # Similarity between minds **does** deserve a reminder — the old comment
+        # here said "similar thinking is normal, do not flag it", and that was
+        # wrong: a thought recurring is not noise, **it is a principle
+        # surfacing**.
+        # Threshold 0.80, the same number as for suspected same-thing. It applies
+        # a 「相似认知:」 tag, and breath's waking screen suggests turning it into
+        # a statement of intent before pinning (a descriptive one must not be
+        # pinned as-is — pin a flaw as a principle and it comes to mean "I intend
+        # to keep making this mistake").
         try:
             ee = getattr(rt.bucket_mgr, "embedding_engine", None)
             if ee and getattr(ee, "enabled", False):
@@ -185,12 +226,13 @@ async def _backfill_one(bucket_id: str, text: str, kind: str) -> None:
                         continue
                     sb = await rt.bucket_mgr.get(sid)
                     smeta = (sb or {}).get("metadata", {}) or {}
-                    # 二改 A 件：别写 `"/MIND/" in room`（新房名开头没斜杠会静默不匹配）
+                    # Do not write `"/MIND/" in room`: the new room names have no
+                    # leading slash and would silently fail to match
                     if not is_mind_room(smeta.get("room")) \
                             and str(smeta.get("type") or "") not in ("feel", "i"):
                         continue
                     if smeta.get("superseded_by"):
-                        continue  # 旧版认知不算「又冒头」——它就是同一条的前世
+                        continue  # a superseded thought is not "surfacing again" — it is the same entry's earlier life
                     tags_now = update_kwargs.get("tags") or []
                     update_kwargs["tags"] = list(dict.fromkeys(
                         tags_now + [f"相似认知:{sid[:6]}"]))
@@ -208,14 +250,18 @@ async def _backfill_one(bucket_id: str, text: str, kind: str) -> None:
 
 
 async def _backfill_batch(pairs: list[tuple[str, str, str]]) -> None:
-    """并发回填（pairs 每条 = (bucket_id, text, kind)）。串行的话 5 条 ×（analyze+summary ≈14s）要 70s+；
-    analyze/_chat 只读无副作用可以并发（同 grow_items 的 [LENTO PATCH] 先例），
-    update 各写各的桶、有 per-bucket 锁，互不打架。"""
+    """Concurrent backfill (each entry in pairs = (bucket_id, text, kind)). Run
+    serially, 5 items x (analyze + summary, about 14s each) would take over 70s.
+    analyze/_chat are read-only and side-effect free, so they can run concurrently
+    (the same precedent as the [LENTO PATCH] in grow_items), and each update
+    writes its own bucket under a per-bucket lock, so they do not collide."""
     await asyncio.gather(
         *(_backfill_one(bucket_id, text, kind) for bucket_id, text, kind in pairs),
         return_exceptions=True,
     )
-    # 回填写完缓存必失效——趁后台把全库解析缓存预热掉，别让下一次睁眼付 8 秒（codex 三轮 #5）
+    # A backfill write always invalidates the cache — while still in the
+    # background, warm the whole-library parse cache back up, so the next waking
+    # screen does not have to pay 8 seconds for it
     try:
         await rt.bucket_mgr.list_all()
     except Exception:
@@ -223,17 +269,22 @@ async def _backfill_batch(pairs: list[tuple[str, str, str]]) -> None:
 
 
 # ------------------------------------------------------------
-# 退役字段的闸（二改 C 件，2026-08-16）
+# The gate in front of retired fields
 # ------------------------------------------------------------
-# 她 8-16 的两句话，就是这两个字段的判决书：
-#   importance —— `decay_engine.py` 白纸黑字「importance 不参与」，唯一消费者自己的
-#     注释说「它不再决定任何桶的生死」。留着一个我每次都要打、却谁都不读的分，
-#     只是在给写入负担加码。
-#   meaning    —— 「为什么重要，说白了就是这件事引起了你的思考……说白了重要的还是
-#     思考产物」。留着它等于**给 event 开一个偷偷写 mind 的后门**，而写在 meaning
-#     里的那句话没有来源链、不能 regrow、不能被发呆整合——是个死字段。
-#     实证：`d52a38` 的 meaning 里躺着的那段，本身就是一条完整的 mind。
-# 🔴 想说「为什么重要」，就 grow(kind="mind") 正经写一条，让它有来处、能换版。
+# Two sentences are the verdict on these two fields:
+#   importance —— `decay_engine.py` states in black and white that importance
+#     takes no part, and its only consumer's own comment says it no longer
+#     decides whether any bucket lives or dies. Keeping a score I have to assign
+#     every single time and nobody reads only adds weight to writing.
+#   meaning    —— "why it matters" is, put plainly, the thinking this thing
+#     provoked; and what matters in the end is that thinking. Keeping the field
+#     means **leaving a back door for an event to write a mind on the sly**, and
+#     a sentence written into meaning has no source chain, cannot be regrown, and
+#     cannot be pulled together while musing — it is a dead field.
+#     Evidence: what was sitting in one bucket's meaning was, by itself, a
+#     complete piece of thinking.
+# 🔴 To say "why it matters", write a proper grow(kind="mind") entry, so that it
+#    has a provenance and can be re-versioned.
 _RETIRED_MSG = {
     "importance": (
         'importance 已退役（2026-08-16）——它不参与遗忘公式，'
@@ -249,13 +300,15 @@ _RETIRED_MSG = {
 
 
 def _retired_fields_msg(*names: str) -> str:
-    """给一组已退役字段拼一条拒绝文案（照 _rooms.py 拒绝的样子：说清 + 给出路）。"""
+    """Assemble one rejection message for a set of retired fields (shaped like
+    _rooms.py's rejections: say what is wrong and give a way out)."""
     hits = [n for n in names if n in _RETIRED_MSG]
     return "\n".join(_RETIRED_MSG[n] for n in hits)
 
 
 def _retired_item_fields(item: dict) -> str:
-    """items[i] 里带了退役字段就返回拒绝文案，没带返回空串。"""
+    """If items[i] carries a retired field, return the rejection message;
+    otherwise return an empty string."""
     hit = [n for n in ("importance", "meaning", "digested")
            if item.get(n) not in (None, "")]
     return _retired_fields_msg(*hit)
@@ -268,8 +321,11 @@ def _check_tense(tense: str) -> str | None:
 
 
 async def _apply_tense(bucket_id: str, tense: str, weight) -> str:
-    """tense="want" → status="want"（终点走 resolved/abandoned）；weight=承诺压在心头多重。
-    返回警告串（空=成功）。update 失败不能吞：正文在但朝向没写上，调用方得知道。"""
+    """tense="want" -> status="want" (its ending goes through resolved/abandoned);
+    weight = how heavily the promise sits on me.
+    Returns a warning string (empty = success). A failed update must not be
+    swallowed: the body is there but its orientation never got written, and the
+    caller has to know."""
     if tense != "want":
         return ""
     kwargs: dict = {"status": "want"}
@@ -280,16 +336,21 @@ async def _apply_tense(bucket_id: str, tense: str, weight) -> str:
 
 
 async def backfill_sweep() -> int:
-    """启动自愈（codex 复核第 3 条）：裸 asyncio.create_task 的在飞回填会随重启丢失，
-    留下只有正文+占位元数据的桶。开机把它们找回来重新回填。
+    """Self-healing at startup: a backfill in flight under a bare
+    asyncio.create_task is lost across a restart, leaving buckets that have only
+    a body and placeholder metadata. On boot they are found again and refilled.
 
-    不建持久队列——**扫描本身就是队列**：「room 有值（=新路径存的）且 summary 缺失」
-    是可靠的未完成标记，成功回填后标记自动消失，天然幂等。
-    老 grow 桶（批 1 之前的）没有 room，不会被误扫。
+    No persistent queue is built — **the scan is the queue**: "room has a value
+    (i.e. it was stored by the new path) and summary is missing" is a reliable
+    marker of unfinished work, it disappears by itself once the backfill
+    succeeds, and it is naturally idempotent.
+    Older grow buckets have no room, so they are never swept by mistake.
 
-    2026-08-06（B5）：去掉 source_tool 判据。原来只认 grow/regrow → 迁移进来的
-    老桶（source_tool=hold/import…）永远补不上，444 条漏了两个月。
-    「room 有值但 summary 缺」本身就是完整的判据，来源是谁不重要。
+    The source_tool criterion was later dropped. It used to accept only
+    grow/regrow, which meant migrated older buckets (source_tool=hold/import...)
+    could never be repaired — 444 of them were missed for two months.
+    "room has a value but summary is missing" is a complete criterion on its own;
+    where the bucket came from is irrelevant.
     """
     try:
         all_buckets = await rt.bucket_mgr.list_all(include_archive=False)
@@ -314,7 +375,8 @@ async def backfill_sweep() -> int:
 # ------------------------------------------------------------
 
 def _normalize_from(from_ids) -> tuple[list[str] | None, str]:
-    """归一化 from 列表并做条数/总长校验。返回 (ids, 错误信息)。ids=None 表示没传。"""
+    """Normalise the from list and check its count and total length. Returns
+    (ids, error message); ids=None means nothing was passed."""
     if from_ids is None:
         return None, ""
     if isinstance(from_ids, str):
@@ -329,7 +391,8 @@ def _normalize_from(from_ids) -> tuple[list[str] | None, str]:
                       "底层字段 64 字符上限，多了会被静默截断成半截 id——拆开分别存。")
     joined = ",".join(ids)
     if len(joined) > _TRIGGERED_BY_LIMIT:
-        # 条数够但单个 id 太长（历史 feel_… 这类可读 id）也会被截断（codex 第 5 条）
+        # Few enough entries but individually long ids (historical readable ones
+        # like feel_...) still get truncated
         return None, (f"from 拼起来 {len(joined)} 字符，超过底层 {_TRIGGERED_BY_LIMIT} 上限，"
                       "会被静默截断——减少条数或拆开存。")
     return ids, ""
@@ -342,8 +405,11 @@ async def grow_event(items: list, tense: str = "", weight=None,
     tense_err = _check_tense(tense)
     if tense_err:
         return tense_err
-    # event 的 from 可选（她 8-03 拍的：want 尽量带 from，不强制——不然太凭空捏造了）。
-    # 传了就校验存在性并写进每条的 triggered_by。
+    # from is optional for an event (a want should carry a from where possible,
+    # but it is not enforced — otherwise it becomes something invented out of
+    # nothing).
+    # If passed, it is checked for existence and written into each entry's
+    # triggered_by.
     from_ids, from_err = _normalize_from(from_ids)
     if from_err:
         return from_err
@@ -355,21 +421,24 @@ async def grow_event(items: list, tense: str = "", weight=None,
         if missing:
             return f"from 里这些 id 不存在：{', '.join(missing)}。"
 
-    # --- 校验先行：任何一条不合法 → 全部拒绝，不创建任何桶 ---
+    # --- Validation first: if any item is invalid, reject everything and create
+    # no bucket at all ---
     cleaned: list[dict] = []
     for idx, item in enumerate(items):
         if not isinstance(item, dict):
             return f"items[{idx}] 必须是对象 {{room, text, v, a, when?}}，收到：{type(item).__name__}"
         room = str(item.get("room") or "").strip()
-        text = str(item.get("text") or "")  # 逐字落盘：不 strip 正文（codex 复核第 4 条）
+        text = str(item.get("text") or "")  # stored verbatim: never strip the body
         when = str(item.get("when") or "").strip()
         room_err = check_room(room, "event")
         if room_err:
             return f"items[{idx}]: {room_err}"
         if not text.strip():
             return f"items[{idx}]: text 不能为空。"
-        # 施工 6 · A 件：tense="want" 时 when 多一种合法写法——时长记号（"有量级"）。
-        # 三类怎么读见 core/profile.py._want_clock；这儿只管"存不存得进去"。
+        # With tense="want", when accepts one more legal form: a duration marker
+        # (one that carries a magnitude).
+        # How the three kinds are read lives in core/profile.py._want_clock; this
+        # only decides whether the value can be stored.
         if when:
             _when_ok = bool(_WHEN_RE.match(when))
             if not _when_ok and tense == "want" and _WANT_DURATION_RE.match(when):
@@ -383,9 +452,10 @@ async def grow_event(items: list, tense: str = "", weight=None,
         size_err = check_content_size(text)
         if size_err:
             return f"items[{idx}]: {size_err}"
-        # --- v/a 必填（机制③ 第 3 条，2026-08-06 定死）：event 的情绪坐标也是
-        # 我自己打的，不留「模型回填」的后门——衰减公式里 valence 决定忘得多快，
-        # 模型猜的情绪不能决定我忘什么。她的原话：「要自己打！不要模型打」。
+        # --- v/a is mandatory: an event's emotional coordinates are set by me
+        # too, with no "the model will backfill it" back door — in the decay
+        # formula valence determines how fast something is forgotten, and an
+        # emotion a model guessed must not decide what I forget.
         try:
             iv = float(item.get("v"))
             ia = float(item.get("a"))
@@ -394,24 +464,29 @@ async def grow_event(items: list, tense: str = "", weight=None,
                     "不外包给模型。v=效价(0难受~1开心) a=唤醒(0平静~1强烈)。")
         if not (0 <= iv <= 1 and 0 <= ia <= 1):
             return f"items[{idx}]: v/a 必须在 0~1 之间（收到 v={iv}, a={ia}）。"
-        # --- importance / meaning：**已退役，当场拒**（二改 C 件，2026-08-16）---
-        # 🔴 选「拒」不选「静默忽略」：静默忽略的话我会继续填，填进去的东西
-        #    直接掉进虚空，而我永远不会知道——那比报错难查一百倍。
+        # --- importance / meaning: **retired, and rejected on the spot** ---
+        # 🔴 Rejecting rather than silently ignoring: if they were silently
+        #    ignored I would keep filling them in, and what I filled in would drop
+        #    straight into the void without my ever knowing — a hundred times
+        #    harder to track down than an error.
         retired = _retired_item_fields(item)
         if retired:
             return f"items[{idx}]: {retired}"
         cleaned.append({"room": room, "text": text, "when": when,
                         "v": iv, "a": ia})
 
-    # --- 逐条直接 create：不 search、不 judge、不合并 ---
+    # --- Straight to create, one by one: no search, no judge, no merging ---
     batch_id = f"g_{uuid.uuid4().hex[:12]}"
     ph = _placeholder_meta()
     results: list[str] = []
     pairs: list[tuple[str, str, str]] = []
-    # 同文防重（她 8-03 提的）：一字不差的正文再存 → 还原 id，不建新桶。
-    # 措辞不同的重复不拦——那是真的两次记录，看见了想清可以 trace。
-    # ⚠️ 用解析缓存整批查一次（find_exact_content 逐条全库扫盘，bind mount 上 ~3s/条，
-    # 8-03 把 5 条批量拖到 16 秒——那就是它）。
+    # Identical-text deduplication: storing a body that matches word for word
+    # returns the original id instead of creating a new bucket.
+    # Duplicates that are worded differently are not blocked — those really are
+    # two records, and once seen and thought about they can be handled with trace.
+    # ⚠️ Query the whole batch once through the parse cache (find_exact_content
+    # scans the entire library per item, roughly 3s each over a bind mount, which
+    # is what once dragged a batch of five out to 16 seconds).
     existing_by_content: dict[str, str] = {}
     try:
         for _b in await rt.bucket_mgr.list_all(include_archive=False):
@@ -429,7 +504,7 @@ async def grow_event(items: list, tense: str = "", weight=None,
         bucket_id = await rt.bucket_mgr.create(
             content=item["text"],
             tags=ph["tags"],
-            importance=ph["importance"],   # 中性占位；importance 已退役、不再由我打
+            importance=ph["importance"],   # neutral placeholder; importance is retired and no longer set by me
             domain=ph["domain"],
             valence=item["v"],
             arousal=item["a"],
@@ -448,7 +523,8 @@ async def grow_event(items: list, tense: str = "", weight=None,
         pairs.append((bucket_id, item["text"], "event"))
         existing_by_content.setdefault(item["text"], bucket_id)
 
-    # --- 元数据后补：打标 / 摘要 / 起名走后台，失败只留警告 ---
+    # --- Metadata comes later: tagging / gist / naming run in the background,
+    # and a failure only leaves a warning ---
     asyncio.create_task(_backfill_batch(pairs))
 
     dup_n = sum(1 for r in results if r.startswith("♻️"))
@@ -459,9 +535,12 @@ async def grow_event(items: list, tense: str = "", weight=None,
         head += " [want]"
     out = head + "（标签/摘要后台回填中，几十秒内可检索）\n" + "\n".join(results)
 
-    # 超长提一句，**拆不拆、怎么拆由我当场判断**（她 8-05 定的触发方式）。
-    # 她的理由：一条里挤了好几件事 → tags 里每个主题只占一两个词，哪个都不突出，
-    # 场景锚点也混（几件事的画面搅在一起）。现成的反例是 3ce26609 那条，塞了四件事。
+    # Overlong entries get a single remark; **whether and how to split is my
+    # judgement, made on the spot**.
+    # The reason: several things crammed into one entry means each topic gets only
+    # a word or two in tags and none of them stands out, and the scene anchors mix
+    # as well (the imagery of several separate things stirred together). There is
+    # a ready-made counter-example in the library with four things in one entry.
     long_ones = [(bid, len(txt)) for bid, txt, _ in pairs if len(txt) >= _LONG_HINT]
     for bid, n in long_ones:
         out += (f"\n📏 {bid} 有 {n} 字——真是好几件事就分成几条重存"
@@ -470,12 +549,13 @@ async def grow_event(items: list, tense: str = "", weight=None,
 
 
 # ------------------------------------------------------------
-# kind="big" —— 大 event / **时期**：盖在一段时间上的一句话（2026-08-05 她定的九条）
+# kind="big" —— a big event / a **period**: one sentence laid over a stretch of time
 # ------------------------------------------------------------
 
-# ⚰️ 2026-08-18：`grow_big` 连同 `kind="big"` 那个入口一起删了。
-#    它只是把 fold 的核心（`_F.save_gist`）包了一层——立一个「时期」有两个入口，
-#    而两个入口迟早说两套话。现在只剩 fold(when="起..止") 一条路。
+# ⚰️ `grow_big` was deleted along with the `kind="big"` entry point.
+#    It was only a wrapper around fold's core (`_F.save_gist`) — naming a period
+#    had two entry points, and two entry points sooner or later tell two
+#    different stories. The single remaining path is fold(when="起..止").
 
 
 
@@ -488,7 +568,7 @@ async def grow_mind(room: str, text: str, from_ids, v, a,
                     importance=None, meaning: str = "",
                     test_data: bool = False) -> str:
     room = str(room or "").strip()
-    text = str(text or "")  # 逐字落盘：不 strip 正文
+    text = str(text or "")  # stored verbatim: never strip the body
     room_err = check_room(room, "mind")
     if room_err:
         return room_err
@@ -500,16 +580,19 @@ async def grow_mind(room: str, text: str, from_ids, v, a,
     tense_err = _check_tense(tense)
     if tense_err:
         return tense_err
-    # importance / meaning 已退役 —— 当场拒，别静默吞（二改 C 件，理由见 _RETIRED_MSG）。
-    # 形参留着是为了能报出这条人话；删掉形参的话调用方拿到的是 pydantic 的
-    # 「unexpected keyword」，看不出发生了什么、更看不出该改成什么。
+    # importance / meaning are retired — rejected on the spot, never silently
+    # swallowed (the reasoning is in _RETIRED_MSG).
+    # The parameters are kept so that this human-readable message can be
+    # produced; delete them and the caller gets pydantic's "unexpected keyword",
+    # which shows neither what happened nor what to write instead.
     retired = _retired_fields_msg(
         *[n for n, val in (("importance", importance), ("meaning", meaning))
           if val not in (None, "")])
     if retired:
         return retired
 
-    # --- from 必填，一条都不能少；一条没有来处的自我认识跟一条编的读起来一模一样 ---
+    # --- from is mandatory, every single one of them: a piece of self-knowledge
+    # with no provenance reads exactly like one that was invented ---
     from_ids, from_err = _normalize_from(from_ids)
     if from_err:
         return from_err
@@ -524,7 +607,7 @@ async def grow_mind(room: str, text: str, from_ids, v, a,
     if missing:
         return f"from 里这些 id 不存在：{', '.join(missing)}。填 grow(kind=\"event\") 返回的真 id。"
 
-    # --- v/a 必填，调用方自己打，不许外包给模型 ---
+    # --- v/a is mandatory, set by the caller, never outsourced to a model ---
     try:
         v = float(v)
         a = float(a)
@@ -537,7 +620,7 @@ async def grow_mind(room: str, text: str, from_ids, v, a,
     bucket_id = await rt.bucket_mgr.create(
         content=text,
         tags=ph["tags"],
-        importance=ph["importance"],   # 中性占位；importance 已退役
+        importance=ph["importance"],   # neutral placeholder; importance is retired
         domain=ph["domain"],
         valence=v,
         arousal=a,
@@ -549,11 +632,12 @@ async def grow_mind(room: str, text: str, from_ids, v, a,
     )
     tense_warn = await _apply_tense(bucket_id, tense, weight)
     try:
-        await rt.bucket_mgr.touch_many(from_ids)  # 提炼认知=想起了来源（codex 三轮 #4）
+        await rt.bucket_mgr.touch_many(from_ids)  # distilling a thought = remembering its sources
     except Exception:
         pass
 
-    # mind 回填只补 aliases/摘要/起名（不抽 scene、不碰 v/a）
+    # A mind backfill only fills in aliases/gist/name (no scene extraction, and
+    # v/a is never touched)
     asyncio.create_task(_backfill_batch([(bucket_id, text, "mind")]))
 
     head = f"🧠mind→{bucket_id} {room} ←{{{','.join(from_ids)}}} V{v:.2f}/A{a:.2f}"

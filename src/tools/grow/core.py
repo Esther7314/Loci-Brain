@@ -1,26 +1,32 @@
 """
 ========================================
-tools/grow/core.py — grow 长内容主路径（digest + merge）
+tools/grow/core.py — grow's long-content main path (digest + merge)
 ========================================
 
-长内容（≥30 字）走这里。先调 dehydrator.digest 把整段拆成 2~6 条
-事件项，每条独立尝试 merge_or_create。
+Long content (>=30 chars) came through here. dehydrator.digest split the whole
+passage into 2-6 event items, and each one tried merge_or_create on its own.
 
-关键行为：
-- digest 失败（API key 不可用）时直接 RuntimeError，不创建任何桶
-- 逐条调 merge_or_create（grow 路径用 LLM merge，会压缩老+新）
-- iter 2.0：每次 grow 调用生成一个 ``grow_batch_id``，同批次新建桶共享，
-  source_tool 一律为 ``grow``；合并到的老桶不改 source_tool
-- 单条失败不影响其他；按字节上限校验单条尺寸
-- embedding 失败时桶正常创建，返回追加向量化降级警告
-- 末尾 fire-and-forget 触发 plan 自动闭环（用整段原文做匹配）
+Key behaviour:
+- If digest fails (API key unavailable) it raises RuntimeError and creates no bucket
+- merge_or_create is called per item (the grow path uses LLM merge, which
+  compresses old + new together)
+- Every grow call generates a ``grow_batch_id`` shared by all buckets created in
+  that batch, with source_tool always ``grow``; an existing bucket that gets
+  merged into keeps its own source_tool
+- One item failing does not affect the others; each item's size is checked
+  against the byte ceiling
+- If embedding fails the bucket is still created and a vectorisation-degraded
+  warning is appended to the result
+- At the end, plan auto-closing is triggered fire-and-forget (matched against
+  the whole original passage)
 
-不做什么（边界）：
-- 不写 feel：grow 是事件归档，不是反思
-- 不做 pinned 标记：grow 拆出来的事件桶都是 dynamic
-- 不接受 why_remembered：grow 是整理，拆出来的每条桶就是事件本身，是 why 本身
+What this file deliberately does not do:
+- Never writes feel: grow files events, it does not reflect
+- Never sets pinned: every event bucket grow produces is dynamic
+- Never accepts why_remembered: grow is filing, and each bucket it produces is
+  the event itself, which is the why
 
-对外暴露：grow_core(content) → str
+Exports: grow_core(content) -> str
 ========================================
 """
 
@@ -37,29 +43,41 @@ from .._common import (
 )
 
 
-# ⚰️ 2026-08-18：`grow_core`（长文丢进来、让系统替你拆成几条）连同它的入口一起删了。
-#    判据是她的：**那是整套里唯一一处「系统替我决定这是几件事」的地方**，跟
-#    「落笔的永远是我」正着劲；而 `grow_items` 本来就完全覆盖它——收工时自己想清楚
-#    这一摊是几件事，然后一次存进去。
-#    （拆分那条路 2026-08-05 已经被治过一次：`digest()` 会重写正文，她定死「只拆不改」，
-#      于是换成了 `cut()` 只说在哪儿切。现在连切也不切了，整条路撤掉。）
+# ⚰️ `grow_core` (throw in long prose, let the system split it into several) was
+#    deleted along with its entry point.
+#    The rule: **that was the one place in the whole system where the system
+#    decided for me how many things this was**, which runs against "the one who
+#    writes it down is always me"; and `grow_items` already covers the case —
+#    work out for yourself, at the end of a stretch, how many things happened,
+#    then store them in one call.
+#    (This path had already been treated once before: `digest()` rewrote the
+#     body, the rule was fixed at "split only, never edit", and it was replaced
+#     by `cut()`, which only says where to cut. Now it does not even cut — the
+#     whole path is gone.)
 
 
 
 async def grow_items(items: list) -> str:
-    """预拆分模式：上层 AI 已把长文拆成 N 条最终正文，直接逐字入库。
+    """Pre-split mode: the calling model has already split the prose into N final
+    bodies, which are stored verbatim.
 
-    与 grow_core 的关键差别（issue 的诉求）：
-    - **不调 digest**：跳过廉价 LLM 的二次拆分+改写，正文一字不动（消除第二次失真）；
-    - 每条只调 analyze() 打元数据（domain/valence/arousal/tags/name），不碰正文；
-    - 合并走 raw_merge=True（原文追加，不 LLM 压缩老+新），消除第三次失真。
-    存储沿用 grow 风格：共享 grow_batch_id，source_tool=grow，dashboard 仍可按批展示。
+    The key differences from grow_core:
+    - **digest is never called**: the cheap LLM's second round of splitting and
+      rewriting is skipped and the body is untouched (removing the second
+      distortion);
+    - each item only calls analyze() for metadata (domain/valence/arousal/tags/
+      name); the body is never touched;
+    - merging uses raw_merge=True (append the original text, no LLM compression
+      of old + new), removing the third distortion.
+    Storage keeps grow's shape: a shared grow_batch_id and source_tool=grow, so
+    the dashboard can still display by batch.
     """
     payload_err = check_grow_items_payload(items)
     if payload_err:
         return payload_err
 
-    # 规整：接受字符串条目；也容忍 {"content": "..."} 形式，取其正文。空条目丢弃。
+    # Normalisation: accept plain string items, and tolerate the
+    # {"content": "..."} form by taking its body. Empty items are dropped.
     clean: list[str] = []
     for it in items:
         if isinstance(it, str):
@@ -81,12 +99,16 @@ async def grow_items(items: list) -> str:
 
     metadata_fallback = False
 
-    # ── [LENTO PATCH] 并发打标 ────────────────────────────────────────
-    # 原实现在同一个 for 里串行 await analyze()，N 条就排 N 轮 LLM。
-    # 实测单条 hold 26~40s，grow 三条 >90s，超过 MCP 客户端 60s 超时：
-    # 服务端其实已经写入，调用方却收到 timeout → 以为没写 → 重写 → 产生重复桶。
-    # analyze() 只读、无副作用，可以安全并发；merge_or_create 仍保持串行，
-    # 避免两条同时并进同一个老桶。
+    # ── [LENTO PATCH] concurrent tagging ─────────────────────────────
+    # The original implementation awaited analyze() serially inside the same for
+    # loop, so N items queued N rounds of LLM calls.
+    # Measured: a single hold takes 26-40s, three grow items >90s — past the MCP
+    # client's 60s timeout. The server had in fact already written, but the caller
+    # saw a timeout -> assumed nothing was written -> wrote again -> duplicate
+    # buckets.
+    # analyze() is read-only and side-effect free, so it is safe to run
+    # concurrently; merge_or_create stays serial so two items cannot merge into
+    # the same existing bucket at once.
     def _default_meta() -> dict:
         default_analysis = getattr(rt.dehydrator, "_default_analysis", None)
         return default_analysis() if callable(default_analysis) else {
@@ -94,8 +116,9 @@ async def grow_items(items: list) -> str:
         }
 
     async def _analyze_one(text: str):
-        # 打标失败（如 API key 未配置）不应丢正文——落回本地中性元数据，
-        # 与 hold 的降级行为保持一致（见 tools/hold/core.py）。
+        # A tagging failure (an unconfigured API key, say) must never cost the
+        # body — fall back to local neutral metadata, matching hold's degraded
+        # behaviour (see tools/hold/core.py).
         try:
             return await rt.dehydrator.analyze(text)
         except Exception as e:
@@ -105,7 +128,7 @@ async def grow_items(items: list) -> str:
             )
             return None
 
-    # 先做尺寸校验：超限的条目不必浪费一次打标调用。
+    # Size check first: an oversized item should not waste a tagging call.
     size_errs: dict[int, str] = {}
     sized: list[tuple[int, str]] = []
     for idx, content_str in enumerate(clean):
@@ -141,7 +164,7 @@ async def grow_items(items: list) -> str:
                 name=meta.get("suggested_name", ""),
                 source_tool="grow",
                 grow_batch_id=batch_id,
-                raw_merge=True,  # 逐字追加，合并不压缩
+                raw_merge=True,  # append verbatim; merging never compresses
             )
             if embed_warn and embed_warn not in embed_warnings:
                 embed_warnings.append(embed_warn)

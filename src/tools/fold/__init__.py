@@ -1,29 +1,33 @@
 # -*- coding: utf-8 -*-
 """
 ========================================
-tools/fold/ — fold：一个动作，三种圈法（二改施工 3，2026-08-16）
+tools/fold/ — fold: one act, three ways of drawing the circle
 ========================================
 
-骨头在 `tools/_fold.py`（三个入口共用），这儿只做**入口的闸和话**：
-参数校验 → 圈法三选一 → 落一条 gist → 说人话。
+The bones live in `tools/_fold.py` (shared by all three entry points); this file
+only handles **the gates and the wording at the entrance**: validate arguments ->
+pick one of the three circles -> write one gist -> say it in plain language.
 
-拒绝路径照 `_rooms.py` 的样子：**说清 + 给出路**。
-一条只说「不合法」的错误会被当成噪音绕过去——那正是我们在防的。
+Rejection paths follow the shape of `_rooms.py`: **say what is wrong and give a
+way out**. An error that only says "invalid" gets treated as noise and routed
+around — which is exactly what we are guarding against.
 
 ------------------------------------------------------------
-🔴 两道圈法闸（她 8-17 14:30 终稿的施工半）——**八个字：Event 用时间，mind 用快照**
+🔴 Two gates on how the circle may be drawn — **events use time, minds use snapshots**
 ------------------------------------------------------------
-| 闸 | 拒什么 | 为什么 |
+| gate | rejects | why |
 |---|---|---|
-| ① | `cover` **多条** + **事件** | 「盖一组 event」整个砍掉：线归 `recall(query=)` 看，日子归时期 |
-| ② | `when` + **MIND** | 认知不认日历（她拍的）——mind 用 `cover` 点名 |
+| ① | `cover` with **several ids** + **events** | "cover a group of events" was cut entirely: a thread is read with `recall(query=)`, a stretch of days becomes a period |
+| ② | `when` + **MIND** | thinking does not go by the calendar — a mind fold names its ids with `cover` |
 
-保留的两条：`cover` **单条 event** = 第 8 节「事件改错，我自己盖掉」的口子；
-mind 的 n=1（换版）/ n≥2（发呆合并）照旧。
-📌 闸①的判据看**被盖那几条自己的房间**，不只看 `room` 参数——`room` 可以填错、
-   可以不填，而「我圈的到底是事件还是想法」这件事，被圈的那几条自己知道。
+The two forms that stay: `cover` with a **single event** is the opening for
+"I got an event wrong, so I cover it myself"; mind's n=1 (re-versioning) and
+n>=2 (merging after a spell of musing) are unchanged.
+📌 Gate ① judges by **the rooms of the covered entries themselves**, not only by
+   the `room` argument — `room` can be wrong or missing, whereas whether I am
+   circling events or thoughts is something the circled entries already know.
 
-对外暴露：dispatch(text, room, v, a, cover, when, from_, test_data) → str
+Exports: dispatch(text, room, v, a, cover, when, from_, test_data) -> str
 ========================================
 """
 
@@ -37,11 +41,12 @@ from ..grow.rooms_path import _normalize_from
 async def dispatch(text: str = "", room: str = "", v=-1, a=-1,
                    cover=None, when: str = "", from_=None,
                    test_data: bool = False) -> str:
-    text = str(text or "")          # 逐字落盘：不 strip 正文（宪法）
+    text = str(text or "")          # stored verbatim: never strip the body (constitutional)
     room = str(room or "").strip()
     when = str(when or "").strip()
 
-    # GLM 这类客户端会把列表序列成 JSON 字符串——宽容地接（grow 那边同样的口子）
+    # Clients like GLM serialise the list as a JSON string — accept it leniently
+    # (grow has the same allowance)
     import json as _json
     if isinstance(cover, str) and cover.strip().startswith("["):
         try:
@@ -64,8 +69,9 @@ async def dispatch(text: str = "", room: str = "", v=-1, a=-1,
     if size_err:
         return size_err
 
-    # ---- 圈法三选一：cover 和 when 只能给一个 ----
-    # 🔴 两个都给 = 一个动作管两件事，正是这一轮在骂的东西（开工单 2.2 第 2 条同款判据）。
+    # ---- One circle out of three: cover and when are mutually exclusive ----
+    # 🔴 Passing both = one act doing two jobs, which is precisely the thing this
+    #    design keeps trying to stamp out.
     if cover and when:
         return ('folds 和 when 只能给一个——两种折法二选一：\n'
                 '  · 一组认知 folds=["a1","b2","c3"]  （这几条在讲同一件事，只给 mind）\n'
@@ -78,7 +84,7 @@ async def dispatch(text: str = "", room: str = "", v=-1, a=-1,
                 '🔴 别拿 from 当 folds：from=我**从**哪几条长出来的（底下继续独立活着）；'
                 'folds=我**折起**哪几条（底下不再独立冒头）。两个参数可以同时带。')
 
-    # ---- 闸②：when + MIND → 拒（认知不认日历，她 8-17 拍的）----
+    # ---- Gate ②: when + MIND -> reject (thinking does not go by the calendar) ----
     if when and is_mind_room(room):
         return ('认知不认日历——mind 用 cover 点名。\n'
                 '  这几条在讲同一件事 → fold(folds=["a1","b2"], room="' + room + '", text=…)\n'
@@ -86,7 +92,7 @@ async def dispatch(text: str = "", room: str = "", v=-1, a=-1,
                 '（一条认知是哪天想到的不改变它是什么；日子是事件的坐标，不是想法的。'
                 '发呆给认知配的团靠的是 v/a 坐标和 from 链，一条都不靠日期。）')
 
-    # ---- v/a：我自己打，不外包（跟 mind / regrow 一条规矩）----
+    # ---- v/a: I set them myself, never outsourced (same rule as mind / regrow) ----
     try:
         v = float(v)
         a = float(a)
@@ -95,7 +101,8 @@ async def dispatch(text: str = "", room: str = "", v=-1, a=-1,
     if not (0 <= v <= 1 and 0 <= a <= 1):
         return f"v/a 必须在 0~1 之间（收到 v={v}, a={a}；没传会是 -1）。"
 
-    # ---- from：从哪几条长出来的（可选，跟 cover 语义不同，不许合并）----
+    # ---- from: which entries this grew out of (optional; a different meaning
+    # from cover, and the two must never be merged) ----
     from_ids, from_err = _normalize_from(from_)
     if from_err:
         return from_err
@@ -105,16 +112,20 @@ async def dispatch(text: str = "", room: str = "", v=-1, a=-1,
         if missing:
             return f"from 里这些 id 不存在：{', '.join(missing)}。"
 
-    # ---- 闸：折一条 = 换版，那是 regrow 的活（2026-08-18 她拍的）----
+    # ---- Gate: folding exactly one = re-versioning, which is regrow's job ----
     if len(cover) == 1 and not when:
         return (f"折一条就是给它换个版本，那是 regrow 的活："
                 f'regrow(bucket_id="{cover[0]}", text="新版全文", v=…, a=…)。\n'
                 "fold 收的是几条讲同一件事的认知，或者给一段日子起个名字。")
 
-    # ---- 圈法③：一段日子 = **时期**。只校验边界，一个 id 都不解析 ----
-    # 🔴 8-17 14:30 终稿：时期=纯命名层（只落名字 + 范围，谁在里面现场算）。
-    #    第一版在这儿把范围解析成 cover 存死——那是从 consolidation/ACP 抄的记账，
-    #    我们一个字不删、只起名字，记账那一半白抄，她当天退了货。
+    # ---- Circle ③: a stretch of days = a **period**. Only the span is checked;
+    # not one id is resolved ----
+    # 🔴 A period is a pure naming layer: it stores a name plus a span, and who
+    #    falls inside is counted live.
+    #    The first version resolved the span into a frozen cover list here — that
+    #    was bookkeeping copied from consolidation/ACP. Here nothing is ever
+    #    deleted and all we do is give it a name, so the bookkeeping half of that
+    #    design was copied for nothing, and it was sent back the same day.
     members_now = 0
     if when:
         _t0, _t1, span_err = F.check_span(when)
@@ -122,7 +133,9 @@ async def dispatch(text: str = "", room: str = "", v=-1, a=-1,
             return span_err
         members_now = len(await F.span_members(_t0, _t1))
 
-    # ---- 圈法①②：给的 id 逐个验存在；归档的不给盖（update 不写归档桶，硬做必留半条链）----
+    # ---- Circles ①②: check each given id exists; archived ones cannot be
+    # covered (update will not write an archived bucket, so forcing it would
+    # leave half a chain) ----
     inherit_from = ""
     covered_rooms: list[str] = []
     for cid in cover:
@@ -137,9 +150,11 @@ async def dispatch(text: str = "", room: str = "", v=-1, a=-1,
                     f'先 trace(bucket_id="{cid}", restore=True) 把它捞回来，再 fold。')
         return f"cover 里这些 id 不存在：{cid}。填真 bucket_id。"
 
-    # ---- 闸①：cover 多条 + 事件 → 拒（「盖一组 event」8-17 砍掉）----
-    # 判据看**被盖那几条自己的房间**，不只看 room 参数（room 可以填错、可以不填，
-    # 而「我圈的是事件还是想法」被圈的那几条自己知道）。
+    # ---- Gate ①: several covers + events -> reject ("cover a group of events"
+    # was cut) ----
+    # It judges by **the rooms of the covered entries themselves**, not only by
+    # the room argument (room can be wrong or missing, whereas whether I am
+    # circling events or thoughts is something the circled entries know).
     if len(cover) >= 2 and (is_event_room(room)
                             or any(is_event_room(r) for r in covered_rooms)):
         return ('盖一组事件不存在——日子用 when 画圈，看一条线用 recall(query)。\n'
@@ -149,7 +164,8 @@ async def dispatch(text: str = "", room: str = "", v=-1, a=-1,
                 '（八个字：**Event 用时间，mind 用快照**。事件的一组没有「上一版」也不该'
                 '被压住；一条事件记错了要盖掉，那是 cover 单条，那个口子留着。）')
 
-    # ---- 房间：n=1 从被盖那条继承（regrow 就是这么干的）；其余必须自己判 ----
+    # ---- Room: at n=1 it is inherited from the covered entry (which is exactly
+    # what regrow does); in every other case it must be chosen deliberately ----
     if not room and len(cover) == 1 and inherit_from:
         old = await rt.bucket_mgr.get(inherit_from)
         room = str((old or {}).get("metadata", {}).get("room") or "")
@@ -162,22 +178,26 @@ async def dispatch(text: str = "", room: str = "", v=-1, a=-1,
     if room_err:
         return room_err
 
-    # ⚰️ 2026-08-18：**「折一条」这支从工具面撤了**（她拍的）。
-    #    以前 cover 恰好一条 = 换版，跟 regrow 做的是同一件事、走的也是同一段代码。
-    #    同一句心里话两个入口，讲不清楚；所以现在分成：
-    #      regrow = 这一条有了新版（认知/事件/时期都用它）
-    #      fold   = 折起来（几条收成一句 / 一段日子起个名）
-    #    🔴 底下那段「n=1 写版本链」的代码**没有删**：regrow 一直在用它
-    #       （regrow 就是 fold 的 n=1 特例），撤掉的只是 fold 这个入口。
+    # ⚰️ **The "fold exactly one" branch was pulled from the tool face.**
+    #    A cover of exactly one used to mean re-versioning — the same thing regrow
+    #    does, through the same code. One thought with two entry points cannot be
+    #    explained, so it now splits as:
+    #      regrow = this entry has a new version (thinking / events / periods alike)
+    #      fold   = fold it up (several collapsed into one sentence / naming a
+    #               stretch of days)
+    #    🔴 The "n=1 writes the version chain" code below was **not** deleted:
+    #       regrow still uses it (regrow is fold's n=1 special case). Only fold's
+    #       entry point into it was withdrawn.
     supersedes = ""
 
     new_id, report = await F.save_gist(
         text, room, v, a, cover, when=when, from_ids=from_ids,
         supersedes=supersedes, test_data=bool(test_data))
 
-    # ---- 说人话。时期和快照是两种话，因为它们真的是两件事 ----
+    # ---- Say it plainly. A period and a snapshot get two different sentences,
+    # because they really are two different things ----
     if when:
-        # 「◈时期→id 范围 名字」+ 现场数的手感（不落盘）
+        # "◈period -> id, span, name" plus a live count for scale (never stored)
         head = f"◈时期→{new_id} {when} {room}「{text.strip().splitlines()[0][:38]}」"
         tail = [f"（范围内现在有 {members_now} 条——**现场数的**，只给个手感，不落盘。）",
                 "（时期只给这段日子起了个名字：谁在里面按日期现算，"

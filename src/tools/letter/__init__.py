@@ -1,13 +1,14 @@
 """
 ========================================
-tools/letter/__init__.py — letter 工具入口（信件读写）
+tools/letter/__init__.py — letter tool entry point (reading and writing letters)
 ========================================
 
-plan 与 letter 都是「特殊通道桶」（type=plan / type=letter）：不参与
-普通 breath 浮现，有专门的入口。这里把这三类（plan / letter_write /
-letter_read）都收在 plan 子包下，便于阅读特殊通道的全景。
+plan and letter are both "special-channel buckets" (type=plan / type=letter):
+they never take part in ordinary breath surfacing, and each has its own entry
+point. All three (plan / letter_write / letter_read) live under the plan
+subpackage so the special channels can be read as one picture.
 
-对外暴露：letter_write / letter_read
+Exports: letter_write / letter_read
 ========================================
 """
 

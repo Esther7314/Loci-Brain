@@ -1,33 +1,41 @@
 """
 ========================================
-tools/trace/core.py — trace 主路径（修改 / 删除 / 重生 embedding）
+tools/trace/core.py — trace's main path (edit / delete / regenerate embedding)
 ========================================
 
-trace 是 OB 唯一的「写元数据」入口，承接所有桶字段更新和删除。模型
-传什么字段，就改什么字段；-1 / 空串 表示「不改」。
+trace is the single entry point for writing metadata, handling every bucket field
+update and deletion. Whatever field the model passes is the field that changes;
+-1 or an empty string means "leave it alone".
 
-关键行为：
-- delete=True → Markdown 移入 archive/ 并清理可重建的 embedding
-- hard_delete=True → 仅清理创建时明确标记 test_data=True 的测试桶；
-  必须同时提供非空 delete_reason，普通记忆和 plan 均拒绝且保持原位
-- 收集传入字段构造 updates dict（status/weight/dont_surface/pinned/tags/domain/
-  name/valence/arousal/media 等）
-- pinned=1 时强制 importance=10 并做配额检查；pinned=0 仅取消标记
-  （⚠️ importance 是**内部字段**：只有 pin 会动它，外面没有入口）
-- old_str/new_str 局部替换会同步重建 embedding，并对 plan 桶追加 change_log
-- status 切到 resolved/abandoned 会附一句中文语义提示
+Key behaviour:
+- delete=True -> the Markdown moves into archive/ and the rebuildable embedding
+  is cleaned up
+- hard_delete=True -> only clears test buckets explicitly marked test_data=True at
+  creation time; a non-empty delete_reason must be supplied as well, and ordinary
+  memories and plans are both refused and left where they are
+- The passed fields are collected into an updates dict (status/weight/
+  dont_surface/pinned/tags/domain/name/valence/arousal/media and so on)
+- pinned=1 forces importance=10 and runs the quota check; pinned=0 only clears
+  the flag
+  (⚠️ importance is an **internal field**: only pin touches it, and there is no
+  entry point from outside)
+- An old_str/new_str partial replacement rebuilds the embedding in step, and
+  appends to change_log for plan buckets
+- Switching status to resolved/abandoned appends a short note about what that means
 
-不做什么（边界）：
-- 不创建桶（那是 hold/grow/plan/letter 的事）
-- 不把普通记忆转换成可擦除测试数据，也不物理删除普通记忆
-- 不返回结构化数据，统一中文短句
+What this file deliberately does not do:
+- Never creates a bucket (that is hold/grow/plan/letter's job)
+- Never converts an ordinary memory into erasable test data, and never physically
+  deletes an ordinary memory
+- Returns no structured data; always one short sentence
 
-对外暴露：trace_core(bucket_id, name, domain, valence, arousal, tags, pinned,
-                     delete, status, weight, dont_surface, media_append,
-                     media_replace, hard_delete, delete_reason, restore,
-                     old_str, new_str, closed_by, mark_asked) → str
-⚰️ 2026-08-19 删了七个死形参：importance / resolved / digested / content /
-   why_remembered / meaning_append / meaning_replace（详见 _retired 那段碑文）
+Exports: trace_core(bucket_id, name, domain, valence, arousal, tags, pinned,
+                    delete, status, weight, dont_surface, media_append,
+                    media_replace, hard_delete, delete_reason, restore,
+                    old_str, new_str, closed_by, mark_asked) -> str
+⚰️ Seven dead parameters were removed: importance / resolved / digested /
+   content / why_remembered / meaning_append / meaning_replace (see the epitaph
+   at _retired below)
 ========================================
 """
 
@@ -52,15 +60,18 @@ from .._common import (
 )
 
 
-# ⚰️ 2026-08-19：`_retired_trace_fields()` 删了（她拍的「这三个修完就结束」）。
-# 它的活是「退役字段被传了就报一句人话」，可 8-18 之后 trace 的 arg model 是
-# `extra="forbid"`：**这些名字在工具面上根本进不来**，函数体永远走不到。
-# 底下那七个形参（importance/resolved/digested/content/why_remembered/
-# meaning_append/meaning_replace）也跟着删了——查过唯二的调用方：
-# `server.py:1265` 只传活着的那些，面板 `web/loci.py` 只用
-# delete/status/closed_by/mark_asked。
-# ⚠️ **`importance` 作为内部字段没动**：pin 一条准则仍然把它锁成 10，配额也照旧读它。
-#    删掉的是「从外面改它」这个入口，不是这个字段。
+# ⚰️ `_retired_trace_fields()` was deleted.
+# Its job was to produce a human-readable complaint when a retired field was
+# passed, but trace's arg model is `extra="forbid"`: **those names cannot get in
+# through the tool face at all**, so the function body was unreachable.
+# The seven parameters below it (importance/resolved/digested/content/
+# why_remembered/meaning_append/meaning_replace) went with it — both of the only
+# two callers were checked: server.py passes only the live ones, and the panel in
+# `web/loci.py` uses only delete/status/closed_by/mark_asked.
+# ⚠️ **`importance` as an internal field was left alone**: pinning a principle
+#    still locks it to 10, and the quota still reads it.
+#    What was removed is the entry point for changing it from outside, not the
+#    field.
 
 
 _DATE_RE = __import__("re").compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -68,12 +79,17 @@ _DUR_RE = __import__("re").compile(r"^\d+[dwmy]$")
 
 
 def _check_real_dates(*dates: str) -> str | None:
-    """形状对不代表日历上有这一天。`2026-09-31` / `2026-13-45` 长得完全合法。
+    """The right shape does not mean the calendar has that day. `2026-09-31` and
+    `2026-13-45` look perfectly legal.
 
-    🔴 2026-08-19：写口只查形状，收下之后**写进库**，而读路（`parse_span`）
-       当时是裸调 —— **一次填错就能让那段时间的记忆永久读不出来**。
-       读路那半已经改成挡漏了退兜底，但真正该拦的是这儿：
-       **别让一个不存在的日子进库**，进去了再宽容也只是掩着。
+    🔴 The write path used to check shape only, accept the value and **write it
+       into the library**, while the read path (`parse_span`) called through
+       bare — **one mistyped date could make that whole stretch of memory
+       permanently unreadable**.
+       The read half now falls back instead of throwing, but the place that
+       really has to stop it is here:
+       **do not let a day that does not exist into the library**; once it is in,
+       any amount of leniency is just covering it up.
     """
     from core._when import parse_date_or_none
     for d in dates:
@@ -83,11 +99,15 @@ def _check_real_dates(*dates: str) -> str | None:
 
 
 def _check_when(when: str, meta: dict) -> str | None:
-    """`when` 填得对不对 —— 三种桶三种形状，照 grow 那边的口径。
+    """Whether `when` is filled in correctly — three bucket kinds, three shapes,
+    matching the definition used by grow.
 
-    ⚠️ 这个参数扛着三种语义（事件=哪一天 / 时期=哪一段 / want=期限或时长），
-       她 8-19 说「一个参数有疑问就是设计的问题」，拆不拆记在开工单里了。
-       在拆之前，至少**当场拒绝填错的形状**，别让一个 "3w" 悄悄落到一条事件上。
+    ⚠️ This one parameter carries three meanings (an event = which day / a period
+       = which stretch / a want = a deadline or a duration). If a parameter
+       raises that question at all, the design is the problem, and whether to
+       split it is still open.
+       Until it is split, at least **reject the wrong shape on the spot**: never
+       let a "3w" land quietly on an event.
     """
     if _is_big(meta):
         m = SPAN_RE.match(when)
@@ -107,10 +127,13 @@ def _check_when(when: str, meta: dict) -> str | None:
 
 
 async def _append_folds(gist_id: str, meta: dict, add: list) -> tuple[str | None, list]:
-    """往一条已有的 gist 底下**再塞几条**。返回 (报错, 新的 cover 名单)。
+    """Push **a few more entries** under an existing gist. Returns (error, the new
+    cover list).
 
-    🔴 **只追加，不覆盖。** 传一份新名单去替换旧的，等于漏写一个 id 就把它**悄悄放出来**了 ——
-       又是一次沉默的行为改变（8-19 一晚上已经踩过两次：沉默的筛子、沉默的截断）。
+    🔴 **Append only, never replace.** Passing a fresh list to replace the old one
+       means that leaving one id out **quietly releases it** — another silent
+       change of behaviour, and this codebase has already been bitten twice by
+       that same shape (the silent filter and the silent truncation).
     """
     if not _F.is_gist(meta):
         return (f"{gist_id} 不是 gist（它没盖着任何东西）。"
@@ -134,7 +157,7 @@ async def _append_folds(gist_id: str, meta: dict, add: list) -> tuple[str | None
     if len(cover) >= 2 and any(is_event_room(r) for r in covered_rooms):
         return ("盖一组事件不存在（跟 fold 同一条闸）：日子用时期画圈，"
                 "看一条线用 recall(query)。", [])
-    # 两头都写：被盖的那几条要认这个 gist
+    # Write both directions: the covered entries have to acknowledge this gist
     for cid in add:
         old = await rt.bucket_mgr.get(cid)
         old_meta = (old or {}).get("metadata", {}) or {}
@@ -317,7 +340,7 @@ async def trace_core(
     if patch_args_supplied and old_str == new_str:
         return "old_str 与 new_str 完全相同，没有内容需要替换；本次未修改。"
 
-    # --- Delete 模式（F-10：普通记忆只允许软删除/归档）---
+    # --- Delete mode (an ordinary memory may only be soft-deleted / archived) ---
     if hard_delete and delete:
         return (
             "参数冲突：delete=True 表示归档，hard_delete=True 仅表示清理测试桶，"
@@ -360,12 +383,16 @@ async def trace_core(
     current_pinned = parse_bool(meta.get("pinned"), default=False)
     protected = parse_bool(meta.get("protected"), default=False)
     unpinning_now = pinned == 0 and current_pinned
-    # 8-19 松闸后 pin 的提醒挂在成功回执后面，所以要活到函数末尾（锁块之外）
+    # Since the gate was loosened, pin's reminder trails the success receipt, so
+    # it has to survive to the end of the function (outside the lock block)
     pin_hint: str | None = None
-    # 配额判定 + 落盘必须在同一把锁里：check_pinned_quota/enforce_high_importance_quota
-    # 到最终 bucket_mgr.update() 之间隔着别的字段处理和一次 await，两个并发 trace()
-    # 都可能在对方提交前读到同一个「未满」快照。是否需要哪把锁在动 updates 之前就
-    # 能从入参判断出来，所以先算好，再把整段检查+落盘包进对应的 quota turn。
+    # The quota decision and the write must happen inside the same lock:
+    # between check_pinned_quota / enforce_high_importance_quota and the final
+    # bucket_mgr.update() there is other field handling and an await, so two
+    # concurrent trace() calls could both read the same "not full yet" snapshot
+    # before either commits. Which lock is needed can be determined from the
+    # arguments before updates is touched, so it is computed first and then the
+    # whole check-plus-write is wrapped in the matching quota turn.
     current_importance = int(meta.get("importance") or 0)
     current_type = str(meta.get("type") or "dynamic").strip().lower()
     pin_state_changed = pinned in (0, 1) and bool(pinned) != current_pinned
@@ -375,13 +402,18 @@ async def trace_core(
         final_type = "permanent"
     elif unpinning_now and not protected:
         final_type = "dynamic"
-    # importance 只剩两个来源了：pin 锁成 10，其余照旧（外面改不了它）。
-    # requested_importance 这个名字留着：底下那句「配额把它压下来了就落盘」
-    # 比的是「要的」和「最后给的」，语义没变，只是「要的」现在恒等于现状。
+    # importance now has only two sources: pin locks it to 10, everything else
+    # stays as it was (it cannot be changed from outside).
+    # The name requested_importance is kept: the line below about "write it if the
+    # quota pushed it down" compares "what was asked for" with "what was finally
+    # given". The meaning is unchanged; it is just that "what was asked for" is
+    # now always identical to the current state.
     requested_importance = current_importance
-    # 8-19：摘钉时 importance 回落到 8（bug ④，落盘那一下由 bucket_manager 兜底）。
-    # 这儿也要跟着算，不然配额还按「摘完仍是 10 分」去判，会推一条根本不该推的
-    # OB-W003 ——**警告说的和盘上发生的不是一回事，比没有警告更坏**。
+    # On unpinning, importance falls back to 8 (bucket_manager backstops the
+    # actual write). It has to be computed here too, or the quota would judge on
+    # "still 10 after unpinning" and push an OB-W003 that should never have been
+    # pushed — **a warning describing something other than what happened on disk
+    # is worse than no warning at all**.
     if pinned == 1:
         final_importance = 10
     elif unpinning_now and not protected:
@@ -480,13 +512,19 @@ async def trace_core(
         if pinned in (0, 1):
             updates["pinned"] = bool(pinned)
             if pinned == 1:
-                # --- pin 的闸（二改 D 件立，2026-08-19 松）---
-                # 钉的还是**准则**（「我要怎么做」），但这道闸 8-19 起**不拦了**：
-                # 这道闸靠代码做不好：正则分不出「我总是心急」（该挡）和
-                # 「我看重的东西向来是慢慢长出来的」（该留），两句都是描述句。
-                # 所以照钉，把提醒挂在成功回执后面（见 tools/_pin.py 的碑文）。
-                # 看的仍是**这条钉完之后的正文**：同一次调用里如果 content/局部替换
-                # 也在改正文，要看改完的那份，不然提醒会对着旧正文说话。
+                # --- The gate in front of pin (built once, later loosened) ---
+                # What gets pinned is still a **principle** ("how I mean to act"),
+                # but this gate no longer **blocks**:
+                # it is not a judgement code can make well. A regex cannot tell
+                # "I am always impatient" (should be stopped) from "the things I
+                # value have always grown slowly" (should be kept); both are
+                # descriptive sentences.
+                # So it pins regardless and hangs the reminder off the success
+                # receipt (see the epitaph in tools/_pin.py).
+                # What it reads is still **the body as it will be after this
+                # pin**: if the same call is also editing the body through
+                # content or a partial replacement, it must look at the edited
+                # version, or the reminder would be talking about the old text.
                 _pin_text = (updates.get("content")
                              or str(bucket.get("content") or ""))
                 if patch_args_supplied:
@@ -500,19 +538,26 @@ async def trace_core(
                 updates["importance"] = 10
         if status:
             s = status.strip().lower()
-            # "want" 也是合法状态（重新激活一条愿望）；以前不在名单里会静默丢弃
+            # "want" is a legal status too (reactivating a wish); it used to be
+            # missing from this list and was therefore silently discarded
             if s in ("active", "resolved", "abandoned", "want"):
                 updates["status"] = s
-        # --- 施工 6 · C 件（二改 §6.2）：谁结的案 ---
-        # 🔴 字段名故意不叫 resolved_by——那个名字已经被 plan 的联动占用了
-        #   （见 tools/_common.py cascade_plan_resolved_to_buckets：plan 桶的
-        #   resolved_by 指向"哪个桶让它结案"，是 bucket_id 或 "manual"/"llm_judge"，
-        #   跟"哪个人结的案"是两件事，撞名字会把两套语义混进同一个词）。
-        # 这个参数也不在 server.py 暴露给我的 trace 工具签名里——只有
-        # web/loci.py 的结案按钮路由（她手点）会传 closed_by="她"，我自己
-        # 调 trace 走 MCP 那条路永远传不到这个参数，所以它天然只会记"她点的"。
-        # 不趁这次结案顺手也写死"我关的" —— 我一直都在，唯一需要留痕的
-        # 是"这次不是我自己发现的，是她告诉我的"。
+        # --- Who closed it ---
+        # 🔴 The field is deliberately not called resolved_by — that name is
+        #   already taken by plan's propagation
+        #   (see cascade_plan_resolved_to_buckets in tools/_common.py: a plan
+        #   bucket's resolved_by points at *which bucket closed it*, and is a
+        #   bucket_id or "manual"/"llm_judge". That is a different thing from
+        #   *which person closed it*, and colliding on the name would fold two
+        #   meanings into one word).
+        # This parameter is also absent from the trace tool signature server.py
+        # exposes to me — only the close button's route in web/loci.py, clicked
+        # by hand, passes a closed_by naming the user. Calling trace myself over
+        # MCP can never reach this parameter, so by construction it only ever
+        # records a close made by a person.
+        # It does not also hard-code "closed by me" while it is here — I am
+        # always present; the only thing worth leaving a trace of is "this time
+        # I did not notice it myself, I was told".
         if updates.get("status") in ("resolved", "abandoned") and closed_by:
             updates["closed_by"] = str(closed_by).strip()[:50]
         if 0 <= weight <= 1:
@@ -520,12 +565,16 @@ async def trace_core(
         if dont_surface in (0, 1):
             updates["dont_surface"] = bool(dont_surface)
 
-        # ---- 房间 / 时间 / 加盖 —— 元数据的家（2026-08-19 她定的轴）----
-        # 🔴 「**regrow 改内容本身，trace 改元数据**」。判据是她那句：
-        #    trace 是我要**修正记忆的元数据**；regrow 是我的记忆**出了差错、或者有了新想法**。
-        #    房间和时间都不影响这条记忆说了什么 —— 改它们像用修正带，不该产生一个新版本。
-        # ⚰️ 同一天早些时候 `regrow` 短暂收过 `room`（理由是「搬家是换版的一部分」）——
-        #    她当天晚上指出那等于一个字段两个入口，正是 8-18 亲手杀掉的那个病。撤了。
+        # ---- Room / time / covering —— where metadata lives ----
+        # 🔴 The axis: **regrow changes the content itself, trace changes
+        #    metadata**. trace is for **correcting a memory's metadata**; regrow
+        #    is for a memory that **went wrong, or that I now think differently
+        #    about**.
+        #    Neither room nor time affects what this memory says — changing them
+        #    is more like correction fluid, and should not produce a new version.
+        # ⚰️ `regrow` briefly accepted `room` (on the grounds that "moving is part
+        #    of re-versioning") — that is one field with two entry points, exactly
+        #    the disease deliberately killed off elsewhere in this system. Removed.
         if room:
             room_err = check_room(room, "")
             if room_err:
@@ -544,28 +593,37 @@ async def trace_core(
         if final_importance != requested_importance:
             # Unpinning/restoring surfacing can create an ordinary high slot.
             # Persist quota degradation in the same bucket transaction.
-            # 8-19：条件从「reserves_high_importance 且变了」放宽成「变了就写」——
-            # 摘钉回落（10→8）**不占**高分名额，正是它不该被前一个条件挡住的原因。
+            # The condition was relaxed from "reserves_high_importance and it
+            # changed" to simply "it changed" — an unpin falling back (10 -> 8)
+            # does **not** occupy a high-importance slot, which is exactly why it
+            # should never have been blocked by the earlier condition.
             updates["importance"] = final_importance
 
-        # --- media —— 追加是日常操作，整体替换只用于纠错/清理 ---
-        # （meaning 已退役，上面就拦掉了；盘上的老 meaning 不动，去处等她亲眼看完再定）
+        # --- media —— appending is the everyday operation; wholesale replacement
+        # is only for correcting or cleaning up ---
+        # (meaning is retired and is rejected above; the old meanings on disk are
+        # left untouched, and what becomes of them is decided only after a human
+        # has read them)
         if media_append:
             updates["media_append"] = media_append
         if media_replace is not None:
             updates["media"] = media_replace
 
-        # 重新激活时中和旧 resolved 布尔——不清掉它，is_closed 会把刚打开的又按回去
+        # On reactivation, neutralise the old resolved boolean — leave it and
+        # is_closed will push the just-reopened entry straight back down
         if updates.get("status") in ("active", "want") and bucket.get("metadata", {}).get("resolved"):
             updates["resolved"] = False
-        # 重新激活时把上一轮的"谁结的案"一并清掉——不然重开又被我关掉之后，
-        # 面板还挂着"她结的案"这个陈旧标记（施工 6 · C 件）。
+        # On reactivation, clear the previous round's "who closed it" as well —
+        # otherwise, after reopening and then closing it myself, the panel would
+        # still be showing the stale marker saying the user closed it.
         if updates.get("status") in ("active", "want") and bucket.get("metadata", {}).get("closed_by"):
             updates["closed_by"] = ""
 
-        # --- 施工 6 · C 件（二改 §6.2）：「上次问过她」时间戳 ---
-        # 只有 web/loci.py 在问句真的展示给她那一刻才会传 mark_asked=True——
-        # 跟 closed_by 一样不进 server.py 的 trace 工具签名，我自己没法凭空盖这个戳。
+        # --- The "last asked" timestamp ---
+        # Only web/loci.py passes mark_asked=True, and only at the moment the
+        # question is actually shown to the user — like closed_by, it is absent
+        # from the trace tool signature in server.py, so I cannot stamp this out
+        # of thin air.
         if mark_asked:
             from core._when import now as _now_local
             updates["last_asked"] = _now_local().isoformat()
@@ -573,8 +631,9 @@ async def trace_core(
         if not updates and not patch_args_supplied:
             return "没有任何字段需要修改。"
 
-        # --- plan 桶：status / content 改变时追加 change_log ---
-        # 整条替换那个入口没了，正文只可能被 old_str/new_str 局部改
+        # --- plan buckets: append to change_log when status or content changes ---
+        # The whole-body replacement entry point is gone, so the body can only be
+        # changed piecewise through old_str/new_str
         content_change_requested = patch_args_supplied
         is_plan = bucket.get("metadata", {}).get("type") == "plan"
         append_plan_history_in_patch = is_plan and patch_args_supplied
@@ -627,20 +686,25 @@ async def trace_core(
             if not success:
                 return f"修改失败: {bucket_id}"
 
-    # 注意：完整正文更新和局部替换都会在 BucketManager 内汇入
-    # _update_locked(content=...)，并投递 embedding outbox。这里不需要、也不应该
-    # 重复调用 generate_and_store，否则同一条内容会多打一次向量 API。
+    # Note: both a full body update and a partial replacement funnel into
+    # _update_locked(content=...) inside BucketManager, which posts to the
+    # embedding outbox. Calling generate_and_store again here is unnecessary and
+    # would be wrong — the same content would hit the vector API twice.
 
-    # --- plan 桶人工/AI 显式 resolve → 联动 related_bucket / resolved_by ---
-    # rule.md §1：plan 是承诺，承诺被显式放下，承载它的事件桶也不该再浮上来。
-    # 仅在 trace 把 plan.status 改成 resolved 时触发；其他路径（自动二判）不联动。
+    # --- An explicit human/AI resolve on a plan bucket -> propagate to
+    # related_bucket / resolved_by ---
+    # A plan is a promise: once the promise is explicitly set down, the event
+    # buckets carrying it should stop surfacing too.
+    # Triggered only when trace changes plan.status to resolved; no other path
+    # (the automatic second judgement) propagates.
     cascaded: list[str] = []
     if (
         bucket.get("metadata", {}).get("type") == "plan"
         and updates.get("status") == "resolved"
     ):
         from .._common import cascade_plan_resolved_to_buckets
-        # 用更新后的 metadata 视图，确保 related_bucket / resolved_by 是最新值
+        # Use the post-update metadata view, so related_bucket / resolved_by are
+        # the latest values
         merged_meta = {**bucket.get("metadata", {}), **{k: v for k, v in updates.items() if k != "change_log"}}
         try:
             cascaded = await cascade_plan_resolved_to_buckets(merged_meta, bucket_id)
@@ -665,7 +729,8 @@ async def trace_core(
     if cascaded:
         changed += f" → 同步把 {len(cascaded)} 个关联事件桶也标为已放下（{', '.join(cascaded)}）"
     out = f"已修改记忆桶 {bucket_id}: {changed}"
-    # pin 的提醒跟在**成功回执**后面：它不是错误，钉已经落盘了（tools/_pin.py 碑文）
+    # pin's reminder trails the **success receipt**: it is not an error, the pin
+    # is already on disk (see the epitaph in tools/_pin.py)
     if pin_hint:
         out += "\n\n" + pin_hint
     return out

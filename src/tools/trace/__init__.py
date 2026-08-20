@@ -1,12 +1,12 @@
 """
 ========================================
-tools/trace/__init__.py — trace 工具入口
+tools/trace/__init__.py — trace tool entry point
 ========================================
 
-trace 是「我修正/更新某条记忆」。整个 trace 没有真正多分支，所以
-只放一个 core.py 实现。这里仅做 dispatch 转发。
+trace is "I correct or update one memory". Nothing in trace really branches, so
+there is a single core.py implementation. This module only forwards dispatch.
 
-对外暴露：dispatch(...) → str（参数与 server.py 中的 trace tool 同名）
+Exports: dispatch(...) -> str (parameters match the trace tool in server.py)
 ========================================
 """
 

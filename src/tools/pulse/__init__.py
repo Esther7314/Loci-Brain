@@ -1,12 +1,13 @@
 """
 ========================================
-tools/pulse/__init__.py — pulse 工具入口
+tools/pulse/__init__.py — pulse tool entry point
 ========================================
 
-iter 2.0 引入 anchor（坐标系桶）。anchor 与 release 是一对开关；
-pulse 是系统状态总览，按工具组织也放在这里方便阅读。
+iter 2.0 introduced anchor (the coordinate-frame bucket). anchor and release
+are a matched pair of switches; pulse is the whole-system overview, and since
+the tree is organised per tool it lives here too, where it reads naturally.
 
-对外暴露：pulse
+Exports: pulse
 ========================================
 """
 

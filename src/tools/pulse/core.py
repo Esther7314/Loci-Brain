@@ -1,28 +1,33 @@
 """
 ========================================
-tools/pulse/core.py — pulse 实现
+tools/pulse/core.py — pulse implementation
 ========================================
 
-anchor 是 iter 2.0 引入的「坐标系桶」概念：把某条已经存在的桶钉为
-我们关系/身份的基准点。它不会主动浮现在默认 breath，但 query/domain/
-emotion/importance_min 命中时仍能返回。硬上限 24 个。
+anchor is the "coordinate-frame bucket" idea introduced in iter 2.0: an existing
+bucket is pinned as a reference point for identity or for a relationship. It
+never surfaces on its own in a default breath, but it can still come back when
+query/domain/emotion/importance_min match it. Hard ceiling of 24.
 
-pulse 顺带放在这里：它是系统状态 + 桶清单的总览，调用频次低，把它
-塞进一个文件不影响阅读。
+pulse sits here as well: it is the overview of system state plus the bucket
+listing, it is called rarely, and putting it in one file costs nothing in
+readability.
 
-关键行为：
-- anchor_set / anchor_release：调 bucket_mgr.set_anchor，原样转译结果
-- pulse：聚合 stats + list_all，按 type 分组（normal/feel/plan/letter）
-  逐行展示 icon + 主题 + 情感 + 权重 + 标签
-- pulse 同时附带「索引漂移」自检：embedding.db 的 ID 集合与磁盘桶 ID 集合
-  对账，缺失/孤儿 > 0 时在状态块顶部告警，提示运行 backfill / clean 脚本
+Key behaviour:
+- anchor_set / anchor_release: call bucket_mgr.set_anchor and translate the
+  result as-is
+- pulse: aggregate stats + list_all, group by type (normal/feel/plan/letter),
+  and show icon + domain + emotion + weight + tags line by line
+- pulse also carries an "index drift" self-check: the ID set in embedding.db is
+  reconciled against the ID set of buckets on disk, and if missing/orphan > 0 it
+  warns at the top of the status block and points at the backfill / clean scripts
 
-不做什么（边界）：
-- anchor 没有「创建快捷键」：必须先 hold() 写下，确认是坐标系再钉
-- pulse 不做 dehydrate：只读元数据，避免大开销
+What this file deliberately does not do:
+- anchor has no "create shortcut": you must hold() it first, and only pin it once
+  it is clear that it really is a coordinate frame
+- pulse never dehydrates: metadata only, to avoid the cost
 
-对外暴露：anchor_set(bucket_id) / anchor_release(bucket_id) /
-         pulse(include_archive) → str
+Exports: anchor_set(bucket_id) / anchor_release(bucket_id) /
+         pulse(include_archive) -> str
 ========================================
 """
 
@@ -49,17 +54,22 @@ def _ago(seconds: float) -> str:
 
 
 async def _working_section(all_buckets: list) -> str:
-    """「它在不在工作」—— 跟上面那段「它还活着吗」不是同一个问题。
+    """"Is it working" — a different question from "is it alive" above.
 
-    🔴 2026-08-20 加的，起因是网关那个 bug：超时设成 5 秒，于是它**从上线起一次
-       都没工作过**，活了好几天没人发现。它没崩、没报错、日志里也看不出区别 ——
-       **它只是安静地什么都不做**。
-    📌 判据：**别问「引擎在不在跑」，问「它最近一次真的干成活是什么时候」。**
-       前者只证明进程还在，后者才是它在工作的证据。一个从来没成功过的东西，
-       和一个上次成功在三天前的东西，在这一段里一眼就分得出来。
+    🔴 Added after a gateway bug: the timeout was set to 5 seconds, so the thing
+       **had never once worked since it went live**, and ran that way for days
+       without anyone noticing. It did not crash, did not raise, and the logs
+       looked no different — **it just quietly did nothing**.
+    📌 The rule: **do not ask "is the engine running", ask "when did it last
+       actually finish a piece of work".** The first only proves the process
+       exists; the second is the evidence that it works. Something that has never
+       succeeded and something that last succeeded three days ago are told apart
+       at a glance in this section.
 
-    ⚠️ 故意**不新建一套记账机制**：全部从盘上已有的东西推出来。
-       多一套账就多一个「账本自己坏了而没人知道」的地方 —— 那正是这一段要治的病。
+    ⚠️ Deliberately **no new bookkeeping mechanism**: everything is inferred from
+       what is already on disk.
+       One more ledger is one more place for "the ledger itself broke and nobody
+       knew" — which is precisely the disease this section exists to treat.
     """
     import os
     import time
@@ -68,21 +78,28 @@ async def _working_section(all_buckets: list) -> str:
     lines = ["", "=== 它在不在工作（不是「还活着吗」，是「最近一次真的干成活」）==="]
     now_ts = time.time()
 
-    # ── 打标：没打上标的还剩几条、最老那条挂了多久 ──────────────────────
-    # 这个数**只会往下走**（回填一条少一条）。它一直不降、或者最老那条越挂越久，
-    # 就是打标那条路停了 —— 而它停了不报错，只是新记忆的标签一直空着。
+    # ── Tagging: how many are still untagged, and how long the oldest has hung ──
+    # This number **only ever goes down** (each backfill removes one). If it stops
+    # falling, or the oldest keeps getting older, the tagging path has stopped —
+    # and when it stops it raises nothing; new memories simply keep empty tags.
     #
-    # 🔴 **只数「该被打标的」。** 2026-08-20 这一段上线第一天就误报了：
-    #    它说「还有 5 条在排队，最老的那条 13 天前就建了 ⚠️ 挂太久了」——
-    #    **那 5 条全是信。** 而信**永远不会被打标**（`letter_write` 一处都不调脱水，
-    #    信要一字不动地留着、不衰减不合并），它们没有 summary 不是「排队」，
-    #    **是它们本来就不该有**。
-    #    📌 这正好第二次踩中这段代码自己写着的那句：
-    #       **一个会撒谎的监控，比没有监控更坏。**
-    #       第一次是把「昨天成功过」说成「现在在工作」（同一天早些时候修的）。
-    #    ⚠️ 判据：**这一格只该报「本来会被打标、但还没打上」的**。
-    #       报一件不会发生的事，读的人第一反应是去修一个不存在的问题
-    #       —— 她当时就问了「能不能整一个一键打标的东西」。**根本没有东西需要打标。**
+    # 🔴 **Count only what is supposed to be tagged.** This section produced a
+    #    false alarm on its very first day live: it said "5 still queued, the
+    #    oldest created 13 days ago ⚠️ hung too long" —
+    #    **all five were letters.** Letters are **never tagged** (`letter_write`
+    #    calls dehydration nowhere; a letter is kept word for word, never decayed,
+    #    never merged), so having no summary is not "queued",
+    #    **it is exactly what they are supposed to look like**.
+    #    📌 That was the second time this very code tripped over the line written
+    #       into it:
+    #       **a monitor that lies is worse than no monitor at all.**
+    #       The first time was reporting "succeeded yesterday" as "working now"
+    #       (fixed earlier the same day).
+    #    ⚠️ The rule: **this cell may only report what would have been tagged and
+    #       has not been yet.**
+    #       Report something that cannot happen, and the reader's first instinct
+    #       is to go fix a problem that does not exist — here, to ask for a
+    #       one-click re-tagging tool. **Nothing needed tagging at all.**
     skip_types = {"letter"}
     untagged, last_tagged = [], None
     for b in all_buckets:
@@ -107,7 +124,7 @@ async def _working_section(all_buckets: list) -> str:
     else:
         lines.append("　　没有排队的（每一条都打上标了）")
 
-    # ── 向量：拿 embeddings.db 的 mtime 当「最近一次真的写进去」──────────
+    # ── Vectors: embeddings.db's mtime stands in for "last real write" ────────
     buckets_dir = str((rt.config or {}).get("buckets_dir") or "")
     db = os.path.join(buckets_dir, "embeddings.db") if buckets_dir else ""
     if db and os.path.exists(db):
@@ -115,7 +132,8 @@ async def _working_section(all_buckets: list) -> str:
     else:
         lines.append("向量：⚠️ 找不到 embeddings.db —— 搜索会**安静地**退化成只认关键词")
 
-    # ── 做梦：它整个是后台活、一声不吭，所以最需要这一行 ────────────────
+    # ── Dreaming: it is entirely a background job and says nothing, which is
+    # exactly why it needs this line most ──────────────────────────────────────
     dream_state = os.path.join(buckets_dir, "_state", "dream_state.json") if buckets_dir else ""
     if dream_state and os.path.exists(dream_state):
         lines.append(f"做梦：最近一次动 {_ago(now_ts - os.path.getmtime(dream_state))}")
@@ -147,10 +165,12 @@ async def pulse(include_archive: Optional[bool] = False) -> str:
         f"衰减引擎: {'运行中' if rt.decay_engine.is_running else '已停止'}\n"
     )
 
-    # --- 索引/存储一致性检查（iter 2.1+）---
-    # 桶文件落在磁盘但 embedding 缺失 → breath 走向量检索时会丢这些桶；
-    # 反之孤儿 embedding 不影响检索，但占空间。两边一旦对不上就在 pulse 里告警，
-    # 让她/他/模型立刻知道「数对不上是真 bug」而不是错觉。
+    # --- Index/storage consistency check ---
+    # A bucket file on disk whose embedding is missing -> breath's vector
+    # retrieval will simply lose that bucket; an orphan embedding, conversely,
+    # does not affect retrieval but takes up space. The moment the two sides stop
+    # matching, pulse warns — so that whoever is reading, person or model, knows
+    # immediately that the numbers not adding up is a real bug, not an illusion.
     try:
         ee = getattr(rt, "embedding_engine", None)
         outbox = getattr(rt.bucket_mgr, "embedding_outbox", None)
@@ -193,8 +213,9 @@ async def pulse(include_archive: Optional[bool] = False) -> str:
     except Exception as e:
         return status + f"\n列出记忆桶失败: {e}"
 
-    # 「它在不在工作」挂在清单之前 —— 它比清单要紧得多。
-    # 这一段自己出岔子也不许把体检带崩：**体检正是那个负责说实话的东西。**
+    # "Is it working" comes before the listing — it matters far more than the list.
+    # If this section itself goes wrong it must not take the health check down
+    # with it: **the health check is the thing whose job is telling the truth.**
     try:
         status += await _working_section(buckets) + "\n"
     except Exception as e:

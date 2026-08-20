@@ -1,21 +1,22 @@
 """
 ========================================
-tools/__init__.py — MCP 工具实现的总入口
+tools/__init__.py — the entry point for every MCP tool implementation
 ========================================
 
-这个文件让 src/tools 成为一个 Python 包。每个子目录是一个 MCP 工具
-（breath / hold / grow / trace / anchor / plan / dream），按代码路径
-拆分到独立文件，便于单独阅读和修改。
+This file makes src/tools a Python package. Each subdirectory is one MCP tool
+(breath / hold / grow / trace / anchor / plan / dream), split into separate
+files along code paths so each can be read and edited on its own.
 
-关键行为：
-- 仅做包标记，不做任何运行时初始化
-- 真正的运行时上下文（config/bucket_mgr/dehydrator 等）由 server.py
-  在启动后通过 tools._runtime.init(...) 注入
+Key behaviour:
+- Package marker only; no runtime initialisation happens here
+- The actual runtime context (config / bucket_mgr / dehydrator ...) is injected
+  by server.py after startup through tools._runtime.init(...)
 
-不做什么（边界）：
-- 不在这里 import 子模块，避免 server.py 启动时被迫加载所有工具
-- 不在这里持有任何全局对象引用
+What this file deliberately does not do:
+- No submodule imports here, so that starting server.py is not forced to load
+  every tool
+- No global object references held here
 
-对外暴露：无（仅作包标记）
+Exports: none (package marker only)
 ========================================
 """
