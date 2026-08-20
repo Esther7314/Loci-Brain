@@ -1281,8 +1281,13 @@ async def _render_browse(entries, gates, room, tag) -> str:
         #    already mentioned at the near end does not mean the stretch is
         #    uncovered.
         if not covering_spans and (now - a).days >= 7:
+            # ⚠️ This suggests `fold`, not `grow(kind="big")`. That entry point was
+            #    withdrawn — passing it now returns "use fold instead", so the older
+            #    wording sent the reader down a path that answers with a correction.
+            #    A system telling you to do something it will refuse costs a round trip
+            #    and, worse, reads as the system not knowing its own shape.
             lines.append("  （这段时间上没有时期盖着。真觉得是在做一件什么事就写下来："
-                         'grow(kind="big", room=…, text=…, when="起..止")）')
+                         'fold(when="起..止", room=…, text=…, v=…, a=…)）')
 
     lines.append("（钻：缩小 when / 加 room·tag / slices=N 控格数；看原文：拿 id 搜）")
     return chr(10).join(lines)

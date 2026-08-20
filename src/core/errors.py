@@ -1,28 +1,31 @@
 """
-Loci Brain — 统一错误码体系 / Unified Error Code System
+Loci Brain — Unified Error Code System
 ==========================================================
 
-设计原则（来自 rule.md §1.5 +  2026-05-02 规范）：
-    "在产生与发现错误这件事上，能说出来的绝不静默。"
-    "报错要让她/他在前端面板上能看到，也要让 LLM 模型在 MCP 的返回端看到。"
+Design principles (from rule.md §1.5):
+    "When it comes to producing and finding errors, anything that can be said out loud
+     is never swallowed."
+    "An error has to be visible to the person on the dashboard AND to the model at the
+     MCP return value."
 
-四级严重度：
-    F (Fatal)   — 拒绝启动 + 终端输出 + 写 error.log
-    E (Error)   — 前端弹窗 + MCP 返回值末尾 + 附最近 15 条 log
-    W (Warning) — MCP 返回值末尾追加 + 前端日志面板
-    I (Info)    — MCP 返回值末尾追加（轻量提示，例如自动降级）
+Four severity levels:
+    F (Fatal)   — refuse to start + terminal output + write error.log
+    E (Error)   — dashboard dialog + appended to the MCP return + last 15 log lines
+    W (Warning) — appended to the MCP return + the dashboard log panel
+    I (Info)    — appended to the MCP return (a light note, e.g. an automatic downgrade)
 
-模块职责：
-    1. ERROR_CODES：错误码注册表（含级别、中英文描述、建议操作）
-    2. format_error()：标准化字符串渲染
-    3. record_error()：写持久化 errors.jsonl + 内存 buffer
-    4. recent_errors()：供 /api/errors/recent 端点读取
-    5. log_buffer：环形缓冲，存最近 N 条 log（含 stderr 流过的所有 log）
-    6. attach_log_buffer_handler()：把 BufferHandler 装到 root logger
-    7. warnings_channel（contextvars）：MCP 工具调用期间累积的 W/I 提示，
-       由 _with_notice() 在工具返回前 pop 出并 append 到返回值末尾
+What this module owns:
+    1. ERROR_CODES: the error-code registry (level, description, suggested action)
+    2. format_error(): rendering to the standard string form
+    3. record_error(): persist to errors.jsonl + the in-memory buffer
+    4. recent_errors(): what the /api/errors/recent endpoint reads
+    5. log_buffer: a ring buffer holding the last N log lines (everything that went
+       through stderr included)
+    6. attach_log_buffer_handler(): installs BufferHandler on the root logger
+    7. warnings_channel (contextvars): W/I notices accumulated during one MCP tool call,
+       popped by _with_notice() and appended to the return value before the tool returns
 
-不引入任何额外依赖，纯标准库实现。
+No extra dependencies: standard library only.
 """
 from __future__ import annotations
 
@@ -40,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================
-# 1. 错误码表 / Error Code Registry
+# 1. Error Code Registry
 # ============================================================
 
 @dataclass(frozen=True)
@@ -53,9 +56,9 @@ class ErrorSpec:
     suggestion_en: str = ""
 
 
-# 注册表 —— 修改/新增请同时同步 rule.md §11
+# The registry — when changing or adding an entry, keep rule.md §11 in sync
 ERROR_CODES: dict[str, ErrorSpec] = {
-    # ---- Fatal：拒绝启动 ----
+    # ---- Fatal: refuse to start ----
     "OB-F001": ErrorSpec(
         code="OB-F001",
         level="F",
@@ -96,7 +99,7 @@ ERROR_CODES: dict[str, ErrorSpec] = {
         ),
     ),
 
-    # ---- Error：前端弹窗 + MCP 末尾 ----
+    # ---- Error: dashboard dialog + appended to the MCP return ----
     "OB-E001": ErrorSpec(
         code="OB-E001",
         level="E",
@@ -138,7 +141,7 @@ ERROR_CODES: dict[str, ErrorSpec] = {
         ),
     ),
 
-    # ---- Warning：MCP 返回末尾 + 前端日志面板 ----
+    # ---- Warning: appended to the MCP return + the dashboard log panel ----
     "OB-W001": ErrorSpec(
         code="OB-W001",
         level="W",
@@ -189,7 +192,7 @@ ERROR_CODES: dict[str, ErrorSpec] = {
         ),
     ),
 
-    # ---- Info：自动降级 / 轻量提示 ----
+    # ---- Info: automatic downgrades and other light notes ----
     "OB-I001": ErrorSpec(
         code="OB-I001",
         level="I",
@@ -218,18 +221,19 @@ ERROR_CODES: dict[str, ErrorSpec] = {
 }
 
 # ============================================================
-# 2. 内存日志环形缓冲 / In-memory Log Ring Buffer
+# 2. In-memory Log Ring Buffer
 # ============================================================
 
-_LOG_BUFFER_MAX = 500     # 总环形缓冲，前端"最近日志"读这里
-_LOG_TAIL_FOR_ERROR = 15  # E 级报错附带的最近日志条数（按规范）
+_LOG_BUFFER_MAX = 500     # the whole ring buffer; the dashboard's "recent logs" reads it
+_LOG_TAIL_FOR_ERROR = 15  # how many recent log lines ride along with an E-level error (per spec)
 
 _log_buffer: collections.deque[str] = collections.deque(maxlen=_LOG_BUFFER_MAX)
 _log_buffer_lock = threading.Lock()
 
 
 class _BufferHandler(logging.Handler):
-    """把 logging 输出顺手存一份到内存 deque，供 E 级报错附带 tail。"""
+    """Keep a copy of every logging line in an in-memory deque, so an E-level error can
+    carry a tail of them."""
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
@@ -237,12 +241,12 @@ class _BufferHandler(logging.Handler):
             with _log_buffer_lock:
                 _log_buffer.append(line)
         except Exception:
-            # 日志 handler 自己绝不能抛
+            # a logging handler must never raise on its own account
             pass
 
 
 def attach_log_buffer_handler(level: int = logging.INFO) -> None:
-    """把 BufferHandler 挂到 root logger；幂等，重复调用无害。"""
+    """Attach BufferHandler to the root logger. Idempotent: calling it again is harmless."""
     root = logging.getLogger()
     for h in root.handlers:
         if isinstance(h, _BufferHandler):
@@ -257,7 +261,7 @@ def attach_log_buffer_handler(level: int = logging.INFO) -> None:
 
 
 def get_recent_logs(n: int = _LOG_TAIL_FOR_ERROR) -> list[str]:
-    """读取最近 n 条 log（newest last）。"""
+    """Read the last n log lines (newest last)."""
     with _log_buffer_lock:
         if n >= len(_log_buffer):
             return list(_log_buffer)
@@ -265,7 +269,7 @@ def get_recent_logs(n: int = _LOG_TAIL_FOR_ERROR) -> list[str]:
 
 
 # ============================================================
-# 3. 持久化错误日志 / Persistent Error Log
+# 3. Persistent Error Log
 # ============================================================
 
 _errors_path: str | None = None
@@ -299,7 +303,7 @@ def _iter_tail_lines(path: str, *, max_bytes: int):
 
 
 def configure_errors_path(buckets_dir: str) -> None:
-    """由 server 启动时调用：将 errors.jsonl 放在 buckets_dir/.logs/errors.jsonl。"""
+    """Called by the server at startup: errors.jsonl goes to buckets_dir/.logs/errors.jsonl."""
     global _errors_path
     log_dir = os.path.join(buckets_dir, ".logs")
     try:
@@ -322,7 +326,7 @@ def _persist_error_record(record: dict) -> None:
 
 
 def recent_errors(limit: int = 50, min_level: str = "W") -> list[dict]:
-    """读取最近 limit 条已记录的错误（从 errors.jsonl 末尾倒序取）。"""
+    """Read the last `limit` recorded errors, walking backwards from the end of errors.jsonl."""
     if not _errors_path or not os.path.exists(_errors_path):
         return []
     order = ["I", "W", "E", "F"]
@@ -355,7 +359,8 @@ def recent_errors(limit: int = 50, min_level: str = "W") -> list[dict]:
 
 
 def clear_errors_log() -> int:
-    """清空 errors.jsonl，返回原行数（供 dashboard "已读" 按钮）。"""
+    """Truncate errors.jsonl and return how many lines it held (drives the dashboard's
+    "mark as read" button)."""
     if not _errors_path or not os.path.exists(_errors_path):
         return 0
     try:
@@ -370,7 +375,7 @@ def clear_errors_log() -> int:
 
 
 # ============================================================
-# 4. 标准格式化 / Standard Formatter
+# 4. Standard Formatter
 # ============================================================
 
 _LEVEL_PREFIX = {
@@ -388,13 +393,13 @@ def format_error(
     include_logs: bool | None = None,
     extra: dict | None = None,
 ) -> str:
-    """渲染统一格式字符串。
+    """Render the standard string form.
 
-    include_logs=None 时按级别决定：F/E 默认带 tail，W/I 默认不带。
+    With include_logs=None the level decides: F/E carry a log tail by default, W/I do not.
     """
     spec = ERROR_CODES.get(code)
     if not spec:
-        # 未知码：仍能渲染，让排错时一眼看到拼错的码
+        # Unknown code: still render, so that a mistyped code is visible at a glance
         return (
             f"❌ [{code}] 未注册错误码\n"
             f"详情：{detail}\n"
@@ -430,9 +435,10 @@ def record_error(
     extra: dict | None = None,
     log: bool = True,
 ) -> dict:
-    """记录一条错误：写 errors.jsonl + 同步到 logger（按级别）+ 返回结构化 dict。
+    """Record one error: write errors.jsonl, mirror it to the logger at the matching
+    level, and return it as a structured dict.
 
-    上层若需要把它附加到 MCP 返回值，使用 format_error 或 push_warning。
+    To attach it to an MCP return value, callers use format_error or push_warning.
     """
     spec = ERROR_CODES.get(code)
     level = spec.level if spec else "E"
@@ -459,14 +465,15 @@ def record_error(
 
 
 # ============================================================
-# 5. MCP 返回值警告通道 / MCP Return Suffix Channel
+# 5. MCP Return Suffix Channel
 # ============================================================
 #
-# 设计：MCP 工具调用期间，业务代码（bucket_manager / tools/_common 等）可能在
-# 任意层产生 W/I 级提示。这些提示要透传到 MCP 返回值末尾让 AI 能看到。
-# 用 contextvars 维护一个 per-task 的列表；server.py 的 _with_notice 包装器
-# 在工具返回时 pop 出来 append 到末尾。
-# 注意：contextvars 在 asyncio 中按任务隔离，不会跨调用串味。
+# The design: during one MCP tool call, business code (bucket_manager, tools/_common
+# and friends) may raise a W/I notice at any depth. Those notices have to reach the end
+# of the MCP return value so the model can see them. A per-task list is kept in
+# contextvars; server.py's _with_notice wrapper pops it when the tool returns and
+# appends it. Note that contextvars are isolated per task under asyncio, so notices
+# never bleed from one call into another.
 
 _warnings_var: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar(
     "ob_warnings", default=None
@@ -474,25 +481,25 @@ _warnings_var: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar
 
 
 def begin_warnings() -> None:
-    """在每次 MCP 工具调用入口处调用一次，初始化本调用的 channel。"""
+    """Called once at the entry of every MCP tool call, to open this call's channel."""
     _warnings_var.set([])
 
 
 def push_warning(code: str, detail: str = "", *, extra: dict | None = None) -> None:
-    """业务代码调用：登记一条 W/I 级提示。
+    """Called by business code to register one W/I-level notice.
 
-    会同时 record_error（写盘 + 写 logger）。
+    It also goes through record_error (persisted to disk and to the logger).
     """
     record_error(code, detail, extra=extra)
     cur = _warnings_var.get()
     if cur is None:
-        # 调用方不在 MCP 工具上下文（例如后台任务），仅持久化即可
+        # The caller is outside an MCP tool context (a background task, say): persisting is enough
         return
     cur.append(format_error(code, detail, extra=extra))
 
 
 def pop_warnings() -> list[str]:
-    """server.py 的 _with_notice 在工具返回前调用，取出本调用累计的提示。"""
+    """Called by server.py's _with_notice before a tool returns, to take this call's notices."""
     cur = _warnings_var.get()
     if cur is None:
         return []
@@ -508,27 +515,30 @@ def format_warnings_suffix(warnings: Iterable[str]) -> str:
 
 
 # ============================================================
-# 6. 启动期专用异常 / Startup-time Exception
+# 6. Startup-time Exception
 # ============================================================
 
 class OBStartupError(SystemExit):
-    """Fatal：拒绝启动。携带错误码，由 server.py 顶层捕获后输出标准格式 + 写 error.log。
+    """Fatal: refuse to start. Carries the error code; server.py catches it at top level,
+    prints the standard form and writes error.log.
 
-    注意：SystemExit 自身有内置 ``.code`` 属性（保存进程退出码），所以本类用
-    ``.error_code`` 暴露 OB 错误码；同时也提供 ``.code`` 的兼容别名。
+    Note that SystemExit has a built-in ``.code`` attribute of its own (the process exit
+    code), so this class exposes the OB error code as ``.error_code``, with ``.code``
+    kept as a compatibility alias.
     """
 
     def __init__(self, code: str, detail: str = "", *, extra: dict | None = None):
         self.error_code = code
         self.detail = detail
         self.extra = extra or {}
-        # SystemExit 的 message 即终端最终输出
+        # SystemExit's message is what finally reaches the terminal
         msg = format_error(code, detail, extra=extra, include_logs=True)
         super().__init__(msg)
 
 
 def write_fatal_log(code: str, detail: str, *, buckets_dir: str | None = None) -> None:
-    """Fatal 级别专用：直接写 error.log（不走 errors.jsonl 因为可能尚未 configure）。"""
+    """Fatal level only: write error.log directly, not errors.jsonl, since the path for
+    that may not have been configured yet."""
     target_dir = buckets_dir or os.environ.get("LOCI_BUCKETS_DIR", "").strip() or "."
     try:
         log_dir = os.path.join(target_dir, ".logs")

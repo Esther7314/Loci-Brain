@@ -1,23 +1,26 @@
 """
 ========================================
-import_memory.py — 历史对话导入引擎
+import_memory.py — the engine that imports exported conversation history
 ========================================
 
-把各平台导出的历史对话（Claude JSON / ChatGPT / DeepSeek / Markdown / 纯文本）
-切块、过LLM 打标、写入记忆系统。
+Takes conversation history exported from various platforms (Claude JSON / ChatGPT /
+DeepSeek / Markdown / plain text), splits it into chunks, runs each through the LLM for
+tagging, and writes the result into the memory system.
 
-关键行为：
-- 自动识别格式，分块处理，单 chunk 独立成桶
-- 导入进度持久化到 import_state.json，可断点续传
-- raw 模式：保留原文不脱水，给特殊场景用
-- 导入完成后扫一遍频次模式（同一主题反复出现 → 提示她/他 pin）
+Key behaviours:
+- Detects the format automatically, processes in chunks, one bucket per chunk
+- Import progress is persisted to import_state.json, so an interrupted run can resume
+- raw mode: keeps the original text undehydrated, for the cases that need it
+- After the import, scans for recurring patterns (the same theme appearing over and over
+  -> suggest that the user pin it)
 
-不做什么（边界）：
-- 不在线接收对话流（只处理离线导出文件）
-- 不写桶文件本身（委托给 BucketManager）
-- 不调用 dehydrator.merge（只新建，不合并）
+What it deliberately does not do:
+- It does not receive a live conversation stream (offline export files only)
+- It does not write bucket files itself (that is delegated to BucketManager)
+- It never calls dehydrator.merge (it creates, it does not merge)
 
-对外暴露：ImportEngine 类（被 server.py 注入到 _runtime，由 dashboard API 触发）
+Exports: the ImportEngine class (injected into _runtime by server.py, triggered from the
+dashboard API)
 ========================================
 """
 
@@ -47,58 +50,61 @@ logger = logging.getLogger("loci_brain.import")
 
 
 # ============================================================
-# 调参面板 / Tunable constants
+# Tunable constants
 # ------------------------------------------------------------
-# rule.md §①：禁裸魔法数字。导入流水线上下参数集中定义在这里。
+# rule.md §①: no bare magic numbers. The parameters of the import pipeline are all
+# defined here.
 # ============================================================
 
-# --- chunk_turns：对话轮次分窗 ---
-_CHUNK_TARGET_TOKENS = 10000   # 单个 chunk 目标 token 数
-_CHUNK_OVERSIZE_RATIO = 1.5    # 单轮 × 该倍数 → 单独成 chunk（避免超范围）
+# --- chunk_turns: windowing by conversation turn ---
+_CHUNK_TARGET_TOKENS = 10000   # target token count for one chunk
+_CHUNK_OVERSIZE_RATIO = 1.5    # one turn beyond target × this becomes its own chunk (so nothing overruns)
 
 # --- ImportState ---
-_STATE_HASH_HEX = 16           # source_hash 取 sha256 前 16 hex
-_JOB_ID_HEX = 16               # import job id：仅用于并发预留与状态关联
-_STATE_ERR_LOG_MAX = 100       # errors 数组最多保留条数（避免状态文件肨胀）
-_CHUNK_ERR_PREVIEW = 200       # 单 chunk 错误信息截断长度
+_STATE_HASH_HEX = 16           # source_hash keeps the first 16 hex of the sha256
+_JOB_ID_HEX = 16               # import job id: only used for concurrency reservation and state correlation
+_STATE_ERR_LOG_MAX = 100       # how many entries the errors array keeps (so the state file cannot bloat)
+_CHUNK_ERR_PREVIEW = 200       # truncation length for one chunk's error message
 
-# --- _extract_memories LLM 调用 ---
-# chunk_turns() 已经把块的大小控制在 ~_CHUNK_TARGET_TOKENS token 附近，只有单轮
-# 超大文本才会摸到 _CHUNK_TARGET_TOKENS × _CHUNK_OVERSIZE_RATIO 这个上限（见
-# chunk_turns 里「单轮超限单独成块」的分支）。这里按 token 数而不是固定字符数
-# 判断要不要截断——旧的固定 12000 字符对英文/中英混合内容而言远小于块本身的
-# token 预算，会把块后半段正文在不留任何痕迹的情况下悄悄丢给 LLM 看不到。
+# --- The _extract_memories LLM call ---
+# chunk_turns() already keeps a chunk near ~_CHUNK_TARGET_TOKENS tokens, and only a single
+# oversized turn ever reaches the _CHUNK_TARGET_TOKENS × _CHUNK_OVERSIZE_RATIO ceiling (see
+# the "one oversized turn becomes its own chunk" branch inside chunk_turns). The decision to
+# truncate is made on token count rather than a fixed character count: the old fixed 12000
+# characters was far below the chunk's own token budget for English or mixed content, so the
+# back half of a chunk was quietly withheld from the LLM without leaving a trace.
 _EXTRACT_TOKEN_CEILING = int(_CHUNK_TARGET_TOKENS * _CHUNK_OVERSIZE_RATIO)
-# 🔴 2026-08-19：原来这是个写死的 2048，跟用户 config 里的 dehydration.max_tokens
-#    毫无关系。一段稍长的对话，模型输出到一半就被截断 → JSON 断在半截 →
-#    解析失败 → 那一块**一条记忆都没导进来**，而 status 还写着 completed。
-#    现在当**下限**用：配置里给多少用多少，但不低于这个数。
+# 🔴 This used to be a hard-coded 2048 with no relation whatsoever to the user's configured
+#    dehydration.max_tokens. On a slightly longer conversation the model's output was cut
+#    off mid-flight -> the JSON broke in half -> parsing failed -> **not one memory was
+#    imported from that chunk**, while the status still read `completed`.
+#    It is now used as a **floor**: take whatever the config says, but never less than this.
 _EXTRACT_MAX_TOKENS = 2048
-_EXTRACT_TEMPERATURE = 0.0     # 提取需确定性
-_PARSE_ERR_PREVIEW = 200       # JSON 解析失败时日志预览
+_EXTRACT_TEMPERATURE = 0.0     # extraction has to be deterministic
+_PARSE_ERR_PREVIEW = 200       # how much is previewed in the log when JSON parsing fails
 
-# --- 默认情感坐标与 importance（与 dehydrator 保持一致）---
+# --- Default emotion coordinates and importance (kept in step with dehydrator) ---
 _DEFAULT_VALENCE = 0.5
 _DEFAULT_AROUSAL = 0.3
 _DEFAULT_IMPORTANCE = 5
 _IMPORTANCE_MIN = 1
 _IMPORTANCE_MAX = 10
 
-# --- 输出截断长度 ---
+# --- Output truncation lengths ---
 _NAME_MAX_CHARS = 20
 _DOMAIN_MAX = 3
-_TAGS_MAX = 10                 # extraction 试在 10 个以内（与 dehydrator 的 15 不同，导入场景信息密度较低）
+_TAGS_MAX = 10                 # extraction aims to stay under 10 (unlike dehydrator's 15: an import carries lower information density)
 
-# --- merge_or_create 默认阈值 ---
+# --- merge_or_create default threshold ---
 _DEFAULT_MERGE_THRESHOLD = 75
 
-# --- detect_patterns：embedding 聚类 ---
-_PATTERN_MIN_DYNAMIC_BUCKETS = 5  # 动态桶少于该数 → 不作处理
-_PATTERN_SIMILARITY_THRESHOLD = 0.7  # 两桶向量余弦 > 该值 → 归同一类
-_PATTERN_MIN_CLUSTER_SIZE = 3     # 类内成员 ≥ 该数才认为是“高频模式”
-_PATTERN_PIN_SUGGEST_THRESHOLD = 5  # 成员 ≥ 该数 → 建议 pin，否则仅 review
-_PATTERN_RESULT_LIMIT = 20        # 返回给 dashboard 的 pattern 上限
-_PATTERN_CONTENT_PREVIEW = 200    # pattern_content 预览长度
+# --- detect_patterns: embedding clustering ---
+_PATTERN_MIN_DYNAMIC_BUCKETS = 5  # fewer dynamic buckets than this -> do nothing
+_PATTERN_SIMILARITY_THRESHOLD = 0.7  # cosine between two bucket vectors above this -> same cluster
+_PATTERN_MIN_CLUSTER_SIZE = 3     # a cluster counts as a "recurring pattern" only at this size
+_PATTERN_PIN_SUGGEST_THRESHOLD = 5  # at this many members -> suggest pinning; below it, only review
+_PATTERN_RESULT_LIMIT = 20        # cap on the patterns returned to the dashboard
+_PATTERN_CONTENT_PREVIEW = 200    # preview length of pattern_content
 
 _TEXT_HASH_CHUNK_CHARS = 1024 * 1024
 
@@ -172,11 +178,11 @@ async def _await_import_worker(func, *args):
 
 
 def _clamp_va(meta: dict) -> tuple[float, float]:
-    """将 meta 中的 valence / arousal 钳制到 [0, 1]。
+    """Clamp meta's valence / arousal to [0, 1].
 
-    与 dehydrator._clamp_va 同表现，这里单独复制一份是为了避免
-    import_memory 反向依赖 dehydrator 的私有方法。两者默认值一致（
-    rule.md §1.0 哲学：中性 V=0.5 / 低唤醒 A=0.3）。
+    Behaves identically to dehydrator._clamp_va; the duplicate exists here purely so that
+    import_memory does not reach backwards into a private method of dehydrator. The
+    defaults match (per the philosophy in rule.md §1.0: neutral V=0.5 / low arousal A=0.3).
     """
     try:
         v = max(0.0, min(1.0, float(meta.get("valence", _DEFAULT_VALENCE))))
@@ -187,7 +193,7 @@ def _clamp_va(meta: dict) -> tuple[float, float]:
 
 
 def _clamp_importance(meta: dict) -> int:
-    """将 meta.importance 钳制到 [1, 10]。解析失败返回默认 5。"""
+    """Clamp meta.importance to [1, 10]. On a parse failure, return the default of 5."""
     try:
         return max(
             _IMPORTANCE_MIN,
@@ -204,7 +210,6 @@ def _strip_md_fence(raw: str) -> str:
 
 # ============================================================
 # Format Parsers — normalize any format to conversation turns
-# 格式解析器 — 将任意格式标准化为对话轮次
 # ============================================================
 
 def _parse_claude_json(data: dict | list) -> list[dict]:
@@ -284,9 +289,11 @@ def _parse_chatgpt_json(data: list | dict) -> list[dict]:
     return turns
 
 
-# 「谁说的」那一行的开头。全小写比对（中文 .lower() 是空操作，不影响）。
-# ⚠️ 只放**明确表示说话人**的词。别为了多认几种把「注」「说明」这类塞进来 ——
-# 认错一行会把一整段话记到另一个人头上。
+# How a "who said this" line begins. Compared lowercased (for Chinese, .lower() is a no-op
+# and changes nothing).
+# ⚠️ Only words that **unambiguously name a speaker** belong here. Do not stuff in things
+# like "note" or "explanation" just to recognise a few more formats — misreading one line
+# attributes a whole passage to the wrong person.
 _USER_MARKS = frozenset(["human", "user", "你", "我", "用户", "me"])
 _AI_MARKS = frozenset(["assistant", "claude", "ai", "gpt", "bot", "deepseek",
                        "助手", "机器人"])
@@ -296,10 +303,12 @@ _DATE_RE = re.compile(r"(\d{4})[-/](\d{2})[-/](\d{2})")
 
 
 def _when_date(ts) -> str:
-    """把导出文件里那个时间戳收成 YYYY-MM-DD；认不出来就返回空串。
+    """Reduce the timestamp from an export file to YYYY-MM-DD; an empty string if it is
+    unreadable.
 
-    认不出来**必须返回空**，不能瞎猜一个：when 空着只是「没写哪天」，
-    而猜错一个日期是往她的时间轴里塞假货 —— 后者永远更糟。
+    Unreadable **must** return empty rather than guessing: an empty `when` merely says
+    "which day was not recorded", whereas a wrong guess plants a forgery in the timeline —
+    and that is always worse.
     """
     s = str(ts or "").strip()
     if not s:
@@ -307,7 +316,7 @@ def _when_date(ts) -> str:
     m = _DATE_RE.search(s)
     if m:
         return m.group(1) + "-" + m.group(2) + "-" + m.group(3)
-    # 纯数字 = unix 时间戳（ChatGPT 那份就是），秒和毫秒都认
+    # All digits = a unix timestamp (the ChatGPT export uses one); seconds and milliseconds both accepted
     if s.replace(".", "").isdigit():
         try:
             v = float(s)
@@ -329,14 +338,17 @@ def _parse_markdown(text: str) -> list[dict]:
     current_content: list[str] = []
 
     def _role_of(stripped: str):
-        """这一行是不是「谁说的」那种开头？是就返回（角色, 冒号后面的话）。
+        """Does this line open the way a "who said this" line does? If so, return
+        (role, whatever follows the colon).
 
-        🔴 2026-08-19 修的两处，中文对话原来整个解析不了：
-          ① **全角冒号「：」根本不认**。原来只切 ASCII 的冒号，
-             而中文写「用户：」十有八九用的是全角 —— 于是整份导出被当成一坨，
-             切不出轮次，导进去就是一大块没头没尾的东西。
-          ② 「用户」不在名单里（原来只有 human/user/你/我）。
-        判据跟别处一样：**认得出来的要认全，认不出的就别装认得。**
+        🔴 Two fixes, without which Chinese conversations did not parse at all:
+          ① **The full-width colon 「：」 was simply not recognised.** Only the ASCII colon
+             was split on, while a Chinese speaker label almost always uses the full-width
+             one — so an entire export was treated as one lump, no turns could be cut, and
+             what got imported was one enormous shapeless block.
+          ② 「用户」 was missing from the list of marks.
+        The rule is the same one as everywhere else: **recognise fully what you recognise,
+        and do not pretend to recognise what you do not.**
         """
         for sep in (":", "："):
             if sep not in stripped:
@@ -377,7 +389,6 @@ def _parse_markdown(text: str) -> list[dict]:
 def detect_and_parse(raw_content: str, filename: str = "") -> list[dict]:
     """
     Auto-detect format and parse to normalized turns.
-    自动检测格式并解析为标准化的对话轮次。
     """
     ext = Path(filename).suffix.lower() if filename else ""
 
@@ -415,15 +426,15 @@ def detect_and_parse(raw_content: str, filename: str = "") -> list[dict]:
 
 # ============================================================
 # Chunking — split turns into ~10k token windows
-# 分窗 — 按对话轮次边界切为 ~10k token 窗口
 # ============================================================
 
 def chunk_turns(turns: list[dict], target_tokens: int = _CHUNK_TARGET_TOKENS, human_label: str = "用户") -> list[dict]:
     """
     Group conversation turns into chunks of ~target_tokens.
     Returns list of {content, timestamp_start, timestamp_end, turn_count}.
-    按对话轮次边界将对话分为 ~target_tokens 大小的窗口。
-    human_label：对话中「用户」那一侧的称呼，默认「用户」，可传入 config["human"] 使内容更个人化。
+    Chunks are cut on conversation-turn boundaries.
+    human_label: what the human side of the conversation is called; it defaults to 「用户」
+    and config["human"] can be passed in to make the content more personal.
     """
     chunks: list[dict] = []
     current_lines: list[str] = []
@@ -583,7 +594,6 @@ def preview_import(raw_content: str, filename: str = "", human_label: str = "用
 
 # ============================================================
 # Import State — persistent progress tracking
-# 导入状态 — 持久化进度追踪
 # ============================================================
 
 class ImportState:
@@ -622,10 +632,12 @@ class ImportState:
     def save(self):
         """Persist state to file."""
         self.data["updated_at"] = now_iso()
-        # 断点续传整个功能都靠这个文件在崩溃后存活：用 utils.atomic_write_text
-        # 而不是手写 open/write/replace——后者既不 fsync（真断电不保证落盘），
-        # 也不带 Windows 长路径前缀（import_state.json 直接在 buckets_dir 下，
-        # 深层安装路径会超 260 字符 MAX_PATH）。
+        # The entire resume-after-interruption feature depends on this file surviving a
+        # crash, so it goes through utils.atomic_write_text rather than a hand-written
+        # open/write/replace. The hand-written version neither fsyncs (so a real power cut
+        # does not guarantee the bytes reached disk) nor carries the Windows long-path
+        # prefix (import_state.json sits directly under buckets_dir, and a deep install
+        # path can exceed the 260-character MAX_PATH).
         atomic_write_text(
             self.state_file, json.dumps(self.data, ensure_ascii=False, indent=2)
         )
@@ -664,7 +676,6 @@ class ImportState:
 
 # ============================================================
 # Import extraction prompt
-# 导入提取提示词
 # ============================================================
 
 IMPORT_EXTRACT_PROMPT = """你是一个对话记忆提取专家。从以下对话片段中提取值得长期记住的信息。
@@ -718,13 +729,11 @@ is_pattern: true = 反复出现的习惯性行为模式"""
 
 # ============================================================
 # Import Engine — core processing logic
-# 导入引擎 — 核心处理逻辑
 # ============================================================
 
 class ImportEngine:
     """
     Processes conversation history files into OB memory buckets.
-    将对话历史文件处理为 OB 记忆桶。
     """
 
     def __init__(self, config: dict, bucket_mgr, dehydrator, embedding_engine=None):
@@ -798,7 +807,6 @@ class ImportEngine:
     ) -> dict:
         """
         Start or resume an import.
-        开始或恢复导入。
         """
         job_id = reservation_id
         if job_id is None:
@@ -816,8 +824,9 @@ class ImportEngine:
 
         keep_chunks_for_pause = False
         try:
-            # 预检：LLM API 必须可用，否则所有 chunk 都会静默失败。
-            # 该检查必须在 reservation 的 try/finally 内，失败时也要释放槽位。
+            # Pre-flight: the LLM API has to be available, or every chunk fails silently.
+            # This check must sit inside the reservation's try/finally, so that a failure
+            # still releases the slot.
             if not self.dehydrator.api_available:
                 return {
                     "error": "LLM API 未配置或不可用，导入需要 LOCI_COMPRESS_API_KEY。请检查 config.yaml 或环境变量。",
@@ -825,12 +834,14 @@ class ImportEngine:
                 }
 
             _human = self.config.get("human", "用户")
-            # source_hash 必须把 human_label 也算进去：chunk_turns() 把它拼进每一行
-            # 再数 token，边界完全由它决定。只按 raw_content 算哈希的话，暂停期间
-            # config.yaml 的 human 字段被改过，恢复时会重新切出一份不同的 chunk
-            # 列表，但 state.data["processed"] 原样复用——要么跳过内容，要么用
-            # 错位的切片重复处理。哈希带上 human_label 后，这种情况会被下面的
-            # "source_hash 不一致" 分支识别为「源变了」，走全新导入而不是错位续传。
+            # source_hash has to include human_label: chunk_turns() splices it into every
+            # line before counting tokens, so it decides the boundaries outright. Hashing
+            # raw_content alone means that if config.yaml's `human` field is edited while
+            # the job is paused, resuming re-cuts a different list of chunks while
+            # state.data["processed"] is reused as-is — which either skips content or
+            # reprocesses misaligned slices. With human_label in the hash, that case is
+            # caught by the "source_hash mismatch" branch below as "the source changed" and
+            # runs a fresh import instead of a misaligned resume.
             # Parsing a JSON export and constructing chunk strings can amplify
             # memory substantially.  Do all CPU-heavy work off the event loop,
             # hash the source incrementally, and retain only the final chunks.
@@ -857,9 +868,10 @@ class ImportEngine:
                         result = await self._process_chunks(preserve_raw)
                         keep_chunks_for_pause = self.state.data.get("status") == "paused"
                         return result
-                    # 哈希对得上，但重新切出来的 chunk 数量对不上——分块逻辑本身
-                    # 依赖的某个输入（非 raw_content/human，理论上不该发生）变了。
-                    # 宁可整个重来，也不能拿旧的 processed 索引去配一份不同的切片。
+                    # The hash matches but the re-cut chunk count does not — some other
+                    # input the chunking logic depends on (not raw_content, not human, and
+                    # in theory impossible) has changed. Better to start over entirely than
+                    # to line an old `processed` index up against a different set of slices.
                     logger.warning(
                         "Resumed chunk count mismatch "
                         f"(state={self.state.data['total_chunks']}, "
@@ -960,20 +972,27 @@ class ImportEngine:
                 valence=item.get("valence", _DEFAULT_VALENCE),
                 arousal=item.get("arousal", _DEFAULT_AROUSAL),
                 name=item.get("name") or None,
-                # 🔴 2026-08-19：原来这儿**不传 when** —— 于是导进来的记忆
-                # 落盘时间是「导入那天」，原文里的日期整个丢掉。
-                # 后果很具体：把一年的历史导进来，几百条全堆在「今天」，
-                # 时间视图、中期那张卡、recall(when=...) 一起废，而且不报错。
-                # 解析器本来就认得时间（chunk 一路带着 timestamp_start），
-                # 缺的只是这一行。纯日期 = 本地日历（tools/_when 的口径）。
+                # 🔴 This used to pass **no `when` at all**, so an imported memory landed
+                # dated on the day of the import and the date in the original was lost
+                # entirely.
+                # The consequence is very concrete: import a year of history and several
+                # hundred entries all pile up on "today", which breaks the timeline view,
+                # the medium-term card and recall(when=...) all at once — without an error.
+                # The parser already knew the time (each chunk carries timestamp_start the
+                # whole way); this one line was all that was missing. A bare date means the
+                # local calendar, per tools/_when.
                 when=item.get("_when", ""),
-                # 🔴 2026-08-19：原来也不给房间 —— 导进来的记忆 room 是空的，
-                # 在房间门里一条都翻不出来（体检那项「没房间的记忆」会跟着变红）。
-                # 为什么一律 EVENT/SELF、不按内容猜：
-                #   「这条是事件还是认知」是语义判断，规则猜不准；而猜错的代价是
-                #   把一条认知记成一件事 —— 读的时候不报错，只是一直不对劲。
-                #   从自己的对话历史里搬过来的东西，绝大多数就是「我在场的事」，
-                #   所以落一间最稳的，分得更细是之后拿 regrow 一条条改的事。
+                # 🔴 No room was given either, so imported memories had an empty room and
+                # not one of them could be found through the room gate (and the health
+                # check's "memories with no room" item went red along with it).
+                # Why EVENT/SELF unconditionally, rather than guessing from the content:
+                #   "is this an event or an insight" is a semantic judgement and a rule
+                #   cannot guess it reliably, while the cost of guessing wrong is filing an
+                #   insight as an event — which raises no error on reading and simply feels
+                #   subtly wrong forever.
+                #   What comes out of one's own conversation history is overwhelmingly
+                #   "things I was present for", so it lands in the safest room, and a finer
+                #   split is something to do afterwards, one regrow at a time.
                 room="EVENT/SELF",
             )
 
@@ -1000,7 +1019,7 @@ class ImportEngine:
             err_msg = f"LLM extraction failed: {e}"
             logger.warning(err_msg)
             self.state.data["api_calls"] += 1
-            # 把 LLM 失败原因写入 state.errors，让 /api/import/status 可见
+            # Record why the LLM failed in state.errors, so /api/import/status can see it
             if len(self.state.data["errors"]) < _STATE_ERR_LOG_MAX:
                 self.state.data["errors"].append(err_msg)
             return
@@ -1009,8 +1028,9 @@ class ImportEngine:
             return
 
         # --- Store each extracted memory ---
-        # 这一块是哪天的：用块的起始时间。一块里可能横跨几天，取起始是保守的 ——
-        # 宁可算早一点，也别把几个月前的话记成今天。
+        # Which day this chunk belongs to: its start time. A chunk may span several days,
+        # and taking the start is the conservative choice — better to date it slightly too
+        # early than to record something from months ago as happening today.
         chunk_when = _when_date(chunk.get("timestamp_start"))
         for item in items:
             try:
@@ -1019,12 +1039,15 @@ class ImportEngine:
                 should_preserve = preserve_raw or item.get("preserve_raw", False)
 
                 if should_preserve:
-                    # preserve_raw 桶不走 _merge_or_create_item 的查重（原文必须逐字
-                    # 保留，不能被 LLM 摘要合并）；但进度只在整个 chunk 处理完才落盘
-                    # （_process_chunks 里 processed=i+1），崩溃重启后同一个 chunk 会
-                    # 从头重新提取一遍，之前已经落盘的 preserve_raw 条目就会被原样
-                    # 再建一份。这里用精确内容匹配挡掉重复——preserve_raw 的定义就是
-                    # 「逐字原文」，完全相同的正文已经存在就是同一条，不是新记忆。
+                    # A preserve_raw bucket skips _merge_or_create_item's duplicate check,
+                    # because the original must be kept verbatim and cannot be merged into
+                    # an LLM summary. But progress is only persisted once the whole chunk is
+                    # done (processed=i+1 in _process_chunks), so after a crash and restart
+                    # the same chunk is extracted again from the top and any preserve_raw
+                    # entries already on disk would simply be created a second time. Exact
+                    # content matching blocks the duplicate here: preserve_raw is defined as
+                    # "the original, character for character", so a body that already exists
+                    # identically IS the same entry, not a new memory.
                     exact_finder = getattr(self.bucket_mgr, "find_exact_content", None)
                     if callable(exact_finder):
                         try:
@@ -1055,9 +1078,10 @@ class ImportEngine:
             except Exception as e:
                 err_msg = f"Failed to store memory {item.get('name', '?')!r}: {e}"
                 logger.warning(err_msg)
-                # 不记 state.errors 的话，/api/import/status 只会看到
-                # memories_created/merged 计数比 api_calls 少，却查不出为什么——
-                # LLM 提取失败已经在记了，存储失败没道理不记。
+                # Without recording this in state.errors, /api/import/status would only show
+                # memories_created/merged trailing api_calls with no way to find out why.
+                # An LLM extraction failure is already recorded; there is no reason a
+                # storage failure should not be.
                 if len(self.state.data["errors"]) < _STATE_ERR_LOG_MAX:
                     self.state.data["errors"].append(err_msg[:_CHUNK_ERR_PREVIEW])
 
@@ -1066,15 +1090,17 @@ class ImportEngine:
         if not self.dehydrator.api_available:
             raise RuntimeError("API not available")
 
-        # 用 human 配置替换 prompt 里的「用户」称呼，让 LLM 输出更个人化。
+        # Substitute the configured `human` name for the generic 「用户」 in the prompt, so
+        # the LLM's output is more personal.
         _human = self.config.get("human", "用户")
         prompt = IMPORT_EXTRACT_PROMPT.replace("用户", _human) if _human != "用户" else IMPORT_EXTRACT_PROMPT
 
         trimmed_content = chunk_content
         total_tokens = count_tokens_approx(chunk_content)
         if total_tokens > _EXTRACT_TOKEN_CEILING:
-            # 按当前内容的字符/token 比例估算要保留的字符数，而不是死板的固定
-            # 字符上限——中英文混合内容每 token 对应的字符数差异很大。
+            # Estimate how many characters to keep from this content's own
+            # characters-per-token ratio, rather than a rigid fixed character cap — the
+            # number of characters per token varies enormously across mixed-language content.
             ratio = len(chunk_content) / max(1, total_tokens)
             approx_chars = max(1, int(_EXTRACT_TOKEN_CEILING * ratio))
             trimmed_content = chunk_content[:approx_chars]
@@ -1116,10 +1142,12 @@ class ImportEngine:
     def _parse_extraction(self, raw: str) -> list[dict]:
         """Parse and validate LLM extraction result.
 
-        🔴 2026-08-19：解析失败原来**只写日志**，state.errors 一个字都不记 ——
-           于是面板上看到的是「completed · errors [] · 创建 0 条」。
-           一次成功的、什么都没干的导入，是这套系统里最难查的那种失败。
-           现在往 errors 里记一条，前端那块 pre 直接就能看见。
+        🔴 A parse failure used to go **to the log only** and record nothing at all in
+           state.errors — so what the panel showed was "completed · errors [] · 0 created".
+           A successful import that did nothing is the hardest kind of failure to track down
+           in this whole system.
+           It now writes one entry into errors, which the front end's pre block shows
+           directly.
         """
         try:
             cleaned = _strip_md_fence(raw)
@@ -1326,7 +1354,6 @@ class ImportEngine:
     async def detect_patterns(self) -> list[dict]:
         """
         Post-import: detect high-frequency patterns via embedding clustering.
-        导入后：通过 embedding 聚类检测高频模式。
         Returns list of {pattern_content, count, bucket_ids, suggested_action}.
         """
         if not self.embedding_engine:

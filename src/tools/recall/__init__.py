@@ -6,12 +6,18 @@ tools/recall/ — remembering
 The first act of "reading": reaching for something. The three gates stack, and
 whatever comes back always goes through the same zoom.
 
-    recall(when="7月底")                          time gate
+    recall(when="上月")                           time gate
     recall(room="MIND/TRAITS")                    room gate (prefixes work, e.g. room="MIND")
     recall(query="跟海有关的那件事")               search (keyword + vector) -> time + score
     recall(query="学代码", view="scene")            cluster by shared scene words (how it got here)
-    recall(when="那阵子", tag="Home")             stack them; tag is a free fourth sieve
+    recall(when="本周", tag="Home")               stack them; tag is a free fourth sieve
     recall(when="上月", slices=1)                   how coarse or fine I want that stretch
+
+    ⚠️ Every example above uses a form `_parse_when()` actually accepts. Two of them
+       used to be `when="7月底"` and `when="那阵子"`, which it does not: it takes
+       48h / 7d / 今天 / 昨天 / 前天 / 本周 / 上周 / 本月 / 上月 / 今年 / 2026-07 /
+       2026-07-15 / 起..止, and nothing else. An example that does not run is worse
+       than no example — it is the documentation asserting a capability that is absent.
 
 🔪 **`by` was removed**: `by="touched"` (there is no such act as "digesting"
    here) and `by="回看"` (superseded by `slices`). The rule behind it:

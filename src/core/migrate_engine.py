@@ -1,30 +1,34 @@
 """
 ========================================
-migrate_engine.py — 完整记忆包导入引擎
+migrate_engine.py — the engine that imports a full memory package
 ========================================
 
-把 /api/export 产生的 zip 包（buckets/*.md + embeddings.db + export_meta.json）
-以增量 merge 方式写入当前系统。
+Takes the zip that /api/export produces (buckets/*.md + embeddings.db +
+export_meta.json) and merges it incrementally into the current system.
 
-关键行为：
-- 解析 zip，识别 bucket 文件，读取 export_meta.json 中的 embedding 模型信息
-- 对比导入包与当前系统的 embedding 模型，决定是否保留向量数据
-- 检测 bucket ID 冲突，返回冲突列表等待她/他决策
-- 冲突决策：skip（跳过）| overwrite（覆盖）| keep_both（保留两者，重分配 ID）
-- embedding 模型一致 → 合并向量数据；不一致 → 仅导入 md 文件，完成后自动重新向量化
+Key behaviours:
+- Parse the zip, identify the bucket files, and read the embedding model information out
+  of export_meta.json
+- Compare the package's embedding model with the current system's, and decide whether the
+  vector data can be kept
+- Detect bucket ID conflicts and return the list of them, waiting for the user to decide
+- Conflict decisions: skip | overwrite | keep_both (keep both, reassigning the ID)
+- Matching embedding model -> merge the vector data; mismatched -> import the md files
+  only, and re-vectorise automatically afterwards
 
-状态机：idle → parsing → parsed → applying → reindexing → done | error
+State machine: idle -> parsing -> parsed -> applying -> reindexing -> done | error
 
-不做什么：
-- 不调用 LLM（不做内容解析/摘要/打标，只做文件迁移）
-- 不修改 config
-- 不做对话历史解析（那是 import_memory.py 的事）
-- 不做 embedding 后端切换（backend 换成 local/api 时的全库重算是
-  migration_engine.py 的事——两个文件名高度相似，改代码前务必确认
-  自己改的是哪一个：这里是"导入别的 OB 实例导出的完整备份包"，
-  migration_engine.py 是"给当前库所有记忆重新生成向量"）
+What it does not do:
+- It never calls an LLM (no content parsing, summarising or tagging — this moves files)
+- It does not modify config
+- It does not parse conversation history (that is import_memory.py's job)
+- It does not switch embedding backend. Recomputing the whole store when the backend
+  changes between local and api belongs to migration_engine.py — the two filenames are
+  very nearly the same, so make sure you know which one you are editing: THIS file
+  imports a full backup package exported from another instance, while
+  migration_engine.py regenerates the vectors for every memory in the current store.
 
-对外暴露：MigrateEngine 类（被 server.py 实例化并注入路由）
+Exports: the MigrateEngine class (instantiated by server.py and injected into the routes)
 ========================================
 """
 
@@ -64,7 +68,7 @@ except ImportError:  # pragma: no cover
 logger = logging.getLogger("loci_brain.migrate")
 
 # ============================================================
-# 状态常量
+# Phase constants
 # ============================================================
 PHASE_IDLE = "idle"
 PHASE_PARSING = "parsing"
@@ -74,7 +78,7 @@ PHASE_REINDEXING = "reindexing"
 PHASE_DONE = "done"
 PHASE_ERROR = "error"
 
-# bucket type → 存储子目录映射（与 bucket_manager.py 保持一致）
+# bucket type -> storage subdirectory (kept in step with bucket_manager.py)
 _TYPE_SUBDIR: dict[str, str] = {
     "permanent": "permanent",
     "dynamic": "dynamic",
@@ -85,7 +89,7 @@ _TYPE_SUBDIR: dict[str, str] = {
     "letter": "letters",
 }
 
-# 默认子目录（unknown type 时）
+# The default subdirectory, used for an unknown type
 _DEFAULT_SUBDIR = "dynamic"
 _DEFAULT_MAX_BUCKET_BYTES = 50 * 1024
 _DEFAULT_MAX_METADATA_BYTES = 16 * 1024
@@ -143,14 +147,14 @@ def _register_migrate_engine(engine: Any) -> None:
 
 
 # ============================================================
-# 数据类
+# Data classes
 # ============================================================
 
 @dataclass
 class _ParsedBucket:
-    """zip 内解析到的单个 bucket 文件。"""
+    """One bucket file parsed out of the zip."""
     bucket_id: str
-    arc_path: str        # zip 内路径，e.g. "buckets/dynamic/foo/name_id.md"
+    arc_path: str        # its path inside the zip, e.g. "buckets/dynamic/foo/name_id.md"
     md_bytes: bytes | None  # compatibility path; production imports use md_path
     name: str
     bucket_type: str
@@ -161,7 +165,7 @@ class _ParsedBucket:
 
 @dataclass
 class ConflictInfo:
-    """导入包内某 bucket_id 与当前系统冲突的描述。"""
+    """A description of one bucket_id in the package colliding with the current system."""
     bucket_id: str
     import_name: str
     import_created: str
@@ -170,11 +174,12 @@ class ConflictInfo:
 
 
 # ============================================================
-# 辅助函数
+# Helpers
 # ============================================================
 
 def _safe_unlink(path: str) -> None:
-    """尽力删除一个暂存文件；失败只记日志，不让清理动作掩盖真正的异常。"""
+    """Best-effort deletion of a staging file. A failure is only logged, so that cleanup
+    can never mask the real exception."""
     try:
         if path and os.path.exists(path):
             os.unlink(path)
@@ -213,7 +218,8 @@ async def _to_thread_reaped(function: Any, *args: Any) -> Any:
 
 
 def _parse_md_meta(raw: bytes) -> tuple[dict, str]:
-    """从 md 字节中解析 frontmatter 元数据 + 正文。失败返回空 dict + 空串。"""
+    """Parse frontmatter metadata plus body out of md bytes. On failure, an empty dict and
+    an empty string."""
     try:
         post = frontmatter.loads(raw.decode("utf-8", errors="replace"))
         return dict(post.metadata), post.content
@@ -222,7 +228,7 @@ def _parse_md_meta(raw: bytes) -> tuple[dict, str]:
 
 
 def _safe_str(val: Any, max_len: int = 512) -> str:
-    """安全地将值转为字符串，并截断。"""
+    """Safely turn a value into a string, truncated."""
     return str(val)[:max_len] if val is not None else ""
 
 
@@ -231,7 +237,8 @@ def _safe_str(val: Any, max_len: int = 512) -> str:
 # ============================================================
 
 class MigrateEngine:
-    """完整记忆包（zip）导入引擎。每个服务进程单例使用；同一时刻只允许一个任务。"""
+    """The engine that imports a full memory package (a zip). One instance per server
+    process; only one job may run at a time."""
 
     def __init__(self, config: dict, bucket_mgr: Any, embedding_engine: Any) -> None:
         self._config = config
@@ -239,12 +246,12 @@ class MigrateEngine:
         self._embedding_engine = embedding_engine
         self._state_guard = threading.RLock()
 
-        # ---- 状态 ----
+        # ---- State ----
         self._phase: str = PHASE_IDLE
         self._job_id: str = ""
         self._apply_reservation: str = ""
 
-        # ---- 解析阶段产物 ----
+        # ---- Products of the parsing phase ----
         self._parsed_buckets: list[_ParsedBucket] = []
         self._conflicts: list[ConflictInfo] = []
         self._conflict_ids_at_parse: frozenset[str] = frozenset()
@@ -261,26 +268,26 @@ class MigrateEngine:
         self._integrity_warning: str = ""
         self._backup_manifest: Optional[dict[str, Any]] = None
 
-        # ---- 执行阶段计数 ----
+        # ---- Counters for the apply phase ----
         self._apply_total: int = 0
         self._apply_done: int = 0
         self._apply_imported: int = 0
         self._apply_skipped: int = 0
         self._apply_errors: list[str] = []
 
-        # ---- 重新向量化阶段 ----
+        # ---- The re-vectorising phase ----
         self._reindex_total: int = 0
         self._reindex_done: int = 0
         self._reindex_errors: int = 0
         self._buckets_to_reindex: list[tuple[str, str]] = []  # (bucket_id, markdown path)
 
-        # ---- 错误信息 ----
+        # ---- Error information ----
         self._error_message: str = ""
 
         _register_migrate_engine(self)
 
     # ----------------------------------------------------------
-    # 属性
+    # Properties
     # ----------------------------------------------------------
 
     @property
@@ -429,7 +436,7 @@ class MigrateEngine:
         return True
 
     def _embedding_match(self) -> bool:
-        """当前 embedding 模型是否与导入包一致。"""
+        """Does the current embedding model match the one in the package?"""
         if not self._import_model:
             return False
         current_model = str(getattr(self._embedding_engine, "model", "") or "")
@@ -447,7 +454,7 @@ class MigrateEngine:
         return not self._import_model_dim or not current_dim or self._import_model_dim == current_dim
 
     # ----------------------------------------------------------
-    # 状态查询
+    # Status queries
     # ----------------------------------------------------------
 
     def get_status(self) -> dict:
@@ -499,7 +506,7 @@ class MigrateEngine:
         }
 
     # ----------------------------------------------------------
-    # 第一步：解析 zip
+    # Step one: parse the zip
     # ----------------------------------------------------------
 
     async def parse_zip(self, zip_bytes: bytes) -> dict:
@@ -745,7 +752,7 @@ class MigrateEngine:
         files: dict[str, bytes | str] = package["files"]
         names = set(files)
 
-        # 1) 读取 export_meta.json → 获取 embedding 模型信息
+        # 1) Read export_meta.json -> get the embedding model information
         if "export_meta.json" in names:
             try:
                 meta_raw = self._read_member(
@@ -761,7 +768,8 @@ class MigrateEngine:
             except Exception as e:
                 logger.warning(f"[migrate] export_meta.json 解析失败，将跳过向量恢复: {e}")
 
-        # 2) 检查是否包含 embeddings.db；损坏快照不能伪装成可恢复索引。
+        # 2) Check whether embeddings.db is present. A corrupt snapshot must not be allowed
+        #    to masquerade as a restorable index.
         if "embeddings.db" in names:
             source = files["embeddings.db"]
             if disk_backed:
@@ -773,8 +781,9 @@ class MigrateEngine:
                 validate_sqlite_bytes(db_bytes)
                 has_embeddings = bool(db_bytes)
 
-        # 3) 遍历 bucket markdown 文件。任何损坏项都会让整个恢复预检失败，
-        # 避免界面显示“成功”但实际静默漏掉记忆。
+        # 3) Walk the bucket markdown files. Any corrupt entry fails the whole restore
+        # pre-flight, so that the interface can never report "success" while memories were
+        # silently dropped.
         seen_ids: set[str] = set()
         for arc_path in sorted(names):
             if not arc_path.startswith("buckets/") or not arc_path.endswith(".md"):
@@ -888,7 +897,7 @@ class MigrateEngine:
         )
 
     # ----------------------------------------------------------
-    # 第二步：执行导入（带冲突决策）
+    # Step two: apply the import, honouring the conflict decisions
     # ----------------------------------------------------------
 
     async def apply(
@@ -897,11 +906,11 @@ class MigrateEngine:
         *,
         reservation_id: str | None = None,
     ) -> None:
-        """执行导入。
+        """Apply the import.
 
         decisions: {bucket_id: "skip" | "overwrite" | "keep_both"}
-        冲突但未出现在 decisions 中的 bucket → 默认 skip（安全优先）。
-        无冲突的 bucket 直接导入，无需决策。
+        A bucket that conflicts but is absent from `decisions` defaults to skip — safety
+        first. A bucket with no conflict is imported directly and needs no decision.
         """
         if reservation_id is None:
             reservation_id = self.reserve_apply(self._job_id)
@@ -961,12 +970,13 @@ class MigrateEngine:
 
                 self._apply_done += 1
 
-            # ---- 向量数据处理 ----
+            # ---- Handling the vector data ----
             merged_ids: set[str] = set()
             if embedding_matches and self._has_embeddings and (
                 self._zip_db_bytes or self._zip_db_path
             ):
-                # 模型与维度一致时复用快照向量。keep_both 会把源 ID 映射到新 ID。
+                # When both model and dimension match, reuse the snapshot's vectors.
+                # keep_both maps the source ID onto the new one.
                 try:
                     if self._zip_db_path:
                         merged_ids = await _to_thread_reaped(
@@ -1066,10 +1076,11 @@ class MigrateEngine:
     def _render_bucket(
         self, pb: _ParsedBucket, target_id: str, buckets_dir: str
     ) -> tuple[str, str, str]:
-        """（在线程中执行）纯计算：解析 frontmatter，算出目标路径和序列化后的
-        markdown。除了 os.makedirs 建目录外不做任何磁盘写入。
+        """(Runs in a thread.) Pure computation: parse the frontmatter, work out the target
+        path and the serialised markdown. Apart from os.makedirs creating directories, it
+        performs no disk writes at all.
 
-        返回 (content, target_path, rendered)。
+        Returns (content, target_path, rendered).
         """
         raw = self._read_member(
             pb.md_bytes if pb.md_bytes is not None else pb.md_path,
@@ -1088,14 +1099,14 @@ class MigrateEngine:
                 f"{pb.arc_path} 正文过大（{content_size} bytes > {self._bucket_content_limit()}）"
             )
 
-        # 始终写显式 ID；恢复不依赖文件名猜测。
+        # Always write an explicit ID; restoring never depends on guessing from a filename.
         meta["id"] = target_id
 
-        # 确定目标目录（按类型 + domain）
+        # Determine the target directory (by type and domain)
         btype = str(meta.get("type") or pb.bucket_type or "dynamic")
         subdir = _TYPE_SUBDIR.get(btype, _DEFAULT_SUBDIR)
 
-        # 获取主 domain（与 bucket_manager 保持一致）
+        # Take the primary domain (kept in step with bucket_manager)
         domain = meta.get("domain") or pb.domain or []
         if btype == "feel":
             primary_domain = "沉淀物"
@@ -1120,16 +1131,17 @@ class MigrateEngine:
         safe_name = sanitize_name(str(meta.get("name") or pb.name or target_id))[:40]
         target_path = str(safe_path(target_dir, f"{safe_name}_{safe_id}.md"))
 
-        # 重新序列化 frontmatter + 正文
+        # Re-serialise the frontmatter plus body
         post = frontmatter.Post(content, **meta)
         rendered = frontmatter.dumps(post)
         return content, target_path, rendered
 
     @staticmethod
     def _atomic_write(path: str, rendered: str) -> None:
-        # 用 _win_long_path 前缀绕开 Windows 260 字符 MAX_PATH：sanitize 后的
-        # domain 嵌套路径在深层 buckets_dir 下真的会超限（同款问题 utils.
-        # atomic_write_text 已经踩过并修过，这里保持一致而不是各写各的）。
+        # The _win_long_path prefix sidesteps Windows' 260-character MAX_PATH: a sanitised
+        # nested domain path under a deep buckets_dir really does exceed it (the same
+        # problem utils.atomic_write_text walked into and fixed — this stays consistent with
+        # it rather than each place inventing its own).
         temp_path = f"{path}.{uuid.uuid4().hex}.tmp"
         temp_path_long = _win_long_path(temp_path)
         try:
@@ -1176,12 +1188,14 @@ class MigrateEngine:
     def _write_bucket_file_staged(
         self, pb: _ParsedBucket, target_id: str, buckets_dir: str
     ) -> tuple[str, str, str]:
-        """（在线程中执行）把新内容写到跟 target_path 同目录的暂存文件，不动
-        target_path 本身。
+        """(Runs in a thread.) Write the new content to a staging file in the same directory
+        as target_path, without touching target_path itself.
 
-        专供 overwrite 冲突路径使用：写入成功之后调用方才决定要不要碰旧桶，
-        写入失败则旧桶完全没被动过。返回 (content, target_path, staged_path)；
-        调用方在确认旧桶已安全处理完之后自己 os.replace(staged_path, target_path)。
+        Exclusively for the overwrite conflict path: only once the write has succeeded does
+        the caller decide whether to touch the old bucket, and a failed write leaves the old
+        bucket entirely untouched. Returns (content, target_path, staged_path); the caller
+        does its own os.replace(staged_path, target_path) once it has confirmed the old
+        bucket has been dealt with safely.
         """
         content, target_path, rendered = self._render_bucket(pb, target_id, buckets_dir)
         staged_path = f"{target_path}.staging-{uuid.uuid4().hex}"
@@ -1281,10 +1295,12 @@ class MigrateEngine:
             _safe_unlink(staged_path)
 
     def _merge_embeddings(self, db_bytes: bytes, id_map: dict[str, str]) -> set[str]:
-        """（在线程中执行）把 zip 内 embeddings.db 的向量合并进当前 db。
+        """(Runs in a thread.) Merge the vectors from the zip's embeddings.db into the
+        current db.
 
-        兼容当前 bucket_id/embedding schema 和早期 id/vector schema。
-        返回成功恢复向量的目标 bucket ID 集合。
+        It understands both the current bucket_id/embedding schema and the earlier
+        id/vector one.
+        Returns the set of target bucket IDs whose vectors were restored successfully.
         """
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tf:
             tf.write(db_bytes)
@@ -1606,7 +1622,8 @@ class MigrateEngine:
         return frontmatter.load(bucket_path).content or ""
 
     async def _reindex_all(self) -> None:
-        """对 embedding 不匹配时导入的 bucket 重新生成向量。"""
+        """Regenerate vectors for the buckets that were imported while the embedding model
+        did not match."""
         emb = self._embedding_engine
         if not getattr(emb, "enabled", False):
             logger.warning("[migrate] embedding engine 未启用，跳过重新向量化")

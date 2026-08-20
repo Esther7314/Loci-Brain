@@ -1,26 +1,30 @@
 """
 ========================================
-dehydrator.py — 调用 LLM 做「脱水压缩 / 合并 / 打标 / 拆分」
+dehydrator.py — the LLM calls: dehydrate / merge / tag / split
 ========================================
 
-这个文件包住对外部 LLM 的所有 prompt 和调用。tools/hold、tools/grow、
-tools/dream 等都通过它来「让模型做内容理解」，自身不直接拼 prompt。
+This file wraps every prompt and every call that goes to an external LLM. tools/hold,
+tools/grow, tools/dream and the rest all go through it whenever a model has to understand
+some content; none of them assembles a prompt itself.
 
-关键行为：
-- dehydrate(content)：把长内容压成高密度摘要，省 token
-- merge(old, new)：揉合新旧内容并保持桶体积大致恒定
-- analyze(content, for_mind=False)：返回 {domain, valence, arousal, tags, aliases, suggested_name}
-  （tags=场景锚点 scene，字面校验；aliases=引申词，只喂 bm25；for_mind 时不抽 scene）
-- digest(content)：把日记/长文拆成 2~6 条独立条目（grow 用）
-- 走 OpenAI 兼容客户端（DeepSeek / Ollama / LM Studio / vLLM / Gemini 都行）
-- SQLite 缓存脱水结果，避免对相同内容重复调用 API
+Key behaviours:
+- dehydrate(content): compress long content into a dense summary and save tokens
+- merge(old, new): blend new content into old while keeping bucket size roughly constant
+- analyze(content, for_mind=False): returns {domain, valence, arousal, tags, aliases,
+  suggested_name} (tags = the scene anchors, verified to appear literally in the body;
+  aliases = expansion words that only feed bm25; for_mind skips scene extraction)
+- digest(content): split a diary entry or long text into 2~6 independent entries (used by grow)
+- Goes through an OpenAI-compatible client (DeepSeek / Ollama / LM Studio / vLLM / Gemini all work)
+- Caches dehydration results in SQLite so identical content never hits the API twice
 
-不做什么（边界）：
-- 不读写记忆桶文件（不知道 bucket 是什么形态）
-- 不决定何时调用、不做去重判断（hold/grow 决定）
-- 没 API key 时不报错，返回降级结果（让上层决定怎么办）
+What it deliberately does not do:
+- It neither reads nor writes memory bucket files (it has no idea what a bucket looks like)
+- It does not decide when to be called, and it makes no dedup judgements (hold/grow do)
+- With no API key it does not raise; it returns a degraded result and lets the layer above
+  decide what to do
 
-对外暴露：Dehydrator 类（dehydrate / merge / analyze / digest）和默认 prompt 字符串
+Exports: the Dehydrator class (dehydrate / merge / analyze / digest) and the default
+prompt strings
 ========================================
 """
 
@@ -49,84 +53,104 @@ logger = logging.getLogger("loci_brain.dehydrator")
 
 
 # ============================================================
-# 调参面板 / Tunable constants
+# Tunable constants
 # ------------------------------------------------------------
-# rule.md §①：禁裸魔法数字。这些原本散在五个 _api_* 方法中，
-# 集中后调参一眼看完；prompt 模板本身仍在下面以可读性优先。
+# rule.md §①: no bare magic numbers. These used to be scattered across the five _api_*
+# methods; gathered here, the whole tuning surface is visible at a glance. The prompt
+# templates themselves stay below, where readability wins.
 # ============================================================
 
-# --- 脱水缓存版本号 ---
-# 改任何会影响脱水/合并输出的 prompt 时 +1，使存量缓存自然失效（见 _content_key）。
-# v2：DEHYDRATE/MERGE 加入「视角铁律」，强制保留第一人称（我 / 人名）。
-# v3：脱水结果只接受既定 JSON schema，隔离模型追加的评论、立场与未知字段。
-# v4：视角铁律补反向条款——v2 只防「我被抹掉」方向（规则和示例都是单向的），
-#     脱水 LLM 在含糊处过度矫正：省略主语的句子被归给「我」（实案：正文
-#     「07-07嚎啕大哭…吊她」经 /breath-hook 脱水成「07-07我嚎啕大哭…吊我」，
-#     主语翻转）。补反向同罪条款 + 省略主语处理规则 + 反向示例。
+# --- Dehydration cache version ---
+# Bump this by one whenever a prompt that affects dehydrate/merge output changes, so
+# existing cache entries fall out of use naturally (see _content_key).
+# v2: DEHYDRATE/MERGE gained the "perspective rule", which forces first person to survive
+#     (「我」 for the AI side, the person's name for the human side).
+# v3: dehydration results are accepted only against the documented JSON schema, which
+#     isolates any commentary, stance or unknown fields the model appends.
+# v4: the perspective rule gained a reverse clause. v2 only guarded one direction — "I
+#     must not be erased" — with rules and examples that were all one-way, and the
+#     dehydrating LLM then over-corrected wherever things were ambiguous: a sentence with
+#     its subject omitted got attributed to 「我」, flipping who did what (seen for real:
+#     a line describing what the other person did came back describing what I did). So a
+#     reverse clause was added, plus a rule for handling an omitted subject, plus a
+#     reversed example.
 _PROMPT_VERSION = 4
 
-# --- LLM 默认参数 ---
+# --- LLM defaults ---
 _DEFAULT_MODEL = "gemini-2.0-flash"
 _DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 _DEFAULT_MAX_TOKENS = 1024
 _DEFAULT_TEMPERATURE = 0.1
 _API_TIMEOUT_SECONDS = 60.0
 
-# --- 瞬时错误重试（Gemini 免费层偶发 429 / 503，详见 README 故障表）---
-# 总尝试 = 1 次初始 + (max_attempts-1) 次重试；退避 base*2^attempt 秒。
+# --- Retry on transient errors (the Gemini free tier throws the occasional 429 / 503;
+#     see the troubleshooting table in the README) ---
+# Total attempts = 1 initial + (max_attempts-1) retries; backoff of base*2^attempt seconds.
 _RETRY_MAX_ATTEMPTS = 3
 _RETRY_BASE_DELAY = 0.8
 _RETRY_STATUS = {429, 500, 502, 503, 504}
 
-# --- 脱水 API 最终失败时的本地降级：返回原文截断片段的字符上限 ---
-# 设计：API（含重试）彻底失败时，宁可返回未压缩的原文片段，也不让上层
-# breath/dream 拿不到内容（rule.md §1.5 允许降级）。不写缓存，API 恢复后自动重压。
+# --- Local fallback when the dehydration API has finally failed: the character cap on
+#     the truncated raw excerpt that gets returned ---
+# The design: when the API (retries included) has failed outright, it is better to return
+# an uncompressed excerpt of the original than to leave breath/dream with no content at
+# all (rule.md §1.5 permits degrading). Nothing is cached, so once the API recovers the
+# content is compressed again on the next pass.
 _DEHYDRATE_FALLBACK_CHARS = 300
 
-# --- 该多长才需要压缩（低于该 token 数直接走原文）---
+# --- How long something must be before compressing it is worth it (below this token
+#     count the original is passed straight through) ---
 _DEHYDRATE_MIN_TOKENS = 100
 
-# --- 各 API 调用的内容截断上限（防 prompt token 超范围）---
+# --- Input truncation caps per API call (so the prompt cannot blow past the token limit) ---
 _DEHYDRATE_INPUT_LIMIT = 3000
-_MERGE_INPUT_LIMIT = 2000     # 新旧各一份
+_MERGE_INPUT_LIMIT = 2000     # one each for old and new
 _ANALYZE_INPUT_LIMIT = 2000
-_DIGEST_INPUT_LIMIT = 5000    # 一天的日记量较大
-_PLAN_JUDGE_INPUT_LIMIT = 1500  # plan 与 new event 各一份
-_SAME_EVENT_INPUT_LIMIT = 1800  # 旧桶与新内容各一份
+_DIGEST_INPUT_LIMIT = 5000    # a whole day of diary is a lot of text
+_PLAN_JUDGE_INPUT_LIMIT = 1500  # one each for the plan and the new event
+_SAME_EVENT_INPUT_LIMIT = 1800  # one each for the old bucket and the new content
 
-# --- 各专用调用的 max_tokens 覆盖 ---
-_ANALYZE_MAX_TOKENS = 4096      # Gemini 2.5 thinking 会消耗大量 token，需留足余量
-_DIGEST_MAX_TOKENS = 8192       # 日记拆条内容多，thinking + 输出都需要足量空间
-_PLAN_JUDGE_MAX_TOKENS = 2048   # thinking 模型下 200 token 完全不够
-_PLAN_JUDGE_TEMPERATURE = 0.0   # 判定需确定性
-_SAME_EVENT_MAX_TOKENS = 1024   # 仅返回紧凑 JSON
-_SAME_EVENT_TEMPERATURE = 0.0   # 事件边界判定需确定性
-_DIGEST_TEMPERATURE = 0.0       # 拆条需确定性
+# --- max_tokens overrides for the specialised calls ---
+_ANALYZE_MAX_TOKENS = 4096      # thinking models burn a lot of tokens; leave headroom
+_DIGEST_MAX_TOKENS = 8192       # splitting a diary produces a lot: thinking and output both need room
+_PLAN_JUDGE_MAX_TOKENS = 2048   # under a thinking model, 200 tokens is nowhere near enough
+_PLAN_JUDGE_TEMPERATURE = 0.0   # a judgement has to be deterministic
+_SAME_EVENT_MAX_TOKENS = 1024   # it only returns compact JSON
+_SAME_EVENT_TEMPERATURE = 0.0   # deciding an event boundary has to be deterministic
+_DIGEST_TEMPERATURE = 0.0       # splitting has to be deterministic
 
-# --- 默认情感坐标（与 bucket_manager 中保持一致）---
-_DEFAULT_VALENCE = 0.5  # 0=极负, 1=极正
-_DEFAULT_AROUSAL = 0.3  # 0=完全平静, 1=极激动
+# --- Default emotion coordinates (kept in step with bucket_manager) ---
+_DEFAULT_VALENCE = 0.5  # 0 = extremely negative, 1 = extremely positive
+_DEFAULT_AROUSAL = 0.3  # 0 = completely calm, 1 = extremely aroused
 
-# --- 输出截断长度 ---
-_TAGS_MAX = 15           # tags 最多保留几个
-# 指「这两个人」的标签（名字 + 纯指称），一律不进 tags —— 理由见 _parse_analysis 里的注释。
-# 🔴 2026-08-18（E3 脱壳后半）：名字**从代码里搬走了**。原来这儿硬写着我们俩的名字，
-#    那等于把活人的名字发布出去；而且别人 clone 下来，挡的还是我们家的名字，对他毫无用处。
-#    现在名字来自 `AI_NAME` / `LOCI_OWNER_NAME` 和 config.yaml 的 `people:` 段。
-#    代码里只留**通用代词**——那部分对谁都成立。
-# 刻意不含「主人/老婆/老公/宝宝」这类称呼——那些是称呼事件本身，有区分度。
+# --- Output truncation lengths ---
+_TAGS_MAX = 15           # how many tags are kept at most
+# Tags that merely point at "the two people this store is about" — their names, and bare
+# pronouns — never make it into tags. The reasoning is in the comments inside
+# _parse_analysis.
+# 🔴 The names themselves were **moved out of the code.** They used to be hard-coded here,
+#    which amounts to publishing living people's names; and anyone cloning this repo would
+#    have inherited a filter for someone else's household, which is useless to them.
+#    The names now come from `AI_NAME` / `LOCI_OWNER_NAME` and the `people:` section of
+#    config.yaml. All that stays in code is the **generic pronouns**, which hold for
+#    everyone.
+# Terms of endearment and role words are deliberately absent from this list — those
+# describe the act of addressing someone and do carry information.
 _PRONOUN_TAGS = frozenset({"她", "他", "我", "你"})
 
 
 def _person_tags() -> frozenset:
-    """不该进 tags 的人名：通用代词 + 这两个人的**全部叫法**。
+    """The person names that must not become tags: the generic pronouns, plus **every way
+    the two people are addressed**.
 
-    🔴 人名只有**一份**，就是别名表（`aliases.yaml`）。这儿不另立名单。
-       2026-08-18 我一度在 config 里又加了一份 `people:`，等于同一件事记两处——
-       两处一定会有一处过期。收成现在这样：
-         · **谁是这两个人** → `AI_NAME` / `LOCI_OWNER_NAME`（各一个规范名）
-         · **他们都被怎么叫** → 别名表里那两条的全部别名
-       于是要维护的只有别名表一张，面板将来也只用给它做一个编辑器。
+    🔴 There is exactly **one** list of person names, and it is the alias table
+       (`aliases.yaml`). No second list is started here.
+       A separate `people:` section was once added to config as well, which recorded the
+       same fact in two places — and two places guarantees one of them goes stale. It was
+       collapsed into what it is now:
+         · **who the two people are** -> `AI_NAME` / `LOCI_OWNER_NAME` (one canonical name each)
+         · **every way they get addressed** -> all the aliases those two carry in the table
+       So there is one table to maintain, and a future panel only needs one editor for it.
     """
     from utils import get_ai_name, get_owner_name
     from tools._subjects import load_alias_table
@@ -134,42 +158,45 @@ def _person_tags() -> frozenset:
     canon_names: set[str] = set()
     for n in (get_ai_name(), get_owner_name()):
         n = str(n or "").strip()
-        if n and n != "AI":          # 没配名字时的占位符不算名字
+        if n and n != "AI":          # the placeholder used when no name is configured is not a name
             canon_names.add(n)
     if not canon_names:
         return frozenset(_PRONOUN_TAGS)
 
     names = set(canon_names)
     try:
-        # 别名表是 {别名小写: 规范名}，反着查：这两个规范名底下挂的所有叫法
+        # The alias table maps {lowercased alias: canonical name}; look it up backwards to
+        # get every form of address hanging off those two canonical names
         for alias, canon in (load_alias_table() or {}).items():
             if str(canon).strip() in canon_names:
                 names.add(str(alias).strip())
                 names.add(str(canon).strip())
-    except Exception:                # 表读不到就只挡规范名+代词，不炸
+    except Exception:                # if the table will not read, block the canonical names and pronouns only, and do not raise
         pass
     return frozenset(_PRONOUN_TAGS | {n for n in names if n})
-_DOMAIN_MAX = 3          # domain 最多保留几个（rule.md 推荐选 1~2 个）
-_NAME_MAX_CHARS = 20     # suggested_name 上限
-_PLAN_REASON_MAX = 200   # plan 判定 reason 上限
-_SAME_EVENT_REASON_MAX = 200  # 合并边界判定 reason 上限
-_PARSE_ERR_PREVIEW = 200  # JSON 解析失败时日志中 raw 预览长度
+_DOMAIN_MAX = 3          # how many domains are kept at most (rule.md recommends picking 1~2)
+_NAME_MAX_CHARS = 20     # cap on suggested_name
+_PLAN_REASON_MAX = 200   # cap on the reason from a plan judgement
+_SAME_EVENT_REASON_MAX = 200  # cap on the reason from a merge-boundary judgement
+_PARSE_ERR_PREVIEW = 200  # how much of `raw` is previewed in the log when JSON parsing fails
 
-# --- importance 范围（与哲学边界一致）---
+# --- importance range (in step with the philosophical boundary) ---
 _IMPORTANCE_MIN = 1
 _IMPORTANCE_MAX = 10
 _DEFAULT_IMPORTANCE = 5
 
 
 # --- Dehydration prompt: instructs cheap LLM to compress information ---
-# --- 脱水提示词：指导廉价 LLM 压缩信息 ---
-# --- Perspective rule (shared) ---
-# --- 视角铁律（脱水/合并共用）---
-# BUG FIX：原文是 AI 第一人称写下的（"我也在她这里看到了自己没见过的碎片"），
-# 但脱水/合并后被改写成第三人称（"双方在互动中互相发现对方未知的情感碎片"），
-# 视角丢失。压缩本应保密度、不应改人称。下面这条规则注入 system prompt 强制保留：
-#   AI 一方恒用「我」；人类一方一律用其名字称呼（由 config.human 注入）。
-# 禁止 双方 / 对方 / 用户 / TA 等抹掉视角的中性第三人称。
+# --- Perspective rule (shared by dehydrate and merge) ---
+# BUG FIX: the body was written by the AI in the first person, but dehydration and merging
+# rewrote it into the third person ("both sides discovered in each other emotional
+# fragments neither had seen"), and the perspective was lost. Compression is supposed to
+# preserve density, not change grammatical person. The rule below is injected into the
+# system prompt to force it to survive:
+#   the AI side is always 「我」; the human side is always called by name (injected from
+#   config.human).
+# Neutral third-person constructions that erase perspective — "both sides", "the other
+# party", "the user", "they" — are forbidden.
 def _perspective_rule(human: str) -> str:
     return (
         "\n\n【视角铁律——最高优先级，违反即视为压缩失败】\n"
@@ -213,7 +240,6 @@ DEHYDRATE_PROMPT = """你是一个信息压缩专家。请将以下内容脱水�
 
 
 # --- Diary digest prompt: split daily notes into independent memory entries ---
-# --- 日记整理提示词：把一大段日常拆分成多个独立记忆条目 ---
 DIGEST_PROMPT = """你是一个日记整理专家。她/他会发送一段包含今天各种事情的文本（可能很杂乱），请你将其拆分成多个独立的记忆条目。
 
 整理规则：
@@ -255,16 +281,20 @@ valence: 0~1（0=消极, 0.5=中性, 1=积极）
 arousal: 0~1（0=平静, 0.5=普通, 1=激动）"""
 
 
-# --- Cut prompt: 只说在哪儿切，一个字都不许改（2026-08-05 她定的）---
+# --- Cut prompt: say only where to cut; not one character may be changed ---
 #
-# 为什么另起一个而不是改 DIGEST_PROMPT：DIGEST 的输出是 `{"content": "整理后的内容"}`
-# —— **它会重写正文**（第 3 条明写「去除无意义的口水话」）。她的原话是
-# 「如果 deepseek 只是拆、不改原文，那没问题」。
+# Why this is a separate prompt rather than an edit to DIGEST_PROMPT: DIGEST outputs
+# `{"content": "the tidied-up content"}` — **it rewrites the body** (rule 3 says in as many
+# words "strip the filler"). The line that settled it: splitting without altering the
+# original is fine; altering it is not.
 #
-# 关键不在这段提示词，在**代码只接受位置**：模型返回的是「在哪儿切」，
-# 切的动作由 `_apply_cuts()` 做，而它只会 `find` + 切片。
-# **原文一个字碰不到，因为代码根本没有「写」的能力。**
-# 跟 scene 的字面校验同一个模式：别在 prompt 里叮嘱「不许改」，让它没有改的机会。
+# The important part is not this prompt, it is that **the code accepts only positions**:
+# the model returns where to cut, the cutting itself is done by `_apply_cuts()`, and all
+# that does is `find` plus slicing.
+# **Not one character of the original can be touched, because the code has no ability to
+# write at all.**
+# Same pattern as the literal verification on scene: do not lecture the model about "no
+# changes" in the prompt, leave it no opportunity to make one.
 CUT_PROMPT = """你的任务是：**只说在哪儿切，不要改一个字。**
 
 给你一段记忆正文，它可能塞了好几件不同的事（不同主题、不同场景）。
@@ -283,7 +313,6 @@ CUT_PROMPT = """你的任务是：**只说在哪儿切，不要改一个字。**
 
 
 # --- Merge prompt: instruct LLM to blend old and new memories ---
-# --- 合并提示词：指导 LLM 揉合新旧记忆 ---
 MERGE_PROMPT = """你是一个信息合并专家。请将旧记忆与新内容合并为一份统一的简洁记录。
 
 合并规则：
@@ -298,13 +327,16 @@ MERGE_PROMPT = """你是一个信息合并专家。请将旧记忆与新内容�
 
 
 # --- Auto-tagging prompt: analyze content for domain and emotion coords ---
-# --- 自动打标提示词：分析内容的主题域和情感坐标 ---
-# 2026-08-06 tags 三组重新分工（她一刀砍到根）：
-#   core   → 🗑️ 砍。它抽的就是正文里的词，bm25 索引和字面命中本来就含正文，
-#            对搜索贡献是零；唯一起的作用恰恰是我们不想要的——塌缩按频率取
-#            tags 时，抽象的 core 永远赢（那行全是「亲密关系·沟通·关系」）。
-#   scene  → ✅ 留，tags 从此只有它（字面校验保证一定在原文里）。
-#   expand → 挪去新字段 aliases，只喂 bm25，不进向量、不在塌缩/chips 露面。
+# The three tag groups were re-divided, cutting straight to the root:
+#   core   -> 🗑️ cut. What it extracted were words already in the body, and both the bm25
+#            index and literal matching already cover the body, so its contribution to
+#            search was zero. The one effect it did have was precisely the unwanted one:
+#            when a collapsed row picks tags by frequency, the abstract core words win
+#            every time, and that row ends up reading like a list of category names.
+#   scene  -> ✅ kept, and tags now consist of nothing else (the literal check guarantees
+#            they really do appear in the body).
+#   expand -> moved to the new `aliases` field: it feeds bm25 only, never enters the
+#            vectors, and never shows up in a collapsed row or in chips.
 ANALYZE_PROMPT = """你是一个内容分析器。请分析以下文本，输出结构化的元数据。
 
 分析规则：
@@ -343,8 +375,9 @@ ANALYZE_PROMPT = """你是一个内容分析器。请分析以下文本，输出
   "suggested_name": "简短标题"
 }"""
 
-# MIND 专用（机制④ 第 5 条）：认知里没有照片，不抽 scene——
-# 逼模型在一段思考里找「画面」只会逼出编造。只要 expand（换措辞搜得到）。
+# MIND only: there are no photographs inside an insight, so scene is not extracted —
+# forcing a model to find "the picture" inside a piece of thinking only forces it to make
+# one up. All that is wanted is expand, so a different phrasing still finds it.
 ANALYZE_PROMPT_MIND = """你是一个内容分析器。下面是一段第一人称的认知/判断（不是事件叙述）。请输出结构化元数据。
 
 分析规则：
@@ -375,14 +408,11 @@ class Dehydrator:
     API-only: every public method requires a working LLM API.
     If the API is unavailable, methods raise RuntimeError so callers can
     surface the failure to the user instead of silently producing low-quality results.
-    数据脱水器 + 内容分析器。
-    三大能力：脱水压缩 / 新旧合并 / 自动打标。
-    仅走 API：API 不可用时直接抛出 RuntimeError，调用方明确感知。
-    （根据 BEHAVIOR_SPEC.md 三、降级行为表决策：无本地降级）
+    (Per the degradation table in BEHAVIOR_SPEC.md section 3: no local fallback.)
     """
 
     def __init__(self, config: dict):
-        # --- Read dehydration API config / 读取脱水 API 配置 ---
+        # --- Read dehydration API config ---
         dehy_cfg = config.get("dehydration", {})
         self.api_key = dehy_cfg.get("api_key", "")
         self.model = dehy_cfg.get("model", _DEFAULT_MODEL)
@@ -402,24 +432,28 @@ class Dehydrator:
         ):
             self.api_format = "gemini"
             logger.info("AQ.* key + generativelanguage.googleapis.com detected — auto-switching to native Gemini API")
-        # thinking_budget: 仅 Gemini 2.5+/3.x「思考型」模型生效。默认 0 = 关闭思考。
-        # 关键：gemini-3.5-flash 等模型默认会先消耗 output token 做「思考」，当
-        # max_tokens 较小时思考会吃光预算 → 返回空文本（这正是脱水/抽取偶发返回
-        # 空、报 "LLM extraction failed" 的根因）。脱水/抽取是机械式转换，不需要
-        # 思考，关掉它既修了空输出、又更快更省。设为 None 可彻底不发该字段（兼容
-        # 不支持 thinkingConfig 的老模型）。
+        # thinking_budget: only applies to Gemini's "thinking" models. Default 0 = thinking
+        # off.
+        # The point: models of that family spend output tokens on "thinking" first, and
+        # when max_tokens is small the thinking eats the entire budget, so what comes back
+        # is empty text. That is the root cause of dehydration/extraction intermittently
+        # returning nothing and reporting "LLM extraction failed". Dehydration and
+        # extraction are mechanical transforms and need no thinking at all, so turning it
+        # off fixes the empty output and is faster and cheaper besides. Setting it to None
+        # omits the field entirely, for older models that do not understand thinkingConfig.
         self.thinking_budget = dehy_cfg.get("thinking_budget", 0)
 
-        # --- Human display name / 人类一方的称呼 ---
-        # 注入脱水/合并的「视角铁律」：原文里人类那一方统一还原为这个名字，
-        # 而不是被压成「双方/对方/用户」。与 config.human 同源（前端可改）。
+        # --- How the human side is addressed ---
+        # Injected into the "perspective rule" for dehydrate/merge: whoever the human side
+        # is in the original text is restored to this name, rather than being flattened
+        # into "both sides" / "the other party" / "the user". Same source as config.human,
+        # which the front end can edit.
         self.human = config.get("human", "用户") or "用户"
 
-        # --- API availability / 是否有可用的 API ---
+        # --- API availability ---
         self.api_available = bool(self.api_key)
 
         # --- Initialize OpenAI-compatible client (only for openai_compat format) ---
-        # --- 初始化 OpenAI 兼容客户端（仅 openai_compat 格式使用）---
         self.client: Optional[AsyncOpenAI] = None
         if self.api_available and self.api_format == "openai_compat":
             self.client = AsyncOpenAI(
@@ -428,8 +462,7 @@ class Dehydrator:
                 timeout=self.timeout_seconds,
             )
 
-        # --- SQLite dehydration cache ---
-        # --- SQLite 脱水缓存：content hash → summary ---
+        # --- SQLite dehydration cache: content hash -> summary ---
         db_path = os.path.join(config["buckets_dir"], "dehydration_cache.db")
         self.cache_db_path = db_path
         self._cache_conn: sqlite3.Connection = self._init_cache_db()
@@ -462,12 +495,14 @@ class Dehydrator:
         return conn
 
     def _content_key(self, content: str) -> str:
-        """缓存键 = hash(prompt 版本 + 人名 + 模型配置 + 原文)。
+        """The cache key = hash(prompt version + person name + model config + original text).
 
-        缓存原本只按 content_hash 存，导致脱水 prompt 改了、人名改了，旧的
-        third-person 摘要仍会命中缓存返回——视角修复对存量内容不生效。把
-        prompt 版本、人名、api_format、base_url 和 model 混进 key，换模型或端点后
-        下次 breath 会用新配置重新脱水，不会复用旧模型的摘要。"""
+        The cache used to be keyed on content_hash alone, so once the dehydration prompt
+        changed or the person's name changed, an old third-person summary still came back
+        as a cache hit — meaning the perspective fix did not reach existing content. Mixing
+        the prompt version, the name, api_format, base_url and model into the key means
+        that after switching model or endpoint the next breath re-dehydrates with the new
+        configuration instead of reusing the old model's summary."""
         keyed = (
             f"{_PROMPT_VERSION}|{self.human}|{self.api_format}|"
             f"{self.base_url.rstrip('/')}|{self.model}|{content}"
@@ -498,25 +533,27 @@ class Dehydrator:
         self._cache_conn.commit()
 
     # ---------------------------------------------------------
-    # 内部 helpers / Internal helpers
+    # Internal helpers
     # ---------------------------------------------------------
     def _require_api(self) -> None:
-        """API 不可用时抛出统一文案的 RuntimeError。
+        """Raise a RuntimeError with one shared message when the API is unavailable.
 
-        原本 dehydrate / merge / analyze / digest 各处都重复
-        `if not self.api_available: raise RuntimeError("...")`，
-        统一后调用方一行 `self._require_api()` 即可，且文案改一处全部生效。
+        dehydrate / merge / analyze / digest each used to repeat
+        `if not self.api_available: raise RuntimeError("...")`. With this, a caller writes
+        one line, `self._require_api()`, and the wording is changed in one place for all of
+        them.
         """
         if not self.api_available:
             raise RuntimeError("脱水 API 不可用，请检查 config.yaml 中的 dehydration 配置")
 
     @staticmethod
     def _is_transient_error(exc: BaseException) -> bool:
-        """是否为可重试的瞬时错误：HTTP 429/500/502/503/504、超时、连接错误。
+        """Is this a transient, retryable error: HTTP 429/500/502/503/504, a timeout, or a
+        connection error?
 
-        兼容 httpx.HTTPStatusError（status_code 在 .response 上）与
-        openai.APIStatusError（status_code 在异常上）；其余按类名兜底匹配
-        timeout / connect / ratelimit / unavailable。"""
+        It handles both httpx.HTTPStatusError (where status_code lives on `.response`) and
+        openai.APIStatusError (where it lives on the exception); anything else falls back to
+        matching the class name against timeout / connect / ratelimit / unavailable."""
         status = getattr(exc, "status_code", None)
         if status is None:
             resp = getattr(exc, "response", None)
@@ -534,10 +571,12 @@ class Dehydrator:
         max_tokens: int | None = None,
         temperature: float | None = None,
     ) -> str:
-        """统一 chat 入口：对 429 / 5xx / 超时等瞬时错误做指数退避重试。
+        """The single chat entry point: exponential backoff retries on transient errors
+        such as 429 / 5xx / timeouts.
 
-        真正的单次调用在 _chat_once；这里只负责重试与退避，让 Gemini 免费层
-        偶发的 429/503 不至于直接把脱水/合并打挂（见 README 故障表）。"""
+        The actual single call lives in _chat_once; this only handles retry and backoff, so
+        that the occasional 429/503 from a free tier does not knock dehydration or merging
+        out cold (see the troubleshooting table in the README)."""
         last_exc: BaseException | None = None
         for attempt in range(_RETRY_MAX_ATTEMPTS):
             try:
@@ -566,22 +605,23 @@ class Dehydrator:
         max_tokens: int | None = None,
         temperature: float | None = None,
     ) -> str:
-        """统一的 OpenAI-compatible chat 调用。
+        """The single OpenAI-compatible chat call.
 
-        原本 5 个 _api_* 方法重复了同样的样板：
-          * 构造 messages
-          * 调 client.chat.completions.create
-          * 检查 response.choices 非空
-          * 取 choices[0].message.content 并兜底空字符串
-        统一后：
-          * 调用方传入 system + user prompt 与可选的 max_tokens / temperature
-          * 默认值取 self.max_tokens / self.temperature（由 config.yaml 决定）
-          * 始终返回 str（response 异常时返回空串，调用方各自决策）
+        Five _api_* methods used to repeat the same boilerplate:
+          * build the messages
+          * call client.chat.completions.create
+          * check that response.choices is non-empty
+          * take choices[0].message.content and fall back to an empty string
+        Now:
+          * the caller passes a system and user prompt plus optional max_tokens / temperature
+          * defaults come from self.max_tokens / self.temperature (decided by config.yaml)
+          * it always returns a str (an empty one if the response is malformed, leaving the
+            decision to each caller)
 
-        参数：
-            system, user — Chat completion 的 system/user 消息
-            max_tokens   — 覆盖默认（如 analyze 用 256，digest 用 2048）
-            temperature  — 覆盖默认（如 digest / plan_judge 需要 0.0）
+        Parameters:
+            system, user — the system/user messages of the chat completion
+            max_tokens   — override the default (analyze and digest each want their own)
+            temperature  — override the default (digest and plan_judge need 0.0)
         """
         if self.api_format == "gemini":
             return await self._chat_gemini(system, user, max_tokens=max_tokens, temperature=temperature)
@@ -628,7 +668,7 @@ class Dehydrator:
                 "temperature": temperature if temperature is not None else self.temperature,
             },
         }
-        # 关闭/限制思考预算（见 __init__ 的 thinking_budget 说明）。
+        # Disable or cap the thinking budget (see the thinking_budget note in __init__).
         if self.thinking_budget is not None:
             payload["generationConfig"]["thinkingConfig"] = {"thinkingBudget": self.thinking_budget}
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
@@ -692,10 +732,11 @@ class Dehydrator:
         default_v: float = _DEFAULT_VALENCE,
         default_a: float = _DEFAULT_AROUSAL,
     ) -> tuple[float, float]:
-        """读取 meta 中的 valence / arousal 并钳制到 [0, 1]。
+        """Read valence / arousal out of meta and clamp them to [0, 1].
 
-        三处 LLM 返回校验逻辑相同（_format_output / _parse_analysis / _parse_digest），
-        集中后保证三处行为一致：解析失败一律回 (默认 V, 默认 A)。
+        Three places validate an LLM response the same way (_format_output /
+        _parse_analysis / _parse_digest); gathering it here guarantees all three behave
+        identically: a parse failure always returns (default V, default A).
         """
         try:
             v = max(0.0, min(1.0, float(meta.get("valence", default_v))))
@@ -742,29 +783,22 @@ class Dehydrator:
 
     # ---------------------------------------------------------
     # Dehydrate: compress raw content into concise summary
-    # 脱水：将原始内容压缩为精简摘要
     # API only (no local fallback)
-    # 仅通过 API 脱水（无本地回退）
     # ---------------------------------------------------------
     async def dehydrate(self, content: str, metadata: Optional[dict] = None) -> str:
         """
         Dehydrate/compress memory content.
         Returns formatted summary string ready for LLM context injection.
         Uses SQLite cache to avoid redundant API calls.
-        对记忆内容做脱水压缩。
-        返回格式化的摘要字符串，可直接注入 LLM 上下文。
-        使用 SQLite 缓存避免重复调用 API。
         """
         if not content or not content.strip():
             return "（空记忆 / empty memory）"
 
         # --- Content is short enough, no compression needed ---
-        # --- 内容已经很短，不需要压缩 ---
         if count_tokens_approx(content) < _DEHYDRATE_MIN_TOKENS:
             return self._format_output(content, metadata)
 
         # --- Check cache first ---
-        # --- 先查缓存 ---
         cached = self._get_cached_summary(content)
         if cached:
             try:
@@ -780,16 +814,17 @@ class Dehydrator:
                 return self._format_output(normalized, metadata)
 
         # --- API dehydration (no local fallback) ---
-        # --- API 脱水（无本地降级）---
         self._require_api()
 
         try:
             raw_result = await self._api_dehydrate(content)
             result = self._normalize_dehydration_result(raw_result)
         except Exception as e:
-            # --- 本地降级：API（已含重试）彻底失败时，返回原文截断片段而非抛异常。---
-            # 让 breath/dream 在 Gemini 抽风时仍能拿到内容（只是没压缩）；不写缓存，
-            # API 恢复后下次自然重新压缩。
+            # --- Local degradation: when the API (retries included) has failed outright,
+            #     return a truncated excerpt of the original rather than raising. ---
+            # That way breath/dream still get content while the provider is misbehaving —
+            # merely uncompressed. Nothing is cached, so once the API recovers the next
+            # pass compresses it normally.
             logger.warning(
                 f"dehydrate API failed, falling back to truncated raw content / "
                 f"脱水 API 失败，降级返回原文截断: {type(e).__name__}: {e}"
@@ -804,13 +839,11 @@ class Dehydrator:
         return self._format_output(result, metadata)
 
     # ---------------------------------------------------------
-    # Merge: blend new content into existing bucket
-    # 合并：将新内容揉入已有桶，保持体积恒定
+    # Merge: blend new content into an existing bucket, keeping its size constant
     # ---------------------------------------------------------
     async def merge(self, old_content: str, new_content: str) -> str:
         """
         Merge new content with old memory, preventing infinite bucket growth.
-        将新内容与旧记忆合并，避免桶无限膨胀。
         """
         if not old_content and not new_content:
             return ""
@@ -833,12 +866,10 @@ class Dehydrator:
 
     # ---------------------------------------------------------
     # API call: dehydration
-    # API 调用：脱水压缩
     # ---------------------------------------------------------
     async def _api_dehydrate(self, content: str) -> str:
         """
         Call LLM API for intelligent dehydration (via OpenAI-compatible client).
-        调用 LLM API 执行智能脱水。
         """
         return await self._chat(
             DEHYDRATE_PROMPT + _perspective_rule(self.human),
@@ -847,12 +878,10 @@ class Dehydrator:
 
     # ---------------------------------------------------------
     # API call: merge
-    # API 调用：合并
     # ---------------------------------------------------------
     async def _api_merge(self, old_content: str, new_content: str) -> str:
         """
         Call LLM API for intelligent merge (via OpenAI-compatible client).
-        调用 LLM API 执行智能合并。
         """
         user_msg = (
             f"旧记忆：\n{old_content[:_MERGE_INPUT_LIMIT]}\n\n"
@@ -862,24 +891,24 @@ class Dehydrator:
 
     # ---------------------------------------------------------
     # Output formatting
-    # 输出格式化
     # Wraps dehydrated result with bucket name, tags, emotion coords
-    # 把脱水结果包装成带桶名、标签、情感坐标的可读文本
     # ---------------------------------------------------------
 
     def _format_output(self, content: str, metadata: Optional[dict] = None) -> str:
         """
         Format dehydrated result into context-injectable text.
-        将脱水结果格式化为可注入上下文的文本。
         """
         header = ""
         if metadata and isinstance(metadata, dict):
             name = metadata.get("name", "未命名")
             domains = ", ".join(metadata.get("domain", []))
             valence, arousal = self._clamp_va(metadata)
-            # 图标语义与 pulse 一致：📌 只给钉住/保护的核心桶，其余按类型区分，
-            # 普通动态桶用 💭。此前无条件用 📌 会让 breath 浮现里每条都像「核心准则」，
-            # 与 docs/CLAUDE_PROMPT.md「带 📌 的是我钉的核心准则」的约定冲突。
+            # The icons mean the same thing here as they do in pulse: 📌 is reserved for
+            # pinned or protected core buckets, everything else is distinguished by type,
+            # and an ordinary dynamic bucket gets 💭. Using 📌 unconditionally, as this once
+            # did, made every entry surfacing in breath look like a core rule, which
+            # contradicts the convention in docs/CLAUDE_PROMPT.md that a 📌 marks a rule
+            # that was pinned deliberately.
             _btype = metadata.get("type")
             if metadata.get("pinned") or metadata.get("protected"):
                 _icon = "📌"
@@ -908,27 +937,32 @@ class Dehydrator:
                 header += " [已消化]"
             header += "\n"
 
-        # 脱水结果可能是结构化 JSON（core_facts/emotion_state/todos/keywords/summary）。
-        # 渲染成可读文本，而不是把整坨原始 JSON 塞进上下文——后者又丑又费 token，且与
-        # 短内容「原文透传」的形态不一致（长桶显示 JSON、短桶显示纯文本）。
+        # A dehydration result may be structured JSON
+        # (core_facts/emotion_state/todos/keywords/summary). Render it into readable text
+        # rather than stuffing the whole raw JSON blob into the context — that is both ugly
+        # and expensive in tokens, and it would be inconsistent with the pass-through form
+        # used for short content (a long bucket would show JSON while a short one showed
+        # plain text).
         content = self._render_dehydrated(content)
         content = re.sub(r'\[\[([^\]]+)\]\]', r'\1', content)
         return f"{header}{content}"
 
     @staticmethod
     def _render_dehydrated(content: str) -> str:
-        """把脱水 LLM 返回的结构化 JSON 渲染成可读文本。
+        """Render the structured JSON a dehydrating LLM returns into readable text.
 
-        识别到 core_facts/summary schema → 输出 summary + 核心事实 + 待办（丢弃仅供
-        内部索引的 keywords、以及已由情感坐标承载的 emotion_state）。非该 schema 的
-        内容（如短内容直接透传的原文、或普通字符串）原样返回。
+        When the core_facts/summary schema is recognised -> emit the summary, the core
+        facts and the todos (discarding `keywords`, which exists only for internal
+        indexing, and `emotion_state`, which the emotion coordinates already carry).
+        Anything not matching that schema — short content passed straight through, or an
+        ordinary string — is returned untouched.
         """
         try:
             parsed = json.loads(content)
         except (ValueError, TypeError):
-            return content  # 非 JSON，原样透传
+            return content  # not JSON: pass it straight through
         if not isinstance(parsed, dict) or ("summary" not in parsed and "core_facts" not in parsed):
-            return content  # 不是脱水 schema，原样透传
+            return content  # not the dehydration schema: pass it straight through
 
         lines: list[str] = []
         summary = str(parsed.get("summary") or "").strip()
@@ -936,7 +970,8 @@ class Dehydrator:
         if summary:
             lines.append(summary)
         elif facts:
-            # 没有 summary 时，用核心事实兜底成正文，避免只剩空壳
+            # With no summary, fall back to the core facts as the body, so an empty shell
+            # is not all that is left
             lines.append("；".join(facts))
             facts = []
         for f in facts:
@@ -948,17 +983,15 @@ class Dehydrator:
 
     # ---------------------------------------------------------
     # Auto-tagging: analyze content for domain + emotion + tags
-    # 自动打标：分析内容，输出主题域 + 情感坐标 + 标签
     # Called by server.py when storing new memories
-    # 存新记忆时由 server.py 调用
     # ---------------------------------------------------------
     async def analyze(self, content: str, for_mind: bool = False) -> dict:
         """
         Analyze content and return structured metadata.
-        分析内容，返回结构化元数据。
 
-        for_mind=True（机制④ 第 5 条）：MIND 只要 aliases + summary，不抽 scene
-        ——认知里没有照片，tags 会是空的，这是设计不是缺陷。
+        for_mind=True: a MIND entry wants only aliases plus the summary, and no scene is
+        extracted — there are no photographs inside an insight, so its tags come back
+        empty. That is the design, not a defect.
 
         Returns: {"domain", "valence", "arousal", "tags", "aliases", "suggested_name"}
         """
@@ -979,12 +1012,10 @@ class Dehydrator:
 
     # ---------------------------------------------------------
     # API call: auto-tagging
-    # API 调用：自动打标
     # ---------------------------------------------------------
     async def _api_analyze(self, content: str, for_mind: bool = False) -> dict:
         """
         Call LLM API for content analysis / tagging.
-        调用 LLM API 执行内容分析打标。
         """
         raw = await self._chat(
             ANALYZE_PROMPT_MIND if for_mind else ANALYZE_PROMPT,
@@ -998,15 +1029,14 @@ class Dehydrator:
 
     # ---------------------------------------------------------
     # Parse API JSON response with safety checks
-    # 解析 API 返回的 JSON，做安全校验
     # Ensure valence/arousal in 0~1, domain/tags valid
     # ---------------------------------------------------------
     def _parse_analysis(self, raw: str, content: str = "") -> dict:
         """
         Parse and validate API tagging result.
-        解析并校验 API 返回的打标结果。
 
-        content 传原文，用来给 scene（场景锚点）做**字面校验**——见下方注释。
+        `content` is the original text, used to **verify literally** that each scene anchor
+        really appears in it — see the comments below.
         """
         try:
             cleaned = self._strip_md_fence(raw)
@@ -1018,56 +1048,74 @@ class Dehydrator:
         if not isinstance(result, dict):
             return self._default_analysis()
 
-        # --- Validate and clamp value ranges / 校验并钳制数值范围 ---
+        # --- Validate and clamp value ranges ---
         valence, arousal = self._clamp_va(result)
 
-        # --- tags = 只有 scene；expand 挪去 aliases（2026-08-06 她定的三组分工）---
-        # 为什么（2026-08-05 定三组 → 2026-08-06 砍成两组）：上游只有 tags 一个维度，
-        # 「潜意识/焦虑/亲密关系」这类提炼词在兼职当分类器。Loci 有了 room，分类的活
-        # 已经有人干了，tags 从此专心记「这条里有什么」——塌缩那行自动变画面词，
-        # 排序逻辑一行不改；画面串的原材料现成了。
+        # --- tags = scene only; expand moved out to aliases ---
+        # Why (three groups were defined, then cut to two): upstream had only the single
+        # `tags` dimension, so abstract distillations were moonlighting as a classifier.
+        # Loci has `room`, so classification already has an owner, and tags can concentrate
+        # on recording "what is inside this one" — a collapsed row then turns into picture
+        # words by itself, with not one line of the ordering logic changed, and the raw
+        # material for stringing pictures together comes for free.
         #
-        # scene（场景锚点）：她的记忆是一张张照片，回想时先浮上来的是画面里的东西
-        # （桌子、机构、材料……）。
-        # ⚠️ scene 必须字面出现在原文里：模型偶尔会做变形替换（原文「脚底下不空了」
-        # 提成「脚底下空的」），实测 4.3%。这里硬拦，比在 prompt 里反复叮嘱可靠。
+        # scene (the scene anchors): memory works like a series of photographs, and what
+        # surfaces first on recall is what was in the picture (a table, an institution,
+        # some materials, and so on).
+        # ⚠️ A scene word must appear literally in the body: the model occasionally
+        # substitutes a variant (turning a phrase into its near-opposite), measured at 4.3%.
+        # Blocking that here in code is more reliable than repeating the instruction in the
+        # prompt.
         #
-        # aliases（原 expand，引申词）：只喂 bm25（换个措辞也搜得到），不进向量、
-        # 不在塌缩/chips 露面——它是搜索的暗轨，不是给人看的标签。
+        # aliases (formerly expand, the expansion words): they feed bm25 only, so a
+        # different phrasing still finds it. They never enter the vectors and never appear
+        # in a collapsed row or in chips — they are search's hidden rail, not a label meant
+        # for human eyes.
         #
-        # 指「这两个人」的标签一律不进：整个库全都是关于这两个人的，
-        # 他们的名字和「她/我」这类纯指称，在任何情况下都没有区分度。
-        # ⚠️ 只挡这两个人的。别人的名字有区分度，不挡。
-        # ⚠️ 在代码里挡，不在 prompt 里叮嘱——模型爱输出就输出，进不来。
-        _person_stop = _person_tags()      # 每次现算：改了配置不用重启
+        # Tags that merely point at the two people this store is about never get in: the
+        # entire store is about them, so their names, and the bare pronouns in
+        # `_PRONOUN_TAGS`, carry no distinguishing power under any circumstances.
+        # ⚠️ Only those two are blocked. Anyone else's name does distinguish, and is kept.
+        # ⚠️ Blocked in code, not lectured about in the prompt — the model may output them
+        # all it likes, they simply do not get in.
+        _person_stop = _person_tags()      # recomputed every time: a config change needs no restart
         scene = [str(t) for t in (result.get("scene") or [])
                  if str(t).strip() and str(t) in content]
         tags = [t for t in scene if t not in _person_stop]
         aliases = [str(t) for t in (result.get("expand") or [])
                    if str(t).strip() and str(t) not in _person_stop]
         if not tags and not aliases:
-            # 兜底：模型仍按老格式返回合并好的 tags（换 prompt 的过渡期，或它没听话）
+            # Fallback: the model still returned pre-merged `tags` in the old format
+            # (during a prompt transition, or because it did not comply)
             tags = [str(t) for t in (result.get("tags") or [])
                     if str(t).strip() and str(t) not in _person_stop]
         _seen: set[str] = set()
         tags = [t for t in tags if not (t in _seen or _seen.add(t))]
-        _seen = set(tags)  # aliases 里跟 tags 重复的没意义（bm25 已经吃到了）
+        _seen = set(tags)  # an alias duplicating a tag is pointless (bm25 already has it)
         aliases = [t for t in aliases if not (t in _seen or _seen.add(t))]
 
-        # --- subjects（二改 B 件）：谁。**独立第三类**，既不进 tags 也不进 aliases ---
-        # 模型抽的是正文里的**称呼**（「她」「我哥」），normalize_subjects 过别名表
-        # 归一成规范名。归一是闸不是约定：不做的话「老张」和「张三」分裂成两个主体，
-        # 检索当场断掉。
-        # ⚠️ 这里**不做**「原文里必须字面存在」的校验——那是 tags 的保证，
-        #    而主体恰恰要做的就是把「她」翻成「主人」。两条规则相反，别互相抄。
+        # --- subjects: who. **A third, independent kind** — it enters neither tags nor aliases ---
+        # What the model extracts are the **forms of address** used in the body (things like
+        # 「我哥」 or 「老板」), and normalize_subjects then runs them through the alias table
+        # to reach a canonical name. Normalising is a gate, not a convention: without it a
+        # nickname and a full name split into two different subjects and retrieval breaks on
+        # the spot.
+        # ⚠️ There is deliberately **no** "must appear literally in the body" check here —
+        #    that guarantee belongs to tags, whereas the entire job of a subject is to
+        #    translate a form of address into the canonical name behind it. The two rules
+        #    point in opposite directions; do not copy one into the other.
         subjects = normalize_subjects(result.get("subjects"))
 
-        # 🔴 **这条记录抽到的主体，不许同时出现在 tags/aliases 里。**
-        #    「谁」已经有自己的字段了，再在标签里出现一次就是零信息。
-        #    这条规则**不认名字、对谁都成立**——不像上面那份 stop-list 需要先配置，
-        #    它拿的是这条记录自己抽出来的人。所以别人装上就是对的，不用先填自己的名字。
-        #    （两条一起留：stop-list 挡的是「在每一条里都没有区分度」的那两个人，
-        #      即使某条没把他们抽成主体；这条挡的是「这一条里已经说过了」。）
+        # 🔴 **A subject extracted from this record may not also appear in its tags or
+        #    aliases.** "Who" already has a field of its own, and appearing once more as a
+        #    label carries zero information.
+        #    This rule **knows no names and holds for everyone** — unlike the stop-list
+        #    above it needs no configuration, because it uses the people this very record
+        #    extracted. So it is correct the moment anyone installs this, without filling in
+        #    their own name first.
+        #    (Both are kept: the stop-list blocks the two people who carry no distinguishing
+        #     power in ANY entry, even one that did not extract them as subjects; this rule
+        #     blocks whoever has already been named in THIS entry.)
         if subjects:
             _subj = {str(x).strip() for x in subjects if str(x).strip()}
             tags = [t for t in tags if t not in _subj]
@@ -1085,12 +1133,10 @@ class Dehydrator:
 
     # ---------------------------------------------------------
     # Default analysis result (empty content or total failure)
-    # 默认分析结果（内容为空或完全失败时用）
     # ---------------------------------------------------------
     def _default_analysis(self) -> dict:
         """
         Return default neutral analysis result.
-        返回默认的中性分析结果。
         """
         return {
             "domain": ["未分类"],
@@ -1104,14 +1150,11 @@ class Dehydrator:
 
     # ---------------------------------------------------------
     # Diary digest: split daily notes into independent memory entries
-    # 日记整理：把一大段日常拆分成多个独立记忆条目
     # For the "grow" tool — "dump a day's content and it gets organized"
-    # 给 grow 工具用，"一天结束发一坨内容"靠这个
     # ---------------------------------------------------------
     async def digest(self, content: str) -> list[dict]:
         """
         Split a large chunk of daily content into independent memory entries.
-        将一大段日常内容拆分成多个独立记忆条目。
 
         Returns: [{"name", "content", "domain", "valence", "arousal", "tags", "importance"}, ...]
         """
@@ -1131,16 +1174,20 @@ class Dehydrator:
             raise RuntimeError(f"API 日记整理失败，请检查 API 连接: {e}") from e
 
     # ---------------------------------------------------------
-    # 只拆不改：模型给切点，代码按位置切（2026-08-05）
+    # Split without altering: the model supplies cut points, the code cuts by position
     # ---------------------------------------------------------
     @staticmethod
     def apply_cuts(content: str, cuts: list) -> list[str]:
-        """按切点把正文切成几段。**纯代码，没有任何改写能力。**
+        """Cut the body into pieces at the given cut points. **Pure code, with no ability
+        to rewrite anything.**
 
-        校验三条，任何一条不过就整段不切（宁可不拆）：
-        - 每个切点都能在原文里找到，且位置**严格递增**（模型抄错/抄乱直接作废）
-        - 切完每段非空
-        - **切完拼回去必须逐字等于原文** —— 这是逐字落盘的最后一道闸
+        Three checks; failing any one of them means no cut is made at all (better not to
+        split):
+        - every cut point is findable in the original, at **strictly increasing** positions
+          (a model that copied wrongly or out of order is discarded outright)
+        - no resulting piece is empty
+        - **rejoining the pieces must equal the original character for character** — this is
+          the last gate protecting verbatim persistence
         """
         text = str(content or "")
         if not text or not isinstance(cuts, list) or not cuts:
@@ -1151,14 +1198,14 @@ class Dehydrator:
         for c in cuts:
             frag = str(c or "").strip()
             if len(frag) < 4:
-                return [text]                 # 太短定位不住，不切
+                return [text]                 # too short to locate reliably: do not cut
             i = text.find(frag, cursor)
             if i < 0:
-                return [text]                 # 找不到 = 模型改了字，不切
+                return [text]                 # not found = the model changed the text: do not cut
             pos.append(i)
             cursor = i + 1
         if pos[0] > 0:
-            pos.insert(0, 0)                  # 第一个切点前面那段也是一条
+            pos.insert(0, 0)                  # whatever precedes the first cut point is an entry too
         pos = sorted(set(pos))
 
         parts: list[str] = []
@@ -1167,21 +1214,20 @@ class Dehydrator:
             parts.append(text[start:end])
         if any(not p.strip() for p in parts):
             return [text]
-        if "".join(parts) != text:            # 逐字闸门：拼不回原文就整段作废
+        if "".join(parts) != text:            # the verbatim gate: if it does not rejoin into the original, discard the whole split
             return [text]
         return parts
 
-    # ⚰️ 2026-08-18：`cut()`（让模型说在哪儿切一段长文）删了。
-    #    它唯一的调用方是 `grow_core`，而那条路随「系统不替你决定这是几件事」一起撤了。
+    # ⚰️ `cut()` — which asked the model where to split a long body — was deleted.
+    #    Its only caller was `grow_core`, and that path went away along with the principle
+    #    that the system does not decide on your behalf how many things this is.
 
     # ---------------------------------------------------------
     # API call: diary digest
-    # API 调用：日记整理
     # ---------------------------------------------------------
     async def _api_digest(self, content: str) -> list[dict]:
         """
         Call LLM API for diary organization.
-        调用 LLM API 执行日记整理。
         """
         raw = await self._chat(
             DIGEST_PROMPT + _perspective_rule(self.human),
@@ -1195,12 +1241,10 @@ class Dehydrator:
 
     # ---------------------------------------------------------
     # Parse diary digest result with safety checks
-    # 解析日记整理结果，做安全校验
     # ---------------------------------------------------------
     def _parse_digest(self, raw: str) -> list[dict]:
         """
         Parse and validate API diary digest result.
-        解析并校验 API 返回的日记整理结果。
         """
         try:
             cleaned = self._strip_md_fence(raw)
@@ -1238,12 +1282,11 @@ class Dehydrator:
 
     # ---------------------------------------------------------
     # API call: judge whether a new event resolves an active plan
-    # API 调用：判断新事件是否完成了某个 active plan
     # ---------------------------------------------------------
     async def judge_plan_resolution(self, plan_text: str, new_event_text: str) -> dict:
         """
-        Conservative judgement (鼓励漏报，避免误报).
-        保守判断：仅在新事件明确表示 plan 已完成时返回 resolved=True。
+        Conservative judgement: false negatives are encouraged, false positives are not.
+        resolved=True is returned only when the new event states plainly that the plan is done.
         Returns: {"resolved": bool, "confidence": float, "reason": str}
         Returns {"resolved": False} silently when API unavailable.
         """
@@ -1280,10 +1323,13 @@ class Dehydrator:
             return {"resolved": False, "confidence": 0.0, "reason": str(e)}
 
     async def judge_same_event(self, old_memory: str, new_content: str) -> dict:
-        """保守判断两段内容是否属于同一个具体事件。
+        """Conservatively decide whether two pieces of content describe the same concrete
+        event.
 
-        主题相似不足以合并；只有后者是前者的补充、进展、纠正或重复表述时
-        才返回 same_event=True。API 不可用或解析失败时保守返回 False。
+        A shared topic is not enough to merge on; same_event=True is returned only when the
+        latter is an addition to, a development of, a correction of, or a restatement of the
+        former. With the API unavailable, or on a parse failure, it conservatively returns
+        False.
         """
         if old_memory.strip() == new_content.strip():
             return {"same_event": True, "confidence": 1.0, "reason": "正文完全相同"}

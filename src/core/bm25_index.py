@@ -1,9 +1,12 @@
 """
-bm25_index.py — BM25 稀疏检索，配合 jieba 中文分词。
-给 bucket_manager.search() 提供 TF-IDF 加权的关键词召回（Dim 7）。
+bm25_index.py — sparse BM25 retrieval, with jieba for Chinese segmentation.
 
-rank_bm25 / jieba 均为软依赖：未安装时所有方法静默 no-op，不影响其余检索维度。
-BM25Index 由 BucketManager 持有，写操作后脏标记，search() 时懒重建。
+Supplies bucket_manager.search() with TF-IDF-weighted keyword recall (Dim 7).
+
+rank_bm25 and jieba are both soft dependencies: when either is missing every method
+becomes a silent no-op and the other retrieval dimensions carry on unaffected.
+BM25Index is owned by BucketManager, marked dirty after any write, and rebuilt lazily
+on the next search().
 """
 from __future__ import annotations
 
@@ -30,7 +33,7 @@ except ImportError:
 
 
 def _tokenize(text: str) -> list[str]:
-    """中文 jieba 分词 + 空格切割英文，小写，过滤空串。"""
+    """jieba for Chinese, whitespace for English; lowercased, empty tokens dropped."""
     if not text:
         return []
     text = text.lower()
@@ -42,11 +45,12 @@ def _tokenize(text: str) -> list[str]:
 
 
 class BM25Index:
-    """内存 BM25 倒排索引门面。
+    """Facade over an in-memory BM25 inverted index.
 
     lifecycle:
-        build(buckets)  — 重建索引（BucketManager 在写操作后脏标记，search 时懒调用）
-        score(query)    — 返回 {bucket_id: normalized_score}，分值 [0, 1]
+        build(buckets)  — rebuild the index (BucketManager marks dirty on write and
+                          calls this lazily from search)
+        score(query)    — returns {bucket_id: normalized_score}, scores in [0, 1]
     """
 
     def __init__(self):
@@ -58,11 +62,14 @@ class BM25Index:
         return _BM25_AVAILABLE
 
     def build(self, buckets: list[dict]) -> None:
-        """重建索引。文档 = name + content[:1200] + tags + aliases 拼接后分词。
+        """Rebuild the index. A document = name + content[:1200] + tags + aliases,
+        concatenated and tokenised.
 
-        2026-08-06（B7）：domain 从检索里拿掉——它是模型编的文件夹名，进索引只会
-        让「编程」「AI」这类词凭空命中一堆不相干的桶。
-        aliases（引申词）进来了：换个措辞也搜得到，这是它唯一的工作。
+        `domain` was pulled back out of retrieval: it is a folder name the model made
+        up, and indexing it only lets broad words like "programming" or "AI" match a
+        pile of unrelated buckets out of nowhere.
+        `aliases` were let in, and they have exactly one job: find it even when it was
+        phrased differently.
         """
         if not _BM25_AVAILABLE:
             return
@@ -87,7 +94,7 @@ class BM25Index:
         self._ids = ids
 
     def score(self, query: str) -> dict[str, float]:
-        """返回 {bucket_id: normalized_bm25_score}，最高分 = 1.0，无命中返回 {}。"""
+        """Returns {bucket_id: normalized_bm25_score}; top score = 1.0, {} if nothing hit."""
         if not _BM25_AVAILABLE or self._index is None:
             return {}
         tokens = _tokenize(query)

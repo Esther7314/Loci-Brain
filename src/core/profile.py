@@ -1,34 +1,36 @@
 """
 ========================================
-core/profile.py — 睁眼/档案页共用的合同源（脱壳 C，从 tools/breath/awaken.py 搬来）
+core/profile.py — the single contract shared by the awakening and the profile page
 ========================================
 
-施工 5（2026-08-17）把「门口那张纸」和「忽然想起」的判据从两份平行实现
-（`tools/breath/awaken.py` 的睁眼 + `web/loci.py` 的档案页各写一遍）合成了一份，
-写在 `awaken.py` 里、两边各自 import。她 8-17 指出这份合同源本身不属于
-breath 这一个工具——`web/loci.py` 的档案页跟睁眼要读的是同一份判据，放在
-`tools/breath/` 下面容易让人误以为它是 breath 专属的。按层重码这一步把它
-挪来 `core/`：跟 `_fold`/`_rooms`/`_when` 这些引擎件放一起，`tools/breath/awaken.py`
-和 `web/loci.py` 都改成从这儿 import，判据只有一处没变。
+The rules behind "the note at the door" and "something suddenly comes back" used to be
+implemented twice in parallel (once in `tools/breath/awaken.py` for the awakening, once
+in `web/loci.py` for the profile page). They were merged into one copy, which then moved
+here: this contract does not belong to breath alone — the profile page and the awakening
+have to read the same rules, and living under `tools/breath/` invited the assumption that
+it was breath's private property. It now sits with the other engine pieces
+(`_fold` / `_rooms` / `_when`), and both `tools/breath/awaken.py` and `web/loci.py`
+import it, so there is exactly one copy of the rules.
 
-⚠️ **只挪家不改逻辑**：`door_note()` / `event_pool()` 两个函数、连同它们各自的
-判据注释，逐字照搬，一个字没改；只有 import 路径跟着新家变了。
+⚠️ **Moved, not rewritten**: `door_note()` and `event_pool()`, along with every comment
+explaining their rules, came across word for word; only the import paths followed the
+new home.
 
-施工 6（2026-08-18，二改 §6+§8）在这份合同源上加了三块，都只在**读侧**判断，
-不新增落盘字段（除了下面这处 tag 约定）：
-① **want 三类钟**（§6）：类型不加字段，从 `when` 的填法本身推断——
-   空＝等触发、`<N>[dwmy]` 时长记号＝有量级、`YYYY-MM-DD`＝有期限。
-   方案全文见 `D:\\lento\\交接\\2-记忆系统\\开工单-Loci二改-2026-08-12.md` §6，
-   第一阶段的方案报告（含真库实证 `ffe707f`/`d7cf87`/`1e12906`/`87f84e`/`d52a38`）
-   在流水里能找到，这里只落地。
-② **问句只问最久那条**（§6.1）：`heavy` 列表照旧全给，另外多给一个
-   `heavy_question_id`——**挂得最久**（不是最重）的那条 id，渲染层拿它去
-   决定哪条该问句、哪条照旧陈述。
-③ **「她改过」的通知**（§8）：`event_pool()` 之外新增 `edited_by_her()`，扫「她改的」
-   标签 + 没被我 fold 掉的（`_F.is_covered()`）——这就是"给我留一条通知"的
-   全部机制：标签本身既是标记也是通知，没有另开一张单独的通知表。
+Three things were later added on top of this contract, all decided on the **read** side,
+with no new persisted field (the one tag convention below excepted):
+① **The three kinds of want-clock**: the kind is not a stored field, it is inferred from
+   how `when` was filled in — empty = `等触发` (waiting for a trigger), a duration mark
+   `<N>[dwmy]` = `有量级` (has a magnitude), `YYYY-MM-DD` = `有期限` (has a deadline).
+② **Only the oldest one gets asked as a question**: the `heavy` list is still returned
+   in full, plus one extra `heavy_question_id` — the id of the one that has been
+   **hanging longest** (not the heaviest). The render layer uses it to decide which one
+   turns into a question and which ones stay statements.
+③ **A notification that a fact was edited from the panel**: alongside `event_pool()`
+   there is `edited_by_her()`, which scans for the edit tag plus "not yet folded away"
+   (`_F.is_covered()`). That is the entire notification mechanism: the tag is both the
+   mark and the notice, and no separate notification table was opened.
 
-对外暴露：door_note(all_buckets, now) / event_pool(all_buckets) / edited_by_her(all_buckets)
+Exports: door_note(all_buckets, now) / event_pool(all_buckets) / edited_by_her(all_buckets)
 ========================================
 """
 
@@ -37,31 +39,37 @@ from datetime import datetime
 
 from utils import is_closed
 
-from . import _fold as _F         # 被盖的不再独立冒头（施工 3）
-from . import _when as _w          # 「她的今天」（本地时区）
-# is_mind_room 2026-08-19 起不再进来：门口那道「准则得住在 MIND」的二次筛子拆了
+from . import _fold as _F         # anything covered stops surfacing on its own
+from . import _when as _w          # "today" on the local calendar
+# is_mind_room is deliberately no longer imported: the secondary "a rule has to live in
+# MIND" filter at the door was taken out (see the long note further down)
 from ._rooms import is_event_room
-from tools.recall.core import _visible  # core→tools 反向依赖：见 core/__init__.py 顶部说明
+from tools.recall.core import _visible  # core->tools backward edge: see the note atop core/__init__.py
 
 _PROFILE_TAG = "__档案事实__"
 _BIGEVENT_TAG = "__大event__"
 _REMIND_DAYS = 30
 
 # ------------------------------------------------------------
-# 施工 6 · A 件：want 三类钟（二改 §6）
+# The three kinds of want-clock
 # ------------------------------------------------------------
-# 她改事实用的这个 tag（§8）单独摆一处，跟 _PROFILE_TAG/_BIGEVENT_TAG 放一起，
-# 免得两边（web/loci.py 的写口 + 这儿的读口）各写一份字符串走漏。
+# The tag written when a fact is edited from the panel gets its own constant here,
+# next to _PROFILE_TAG / _BIGEVENT_TAG, so that the two ends (the write side in
+# web/loci.py and the read side here) cannot drift apart by each spelling the string
+# out for themselves.
 _EDITED_BY_HER_TAG = "她改的"
 
-# 时长记号：`<N><单位>`，没有前缀符号（她 8-18 裁决砍掉了 `~`——没有语义的符号不留）。
-# 不能跟日期格式 `\d{4}-\d{2}-\d{2}` 混：时长记号里没有横杠，天然不歧义。
+# Duration mark: `<N><unit>`, with no prefix symbol — an earlier `~` prefix was cut,
+# because a symbol that carries no meaning does not earn its place.
+# It cannot be confused with the date form `\d{4}-\d{2}-\d{2}`: a duration mark contains
+# no dash, so the two are unambiguous by construction.
 _DURATION_RE = re.compile(r"^(\d+)([dwmy])$")
 _DURATION_UNIT_DAYS = {"d": 1, "w": 7, "m": 30, "y": 365}
 
 
 def _magnitude_days(w: str) -> float | None:
-    """时长记号 → 约等于多少天。认不出返回 None（不是"有量级"这一类）。"""
+    """Duration mark -> roughly how many days. None if unrecognised, i.e. not the
+    `有量级` kind at all."""
     m = _DURATION_RE.match(w)
     if not m:
         return None
@@ -70,13 +78,13 @@ def _magnitude_days(w: str) -> float | None:
 
 
 def _magnitude_loudness(ratio: float) -> str:
-    """有量级这一类专属的曲线：挂的天数 ÷ 量级天数。
+    """The curve belonging to the `有量级` kind: days held divided by days of magnitude.
 
-    两个校准点（她 8-18 给的，写死在 smoke 里）：
-    「这周内」（7天）挂 10 天 → ratio=1.43 → 该催；
-    「今年内」（365天）挂 10 天 → ratio=0.027 → 不该催。
-    阈值本身是我按这两点反推的提案，不是开工单钦定的数字，
-    她的实际感受说要调就调，不是这单的卡点（统筹 8-18 裁决）。
+    Two calibration points, frozen into the smoke test:
+    "within this week" (7 days) held for 10 days -> ratio=1.43 -> should nag;
+    "within this year" (365 days) held for 10 days -> ratio=0.027 -> should not.
+    The thresholds themselves are a proposal reverse-engineered from those two points,
+    not sacred numbers. If they turn out to feel wrong in use, move them.
     """
     if ratio < 0.7:
         return "far"
@@ -88,14 +96,18 @@ def _magnitude_loudness(ratio: float) -> str:
 
 
 def _want_clock(meta: dict, created, now: datetime) -> tuple[str, str, str]:
-    """给一条 want 判「有期限 / 有量级 / 等触发 / 旧数据待复核」，算出这一类该多大声。
+    """Sort one want into `有期限` / `有量级` / `等触发` / `旧数据待复核` (deadline /
+    magnitude / waiting for a trigger / old data needing review), and work out how loudly
+    that kind should speak.
 
-    返回 (clock, loud, note)：clock 只给内部/调试用，note 是给人看的一句解释
-    （非空时该在展示层露出来——目前只有"旧数据待复核"这类会有）。
+    Returns (clock, loud, note): `clock` is for internals and debugging only, `note` is a
+    one-line explanation meant for human eyes (when non-empty it should be surfaced by
+    the display layer — today only the `旧数据待复核` kind ever produces one).
 
-    🔴 这函数只处理**已经落进"压在心头"池子**的 want（=已过期或没有未来
-    when 的那些）——还没到期的有期限项走的是既有的 `reminders` 分支
-    （下面 `door_note()` 里那段一个字没动），这儿不重复判。
+    🔴 This only handles wants that have **already landed in the "weighing on me" pool**
+    (i.e. overdue, or with no future `when`). A deadline that has not arrived yet goes
+    through the existing `reminders` branch in `door_note()` below, and is not judged
+    twice here.
     """
     w = str(meta.get("when") or "").strip()
     if not w:
@@ -113,15 +125,20 @@ def _want_clock(meta: dict, created, now: datetime) -> tuple[str, str, str]:
             when_date = _w.parse_date(m.group(1))
         except ValueError:
             return "旧数据待复核", "far", "没定期限 —— when 的格式认不出来，它不会自己催你"
-        # 老数据雷区（真库实证 1e12906/87f84e）：when 跟 created 是同一天，
-        # 十有八九是历史上随手把"今天"填进 when 的占位，不是真期限。
-        # 结构上判不清"真的当天到期"和"误填占位"，保守一侧：
-        # 宁漏催不误催（她 8-13「不想把记忆丢给系统去操作」的精神，统筹 8-18 裁决接受）。
+        # A minefield in older data, confirmed against a real store: when `when` equals
+        # `created`, nine times out of ten it is a placeholder from someone dropping
+        # "today" into `when` in passing, not a genuine deadline.
+        # Structurally there is no way to tell "genuinely due that day" from "a placeholder
+        # filled in by mistake", so this errs on the conservative side: better to miss a nag
+        # than to nag wrongly. (In the spirit of not handing memory over to the system to
+        # operate on.)
         if created and when_date.date() == created.date():
             return "旧数据待复核", "far", "没定期限 —— 存的那天顺手填成了 when，它不会自己催你"
-        # 到这里说明这条 want 已经过期还没了结（没过期的会被 reminders 分支截走，
-        # 不会进 heavy 池）。过期锚点换成"过期了多少天"，曲线复用现成的
-        # `_held_loudness`——最小改动，她觉得"迟到"该有独立曲线再拆（统筹 8-18 裁决）。
+        # Reaching this point means the want is overdue and still unclosed: anything not
+        # overdue is intercepted by the reminders branch and never enters the heavy pool.
+        # The anchor becomes "how many days overdue", and the curve simply reuses the
+        # existing `_held_loudness` — the smallest possible change. If "late" turns out to
+        # deserve a curve of its own, that gets split out then.
         overdue = max(0, (now.date() - when_date.date()).days)
         return "有期限", _held_loudness(overdue), ""
 
@@ -129,7 +146,8 @@ def _want_clock(meta: dict, created, now: datetime) -> tuple[str, str, str]:
 
 
 def _f_weight(x) -> float:
-    """weight 读成 float，读不动就当 0.5。**0 必须活下来**（见「压在心头」那段）。"""
+    """Read weight as a float, falling back to 0.5 when unreadable. **A real 0 must
+    survive** (see the "weighing on me" note below)."""
     try:
         return float(x)
     except (TypeError, ValueError):
@@ -137,27 +155,35 @@ def _f_weight(x) -> float:
 
 
 def _reminder_loudness(days: int) -> str:
-    """⏰ 越近越大声（她 8-03 的原话）。**门槛只有这一处**，两张皮都读它。"""
+    """⏰ The nearer it is, the louder. **The thresholds live in exactly one place** and
+    both skins read them from here."""
     return "now" if days == 0 else "soon" if days <= 3 else "near" if days <= 14 else "far"
 
 
 def _held_loudness(held: int) -> str:
-    """🫀 越挂越大声（催的是「到底做不做」，不是「快到日子了」）。"""
+    """🫀 The longer it hangs, the louder. What this nags about is "are you actually going
+    to do it", not "the date is coming up"."""
     return "now" if held >= 60 else "soon" if held >= 30 else "near" if held >= 7 else "far"
 
 
 def event_pool(all_buckets: list) -> list[dict]:
-    """「忽然想起」的池子：可见的、EVENT 房间里的、**没被盖过**的事件。
+    """The pool behind "something suddenly comes back": events that are visible, live in
+    an EVENT room, and have **not been covered**.
 
-    🔴 三道闸，缺一道都会静默出错：
-    ① `is_event_room()` 新旧房名都认——原来两边各写 `.find("/EVENT/") > 0`，
-       新房名 `EVENT/SELF` 里压根没有 `/EVENT/`，池子会**静默变空**（不报错）。
-    ② 工具件（名字页 / 时期）不算记忆。
-    ③ **被盖住的不进这个池子**（施工 3）：「忽然想起」是偶遇，而被我 fold 过的
-       东西已经有了名字，它该以那句话的形式出现在 recall 里，不该再当散条拍我一下。
-       ⚠️ 施工 5 · F 件之后 `is_covered()` 也管住了换过版的旧版（`superseded_by`）——
-       以前那半是靠 `_visible()` 整个排掉的，现在统一由这道闸管。
-    ⚠️ 将来阈值引擎的候选池同样要过这道闸：**这里就是那个锚点**。
+    🔴 Three gates; miss any one of them and it fails silently:
+    ① `is_event_room()` accepts both old and new room names. Both sides used to write
+       `.find("/EVENT/") > 0` themselves, and the new name `EVENT/SELF` contains no
+       `/EVENT/` at all, so the pool would **go silently empty** with no error.
+    ② Machinery (the name page, periods) is not a memory.
+    ③ **Covered entries stay out of this pool.** Coming across something suddenly is a
+       chance encounter, whereas anything already folded has been given a name — it
+       should appear inside recall as that sentence, not tap me on the shoulder again as
+       a loose entry.
+       ⚠️ `is_covered()` also covers superseded versions (`superseded_by`) now; that half
+       used to be excluded wholesale by `_visible()`, and both are handled by this one
+       gate today.
+    ⚠️ A future threshold engine's candidate pool has to pass the same gate:
+       **this is the anchor point for it.**
     """
     pool: list[dict] = []
     for b in all_buckets:
@@ -177,18 +203,20 @@ def event_pool(all_buckets: list) -> list[dict]:
 
 
 def door_note(all_buckets: list, now: datetime) -> dict:
-    """名字 + 准则 + ⏰提醒 + 🫀压在心头 + 时期清单 —— **一次扫库，一套判据。**
+    """Name + rules + ⏰ reminders + 🫀 what is weighing on me + the list of periods —
+    **one pass over the store, one set of rules.**
 
-    返回 {"facts": [...], "rules": [...], "reminders": [...], "heavy": [...],
-          "big": [...], "entries": [...]}，元素里带原始 `meta`/`content`，
-    渲染（文字皮 / JSON 皮）各自去做，**判断一步都不在渲染层做**。
+    Returns {"facts": [...], "rules": [...], "reminders": [...], "heavy": [...],
+             "big": [...], "entries": [...]}, with the raw `meta` / `content` carried on
+    each element. Rendering (the text skin, the JSON skin) is each caller's own business:
+    **not one judgement is made in the render layer.**
     """
-    facts: list[dict] = []        # (created, content) 收集后取最早的；>1 个要警告
+    facts: list[dict] = []        # collect (created, content), keep the earliest; warn if >1
     rules: list[dict] = []
     reminders: list[dict] = []
-    heavy: list[dict] = []        # 压在心头：没日子、或日子过了还没了结的 want
-    big: list[dict] = []          # 时期（大 event）——睁眼不露面，档案页要列
-    entries: list[dict] = []      # recall 口径的可见记忆（随机 / 算最早那条用）
+    heavy: list[dict] = []        # weighing on me: wants with no date, or a date that passed unresolved
+    big: list[dict] = []          # periods (big events) — absent from the awakening, listed on the profile page
+    entries: list[dict] = []      # visible memories by recall's definition (for the random pick / the earliest one)
 
     for b in all_buckets:
         meta = b.get("metadata", {}) or {}
@@ -201,16 +229,17 @@ def door_note(all_buckets: list, now: datetime) -> dict:
                           "content": content})
             continue
         if _BIGEVENT_TAG in tags:
-            # 时期不在睁眼里露面（见下面「4 长期」那段砍掉的理由）；
-            # 档案页要列一行，所以在这儿收着（了结的不列）。
+            # Periods do not appear in the awakening, but the profile page lists a line
+            # for each, so they are collected here (resolved ones are not listed).
             if str(meta.get("status") or "") != "resolved":
                 big.append({"id": bid, "meta": meta, "content": content})
             continue
 
-        # 提醒：when 在未来 30 天内（含 want 和普通事件）。
-        # codex 三轮 #1：了结的（resolved/abandoned）、主动遗忘的、被换版的不提醒
+        # Reminders: `when` within the next 30 days (wants and ordinary events alike).
+        # Nothing closed (resolved/abandoned), deliberately forgotten, or superseded
+        # gets a reminder.
         _status = str(meta.get("status") or "")
-        _remindable = (not is_closed(meta)  # 终点只认 status；旧布尔只读兼容（二改第0节）
+        _remindable = (not is_closed(meta)  # only `status` marks an ending; the old booleans stay read-only for compatibility
                        and not meta.get("dont_surface")
                        and not meta.get("superseded_by"))
         w = str(meta.get("when") or "") if _remindable else ""
@@ -220,9 +249,11 @@ def door_note(all_buckets: list, now: datetime) -> dict:
             try:
                 d = datetime.fromisoformat(m.group(1))
                 days = (d.date() - now.date()).days
-                # 「就是今天」只留给 want（想发生的到了日子才响）；
-                # 已发生的事带今天的 when 是历史记录，不是提醒——不然今天存的
-                # 每条流水都会喊「就是今天！」把真提醒挤出三个位子（8-03 真发生了）
+                # "It is today" is reserved for wants — something you want to happen
+                # rings when its day arrives. An event that already happened carrying
+                # today's `when` is a record, not a reminder; otherwise every single
+                # entry stored today would shout "that's today!" and push the real
+                # reminders out of all three slots. (Which is exactly what happened.)
                 if 0 <= days <= _REMIND_DAYS and (days > 0 or _status == "want"):
                     reminders.append({"id": bid, "meta": meta, "content": content,
                                       "days": days, "when": m.group(1),
@@ -231,21 +262,28 @@ def door_note(all_buckets: list, now: datetime) -> dict:
             except ValueError:
                 pass
 
-        # 压在心头（她 2026-08-08 定）：想做的事**没有日子**、或者**日子过了还没了结**，
-        # 原来整个不浮 —— 而 want 只有两个终点，都得手动标，没有自动结案。
-        # 🔴 不给它加自动结案（那是把没做完的事悄悄抹掉），改成**把「挂了多少天」顶在眼前**：
-        #    挂到第 40 天我还没动，那个数字自己会问我到底做不做。
+        # Weighing on me: a want with **no date at all**, or one whose **date passed
+        # without it being closed**. Neither used to surface anywhere — and a want has
+        # only two endings, both of which have to be marked by hand; nothing closes
+        # itself.
+        # 🔴 No automatic closing was added (that would quietly erase things left
+        #    undone). Instead **the number of days it has hung is pushed into view**:
+        #    on day 40 with still nothing done, that number asks the question by itself.
         if _status == "want" and _remindable and not _reminded:
             _c = _w.parse_stamp(meta.get("created"))
-            # ⚠️ 2026-08-17（做梦那单逮到的）：原来这儿写 `float(meta.get("weight") or 0.5)`,
-            #    而 `0.0 or 0.5` 在 Python 里等于 0.5 —— **真被清零的那条会被当成 0.5 排**。
-            #    做梦的后果就是「被梦到的 want 重量清零 = 它不再压着我了」，
-            #    这个 falsy 兜底会把那个后果整个吃掉（字段清了，眼前照旧压着）。
-            #    只把「缺字段/空串」当 0.5，**真 0 就是 0**。
-            #    （施工 5 · E 件：这一条以前只在 awaken 修好，档案页那边还带着 bug。）
+            # ⚠️ Caught while building dreaming: this used to read
+            #    `float(meta.get("weight") or 0.5)`, and in Python `0.0 or 0.5` is 0.5 —
+            #    so **an entry whose weight was genuinely zeroed got ranked as 0.5**.
+            #    The whole point of dreaming is that "a want that was dreamt about has its
+            #    weight cleared = it stops pressing on me", and this falsy fallback ate
+            #    that outcome entirely (field cleared, still pressing in plain view).
+            #    Only a missing field or an empty string counts as 0.5; **a real 0 is 0**.
+            #    (This had once been fixed in awaken only, leaving the profile page still
+            #    carrying the bug — the reason both now share this file.)
             _wt = meta.get("weight")
             _held = (now.date() - _c.date()).days if _c else 0
-            # 施工 6 · A 件：三类钟只换"多大声"怎么算，held/weight 的口径一个字没动。
+            # The three want-clocks only change how "how loud" is computed; the meaning
+            # of held/weight is untouched.
             _clock, _loud, _note = _want_clock(meta, _c, now)
             _asked = str(meta.get("last_asked") or "")
             heavy.append({"id": bid, "meta": meta, "content": content,
@@ -257,31 +295,38 @@ def door_note(all_buckets: list, now: datetime) -> dict:
         if not _visible(meta):
             continue
         room = str(meta.get("room") or "")
-        # 准则 = **钉着的**。就这一条判据。
+        # A rule is **something pinned**. That is the whole test.
         #
-        # ⚰️ 2026-08-19：把「而且房间得是 MIND，或者正文前 40 字写着『行为准则』」
-        #    那道二次筛子**拆了**。理由跟她那天松 pin 闸时说的是同一条：
-        #      **钉住本身就是我做过的一次判断了。** 再拿房间去否决它，等于让
-        #      8-16 那次按老房名映射的迁移**推翻我今天的判断**——而迁移不认识内容。
-        #    这道筛子当天真的咬了一口：她一条条看完留下的「拉钩」「享受当下」
-        #    「不疼的爱」三条，钉着，却因为落在 EVENT/SELF 而**在门口一个字都不显示**，
-        #    不报错、不警告，就是不出现。**沉默的过滤比拒绝更坏**：拒绝我会改，
-        #    沉默我以为它在。
-        #    副作用（好的那种）：房间那摊烂账从此不再挡门口，可以慢慢修。
-        # 🔴 施工 5 · F 件：**换过版/被盖住的旧版不当准则**——以前靠 `_visible()`
-        #    把 `superseded_by` 整个排掉，现在那半交给 `is_covered()`，
-        #    这儿必须自己加上，不然门口会挂着一条我已经改了主意的准则。
+        # ⚰️ The secondary filter — "and the room has to be MIND, or the first 40
+        #    characters of the body have to say 'rule of conduct'" — was **taken out**.
+        #    The reason: **pinning something IS a judgement, already made.** Overruling it
+        #    with a room amounts to letting an old bulk migration, which mapped rooms by
+        #    name and understands nothing about content, **overturn a judgement made
+        #    deliberately today.**
+        #    That filter really did bite: three pinned notes, kept on purpose after going
+        #    through them one by one, showed **not a single character at the door** purely
+        #    because they happened to land in EVENT/SELF. No error, no warning, just
+        #    absent. **A silent filter is worse than a rejection**: a rejection gets
+        #    fixed, while silence leaves you believing the thing is there.
+        #    Good side effect: the mess in the room field no longer blocks the door and
+        #    can be cleaned up at leisure.
+        # 🔴 **A superseded or covered version is not a rule.** `_visible()` used to
+        #    exclude `superseded_by` wholesale; that half now belongs to `is_covered()`,
+        #    which has to be called explicitly here — otherwise the door would display a
+        #    rule that has already been changed my mind about.
         if meta.get("pinned") and not _F.is_covered(meta):
             rules.append({"id": bid, "meta": meta, "content": content})
         entries.append({"id": bid, "meta": meta, "content": content})
 
     facts.sort(key=lambda f: f["created"])
     reminders.sort(key=lambda r: r["days"])
-    # 重的在前；一样重的，挂得久的在前——这个排序给"整份列出来"那半用，没动。
+    # Heaviest first; ties broken by whichever has hung longer. This ordering is for the
+    # "list the whole thing" half and was left as it was.
     heavy.sort(key=lambda h: (-h["weight"], -h["held"]))
-    # 施工 6 · B 件（§6.1）：陈述换问句，**只问最久的那一条**——"最久"是挂钟天数
-    # 本身（held），不是上面那条给列表排序用的"weight 优先"。两个"哪条排第一"
-    # 不是同一个问题，所以这儿单独算，不去动 heavy 本身的顺序或掐它的长度。
+    # One statement becomes a question, and **only the one that has hung longest** —
+    # "longest" meaning the clock itself (held), not the weight-first ordering used for
+    # the list above. "Which comes first" is two different questions here, so this is
+    # computed separately rather than by reordering `heavy` or truncating it.
     heavy_question_id = (max(heavy, key=lambda h: h["held"])["id"] if heavy else "")
     return {"facts": facts, "rules": rules, "reminders": reminders,
             "heavy": heavy, "big": big, "entries": entries,
@@ -289,13 +334,16 @@ def door_note(all_buckets: list, now: datetime) -> dict:
 
 
 def edited_by_her(all_buckets: list) -> list[dict]:
-    """「她改过事实」的通知池（二改 §8）：带 `她改的` 标签、且**没被我 fold 掉**的event。
+    """The notification pool for "a fact was edited from the panel": events carrying the
+    `_EDITED_BY_HER_TAG` tag that have **not been folded away**.
 
-    这就是通知机制的全部：标签本身既是"她改过"的标记，也是"还没被我看过"
-    的判据（`_F.is_covered()`）——我认同就自己 `fold`，fold 完这条自然从
-    这个池子里消失；不认同的话它会一直留在这儿，直到我们俩把这条掰扯清楚、
-    我动手处理（fold 掉，或者干脆不管）。8.1 的"成批看"这单不做，
-    但这份池子本身已经是"攒得起来"的底子——将来 muse 要批量看，从这儿捞。
+    That is the entire notification mechanism: the tag is simultaneously the mark that an
+    edit happened and the test for "not yet looked at" (`_F.is_covered()`). Agreeing with
+    an edit means folding it, after which it drops out of this pool by itself; disagreeing
+    leaves it sitting here until the disagreement has actually been talked through and
+    something is done about it (folded, or deliberately left alone).
+    Reviewing these in batches is not implemented here, but this pool is already the
+    substrate for it — a future batch view in muse would draw from exactly this.
     """
     pool: list[dict] = []
     for b in all_buckets:

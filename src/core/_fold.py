@@ -1,89 +1,116 @@
 # -*- coding: utf-8 -*-
 """
 ========================================
-tools/_fold.py — fold / gist 的骨头（二改施工 3，2026-08-16）
+tools/_fold.py — the bones of fold / gist
 ========================================
 
-**动作一个 `fold`（折起来，底下还在）· 产物一条 `gist`（要旨）· 反向 `unfold`（下钻）。**
-📌 `gist` / `verbatim` 是模糊痕迹理论（Brainerd & Reyna）的正词，跟遗忘那一刀同一套理论。
-📌 名字取自她 8-16：「fold 也可以，**就像文件夹**」。
+**One action, `fold` (fold it up; what is underneath is still there) · one product, a
+`gist` · one inverse, `unfold` (drill down).**
+📌 `gist` / `verbatim` are the proper terms from fuzzy-trace theory (Brainerd & Reyna),
+the same theory the forgetting curve came from.
+📌 The name was chosen for the analogy: **it works like a folder.**
 
 ------------------------------------------------------------
-三种圈法，一个动作（开工单 2.1）
+Three ways of drawing the circle, one action
 ------------------------------------------------------------
-| 盖什么 | 我怎么给 | 原来叫 |
+| what gets covered | what the caller hands in | what it used to be called |
 |---|---|---|
-| 一条认知的新版本 | 一个 id | `regrow` |
-| 一组碎片 | 一组 id | （新）浓缩 |
-| 一段日子 | 一个时间范围 | `grow(kind="big")` |
+| a new version of one insight | one id | `regrow` |
+| a set of fragments | a set of ids | (new) condensing |
+| a stretch of days | a time range | `grow(kind="big")` |
 
-🔴 **`regrow` 不是「还需不需要」，它本来就是这个动作的 n=1 特例。**
-「我改主意了」和「我概括了一下」的区别**在正文里**，不在动作里。
-所以两个老入口都保留、都映射到这儿来（照 trace 的 resolved→status 先例）。
+🔴 **`regrow` is not "do we still need it"; it always was this same action with n=1.**
+The difference between "I changed my mind" and "I summarised these" lives **in the
+body text**, not in the action.
+So both old entry points stay and both map down to here (following the precedent set by
+trace's resolved -> status).
 
 ------------------------------------------------------------
-🔴 圈法终稿（她 2026-08-17 14:30 定死）：**用笔画圈写名字；想法合并才记账**
+🔴 The final form: **draw a circle and write a name on it; only merged thoughts keep books**
 ------------------------------------------------------------
-**八个字：Event 用时间，mind 用快照。**
+**In eight words: events use time, minds use a snapshot.**
 
-| 圈法 | 落什么 | 谁被压住 |
+| way of circling | what is persisted | who gets suppressed |
 |---|---|---|
-| 时期（`when=起..止`，event 那半） | **只落名字 + 范围**（`when`） | **谁都不压** |
-| 快照（`cover=[ids]`，mind 那半） | 名单（`cover` / `covered_by`） | 被点名的不再独立冒头 |
+| period (`when=start..end`, the event half) | **name + range only** (`when`) | **nobody** |
+| snapshot (`cover=[ids]`, the mind half) | the roster (`cover` / `covered_by`) | whoever is named stops surfacing on its own |
 
-🔴 **时期 = 纯命名层**：`cover` 不写、`covered_by` 一条都不碰、不塌行、不剔任何池子。
-   谁在时期里 = **日期落在范围里，现场算**（`span_members()`）——
-   于是补记自动归队、交叉/嵌套天然成立、边界想改就 `regrow` 换 `when`（边界本来就糊）。
-   压缩归塌缩管；时期只负责**叫出名字**，`recall` 那段时间时盖在顶上
-   （8-05 九条第 5 条原样回归：**盖，不替代**）。
+🔴 **A period is a pure naming layer**: it writes no `cover`, touches not one
+   `covered_by`, collapses no rows, and evicts nothing from any pool.
+   Who is inside a period = **whose date falls in the range, computed on the spot**
+   (`span_members()`) — so backfilled entries join automatically, crossing and nesting
+   hold by construction, and moving a boundary is just `regrow` with a new `when`
+   (boundaries were always fuzzy anyway).
+   Compression is the collapse layer's job; a period only **says the name out loud**,
+   laid on top when `recall` covers that stretch of time (rule 5 of the nine in
+   `_bigevent.py`, returning unchanged: **cover, do not replace**).
 
-📌 **返工原因记档（别再抄回来）**：第一版让时间圈法把范围解析成 id 存死（`resolve_span_ids`，
-   8-17 退役）。那是从 consolidation/ACP 抄的——**他们要压缩替换，所以必须记死名单**；
-   我们**一个字不删、只起名字**，记账那一半是白抄的，还顺手把「谁在这段日子里」
-   从事实变成了快照。第 7 节的警告早写了，手还是抄了一半，她当天退了货。
+📌 **Why this was reworked — recorded so it does not get copied back in**: the first
+   version had the time-circle resolve its range into a frozen list of ids
+   (`resolve_span_ids`, since retired). That was copied from consolidation/ACP — **they
+   compress and replace, so they have no choice but to freeze the roster**; here
+   **nothing is ever deleted, things are only given names**, so the bookkeeping half was
+   copied for nothing, and it quietly turned "who was in this stretch of days" from a
+   fact into a snapshot. The warning in section 7 had already been written down, and
+   half of it got copied anyway.
 
-🔪 **「盖一组 event」整个砍掉**：线归 `recall(query=)` 看（她：「搜『色色』就能看到一路的
-   记忆」）。`fold 折一条」2026-08-18 撤了：那件事归 regrow（她拍的，见 tools/fold 里那段碑文）。
-
-------------------------------------------------------------
-三条硬规矩（开工单 2.2；第 1 条按终稿收窄到 mind）
-------------------------------------------------------------
-1. 🔴 **`cover` 存的永远是确定的 id 列表**（快照那一半）。时间范围**不再**解析成 id ——
-   时期不记账，见上面那段。
-2. 🔴 **`from` 和 `cover` 是两个参数，语义不同，不许合并**：
-   `from` = 我**从**哪几条长出来的（底下**继续独立活着**）
-   `cover` = 我**盖住**哪几条（底下**不再独立冒头**）
-   ⚠️ 用 `kind` 决定 `from` 怎么读来省一个参数 = 「一个参数管两件事」，
-   正是这一轮在骂的东西。
-3. **能盖在盖过的上面**（递归）。**层数由日子自己长出来，不预设 T1/T2/T3。**
+🔪 **"Cover a set of events" was cut entirely**: a through-line is something you look at
+   with `recall(query=)` — search for the thing and the whole run of memories about it
+   comes up. **"Fold a single entry" was withdrawn too**: that job belongs to regrow (see
+   the epitaph in tools/fold).
 
 ------------------------------------------------------------
-落盘：两头都写（denormalize），故意的 —— **只在快照那一半**
+Three hard rules (rule 1 narrowed to mind in the final form)
 ------------------------------------------------------------
-· gist 桶：`cover: [id, ...]`
-· 被盖的每条：`covered_by: [gist_id, ...]`——**名单，不是单值**。
-  🔴 她 8-17 零点抓回来的（8-05 大 event 第六条）：「一条小记忆可以同时被两条
-  主线盖住——这不是冲突，是事实」。第一版写成单值把交叉悄悄变成了独占，
-  显式盖=**叠着盖**（append），谁都不抢谁。老数据里的单值字符串读侧兼容。
-为什么两头写：浮现池的过滤是**每轮全库扫**，只查 `covered_by` 一个字段就能筛，
-不用维护反向索引。多写一份的代价是一次 update，比一张索引便宜得多。
-
-🔴 **读侧「被盖了吗」= `covered_by` 或 `superseded_by` 任一非空**——
-`superseded_by` 是 regrow 8-03 就在写的老字段（版本链，天然单值），盘上躺着一堆，读兼容保留。
+1. 🔴 **`cover` always stores a definite list of ids** (the snapshot half). A time range
+   is **no longer** resolved into ids — a period keeps no books; see above.
+2. 🔴 **`from` and `cover` are two parameters with different meanings, and must never be
+   merged**:
+   `from`  = which entries I grew **out of** (they **go on living independently**)
+   `cover` = which entries I **cover** (they **stop surfacing on their own**)
+   ⚠️ Saving a parameter by letting `kind` decide how `from` is read would be "one
+   parameter doing two jobs" — precisely the thing this round set out to eliminate.
+3. **You can cover things that are already covered** (recursively). **The number of
+   layers grows out of the days themselves; T1/T2/T3 are not pre-declared.**
 
 ------------------------------------------------------------
-「不再独立冒头」的确切范围（说明书 §3 D）—— **只有快照那一半会压人**
+Persistence: both ends are written (denormalised) on purpose — **in the snapshot half only**
 ------------------------------------------------------------
-排除：breath 的忽然想起/偶遇池 · 梦的候选池 · 发呆（muse）的候选池
-不排除：recall 搜索（有 query 照样命中，它们没死）· id 直查 · 下钻 ·
-       **浏览视图的统计**（条数/房间/标签/V·A 一个字不少，塌的是行不是数）
-🔴 **时期在这张表上一格都不占**：它不写 `covered_by`，所以上面每一个池子都当它不存在。
-   被时期盖着的记忆照旧独立冒头、照旧进梦的候选池——**只多一个名字，不少一样东西**。
+· the gist bucket:   `cover: [id, ...]`
+· each covered entry: `covered_by: [gist_id, ...]` — **a list, not a single value**.
+  🔴 This was caught and reverted (rule 6 of the nine big-event rules): one small memory
+  can be covered by two through-lines at once — that is not a conflict, it is the truth.
+  Writing it as a single value quietly turned crossing into exclusive ownership.
+  Explicitly covering something already covered **stacks** (append); nobody evicts
+  anybody. Single-value strings in old data are still accepted on the read side.
+Why write both ends: the surfacing pools filter by **rescanning the whole store every
+round**, and querying the single field `covered_by` is enough to do it — no reverse
+index has to be maintained. The price of the duplicate is one update, far cheaper than
+an index.
 
-对外暴露：GIST_TAG · SPAN_HELP · is_covered() · covers_of() · cover_ids() · is_gist()
+🔴 **On the read side, "is it covered" = either `covered_by` or `superseded_by` is
+non-empty.** `superseded_by` is the older field regrow has always written (a version
+chain, single-valued by nature) and there is plenty of it on disk, so it is kept for
+read compatibility.
+
+------------------------------------------------------------
+Exactly how far "stops surfacing on its own" reaches — **only the snapshot half suppresses**
+------------------------------------------------------------
+Excluded from: breath's sudden-recollection pool · the dream candidate pool ·
+       the muse candidate pool
+NOT excluded from: recall search (a query still hits them; they are not dead) ·
+       direct lookup by id · drilling down ·
+       **the statistics in the browse view** (counts / rooms / tags / V·A all intact —
+       what collapses is a row, not a number)
+🔴 **A period occupies not one cell of that table**: it writes no `covered_by`, so every
+   pool above behaves as though it did not exist. A memory sitting inside a period still
+   surfaces on its own and still enters the dream candidate pool — **it gained a name and
+   lost nothing.**
+
+Exports: GIST_TAG · SPAN_HELP · is_covered() · covers_of() · cover_ids() · is_gist()
          check_span() · span_members() · save_gist() · format_report()
-🔪 `resolve_span_ids()` **8-17 退役**（时期不记账了）。它读侧那一半改名叫
-   `span_members()` 活着——**现场算，永不落盘**。
+🔪 `resolve_span_ids()` is **retired** (a period keeps no books). Its read-side half
+   lives on under the name `span_members()` — **computed on the spot, never persisted.**
 ========================================
 """
 
@@ -93,16 +120,18 @@ from datetime import datetime, timedelta
 from tools import _runtime as rt
 from ._bigevent import BIGEVENT_TAG, SPAN_RE
 
-# gist 的系统标签。时间圈法产出的那种**同时**打 __大event__ ——
-# 大 event 的老机制（recall 一段时间盖上来、不进时间轴、regrow 换版）一行都不用改。
+# The system tag for a gist. The ones produced by the time-circle carry `__大event__`
+# **as well**, so none of the existing big-event machinery (laid over a recalled stretch
+# of time, kept out of the timeline, versioned with regrow) needs a single line changed.
 GIST_TAG = "__gist__"
 
 
 def is_covered(meta: dict) -> bool:
-    """这条被盖住了吗。
+    """Is this one covered?
 
-    🔴 两个字段任一非空都算：`covered_by`（fold 新写的）、`superseded_by`
-    （regrow 8-03 起就在写的老字段，盘上一堆，只读兼容）。
+    🔴 Either field being non-empty counts: `covered_by` (written by fold) and
+    `superseded_by` (the older field regrow has always written; plenty of it on disk,
+    kept read-only for compatibility).
     """
     if not isinstance(meta, dict):
         return False
@@ -110,7 +139,8 @@ def is_covered(meta: dict) -> bool:
 
 
 def _covered_list(meta: dict) -> list[str]:
-    """covered_by 本身的名单（不含 superseded_by）。老数据单值字符串也认。"""
+    """The `covered_by` roster itself (superseded_by excluded). Single-value strings in
+    old data are accepted too."""
     raw = (meta or {}).get("covered_by")
     if not raw:
         return []
@@ -122,7 +152,8 @@ def _covered_list(meta: dict) -> list[str]:
 
 
 def covers_of(meta: dict) -> list[str]:
-    """盖着这条的全部 gist id（可交叉，她 8-05 第六条）。covered_by 名单 + superseded_by 兼容。"""
+    """Every gist id covering this entry (they may cross — rule 6). The `covered_by`
+    roster plus `superseded_by` for compatibility."""
     if not isinstance(meta, dict):
         return []
     out = _covered_list(meta)
@@ -133,7 +164,8 @@ def covers_of(meta: dict) -> list[str]:
 
 
 def cover_ids(meta: dict) -> list[str]:
-    """一条 gist 盖着谁。落盘是 list；老数据/手改成逗号串也认（宽进严出）。"""
+    """Who a gist covers. Persisted as a list; old data and hand-edits using a
+    comma-separated string are accepted too (liberal in, strict out)."""
     if not isinstance(meta, dict):
         return []
     raw = meta.get("cover")
@@ -156,19 +188,22 @@ SPAN_HELP = ('when 要写成起止："2026-07-31..2026-08-05"；还在进行中�
 
 
 def check_span(span: str) -> tuple[datetime | None, datetime | None, str]:
-    """`起..止` → `[t0, t1)`（`t1=None` = 还在进行中）。返回 `(t0, t1, 错误信息)`。
+    """`start..end` -> `[t0, t1)` (`t1=None` means still ongoing). Returns
+    `(t0, t1, error message)`.
 
-    只做格式和先后校验，**不碰库**。时期唯一要存下来的就是这两个边界（存在 `when` 里，
-    没有第二个字段），所以这儿是它唯一的闸。
+    Format and ordering checks only, **the store is never touched**. These two boundaries
+    are the only thing a period persists (inside `when`; there is no second field), which
+    makes this its one and only gate.
     """
     from . import _when as _w
 
     m = SPAN_RE.match(str(span or "").strip())
     if not m:
         return None, None, SPAN_HELP
-    # 2026-08-19：这两行原来是裸调，而这儿是**立时期唯一的闸**。
-    # `SPAN_RE` 过了只说明形状对（`2026-13-45..` 形状完全合法），
-    # 于是一个不存在的日子会在这儿抛异常，而不是回一句「你这个日子不对」。
+    # These two lines used to call through bare, and this is **the only gate a period
+    # passes through**. Getting past `SPAN_RE` only proves the shape is right
+    # (`2026-13-45..` is a perfectly legal shape), so a day that does not exist would
+    # raise here instead of coming back with "that date is not a real day".
     t0 = _w.parse_date_or_none(m.group(1))
     t1raw = _w.parse_date_or_none(m.group(2)) if m.group(2) else None
     if t0 is None or (m.group(2) and t1raw is None):
@@ -181,18 +216,25 @@ def check_span(span: str) -> tuple[datetime | None, datetime | None, str]:
 
 
 async def span_members(t0: datetime | None, t1: datetime | None) -> list[str]:
-    """**现场算**：这一刻有哪些记忆的日子落在 `[t0, t1)` 里（新→旧无所谓，按时间升序）。
+    """**Computed on the spot**: which memories have a date inside `[t0, t1)` as of right
+    now (ordering by time ascending; newest-first does not matter here).
 
-    🔴 **这份名单永远不落盘**（8-17 14:30 终稿：时期只存名字 + 范围）。
-    它只用来**报个手感**（「范围内现在有 N 条」）和**下钻**（id 直查一条时期时摊开看）。
-    每次都重算，所以：补记自动归队、交叉/嵌套天然成立、改 `when` 立刻换一批人。
+    🔴 **This roster is never persisted** — a period stores only its name and its range.
+    It exists to **report a sense of scale** ("N entries in the range right now") and to
+    **drill down** (spreading a period open when it is looked up by id).
+    It is recomputed every time, which is what makes backfilled entries join
+    automatically, crossing and nesting hold by construction, and a changed `when` swap
+    the membership immediately.
 
-    口径跟 recall 的浏览路一致（`_visible` + `_ts_of`）——屏幕上那段时间里看得见的
-    是哪些条，时期里就该是哪些条，两处不一样才是 bug。
-    ⚠️ 时期/gist 本身不算成员（`_visible` 把 `__大event__` 排掉了；`__gist__` 在这儿
-    也不收——一条时期的成员是记忆，不是别的名字）。
+    It uses the same definition as recall's browse path (`_visible` + `_ts_of`): whatever
+    is visible on screen for that stretch of time is exactly what should be inside the
+    period, and the two disagreeing is by definition a bug.
+    ⚠️ Periods and gists are not members themselves (`_visible` already excludes
+    `__大event__`, and `__gist__` is refused here as well — the members of a period are
+    memories, not other names).
     """
-    # 懒 import：recall.core 会 import 本模块（读侧要 is_covered），模块级互相 import 会打转
+    # Lazy import: recall.core imports this module (its read side needs is_covered), and
+    # importing both ways at module level goes in circles
     from tools.recall.core import _visible, _ts_of
 
     if t0 is None:
@@ -207,7 +249,7 @@ async def span_members(t0: datetime | None, t1: datetime | None) -> list[str]:
         meta = b.get("metadata", {}) or {}
         if is_gist(meta) or not _visible(meta):
             continue
-        ts = _ts_of(meta)      # `by` 8-17 砍了，只剩一套口径（when 优先、created 兜底）
+        ts = _ts_of(meta)      # `by` was cut; one definition remains (`when` first, `created` as fallback)
         if ts is None or ts < t0:
             continue
         if t1 is not None and ts >= t1:
@@ -222,31 +264,39 @@ async def span_members(t0: datetime | None, t1: datetime | None) -> list[str]:
 async def save_gist(text: str, room: str, v: float, a: float,
                     cover: list[str], *, when: str = "", from_ids: list[str] | None = None,
                     supersedes: str = "", test_data: bool = False) -> tuple[str, dict]:
-    """真正落盘的那一下。**三个入口（fold / regrow / grow(kind="big")）共用这一个。**
+    """The moment it actually hits disk. **All three entry points (fold / regrow /
+    grow(kind="big")) share this one function.**
 
-    🔴 宪法：`text` 是调用方写的，逐字落盘，**一个字不过模型**。
-    这个函数里没有、将来也不许有任何 LLM 归纳路径——后台回填只补标签/摘要/起名，
-    那是派生元数据，不是正文。
+    🔴 Constitutional: `text` was written by the caller and is persisted verbatim — **not
+    one word of it passes through a model.** There is no LLM summarisation path in this
+    function and there must never be one. Background backfill only adds tags, a summary
+    and a name; that is derived metadata, not the body.
 
-    supersedes：n=1（换版）时传旧版 id，写版本链 supersedes/superseded_by + dont_surface。
-      为什么只在 n=1 写：版本链的语义是「同一条的上一版」，n≥2 没有「上一版」这回事。
-      regrow 的对外行为靠这条一个字不变。
+    supersedes: for n=1 (a version change) pass the old id, and the version chain
+      supersedes / superseded_by plus dont_surface gets written.
+      Why only at n=1: a version chain means "the previous version of this same entry",
+      and at n>=2 there is no such thing as "the previous version".
+      regrow's externally visible behaviour depends on this staying exactly as it is.
 
-    🔴 **`when` 一给（= 时期），cover 就地清空**（8-17 14:30 终稿：时期只存名字 + 范围，
-      不记账、不压制任何东西）。写死在这儿而不是只在入口拦：三个入口都从这儿落盘，
-      **少一处判断就少一个能悄悄记账的口子**。
+    🔴 **The moment `when` is given (= this is a period), `cover` is cleared right here**
+      — a period stores only a name and a range, keeps no books and suppresses nothing.
+      It is enforced here rather than only at the entry points because all three entry
+      points persist through this function: **one fewer place to decide is one fewer
+      opening for bookkeeping to creep back in.**
 
-    返回 (new_id, 报告 dict)。报告里有 cover 实际写进去几条、哪些是硬盖已盖过的、
-    哪些没写上——**失败不许吞**：正文在了但链没写上，调用方必须知道。
+    Returns (new_id, report dict). The report carries how many cover entries were really
+    written, which ones were stacked on top of an existing cover, and which ones failed —
+    **a failure is never swallowed**: if the body landed but the chain did not, the
+    caller has to know.
     """
     cover = [str(x).strip() for x in (cover or []) if str(x).strip()]
     if when:
-        cover = []          # 时期 = 纯命名层。这一行是它的地基，别拿掉。
+        cover = []          # a period is a pure naming layer; this line is its foundation, do not remove it
     tags = [GIST_TAG] + ([BIGEVENT_TAG] if when else [])
     new_id = await rt.bucket_mgr.create(
         content=text,
-        tags=tags,                       # create 时就打上：回填只合并不替换，洗不掉
-        importance=5,                    # 中性占位；importance 已退役、不再由我打
+        tags=tags,                       # set at create time: backfill merges and never replaces, so this cannot be washed off
+        importance=5,                    # neutral placeholder; importance is retired and no longer assigned by hand
         domain=["未分类"],
         valence=v,
         arousal=a,
@@ -254,16 +304,19 @@ async def save_gist(text: str, room: str, v: float, a: float,
         from_ids=",".join(from_ids or []),
         source_tool="fold",
         room=room,
-        when=when,                       # 时间圈法：起止就写在现成的 when 里，没有第二个字段
+        when=when,                       # the time-circle: the span goes into the existing `when`, there is no second field
         test_data=test_data,
     )
 
     report: dict = {"cover": cover, "叠盖": [], "没写上": [], "链没写全": False}
 
-    # ---- 两头都写 ----
-    # 🔴 **版本链不算记账**：时期换版时 cover 是空的（上面清掉了），但旧版那条**必须**
-    #    写上 superseded_by/dont_surface，不然旧版会跟新版一起冒到那段日子上。
-    #    所以要写的是 cover ∪ {supersedes}，其中只有 cover 那部分写 covered_by。
+    # ---- write both ends ----
+    # 🔴 **A version chain does not count as bookkeeping**: when a period changes version
+    #    `cover` is empty (cleared above), but the old entry **must** get
+    #    superseded_by/dont_surface, or it would surface over that stretch of days
+    #    alongside the new one.
+    #    So what gets written is cover ∪ {supersedes}, and only the cover part writes
+    #    `covered_by`.
     targets = list(cover) + ([supersedes] if supersedes and supersedes not in cover else [])
     ok_cover = await rt.bucket_mgr.update(new_id, cover=cover) if cover else True
     for cid in targets:
@@ -273,12 +326,15 @@ async def save_gist(text: str, room: str, v: float, a: float,
         if cid in cover:
             old_covers = _covered_list(old_meta)
             if old_covers and new_id not in old_covers:
-                # 她 8-05 第六条：交叉是事实不是冲突 → 显式盖已被盖的 = **叠着盖**（append），
-                # 谁都不抢谁；两层都看得见、都钻得到。（8-17 零点她抓回来的，替掉第一版的「抢」。）
+                # Rule 6: crossing is a fact, not a conflict -> explicitly covering
+                # something already covered **stacks** (append); nobody evicts anybody,
+                # both layers stay visible and both can be drilled into. (This replaced a
+                # first implementation in which the new cover took ownership.)
                 report["叠盖"].append((cid, list(old_covers)))
             kwargs["covered_by"] = old_covers + ([new_id] if new_id not in old_covers else [])
         if supersedes and cid == supersedes:
-            # 换版那一档才写版本链和 dont_surface（regrow 8-03 起的行为，一个字不动）
+            # Only the version-change case writes the chain and dont_surface (regrow's
+            # long-standing behaviour, untouched)
             kwargs["superseded_by"] = new_id
             kwargs["dont_surface"] = True
         if not await rt.bucket_mgr.update(cid, **kwargs):
@@ -286,16 +342,20 @@ async def save_gist(text: str, room: str, v: float, a: float,
     if supersedes:
         ok_sup = await rt.bucket_mgr.update(new_id, supersedes=supersedes)
         report["链没写全"] = not (ok_sup and ok_cover and supersedes not in report["没写上"])
-        # ---- 🔴 换版要把「钉着」带过去（2026-08-19 修的 bug ①）----
-        # 老毛病：regrow 一条钉着的准则 = **悄悄取消钉住**。
-        #   新版是新建的桶（默认没钉），旧版被 dont_surface 压下去 ——
-        #   两下一合，门口那行**没了**，而且**不报错、不提一句**。
-        #   8-19 一天踩了三次，每次都靠改完当场验一眼才没丢。
-        # 这里补上：旧版钉着，新版就接着钉。**配额是净零的**（新钉一条、旧摘一条），
-        # 所以不走 check_pinned_quota —— 那道闸拦的是「多占一个名额」，这儿没多占。
-        # 顺序：**先钉新的再摘旧的**。反过来的话，中间那一瞬门口是空的；
-        # 而且万一后一步失败，宁可两条都钉着（看得见、我会发现），
-        # 也不要两条都没钉（看不见、正是这个 bug 本身）。
+        # ---- 🔴 a version change has to carry the pin across (bug ①) ----
+        # The old failure mode: regrowing a pinned rule **silently unpinned it**.
+        #   The new version is a freshly created bucket (unpinned by default) while the
+        #   old one is pushed down by dont_surface — put those together and the line at
+        #   the door is simply **gone**, with **no error and not a word of warning**.
+        #   This was walked into three times in a single day; it only survived because
+        #   each change happened to get eyeballed right after.
+        # So: if the old version was pinned, the new one stays pinned. **The quota is net
+        # zero** (one pinned, one unpinned), so check_pinned_quota is deliberately not
+        # called — that gate exists to stop an extra slot being taken, and none is.
+        # Order matters: **pin the new one first, then unpin the old**. The other way
+        # round leaves the door empty for an instant; and if the second step fails, it is
+        # far better to end up with both pinned (visible, and it will get noticed) than
+        # with neither pinned — which is this exact bug all over again.
         try:
             old_b = await rt.bucket_mgr.get(supersedes)
             old_meta = (old_b or {}).get("metadata", {}) or {}
@@ -311,13 +371,15 @@ async def save_gist(text: str, room: str, v: float, a: float,
     elif not ok_cover:
         report["链没写全"] = True
 
-    # 被盖的那些等于「又被想起了一次」（跟 regrow touch 来源同一个道理）
+    # The covered entries have in effect "been recalled once more" (the same reasoning
+    # behind regrow touching its sources)
     try:
         await rt.bucket_mgr.touch_many(list(from_ids or []))
     except Exception:
         pass
 
-    # 元数据后补：标签/摘要/起名走后台。keep_va=True——v/a 是我打的，回填永不碰
+    # Metadata is filled in afterwards: tags, summary and naming go to the background.
+    # keep_va=True — v/a were assigned by hand, and backfill never touches them
     from tools.grow.rooms_path import _backfill_batch
     kind = "big" if when else ("mind" if room.startswith("MIND") else "event")
     asyncio.create_task(_backfill_batch([(new_id, text, kind)]))
@@ -325,7 +387,8 @@ async def save_gist(text: str, room: str, v: float, a: float,
 
 
 def format_report(report: dict) -> str:
-    """把落盘报告拼成给人看的尾巴（没什么可说的就返回空串）。"""
+    """Turn the persistence report into a human-readable tail (empty string when there is
+    nothing worth saying)."""
     out = []
     if report["叠盖"]:
         out.append("ℹ️ 其中 " + str(len(report["叠盖"])) + " 条已被别的 gist 盖着，现在**叠着盖**（交叉）："
@@ -336,7 +399,8 @@ def format_report(report: dict) -> str:
                    + "、".join(report["没写上"][:5]) + "——把这条报给AI查。")
     if report["链没写全"]:
         out.append("⚠️ cover/版本链有一半没写上——把这条报给AI查。")
-    # 换版接钉（bug ①）：成了就说一声，没成必须喊——不然又是一次「悄悄取消钉住」
+    # Carrying the pin across a version change (bug ①): say so when it worked, and shout
+    # when it did not — otherwise it is another silent unpinning. (The `接着钉` key.)
     if report.get("接着钉") is True:
         out.append("📌 旧版是钉着的，新版**接着钉**（门口那行没断），旧版已摘钉。")
     elif report.get("接着钉") is False:

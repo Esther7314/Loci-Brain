@@ -1,26 +1,30 @@
 """
 ========================================
-migration_engine.py — embedding 迁移引擎（2.0.3 新增）
+migration_engine.py — the embedding migration engine
 ========================================
 
-切 embedding 后端（local ↔ api）时，需要把 embeddings.db 里所有 bucket 的向量
-用新后端重算一遍。这个模块负责后台跑这件事：
+Switching embedding backend (local <-> api) means recomputing the vector of every bucket
+in embeddings.db with the new backend. This module runs that in the background:
 
-- 备份 embeddings.db → embeddings.db.backup（只在第一次启动时）
-- 把新向量先写入 embeddings.db.migrating，避免半截状态污染主表
-- 全部跑完后 atomically swap：主 db 替成 .migrating 文件
-- 单条失败跳过 + 记录到 failed_items[:50]，不中断整体
-- 进度文件 _pending_migration_status.json，前端 3s 轮询
-- 断点续传：_migration_checkpoint.json 记录已完成 id 集合
-- 限速：每批 10 条，间隔 0.5s（避免本地推理打爆 CPU 或 API 限流）
-- 失败时附最近 15 行 errors.jsonl，提示她/他「这是本地环境相关问题」
+- Back up embeddings.db -> embeddings.db.backup (only on the first run)
+- Write new vectors into embeddings.db.migrating first, so a half-finished state cannot
+  contaminate the main table
+- Once everything is through, swap atomically: the main db is replaced by the .migrating file
+- A single failure is skipped and recorded in failed_items[:50] without stopping the run
+- Progress lives in _pending_migration_status.json, which the front end polls every 3s
+- Resume after interruption: _migration_checkpoint.json records the set of finished ids
+- Rate limiting: batches of 10 with a 0.5s gap, so local inference cannot peg the CPU and
+  an API cannot rate-limit us
+- On failure it attaches the last 15 lines of errors.jsonl, pointing the user at the fact
+  that this is usually a local-environment problem
 
-不做：
-- 不做 bucket 迁移、桶文件重写
-- 不切换 global embedding_engine —— 那是 server.py 调用方的事
-- 不做配置写盘
-- 不做"导入别的 OB 实例导出的完整备份包"——那是 migrate_engine.py 的事。
-  两个文件名高度相似，改代码前务必确认自己改的是哪一个。
+What it does not do:
+- It does not migrate buckets or rewrite bucket files
+- It does not switch the global embedding_engine — that belongs to the caller in server.py
+- It does not write configuration to disk
+- It does not import a full backup package exported from another instance — that is
+  migrate_engine.py's job. The two filenames are very nearly the same, so make sure you
+  know which one you are editing before you change anything.
 ========================================
 """
 
@@ -40,22 +44,22 @@ from typing import Any, Awaitable, Callable, Iterable
 logger = logging.getLogger("loci_brain.migration_engine")
 
 
-# ---- 常量 ----
+# ---- Constants ----
 
 _STATUS_FILE_NAME = "_pending_migration_status.json"
 _CHECKPOINT_FILE_NAME = "_migration_checkpoint.json"
 
-# 每批 10 条，间隔 0.5s
+# Batches of 10, 0.5s apart
 BATCH_SIZE = 10
 BATCH_INTERVAL_SEC = 0.5
 
-# failed_items 上限（避免 status JSON 无限膨胀）
+# Cap on failed_items, so the status JSON cannot grow without bound
 MAX_FAILED_ITEMS = 50
 
-# 失败时附带的 errors.jsonl 末尾行数
+# How many trailing lines of errors.jsonl travel with a failure
 TAIL_LOG_LINES = 15
 
-# 进程级锁：同一时刻只允许一个迁移任务
+# A process-wide lock: only one migration job may run at a time
 _migration_lock = threading.Lock()
 _migration_owner_guard = threading.Lock()
 _migration_owner: "MigrationReservation | None" = None
@@ -119,7 +123,7 @@ def get_v3_runtime():
 
 
 # ============================================================
-# 路径与状态
+# Paths and status
 # ============================================================
 
 def status_path_for(buckets_dir: str) -> str:
@@ -178,11 +182,14 @@ def write_status(status_path: str, status: dict[str, Any]) -> None:
 
 
 def target_signature(target_backend: str, target_model: str, target_dim: int) -> str:
-    """迁移目标的唯一签名：断点续传只在「跟上次同一个目标」时才生效。
+    """A unique signature for the migration target: resuming only applies when the target
+    is the same one as last time.
 
-    checkpoint 原来只存 done_ids，不记目标是谁——先迁到 backend A 失败一半，
-    再改迁到 backend B，会把 A 模型的 done_ids 当成 B 已完成，连带复用同一份
-    staging db 里 A 的向量，直接原子替换进主库。签名不一致就必须整个重来。
+    The checkpoint used to store done_ids alone and record nothing about the target — so a
+    migration to backend A that failed halfway, followed by a migration to backend B, would
+    treat A's done_ids as already finished for B, reuse A's vectors sitting in the same
+    staging db, and swap them atomically into the main store. A signature mismatch has to
+    mean starting over entirely.
     """
     return f"{target_backend}:{target_model}:{target_dim}"
 
@@ -218,16 +225,19 @@ def _write_checkpoint(path: str, done_ids: Iterable[str], signature: str) -> Non
 
 
 def staging_db_path_for(db_path: str) -> str:
-    """迁移过程中间向量只写这个文件，绝不碰 live db，直到全部成功才原子替换。"""
+    """Intermediate vectors go into this file and this file only. The live db is never
+    touched until everything has succeeded and the atomic replace happens."""
     return f"{db_path}.migrating"
 
 
 def reset_stale_migration_state(buckets_dir: str, db_path: str, signature: str) -> None:
-    """启动新一轮迁移前调用：checkpoint 目标签名对不上就整个清掉。
+    """Called before starting a fresh migration: if the checkpoint's target signature does
+    not match, wipe it entirely.
 
-    必须在调用方构造 target_engine（从而在 staging db 路径上跑
-    ``_init_db()``）**之前**调用，否则会在一份带着上一个目标模型向量的
-    staging db 上继续写，签名检查形同虚设。
+    It must be called **before** the caller constructs target_engine (and thereby runs
+    ``_init_db()`` against the staging db path). Otherwise writing continues into a staging
+    db still holding the previous target model's vectors, and the signature check becomes
+    decorative.
     """
     ckpt_path = checkpoint_path_for(buckets_dir)
     if not os.path.exists(ckpt_path):
@@ -253,7 +263,7 @@ def reset_stale_migration_state(buckets_dir: str, db_path: str, signature: str) 
 
 
 def _tail_errors_log(buckets_dir: str, n: int = TAIL_LOG_LINES) -> list[str]:
-    """读 errors.jsonl 末尾 n 行。失败返回空列表。"""
+    """Read the last n lines of errors.jsonl. An empty list on failure."""
     candidates = [
         os.path.join(buckets_dir, ".logs", "errors.jsonl"),
         os.path.join(buckets_dir, "errors.jsonl"),
@@ -271,13 +281,14 @@ def _tail_errors_log(buckets_dir: str, n: int = TAIL_LOG_LINES) -> list[str]:
 
 
 # ============================================================
-# 备份与提交
+# Backup and commit
 # ============================================================
 
 def backup_db_once(db_path: str) -> str:
-    """如果 .backup 不存在则备份 db_path，返回备份文件路径。
+    """Back up db_path if no .backup exists yet, and return the backup's path.
 
-    已存在 .backup 则不重复备份（避免覆盖更早版本）。
+    If a .backup is already there it is not made again, so an earlier version cannot be
+    overwritten.
     """
     backup = db_path + ".backup"
     if os.path.exists(backup):
@@ -289,20 +300,20 @@ def backup_db_once(db_path: str) -> str:
 
 
 # ============================================================
-# 迁移核心
+# The core of the migration
 # ============================================================
 
 @dataclass
 class MigrationConfig:
-    """迁移参数。"""
+    """The migration's parameters."""
     buckets_dir: str
     db_path: str
     target_backend: str          # 'local' | 'api'
     target_model: str
     target_dim: int
-    # source/target engine 都已由调用方实例化好
-    target_engine: Any           # EmbeddingEngine 实例（迁移目标）
-    # bucket 内容来源：返回 list[(bucket_id, content)] 的 awaitable
+    # Both the source and target engines have already been constructed by the caller
+    target_engine: Any           # an EmbeddingEngine instance: the migration target
+    # Where bucket content comes from: an awaitable returning list[(bucket_id, content)]
     fetch_buckets: Callable[[], Awaitable[list[tuple[str, str]]]]
 
 
@@ -310,11 +321,11 @@ async def _run_migration(
     cfg: MigrationConfig,
     on_complete: Callable[[bool], None] | None = None,
 ) -> None:
-    """实际跑迁移的协程。"""
+    """The coroutine that actually runs the migration."""
     status_path = status_path_for(cfg.buckets_dir)
     ckpt_path = checkpoint_path_for(cfg.buckets_dir)
 
-    # 1) 备份原 db
+    # 1) Back up the original db
     try:
         backup_db_once(cfg.db_path)
     except Exception as e:
@@ -330,7 +341,7 @@ async def _run_migration(
             on_complete(False)
         return
 
-    # 2) 拉所有 bucket
+    # 2) Fetch every bucket
     try:
         buckets = await cfg.fetch_buckets()
     except Exception as e:
@@ -348,7 +359,7 @@ async def _run_migration(
 
     total = len(buckets)
     signature = target_signature(cfg.target_backend, cfg.target_model, cfg.target_dim)
-    done_ids = _read_checkpoint(ckpt_path, signature)  # 断点续传（目标不一致则整个重来）
+    done_ids = _read_checkpoint(ckpt_path, signature)  # resume from the checkpoint (a mismatched target starts over)
     failed_items: list[dict[str, str]] = []
     failed_count = 0
 
@@ -366,7 +377,7 @@ async def _run_migration(
         "message": f"开始迁移 {total} 个 bucket（已完成 {len(done_ids)}）",
     })
 
-    # 3) 分批跑
+    # 3) Run in batches
     pending = [(bid, content) for bid, content in buckets if bid not in done_ids]
     for i in range(0, len(pending), BATCH_SIZE):
         batch = pending[i:i + BATCH_SIZE]
@@ -394,7 +405,7 @@ async def _run_migration(
                         "error": f"{type(e).__name__}: {e}",
                     })
 
-        # 每批写一次 checkpoint + status
+        # Write the checkpoint and status once per batch
         _write_checkpoint(ckpt_path, done_ids, signature)
         cur = read_status(status_path)
         cur["done"] = len(done_ids)
@@ -403,15 +414,18 @@ async def _run_migration(
         cur["message"] = f"已完成 {len(done_ids)} / {total}（失败 {failed_count}）"
         write_status(status_path, cur)
 
-        # 限速
+        # Rate limiting
         if i + BATCH_SIZE < len(pending):
             await asyncio.sleep(BATCH_INTERVAL_SEC)
 
-    # 4) 全部成功才原子替换进主库——docstring 承诺的「先写 .migrating，全部跑完
-    #    再原子 swap」真正落地点。循环全程只写 cfg.target_engine 自己的 staging
-    #    db（由调用方在构造 target_engine 时把 db_path 指到 staging_db_path_for()
-    #    返回的路径），从未碰过 cfg.db_path，所以任何一步失败/崩溃，live db
-    #    都还是迁移前的样子，不会出现新旧模型向量混杂的半截状态。
+    # 4) Only a completely successful run swaps atomically into the main store. This is
+    #    where the docstring's promise — "write .migrating first, swap atomically once
+    #    everything is through" — actually lands. Throughout the loop only
+    #    cfg.target_engine's own staging db is written (the caller points its db_path at
+    #    whatever staging_db_path_for() returned when constructing target_engine), and
+    #    cfg.db_path is never touched. So any failure or crash at any step leaves the live
+    #    db exactly as it was before the migration, with no half-finished state mixing
+    #    vectors from two models.
     all_done = failed_count == 0 and len(done_ids) >= total
     swap_error = ""
     if all_done:
@@ -419,10 +433,11 @@ async def _run_migration(
         if staged_path and os.path.abspath(staged_path) != os.path.abspath(cfg.db_path):
             try:
                 os.replace(staged_path, cfg.db_path)
-                # 后续任何用这个 target_engine 发起的操作都必须落在刚替换好的
-                # live 路径——继续指着已经被 rename 走的旧 staging 路径，下一次
-                # sqlite3.connect() 会在那里悄悄建一个空库，看起来"正常"实则
-                # 全部向量重新归零。
+                # Anything this target_engine does from now on has to land on the live path
+                # that was just swapped in. Left pointing at the old staging path, which has
+                # been renamed away, the next sqlite3.connect() would quietly create an
+                # empty database there — everything would look "fine" while every vector had
+                # in fact been reset to nothing.
                 cfg.target_engine.db_path = cfg.db_path
             except OSError as e:
                 swap_error = f"{type(e).__name__}: {e}"
@@ -437,7 +452,7 @@ async def _run_migration(
         final_msg = f"迁移完成：{len(done_ids)} 成功 / {failed_count} 失败"
     tail = []
     if failed_count > 0 or swap_error:
-        # 失败时附 log + 引导提示
+        # On failure, attach the log and a pointer to what to do
         tail = _tail_errors_log(cfg.buckets_dir)
 
     cur = read_status(status_path)
@@ -454,8 +469,9 @@ async def _run_migration(
     })
     write_status(status_path, cur)
 
-    # 成功后把 embeddings_meta 更新为目标后端的 model/dim，
-    # 否则 db_meta 还是旧值（如 gemini/768），重启会误报 OB-W005 维度不一致。
+    # On success, update embeddings_meta to the target backend's model/dim. Otherwise the
+    # db meta still holds the old values and the next restart falsely reports an OB-W005
+    # dimension mismatch.
     if success:
         try:
             cfg.target_engine._write_meta("model_name", cfg.target_model or "")
@@ -463,9 +479,10 @@ async def _run_migration(
         except Exception as e:
             logger.warning(f"[migration] update meta failed: {e}")
 
-    # 完成后清掉 checkpoint（下次切换从头开始）——只有真正 swap 成功才清，
-    # swap 失败时必须留着，好让下次重试从断点续传，而不是把 staging db 里
-    # 已经算完的向量再重算一遍。
+    # Clear the checkpoint when it is done, so the next switch starts from scratch — but
+    # only once the swap has genuinely succeeded. If the swap failed the checkpoint must
+    # stay, so that a retry resumes rather than recomputing vectors the staging db already
+    # holds.
     if success:
         try:
             if os.path.exists(ckpt_path):
@@ -487,9 +504,9 @@ def start_migration(
     *,
     reservation: MigrationReservation | None = None,
 ) -> asyncio.Task | None:
-    """在指定 event loop 上启动后台迁移任务。
+    """Start the background migration task on the given event loop.
 
-    同一时刻只允许一个迁移任务，重复调用返回 None。
+    Only one migration may run at a time; a second call returns None.
     """
     global _migration_task
     active_reservation = reservation or reserve_migration()
@@ -535,7 +552,7 @@ def is_running() -> bool:
 
 
 def reset_for_test() -> None:
-    """测试用：强制释放锁。"""
+    """For tests: force the lock to release."""
     global _migration_owner, _migration_task
     with _migration_owner_guard:
         _migration_owner = None

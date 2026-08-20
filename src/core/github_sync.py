@@ -1,13 +1,13 @@
 """
-github_sync.py — GitHub 仓库同步（用于 bucket 数据云端备份）
+github_sync.py — syncing to a GitHub repository, for off-site backup of bucket data
 
-策略：
-- 只同步 buckets_dir 下的 .md 文件（纯文本，体积小，可读性好）
-- embeddings.db 不上传（二进制，可由 /api/embedding/migrate 重算）
-- 使用 GitHub Git Trees API 批量提交（一次同步 = 一个 commit）
-- 支持手动触发 + 可选的定时自动同步
+The strategy:
+- Only the .md files under buckets_dir are synced (plain text, small, and readable)
+- embeddings.db is not uploaded (it is binary, and /api/embedding/migrate can rebuild it)
+- Commits go through the GitHub Git Trees API in bulk (one sync = one commit)
+- Both manual triggering and optional scheduled auto-sync are supported
 
-依赖：httpx（已在 requirements.txt）
+Dependency: httpx (already in requirements.txt)
 """
 
 from __future__ import annotations
@@ -31,8 +31,8 @@ logger = logging.getLogger("loci_brain.github_sync")
 
 _API = "https://api.github.com"
 _TIMEOUT = 60.0
-_MAX_FILE_BYTES = 5 * 1024 * 1024  # GitHub single blob 上限 ~100MB，这里保守限 5MB
-_TREE_CHUNK = 200                  # 每个 /git/trees 请求最多内联多少文件，避免单请求过大
+_MAX_FILE_BYTES = 5 * 1024 * 1024  # GitHub caps a single blob near 100MB; 5MB is the conservative limit here
+_TREE_CHUNK = 200                  # how many files one /git/trees request may inline, so no single request grows huge
 _TREE_CHUNK_BYTES = 2 * 1024 * 1024  # Bound decoded bodies retained by one request.
 _MAX_BACKUP_FILES = 10_000
 _MAX_BACKUP_PATH_BYTES = 1024
@@ -128,7 +128,7 @@ def _iter_markdown_paths(root_dir: str) -> Iterator[str]:
 
 
 class GitHubSync:
-    """向 GitHub 仓库批量上传 bucket .md 文件。"""
+    """Uploads bucket .md files to a GitHub repository in bulk."""
 
     def __init__(
         self,
@@ -152,20 +152,22 @@ class GitHubSync:
         self.last_status: str = "idle"   # idle | ok | error
         self.last_error: str = ""
         self.last_count: int = 0
-        self.is_validated: bool = False   # validate() 成功后置 True
-        # A3：连续失败计数。自动备份可能连挂几次而用户毫无察觉（以为有备份其实没有）。
-        # 每次成功归零、每次失败 +1，供诊断面板判断要不要升级为醒目告警。
+        self.is_validated: bool = False   # set to True once validate() succeeds
+        # A consecutive-failure counter. An automatic backup can fail several times running
+        # without the user noticing a thing — they believe there is a backup when there is
+        # not. Reset to zero on every success, incremented on every failure, so the
+        # diagnostics panel can decide when to escalate to a conspicuous alarm.
         self.consecutive_failures: int = 0
         # Manual and scheduled backups share one instance.  Serializing them
         # prevents two bounded jobs from adding up to an unbounded peak.
         self._sync_lock = asyncio.Lock()
 
     # --------------------------------------------------------
-    # 公开接口
+    # Public interface
     # --------------------------------------------------------
 
     async def sync(self, buckets_dir: str) -> dict[str, Any]:
-        """同步 buckets_dir 下所有 .md 到 GitHub。返回结果 dict。"""
+        """Sync every .md under buckets_dir to GitHub. Returns a result dict."""
         async with self._sync_lock:
             try:
                 files = self._collect_files(buckets_dir)
@@ -191,11 +193,14 @@ class GitHubSync:
                 return {"ok": False, "error": str(e)}
 
     async def import_from_github(self, buckets_dir: str) -> dict[str, Any]:
-        """从 GitHub 仓库把 path_prefix 下的所有 .md 拉回本地 buckets_dir（恢复 / 回滚）。
+        """Pull every .md under path_prefix from the GitHub repository back into the local
+        buckets_dir (restore / rollback).
 
-        这是 sync() 的逆操作。合并覆盖语义：同名（同相对路径）文件用 GitHub 上的覆盖，
-        本地独有的文件保留不动。embeddings.db 不在仓库里，调用方应在导入后跑一次
-        backfill 重建向量。带 path-traversal 防护（仓库内容不可信，防 ../ 逃逸）。
+        The inverse of sync(). Merge-and-overwrite semantics: a file with the same relative
+        path is overwritten by the GitHub copy, while a file that exists only locally is
+        left alone. embeddings.db is not in the repository, so the caller should run a
+        backfill afterwards to rebuild the vectors. Path-traversal protection is included:
+        repository content is untrusted, and `../` must not escape.
         """
         async with self._sync_lock:
             return await self._import_from_github_locked(buckets_dir)
@@ -204,7 +209,7 @@ class GitHubSync:
         """Serialized implementation shared with the backup lock."""
         try:
             async with httpx.AsyncClient(headers=self._headers, timeout=_TIMEOUT) as c:
-                # 取 branch HEAD → commit tree → 递归列出全部 blob
+                # Fetch the branch HEAD -> the commit tree -> recursively list every blob
                 r = await self._request(c, "GET", f"{_API}/repos/{self.repo}/git/ref/heads/{self.branch}")
                 if _is_empty_repo_response(r):
                     return {
@@ -316,7 +321,7 @@ class GitHubSync:
                     rel = t["path"][len(prefix):]
                     if not rel:
                         continue
-                    # path-traversal 防护：解析后必须仍在 buckets_dir 内
+                    # Path-traversal protection: once resolved it must still be inside buckets_dir
                     dest = os.path.abspath(os.path.join(base, rel))
                     if dest != base and not dest.startswith(base + os.sep):
                         skipped += 1
@@ -347,13 +352,15 @@ class GitHubSync:
                             ):
                                 raise RuntimeError("backup manifest integrity mismatch")
                         self._assert_safe_restore_destination(base, rel)
-                        # _win_long_path 前缀绕开 Windows 260 字符 MAX_PATH：恢复
-                        # 备份是这个前缀存在的头号场景——sanitize 后的深层 domain
-                        # 路径叠上一个本来就很长的安装目录，真的会超限（同款问题
-                        # utils.atomic_write_text 已经踩过并修过）。
+                        # The _win_long_path prefix sidesteps Windows' 260-character
+                        # MAX_PATH. Restoring a backup is the number one reason that prefix
+                        # exists: a deep sanitised domain path on top of an already long
+                        # install directory really does exceed the limit (the same problem
+                        # utils.atomic_write_text walked into and fixed).
                         dest_long = _win_long_path(dest)
                         os.makedirs(_win_long_path(os.path.dirname(dest)), exist_ok=True)
-                        # 原子写：导入是覆盖本地记忆的操作，写到一半被中断绝不能留半截文件。
+                        # Atomic write: importing overwrites local memories, and an
+                        # interruption halfway must never leave a half-written file behind.
                         _tmp = f"{dest}.{uuid.uuid4().hex}.tmp"
                         _tmp_long = _win_long_path(_tmp)
                         try:
@@ -391,7 +398,8 @@ class GitHubSync:
             return {"ok": False, "error": str(e)}
 
     async def validate(self) -> dict[str, Any]:
-        """验证 token + repo 可访问，且具有写权限（contents: write）。"""
+        """Verify that the token and repo are reachable and carry write permission
+        (contents: write)."""
         try:
             async with httpx.AsyncClient(headers=self._headers, timeout=15.0) as c:
                 r = await c.get(f"{_API}/repos/{self.repo}")
@@ -438,7 +446,7 @@ class GitHubSync:
         }
 
     # --------------------------------------------------------
-    # 内部实现
+    # Internals
     # --------------------------------------------------------
 
     def _collect_files(self, buckets_dir: str) -> Mapping[str, bytes]:
@@ -615,18 +623,22 @@ class GitHubSync:
             yield chunk
 
     async def _batch_commit(self, files: Mapping[str, bytes]) -> int:
-        """用 Git Trees API 一次性提交所有文件，返回上传文件数。
+        """Commit every file at once through the Git Trees API; returns how many were
+        uploaded.
 
-        关键点：tree entry 直接内联 `content`（UTF-8 文本），由 GitHub 在建
-        tree 时顺带创建 blob —— 几百个文件只需 1~N 个 /git/trees 请求，而不是
-        每个文件一个 /git/blobs 请求。后者会瞬间打满 GitHub 的 *secondary rate
-        limit*（返回 403），正是之前同步莫名 403 的根因。
+        The key point: a tree entry inlines its `content` (UTF-8 text) directly and GitHub
+        creates the blob while building the tree — so several hundred files take 1..N
+        /git/trees requests rather than one /git/blobs request per file. The latter
+        saturates GitHub's *secondary rate limit* almost immediately (a 403), which was the
+        root cause of syncs mysteriously returning 403.
 
-        大批量时分块提交（每块 _TREE_CHUNK 个），块与块之间用 base_tree 串联，
-        最后只打一个 commit。所有请求都带指数退避重试以应对偶发的二级限流。
+        Large batches are committed in chunks of _TREE_CHUNK, chained together through
+        base_tree, with a single commit at the end. Every request carries exponential
+        backoff retries to absorb the occasional secondary rate limit.
         """
         async with httpx.AsyncClient(headers=self._headers, timeout=_TIMEOUT) as c:
-            # 1. 获取 branch HEAD commit SHA。GitHub 空仓库没有任何 ref，会在这里返回 409。
+            # 1. Get the branch HEAD commit SHA. An empty GitHub repo has no refs at all and
+            #    returns 409 here.
             r = await self._request(c, "GET", f"{_API}/repos/{self.repo}/git/ref/heads/{self.branch}")
             bootstrap_branch = _is_empty_repo_response(r)
             head_sha: str | None = None
@@ -637,7 +649,7 @@ class GitHubSync:
                 r.raise_for_status()
                 head_sha = r.json()["object"]["sha"]
 
-                # 2. 获取 HEAD commit 对应的 tree SHA
+                # 2. Get the tree SHA belonging to that HEAD commit
                 r = await self._request(c, "GET", f"{_API}/repos/{self.repo}/git/commits/{head_sha}")
                 r.raise_for_status()
                 base_tree_sha = r.json()["tree"]["sha"]
@@ -718,7 +730,7 @@ class GitHubSync:
             del r, manifest_payload, manifest_entry, manifest_content
             new_tree_sha = cur_base
 
-            # 5. 创建 commit
+            # 5. Create the commit
             now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
             r = await self._request(
                 c, "POST", f"{_API}/repos/{self.repo}/git/commits",
@@ -731,7 +743,7 @@ class GitHubSync:
             r.raise_for_status()
             commit_sha: str = r.json()["sha"]
 
-            # 6. 更新已有 branch ref；空仓库首次提交则创建 branch ref
+            # 6. Update the existing branch ref; on an empty repo's first commit, create it
             if bootstrap_branch:
                 r = await self._request(
                     c, "POST", f"{_API}/repos/{self.repo}/git/refs",
@@ -800,15 +812,18 @@ class GitHubSync:
         json: dict | None = None,
         _max_retries: int = 4,
     ) -> httpx.Response:
-        """带退避重试的请求。专治 GitHub 二级限流（403/429 + Retry-After）。
+        """A request with backoff retries, aimed squarely at GitHub's secondary rate limit
+        (403/429 plus Retry-After).
 
-        普通 4xx（权限/404 等）直接返回交由上层 raise_for_status 处理，不重试。
+        An ordinary 4xx — a permission problem, a 404 — is returned straight away for the
+        caller's raise_for_status to deal with, and is not retried.
         """
         for attempt in range(_max_retries + 1):
             resp = await client.request(method, url, json=json)
             if resp.status_code not in (403, 429):
                 return resp
-            # 判断是否二级限流（而非真正的权限 403）
+            # Decide whether this is the secondary rate limit rather than a genuine
+            # permission 403
             body_l = resp.text.lower()
             is_rate = (
                 "rate limit" in body_l
@@ -817,7 +832,7 @@ class GitHubSync:
             )
             if not is_rate or attempt == _max_retries:
                 return resp
-            # 计算等待时长：优先 Retry-After，其次指数退避
+            # Work out how long to wait: Retry-After if given, otherwise exponential backoff
             retry_after = resp.headers.get("retry-after")
             if retry_after and retry_after.isdigit():
                 wait = int(retry_after)

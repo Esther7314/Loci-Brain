@@ -1,27 +1,34 @@
 """
 ========================================
-bucket_manager.py — 记忆桶的增删改查与多维索引
+bucket_manager.py — CRUD over memory buckets, plus the multi-dimensional index
 ========================================
 
-一个「记忆桶」就是一份带 YAML frontmatter 的 Markdown 文件。
-这个文件负责把它们读出来、写回去、按主题域+情感坐标+文本模糊匹配筛出来。
+A "memory bucket" is a Markdown file with YAML frontmatter. This file is responsible for
+reading them, writing them back, and filtering them by domain, emotion coordinates and
+fuzzy text matching.
 
-关键行为：
-- 每个桶 = 一个 .md 文件，按 permanent / dynamic / archive / feel / plans / letters 分目录存
-- 创建/读取/更新/删除/搬家（move）都在这里
-- 检索 = 先按 domain 预筛，再按情感坐标 + 文本相似度加权排序
-- 情感坐标是 Russell 环形模型的连续值：valence 0~1（消极→积极），arousal 0~1（平静→激动）
-- create()/update(content=...) 先落盘再投递 embedding outbox；delete() 清理派生索引
-- 所有记忆类型都以 Markdown 为真源；向量化失败不会回滚原文，由后台统一重试
-- iter 2.0：create() 接受 ``bucket_id_override``（feel 用分钟级可读 id），
-  以及 ``source_tool`` / ``grow_batch_id`` 用于来源追踪
+Key behaviours:
+- One bucket = one .md file, stored under permanent / dynamic / archive / feel / plans /
+  letters
+- Create, read, update, delete and move all live here
+- Retrieval = pre-filter by domain, then weighted ordering by emotion coordinates and text
+  similarity
+- The emotion coordinates are continuous values from Russell's circumplex model:
+  valence 0~1 (negative -> positive), arousal 0~1 (calm -> aroused)
+- create() / update(content=...) hit disk first and only then post to the embedding
+  outbox; delete() cleans up the derived indexes
+- Markdown is the source of truth for every memory type; a vectorisation failure never
+  rolls back the text, and the background retries it
+- create() accepts ``bucket_id_override`` (feel uses a readable minute-resolution id),
+  plus ``source_tool`` / ``grow_batch_id`` for provenance
 
-不做什么（边界）：
-- 不做衰减打分（那是 decay_engine 的事）
-- 不做 LLM 调用、不做向量化（那是 dehydrator / embedding_engine 的事）
-- 不直接对外提供 MCP 工具（被 tools/* 通过 _runtime 引用）
+What it deliberately does not do:
+- No decay scoring (that is decay_engine's job)
+- No LLM calls and no vectorisation (that is dehydrator / embedding_engine)
+- It exposes no MCP tool directly (tools/* reach it through _runtime)
 
-对外暴露：BucketManager 类（create / get / update / delete / search / list_by_type 等）
+Exports: the BucketManager class (create / get / update / delete / search /
+list_by_type and friends)
 ========================================
 """
 # ============================================================
@@ -43,7 +50,8 @@ from datetime import date, datetime
 from locibrain.domain.plan_history import append_plan_change_log
 from locibrain.eventsourcing.footprint import FootprintSnapshot
 
-# 统一错误体系：越界 clamp 时上报 OB-W001/OB-W002（rule.md §11）
+# The unified error system: clamping an out-of-range value reports OB-W001/OB-W002
+# (rule.md §11)
 try:
     from errors import push_warning as _ob_push_warning  # type: ignore
 except Exception:
@@ -198,7 +206,7 @@ async def _filesystem_turn(base_dir: str, key: str, timeout_seconds: float = 30.
 
 
 def _clamp_importance(v, source: str) -> int:
-    """importance 越界 → clamp 到 [1,10]，并产生 OB-W001 提示。"""
+    """importance out of range -> clamp into [1,10], and raise an OB-W001 notice."""
     try:
         iv = int(v)
     except (TypeError, ValueError, OverflowError):
@@ -212,7 +220,7 @@ def _clamp_importance(v, source: str) -> int:
 
 
 def _clamp_unit(v, field: str, source: str) -> float:
-    """valence/arousal 越界 → clamp 到 [0.0,1.0]，并产生 OB-W002 提示。"""
+    """valence/arousal out of range -> clamp into [0.0,1.0], and raise an OB-W002 notice."""
     try:
         fv = float(v)
     except (TypeError, ValueError):
@@ -263,9 +271,12 @@ from locibrain.projection.projection_vector import TraceVectorProjectionManifest
 from locibrain.policy.formal_invariants import FormalInvariantChecker
 
 try:
-    # ⚠️ 8-18 验收抓的雷：重码搬进 core 后旧顶层路径 `from bm25_index import` 静默
-    #    ImportError → BM25 整维死掉不吭声（软依赖的坑：挂了不报错，检索悄悄变瞎）。
-    #    这个 try 只该兜 rank_bm25/jieba 缺席，不该兜自己人的路径错。
+    # ⚠️ A mine caught during acceptance: after the move into core, the old top-level path
+    #    `from bm25_index import` failed with a silent ImportError -> the entire BM25
+    #    dimension died without a word. That is the trap in a soft dependency: it fails
+    #    without erroring, and retrieval quietly goes blind.
+    #    This try is only meant to cover rank_bm25/jieba being absent. It must not cover an
+    #    import path of our own being wrong.
     from .bm25_index import BM25Index as _BM25Index
 except ImportError:
     _BM25Index = None  # type: ignore
@@ -306,32 +317,36 @@ def _atomic_create_text(path: str, text: str) -> None:
 
 
 # ============================================================
-# 调参面板 / Tunable constants
+# Tunable constants
 # ------------------------------------------------------------
-# rule.md §①：禁裸魔法数字。检索评分、时间涾漪、字段截断上限集中在这里。
-# 修改这些数值 → 请同步跑 tests/regression 验证评分行为。
+# rule.md §①: no bare magic numbers. Retrieval scoring and the field truncation caps are
+# gathered here.
+# After changing any of these, run tests/regression to verify the scoring behaviour.
 # ============================================================
 
-# --- 默认元数据值（与 dehydrator/import_memory 保持一致）---
+# --- Default metadata values (kept in step with dehydrator/import_memory) ---
 _DEFAULT_VALENCE = 0.5
 _DEFAULT_AROUSAL = 0.3
 _DEFAULT_IMPORTANCE = 5
-_PINNED_IMPORTANCE = 10           # pinned/protected 桶 importance 锁定值
-_DEFAULT_DOMAIN_NAME = "未分类"     # 未提供 domain 时的占位
+_PINNED_IMPORTANCE = 10           # the importance a pinned/protected bucket is locked to
+_DEFAULT_DOMAIN_NAME = "未分类"     # the placeholder used when no domain was supplied
 _EDITABLE_BUCKET_TYPES = frozenset(
     {"dynamic", "permanent", "feel", "plan", "letter", "i", "self"}
 )
 _PLAN_STATUSES = frozenset({"active", "resolved", "abandoned"})
 
-# --- 字段截断长度（避免 frontmatter 肨胀）---
+# --- Field truncation lengths, so the frontmatter cannot bloat ---
 _SOURCE_TOOL_MAX = 32
 _GROW_BATCH_ID_MAX = 64
 _WHY_REMEMBERED_MAX = 500
 _TRIGGERED_BY_MAX = 64
-# --- 批 1（2026-08-03）新增三个字段的截断长度 ---
-# room = 房间（十选一，由调用方判断，tools/_rooms.py 校验，这里只存不管语义）
-# summary = 一句话摘要（「远的只给摘要」的地基，dehydrator 后台回填）
-# when = 事件发生时间（ISO 日期字符串；批 2 recall 的时间门用它，不填＝存入时间）
+# --- Truncation lengths for three later fields ---
+# room    = the room. The caller decides it and tools/_rooms.py validates it; this file
+#           only stores it and has no opinion on its meaning.
+# summary = the one-sentence summary. It is the foundation of "distant things get only
+#           their summary", and the dehydrator backfills it in the background.
+# when    = when the event happened (an ISO date string). recall's time gate reads it;
+#           left empty it means the moment of storing.
 _ROOM_MAX = 64
 _SUMMARY_MAX = 200
 _WHEN_MAX = 32
@@ -340,17 +355,19 @@ _MAX_TAGS = 64
 _MAX_TAG_CHARS = 128
 _MAX_DOMAINS = 16
 _MAX_DOMAIN_CHARS = 128
-# --- 二改 B 件：subjects（主体，标签三类里的第三类）---
-# 一条记忆里出现的人不会太多；上限存在的意义是挡住模型抽疯把一整段话拆成人名。
+# --- subjects: the third of the three kinds of label ---
+# Not many people appear in one memory; the cap exists to stop a model having a fit and
+# splitting an entire passage into person names.
 _MAX_SUBJECTS = 8
 _MAX_SUBJECT_CHARS = 64
 
-# --- Miss：meaning / media（hold 的体验锚定扩展）---
-# meaning 存储为 list[str]：同一条记忆可能在不同时刻被反复触动，每次 hold
-# 传入的是新增的一条，追加到列表，不覆盖已有的（见 tools/_common.py merge_or_create）。
-_MEANING_ITEM_MAX = 2000        # 单条 meaning 的长度上限
-_MEANING_LIST_MAX_ITEMS = 50    # 一个桶最多累积多少条 meaning
-_MEDIA_MAX_ITEMS = 20           # 单条记忆最多关联多少个 media 引用
+# --- meaning / media: hold's experience-anchoring extension ---
+# meaning is stored as list[str]: the same memory may be touched again at different
+# moments, and each hold passes in the new entry, which is appended rather than
+# overwriting what is there (see merge_or_create in tools/_common.py).
+_MEANING_ITEM_MAX = 2000        # length cap on one meaning entry
+_MEANING_LIST_MAX_ITEMS = 50    # how many meanings one bucket may accumulate
+_MEDIA_MAX_ITEMS = 20           # how many media references one memory may carry
 _MEDIA_PATH_MAX = 500
 _MEDIA_TITLE_MAX = 200
 _MEDIA_TYPE_MAX = 32
@@ -362,16 +379,18 @@ _METADATA_TEXT_LIMITS = {
     "resolution_reason": 500,
     "resolved_by": 128,
     "related_bucket": 128,
-    # 施工 6 · C 件（二改 §6.2）：want 结案记"谁结的案"。字段名故意跟上面
-    # plan 联动用的 resolved_by 分开——那个存的是 bucket_id/来源标签，这个存人名。
+    # Closing a want records who closed it. The field name is deliberately kept separate
+    # from the resolved_by above, which plan linkage uses: that one holds a bucket_id or a
+    # source label, while this one holds a person's name.
     "closed_by": 50,
     "author": 120,
     "user_name": 120,
     "title": 120,
     "letter_date": 64,
     "why_remembered": _WHY_REMEMBERED_MAX,
-    # 二改 E 件：新名字 from 是唯一写入口；老名字 triggered_by 还要留在这张表里，
-    # 因为盘上的老桶被 update() 碰到时仍会走一遍长度校验。
+    # The new name `from` is the only write entry point; the old name triggered_by has to
+    # stay in this table because an old bucket on disk still goes through the length check
+    # whenever update() touches it.
     FROM_FIELD: _TRIGGERED_BY_MAX,
     FROM_FIELD_LEGACY: _TRIGGERED_BY_MAX,
     "source_tool": _SOURCE_TOOL_MAX,
@@ -380,35 +399,44 @@ _METADATA_TEXT_LIMITS = {
     "_pre_anchor_source_tool": _SOURCE_TOOL_MAX,
 }
 
-# ⚰️ 时间涟漪那三个常量 2026-08-20 跟函数一起删了 —— 判据在 touch() 上面那块碑。
-#    （留着没人用的常量，读的人会以为那个机制还活着。）
+# ⚰️ The three temporal-ripple constants were deleted along with the function — the
+#    reasoning is on the memorial above touch().
+#    (Leaving unused constants behind makes a reader believe the mechanism is still alive.)
 _MAX_METADATA_DEPTH = 16
 _MAX_METADATA_NODES = 10_000
 
-# --- search 评分 ---
-_VECTOR_TOPK = 50          # embedding 预取 top_k（仅作 semantic 分源，不窄化候选集）
-_VECTOR_RECALL_THRESHOLD = 0.65  # 纯语义候选进入结果池的最低余弦相似度
-_RESOLVED_RANK_PENALTY = 0.3   # resolved 桶仅在排序时降权
-# 机制①（2026-08-06）：遗忘三档在搜索里的样子——淡出打折、沉底打更狠的折。
-# 「老的默认不出来，但你真在找它、撞得准，它扛得住打折冲上来」：字面命中的
-# 由 recall 层 max(分数, 线) 托底，不受这两个折扣挡。数值等真有东西沉了再校。
+# --- search scoring ---
+_VECTOR_TOPK = 50          # embedding prefetch top_k (a source for the semantic score only; it never narrows the candidate set)
+_VECTOR_RECALL_THRESHOLD = 0.65  # minimum cosine similarity for a purely semantic candidate to enter the result pool
+_RESOLVED_RANK_PENALTY = 0.3   # a resolved bucket is demoted in ordering only
+# What the three forgetting stages look like inside search: faded takes a discount, sunk
+# takes a harsher one.
+# "Old things do not come up by default, but if you really are looking for one and hit it
+# squarely, it survives the discount and climbs anyway": a literal hit is floored by the
+# recall layer's max(score, line) and is not blocked by either discount. These numbers get
+# recalibrated once something has genuinely sunk.
 _FADED_SEARCH_DISCOUNT = 0.85
 _SUNK_SEARCH_DISCOUNT = 0.6
-# _LITERAL_MATCH_BONUS 已删（2026-08-06 机制②）：字面命中从「+25 加分」改成
-# 「结果带 literal_hit 标记，recall 层 max(分数, 关联度线) 托底」——它在家底表里的
-# 名字就叫「字面命中保底」，要的是别漏掉不是排第一；加 25 会撞 100 天花板分不出高下。
+# _LITERAL_MATCH_BONUS was deleted: a literal hit went from "+25 to the score" to "the
+# result carries a literal_hit flag and the recall layer floors it with max(score, the
+# relevance line)". Its name in the design table is "the literal-hit floor" — what it wants
+# is not to be missed, not to come first; and adding 25 hits the 100 ceiling where nothing
+# can be told apart any more.
 
-# topic/emotion/time/touch 四个评分维度的纯函数 + 权重常量已拆到
-# locibrain.retrieval.bucket_scoring（search() 和 _calc_*_score wrapper 都从那里导入）。
+# The pure functions for the topic/emotion/time/touch scoring dimensions, and their weight
+# constants, moved to locibrain.retrieval.bucket_scoring (both search() and the _calc_*_score
+# wrappers import them from there).
 
 
 def _clamp01(value, default: float) -> float:
-    """将任意输入钳制到 [0.0, 1.0]；失败返回 default。
+    """Clamp any input into [0.0, 1.0]; on failure return `default`.
 
-    专门处理身体里散落的 ``max(0.0, min(1.0, float(x)))`` 样板
-    （model_valence / weight / bucket_type_defaults.weight 等）。
-    哲学 valence/arousal 请走 _clamp_unit，那个会 push OB-W002。
-    这个 helper 静默钳制，适用于“调用方保证范围、充其量充个防”的场景。
+    This exists for the ``max(0.0, min(1.0, float(x)))`` boilerplate scattered through the
+    body (model_valence, weight, bucket_type_defaults.weight and so on).
+    The philosophical valence/arousal go through _clamp_unit instead, which pushes an
+    OB-W002.
+    This helper clamps silently, and suits the case where the caller already guarantees the
+    range and this is at most a belt-and-braces check.
     """
     try:
         numeric = float(value)
@@ -424,17 +452,13 @@ class BucketManager:
     Memory bucket manager — entry point for all bucket CRUD operations.
     Buckets are stored as Markdown files with YAML frontmatter for metadata
     and body for content. Natively compatible with Obsidian browsing/editing.
-    记忆桶管理器 —— 所有桶的 CRUD 操作入口。
-    桶以 Markdown 文件存储，YAML frontmatter 存元数据，正文存内容。
-    天然兼容 Obsidian 直接浏览和编辑。
     """
 
     def __init__(self, config: dict, embedding_engine=None, v3_runtime=None):
-        # iter 1.9 G: 保留原始 config 引用，让 create() 能读 bucket_type_defaults
         # Keep raw config so create() can look up bucket_type_defaults at write time.
         self.config = config
         self.v3_runtime = v3_runtime
-        # --- Read storage paths from config / 从配置中读取存储路径 ---
+        # --- Read storage paths from config ---
         self.base_dir = config["buckets_dir"]
         self.media_store = MediaStore(
             self.base_dir,
@@ -450,22 +474,23 @@ class BucketManager:
         self.fuzzy_threshold = config.get("matching", {}).get("fuzzy_threshold", 50)
         self.max_results = config.get("matching", {}).get("max_results", 5)
 
-        # --- Search scoring weights / 检索权重配置 ---
+        # --- Search scoring weights ---
         scoring = config.get("scoring_weights", {})
         self.w_topic = scoring.get("topic_relevance", 4.0)
         self.w_emotion = scoring.get("emotion_resonance", 2.0)
         self.w_time = scoring.get("time_proximity", 1.5)
         self.w_importance = scoring.get("importance", 1.0)
         self.content_weight = scoring.get("content_weight", 1.0)  # body×1, per spec
-        # iter 2.1: touch + semantic 两个新维度
-        # touch: 被主动召回越多加分越高（上限 10 次归一化）
-        # semantic: embedding 余弦相似度（仅 embedding 启用时生效）
+        # Two additional dimensions, touch and semantic:
+        # touch:    the more it has been deliberately recalled, the higher the score
+        #           (normalised, capped at 10 recalls)
+        # semantic: embedding cosine similarity (only when embedding is enabled)
         self.w_touch = scoring.get("touch_weight", 1.0)
         self.w_semantic = scoring.get("semantic_weight", 2.5)
-        # BM25: TF-IDF 加权关键词匹配（rank_bm25+jieba，软依赖）
+        # BM25: TF-IDF weighted keyword matching (rank_bm25 + jieba, both soft dependencies)
         self.w_bm25 = scoring.get("bm25_weight", 1.5)
 
-        # --- Optional embedding engine for pre-filtering / 可选 embedding 引擎，用于预筛候选集 ---
+        # --- The optional embedding engine, used to pre-filter the candidate set ---
         self.embedding_engine = embedding_engine
         self.embedding_outbox = None
         ledger_path = config.get("ledger_path") or os.path.join(
@@ -473,7 +498,7 @@ class BucketManager:
         )
         self.ledger_mirror = LedgerMirror(ledger_path)
 
-        # BM25 稀疏索引（写操作后脏标记，search() 时懒重建）
+        # The sparse BM25 index (marked dirty after a write, rebuilt lazily on search())
         self._bm25: "_BM25Index | None" = _BM25Index() if _BM25Index is not None else None
         self._bm25_dirty: bool = True
         self._bm25_rebuilding: bool = False  # Avoid concurrent duplicate rebuilds.
@@ -491,13 +516,15 @@ class BucketManager:
         self._bucket_path_index_guard = threading.RLock()
         self._bucket_path_index: dict[str, str] = {}
         self._bucket_path_index_ready = False
-        # 见 _bucket_turn：archive()/update()/delete()/touch() 各自独立做
-        # find_file → load → mutate → atomic_write，互不知会。并发命中同一个
-        # bucket_id 时（比如衰减引擎后台 archive() 撞上一次 trace/hold 的
-        # update()），后到的那个基于自己读到的旧 file_path 写回，可能在另一个
-        # 已经把文件 move 进 archive/ 之后，在原路径「复活」一份带旧内容的
-        # 桶。找茬会话（2026-07-15）发现，按 tools/_common.py 里 _quota_turn
-        # 同一套跨 loop/进程文件锁方案修，见 _bucket_turn()。
+        # See _bucket_turn: archive() / update() / delete() / touch() each independently do
+        # find_file -> load -> mutate -> atomic_write, without telling one another. When two
+        # of them hit the same bucket_id concurrently — the decay engine's background
+        # archive() colliding with an update() from trace or hold, say — the later one
+        # writes back based on the old file_path it read, and can "resurrect" a bucket with
+        # stale content at the original path after the other has already moved the file into
+        # archive/. Found during an adversarial review, and fixed with the same cross-loop,
+        # cross-process file-lock scheme used by _quota_turn in tools/_common.py; see
+        # _bucket_turn().
         storage_cfg = config.get("storage", {}) or {}
         try:
             self.external_change_poll_seconds = max(
@@ -623,24 +650,26 @@ class BucketManager:
         return report
 
     def footprint_snapshot(self) -> FootprintSnapshot:
-        """读取旧 Ledger 兼容存储，生成面向 breath 的一次性足迹快照。"""
+        """Read the legacy Ledger-compatible store and build a one-shot footprint snapshot
+        for breath."""
         return FootprintSnapshot.from_events(self.ledger_mirror.iter_events())
 
     # ---------------------------------------------------------
-    # Internal helpers【代码多复用、不作为公共 API】
-    # 内部工具：目录遍历 / 主域路径 / 装入与开销完全一致于原原本
+    # Internal helpers — heavily reused inside this file, not a public API
+    # Directory walking, primary-domain paths, loading; behaviour and cost identical to
+    # the originals they were extracted from
     # ---------------------------------------------------------
     @property
     def _active_dirs(self) -> list[str]:
-        """不含 archive 的活跃桶目录（list_all/_collect_all_tags/查找均使用）。。。顺序不可随意调整：feel/plan/letter 在 dynamic 之后是为了与原代码扫描顺序保持一致。"""
+        """The active bucket directories, archive excluded (used by list_all, _collect_all_tags and lookups). The order must not be shuffled: feel/plan/letter come after dynamic to preserve the original scan order."""
         return [self.permanent_dir, self.dynamic_dir,
                 self.feel_dir, self.plan_dir, self.letter_dir]
 
     def _iter_md_files(self, dirs: list[str]):
-        """递归遍历多个目录下的 *.md，yield (root, filename, full_path)。
+        """Recursively walk several directories for *.md, yielding (root, filename, full_path).
 
-        原本中 5 处 ``for root, _, files in os.walk(…): for f in files: if not f.endswith('.md'): continue`` 同表现。。。
-        这里不加任何过滤逻辑，调用方自己判断是否跳过。
+        Behaves exactly like the five copies of ``for root, _, files in os.walk(…): for f in files: if not f.endswith('.md'): continue`` it replaced.
+        No filtering logic is added here; the caller decides what to skip.
         """
         for dir_path in dirs:
             if not os.path.exists(dir_path):
@@ -653,9 +682,11 @@ class BucketManager:
 
     @staticmethod
     def _primary_domain(domain: list[str] | str | None) -> str:
-        """取 domain[0] 作为主域子目录名，空/缺失 → 默认 ``未分类``。
+        """Take domain[0] as the primary-domain subdirectory name; empty or missing falls
+        back to ``未分类``.
 
-        在 create / _move_bucket / archive 三处使用。sanitize_name 后才能当路径用。
+        Used in three places: create, _move_bucket and archive. It has to go through
+        sanitize_name before it can be used as a path.
         """
         if isinstance(domain, str):
             primary = domain.strip()
@@ -711,16 +742,17 @@ class BucketManager:
 
     @classmethod
     def _normalize_meaning_item(cls, text) -> str:
-        """裁剪单条 meaning 文本；不是摘要，只做长度上限保护。"""
+        """Trim one meaning entry. This is not summarisation, only a length cap."""
         if not text:
             return ""
         return cls._sanitize_text(str(text)).strip()[:_MEANING_ITEM_MAX]
 
     @classmethod
     def _normalize_meaning_list(cls, values) -> list[str]:
-        """整体替换用：逐条裁剪 + 丢空条目 + 裁总数上限。
+        """For wholesale replacement: trim each entry, drop the empty ones, and cap the count.
 
-        不去重：同一句话在不同时刻写下也是信息，去重会抹掉这个时间差。
+        It deliberately does not deduplicate: the same sentence written at two different
+        moments is itself information, and deduplicating would erase that gap in time.
         """
         if not values:
             return []
@@ -737,7 +769,8 @@ class BucketManager:
 
     @classmethod
     def _normalize_media(cls, media) -> list[dict]:
-        """校验持久媒体元数据；path 必须已经由 MediaStore 稳定化。"""
+        """Validate persisted media metadata; `path` must already have been stabilised by
+        MediaStore."""
         if not media:
             return []
         if not isinstance(media, list):
@@ -777,7 +810,6 @@ class BucketManager:
 
     # ---------------------------------------------------------
     # Internal: keep embedding index in sync with markdown storage
-    # 内部：保证向量索引与 markdown 存储层一致
     # ---------------------------------------------------------
     async def _sync_embedding(self, bucket_id: str, content: str) -> bool:
         """Best-effort inline indexing for runtimes without a queue worker."""
@@ -792,9 +824,10 @@ class BucketManager:
     async def _sync_meaning_embedding(self, bucket_id: str, meaning_list: list[str]) -> None:
         """Best-effort: embed the most recent meaning entry, separate from content.
 
-        取列表最后一条：最新的感受通常最贴近当前语境。没有专门的 outbox/重试
-        队列——meaning 向量失败不影响记忆本身已经落盘，稍后可通过再次
-        hold/trace 追加新 meaning 时重新尝试。
+        It takes the last entry in the list: the most recent feeling is usually the closest
+        to the current context. There is no dedicated outbox or retry queue — a failed
+        meaning vector does not affect the fact that the memory itself is already on disk,
+        and the next hold or trace that appends a new meaning tries again.
         """
         if not meaning_list:
             return
@@ -852,9 +885,11 @@ class BucketManager:
             )
 
     def _invalidate_bm25(self) -> None:
-        """写操作后调用：标记 BM25 需重建 + 清活跃桶缓存（集合已变，缓存作废）。
+        """Called after a write: mark BM25 for rebuild and clear the active-bucket cache,
+        since the set has changed and the cache is void.
 
-        名字沿用历史（各写路径已在调它），实际是「集合变更」的统一失效钩子。
+        The name is historical (every write path already calls it); what it really is, is
+        the single invalidation hook for "the set changed".
         """
         with self._active_cache_state_guard:
             self._active_cache_generation += 1
@@ -862,16 +897,21 @@ class BucketManager:
             self._active_cache = None
             self._active_file_state = {}
             self._last_file_state_check = 0.0
-        # 批 1（2026-08-03）：这里原来还会清空 _bucket_path_index。删掉的理由：
-        # 每次托管写盘后下一个 create() 的撞名检查都会触发全库 frontmatter 重解析
-        # （886 文件在 Windows bind mount 上 ≈5.4s/次——这就是 hold 慢、grow 超时的
-        # 隐藏一半）。路径索引对**托管写**不需要整体失效：
-        #   ① create() 写完自己插入新条目（同一把 guard 下）；
-        #   ② 每次命中都有 os.path.isfile 验证，文件被移动/删除会当场丢弃条目并
-        #      标记 not-ready，走文件名扫描 → 全量重建兜底；
-        #   ③ 托管文件名里带 id，验证通过却指向别的桶不可能发生。
-        # 外部改动（Obsidian/git 手编）的失效走 list_all 的文件状态轮询（另一处
-        # _bucket_path_index_ready=False），原样保留——那才是真正需要全量重建的场景。
+        # This used to clear _bucket_path_index as well. Why that was removed: after every
+        # managed write, the next create()'s collision check triggered a full re-parse of
+        # every frontmatter in the store (886 files on a Windows bind mount ≈5.4s a time —
+        # which was the hidden half of hold being slow and grow timing out). The path index
+        # does not need wholesale invalidation for a **managed** write:
+        #   ① create() inserts its own new entry after writing (under the same guard);
+        #   ② every hit is verified with os.path.isfile, so a moved or deleted file drops
+        #      its entry on the spot and marks the index not-ready, falling through to the
+        #      filename scan and then a full rebuild;
+        #   ③ a managed filename carries the id, so passing verification while pointing at a
+        #      different bucket is impossible.
+        # Invalidation for external edits (Obsidian, a hand-edit through git) goes through
+        # list_all's file-state polling instead (the other _bucket_path_index_ready=False),
+        # and is left exactly as it was — that is the case that genuinely needs a full
+        # rebuild.
 
     def _cache_bump(
         self,
@@ -881,7 +921,8 @@ class BucketManager:
         activation_count=None,
         file_path: str = "",
     ) -> None:
-        """touch/ripple 只改了某桶的激活字段（集合没变）→ 就地更新缓存，不清整表。"""
+        """touch only changes one bucket's activation fields and leaves the set unchanged,
+        so the cache is updated in place rather than cleared wholesale."""
         with self._active_cache_state_guard:
             # Even with no published cache, a concurrent builder may have
             # parsed the pre-touch file.  Bumping the generation makes its
@@ -917,11 +958,13 @@ class BucketManager:
     def _scan_active_file_state(self) -> dict[str, tuple[int, int]]:
         """Return a cheap metadata fingerprint for every active Markdown file.
 
-        🔴 2026-08-19：走 os.scandir，不走 walk + os.stat。
-           目录列举本来就把每个条目的 mtime/size 带出来了（DirEntry 自己缓存），
-           再 os.stat 一遍等于**同一件事问两次** —— 在 Windows 的 Docker bind mount 上
-           一次 stat 就是一次跨界往返，1000 个文件实测 2.45 秒 → 换成 scandir 1.05 秒。
-           指纹的内容一个字段没变（mtime_ns + size），只是拿法换了。
+        🔴 It uses os.scandir, not walk + os.stat.
+           Listing a directory already carries each entry's mtime and size (DirEntry caches
+           them itself), so calling os.stat afterwards **asks the same question twice** — and
+           on a Windows Docker bind mount one stat is one round trip across the boundary.
+           Measured over 1000 files: 2.45 seconds, versus 1.05 seconds with scandir.
+           Not one field of the fingerprint changed (mtime_ns + size); only the way it is
+           fetched did.
         """
         state: dict[str, tuple[int, int]] = {}
         stack = [str(d) for d in self._active_dirs]
@@ -1056,18 +1099,21 @@ class BucketManager:
         )
 
     def _sunk_orig_path(self, bucket_id: str) -> str:
-        """沉底桶的原文存放处：archive/原文/{id}.txt。
+        """Where a sunk bucket's original text lives: archive/原文/{id}.txt.
 
-        ⚠️ 必须 .txt 不能 .md：同一个 id 在两处各有一个 md 的话，_find_bucket_file 会撞。
+        ⚠️ It must be .txt and never .md: with the same id owning an md file in two places,
+        _find_bucket_file would collide.
         """
         return os.path.join(self.archive_dir, "原文", f"{bucket_id}.txt")
 
     def _build_bm25_index(self, buckets: list):
-        """在线程里构建一个**全新**的 BM25 索引并返回（性能 P4：jieba 全库分词很慢）。
+        """Build a **brand new** BM25 index in a thread and return it (jieba segmenting the
+        whole store is slow).
 
-        D6（2026-08-06）：沉底桶主库正文只剩摘要，但「搜肯定是根据原文匹配，只是原文
-        细节你看不到了」（她定的）——重建时从 archive/原文/{id}.txt 把原文读回来喂给
-        索引。读文件在 to_thread 里跑，不卡事件循环。
+        A sunk bucket has only its summary left in the main store, but the rule is: search
+        still matches against the original text, you simply cannot see its details any more.
+        So the rebuild reads the original back from archive/原文/{id}.txt and feeds that to
+        the index. The file reads happen inside to_thread and never block the event loop.
         """
         docs = []
         for b in buckets:
@@ -1079,17 +1125,18 @@ class BucketManager:
                         b = dict(b)
                         b["content"] = f.read()
                 except OSError:
-                    pass  # 原文丢了就只能按摘要匹配，不因此炸掉整个索引
+                    pass  # if the original is gone, match on the summary; do not blow up the whole index over it
             docs.append(b)
         idx = _BM25Index()  # type: ignore[operator]
         idx.build(docs)
         return idx
 
     async def _rebuild_bm25_async(self, buckets: list) -> None:
-        """后台重建 BM25：to_thread 里建新索引，建好原子换入 self._bm25，不阻塞事件循环。"""
+        """Rebuild BM25 in the background: build the new index inside to_thread, then swap
+        it into self._bm25 atomically. The event loop is never blocked."""
         try:
             fresh = await asyncio.to_thread(self._build_bm25_index, buckets)
-            self._bm25 = fresh          # 原子替换（单次赋值）
+            self._bm25 = fresh          # an atomic swap (a single assignment)
             self._bm25_dirty = False
         except Exception as e:
             logger.warning(f"[bm25] 后台重建失败，保留旧索引: {e}")
@@ -1098,9 +1145,7 @@ class BucketManager:
 
     # ---------------------------------------------------------
     # Create a new bucket
-    # 创建新桶
     # Write content and metadata into a .md file
-    # 将内容和元数据写入一个 .md 文件
     # ---------------------------------------------------------
     async def create(
         self,
@@ -1115,8 +1160,9 @@ class BucketManager:
         pinned: bool = False,
         protected: bool = False,
         why_remembered: str = "",
-        # 二改 E 件：参数和落盘字段统一叫 from。`from` 是 Python 关键字，
-        # 所以形参只能叫 from_ids；写进 frontmatter 的 key 才是真正的 "from"。
+        # Both the parameter and the persisted field are called `from`. `from` is a Python
+        # keyword, so the parameter has to be named from_ids; the key written into the
+        # frontmatter is the real "from".
         from_ids: str = "",
         weight: Optional[float] = None,
         source_tool: str = "",
@@ -1133,25 +1179,24 @@ class BucketManager:
     ) -> str:
         """
         Create a new memory bucket, return bucket ID.
-        创建一个新的记忆桶，返回桶 ID。
 
         pinned/protected=True: bucket won't be merged, decayed, or have importance changed.
         Importance is locked to 10 for pinned/protected buckets.
-        pinned/protected 桶不参与合并与衰减，importance 强制锁定为 10。
 
-        iter 2.0 来源追踪：
-        - source_tool: "hold" | "grow" — 记录由哪个工具创建。feel 走 hold 分支，
-          所以 feel 桶 source_tool="hold"，依靠 bucket_type 区分。
-        - grow_batch_id: 同一次 grow 调用拆出的所有桶共享同一个 batch_id，
-          dashboard 可按 batch 聚合显示。
-        - bucket_id_override: 调用方提供的可读 id（如 feel 的
-          ``feel_202605011423_V085``）。如果与已有桶冲突，自动追加秒级后缀。
-          为空 → 走默认 ``generate_bucket_id()``（12 位 hex）。
+        Provenance:
+        - source_tool: "hold" | "grow" — which tool created it. feel goes through the hold
+          branch, so a feel bucket has source_tool="hold" and is told apart by bucket_type.
+        - grow_batch_id: every bucket split out of one grow call shares a batch_id, so the
+          dashboard can group them by batch.
+        - bucket_id_override: a readable id supplied by the caller (feel uses
+          ``feel_202605011423_V085``). On a collision with an existing bucket a
+          second-resolution suffix is appended automatically.
+          Empty -> fall back to ``generate_bucket_id()`` (12 hex characters).
         """
         # ``allow_embedding_fallback`` is retained for API compatibility.
         # All memory types now write first; embedding is a derived index.
 
-        # F-04: 清洗 content / tags / name 中的危险控制字符和双向覆写符
+        # F-04: strip dangerous control characters and bidi overrides out of content, tags and name
         content = self._sanitize_text(content)
         self._validate_bucket_content(content)
         if name:
@@ -1167,11 +1212,14 @@ class BucketManager:
             else generate_bucket_id()
         )
         bucket_id = preferred_bucket_id
-        # 桶名 = "YYYY-MM-DD HH-MM-SS [LLM生成的标题]"，无标题时仅用时间戳。
-        # 使用连字符替代冒号，避免 sanitize_name 后续编辑时把冒号去掉破坏可读性。
-        # H3（2026-08-06）：名字/文件名用**她的本地时间**——凌晨存的东西挂着前一天
-        # 下午的名字，每次看都硌一下。只改名字这一层；created/last_active 仍是
-        # 无后缀 UTC（tools/_when 的三条口径，改了历史数据会整体挪 8 小时）。
+        # The bucket name is "YYYY-MM-DD HH-MM-SS [title generated by the LLM]", or just
+        # the timestamp when there is no title.
+        # Hyphens are used instead of colons, so that a later sanitize_name pass cannot
+        # strip the colons and wreck readability.
+        # The name and filename use the **local** time: something stored after midnight
+        # carrying yesterday afternoon's name grates every time it is read. Only this naming
+        # layer changed; created/last_active remain suffix-less UTC (the three conventions
+        # in tools/_when — changing those would shift the whole history by eight hours).
         try:
             from ._when import now as _local_now
             _ts = _local_now().strftime("%Y-%m-%d %H-%M-%S")
@@ -1199,12 +1247,12 @@ class BucketManager:
         linked_content = content  # wikilink injection disabled; LLM adds [[]] via prompt
 
         # --- Pinned/protected buckets: lock importance to 10 ---
-        # --- 钉选/保护桶：importance 强制锁定为 10 ---
         if pinned or protected:
             importance = _PINNED_IMPORTANCE
 
-        # --- Build YAML frontmatter metadata / 构建元数据 ---
-        # 越界不静默 clamp：会产生 OB-W001/OB-W002 提示走到 MCP 返回末尾
+        # --- Build the YAML frontmatter metadata ---
+        # Out-of-range values are not clamped silently: they raise an OB-W001/OB-W002 that
+        # travels to the end of the MCP return value
         metadata = {
             "id": bucket_id,
             "name": bucket_name,
@@ -1231,34 +1279,45 @@ class BucketManager:
         if bucket_type == "permanent" or pinned:
             metadata["type"] = "permanent"
 
-        # --- iter 2.0: 来源工具与 grow 批次 ---
-        # source_tool 留空 = 调用方未声明（兼容老逻辑），不写 frontmatter。
-        # grow_batch_id 仅 grow 路径会传，hold/feel 不会有这个字段。
+        # --- The source tool and the grow batch ---
+        # An empty source_tool means the caller did not declare one (older callers), and
+        # nothing is written into the frontmatter.
+        # Only the grow path passes grow_batch_id; hold and feel never carry that field.
         if source_tool:
             metadata["source_tool"] = str(source_tool).strip()[:_SOURCE_TOOL_MAX]
         if grow_batch_id:
             metadata["grow_batch_id"] = str(grow_batch_id).strip()[:_GROW_BATCH_ID_MAX]
 
-        # --- iter 1.8: 让记忆带「为什么记得」 / why this is worth remembering ---
-        # 自由文本字段。模型 / 人类手写。不参与评分，只参与展示与搜索。
-        # Empty string = 没说原因，dashboard 直接不渲染该行。
+        # --- Let a memory carry "why this is worth remembering" ---
+        # A free-text field, written by the model or by hand. It takes no part in scoring;
+        # it only appears in display and search.
+        # An empty string means no reason was given, and the dashboard simply omits the row.
         if why_remembered:
             metadata["why_remembered"] = str(why_remembered).strip()[:_WHY_REMEMBERED_MAX]
-        # --- 来源链（二改 E 件 2026-08-16：落盘统一叫 from，不再写 triggered_by）---
-        # 参数一直叫 from、盘上却叫 triggered_by，同一个东西两个名字。
-        # 🔴 只写新名字；老桶上的 triggered_by 由 read_from() 读兼容，迁移脚本负责改盘。
+        # --- The source chain. What lands on disk is now uniformly `from`; triggered_by is
+        #     no longer written. ---
+        # The parameter had always been called `from` while disk said triggered_by: one
+        # thing under two names.
+        # 🔴 Only the new name is written; triggered_by on old buckets is handled on read by
+        #    read_from(), and a migration script is responsible for the disk.
         if from_ids:
             metadata[FROM_FIELD] = str(from_ids).strip()[:_TRIGGERED_BY_MAX]
-        # --- 批 1（2026-08-03）：room / summary / when ---
-        # room 的语义校验在 tools/_rooms.py（十选一，调用方判断）；这里只存不管语义。
-        # summary 由 dehydrator 后台回填（update 白名单里也有它）。
-        # when = 事件发生时间，不填＝存入时间（读 created 即可，不冗余写）。
+        # --- room / summary / when ---
+        # The semantic validation of `room` lives in tools/_rooms.py and the caller decides
+        # it; this file only stores it and has no opinion on its meaning.
+        # `summary` is backfilled in the background by the dehydrator (it is on update's
+        # whitelist too).
+        # `when` is when the event happened; left empty it means the moment of storing, so
+        # `created` can simply be read and nothing redundant is written.
         if room:
             metadata["room"] = self._sanitize_text(str(room)).strip()[:_ROOM_MAX]
-        # --- 二改 B 件：subjects = 标签的**第三类**（谁）---
-        # 🔴 独立成字段，不许混：混进 tags 会破坏「字面一定在原文里」这条保证；
-        #    混进 aliases 会进 BM25 打分，而主体不该影响相关度。
-        # deepseek 抽、过别名表归一（config/别名表.yaml），我不必多写一个字段。
+        # --- subjects: the **third kind** of label, namely who ---
+        # 🔴 It is a field of its own and must never be mixed in: mixed into tags it would
+        #    break the guarantee that a tag appears literally in the body; mixed into
+        #    aliases it would enter BM25 scoring, and who a memory is about should not move
+        #    relevance.
+        # The model extracts it and it is normalised through the alias table, so no extra
+        # field has to be written by hand.
         if subjects:
             metadata["subjects"] = self._normalize_metadata_list(
                 subjects, max_items=_MAX_SUBJECTS, max_chars=_MAX_SUBJECT_CHARS)
@@ -1266,21 +1325,23 @@ class BucketManager:
             metadata["summary"] = self._sanitize_text(str(summary)).strip()[:_SUMMARY_MAX]
         if when:
             metadata["when"] = str(when).strip()[:_WHEN_MAX]
-        # --- Miss: meaning / media —— 我自己觉得这条记忆为什么值得被想起 ---
-        # meaning 是 list[str]：新建时只有一条（这次 hold 传入的那句）；后续
-        # 每次 hold/trace 追加都会往这个列表里继续加。media 是不透明的外部引用列表。
-        # 两者都可选，互不依赖，也不参与打分。
+        # --- meaning / media: why I myself think this memory is worth being recalled ---
+        # meaning is a list[str]: on creation it holds one entry (the sentence this hold
+        # passed in), and every later hold or trace appends to the same list. media is an
+        # opaque list of external references.
+        # Both are optional, neither depends on the other, and neither takes part in scoring.
         meaning_item = self._normalize_meaning_item(meaning)
         if meaning_item:
             metadata["meaning"] = [meaning_item]
-        # --- iter 1.8: plan 的「承诺重量」0.0-1.0，与 importance 不同 ---
-        # importance = 这件事多重要；weight = 这件事压在我心头多重。
+        # --- a plan's "weight of the promise", 0.0-1.0, which is not importance ---
+        # importance = how important this thing is; weight = how heavily it presses on me.
         if bucket_type == "plan" and weight is not None:
             metadata["weight"] = _clamp01(weight, _DEFAULT_VALENCE)
-        # --- iter 1.9 G: bucket_type_defaults / 类型默认值 ---
-        # config.bucket_type_defaults 里可以写 {letter: {weight: 1.0, dont_surface: false}, ...}
-        # 仅在调用方未显式传该字段时套用。letter 默认 weight=1.0 体现「信件天然有重量」。
-        # 老配置没这段时静默跳过。
+        # --- bucket_type_defaults: per-type default values ---
+        # config.bucket_type_defaults may hold {letter: {weight: 1.0, dont_surface: false}, ...}
+        # and is applied only where the caller passed no explicit value. A letter defaults to
+        # weight=1.0, expressing that a letter has weight by its nature.
+        # An older config without that section is skipped silently.
         try:
             type_defaults = (self.config.get("bucket_type_defaults") or {}).get(bucket_type, {})
             if type_defaults:
@@ -1293,22 +1354,23 @@ class BucketManager:
                     metadata["why_remembered"] = str(type_defaults["why_remembered"]).strip()[:_WHY_REMEMBERED_MAX]
         except Exception as e:
             logger.warning(f"bucket_type_defaults apply failed / 类型默认值应用失败: {e}")
-        # --- iter 1.8: 主动遗忘开关，默认 False。新桶不写 frontmatter 节省空间 ---
-        # 通过 update(dont_surface=True) 后才会出现在 frontmatter 里。
-        # --- iter 1.8: first_of_kind 自动判定 ---
-        # 规则：当前桶的 tags 与全库已有 tags 完全无交集 → 这是一个「第一次」
-        # 仅对带 tag 的桶判定。空 tag 桶不标。
+        # --- The deliberate-forgetting switch, defaulting to False. A new bucket does not
+        #     write it into the frontmatter, to save space ---
+        # It only appears there after an update(dont_surface=True).
+        # --- first_of_kind, decided automatically ---
+        # The rule: this bucket's tags share nothing at all with the tags already in the
+        # store -> this is a "first time".
+        # Only buckets that carry tags are judged; a bucket with no tags is never marked.
         if tags:
             try:
                 existing_tags = self._collect_all_tags()
                 if existing_tags is not None and not (set(tags) & existing_tags):
                     metadata["first_of_kind"] = True
             except Exception as e:
-                # 失败不阻塞写入主流程
+                # A failure here must not block the main write path
                 logger.warning(f"first_of_kind check failed / 首次标记检测失败: {e}")
 
         # --- Choose directory by type + primary domain ---
-        # --- 按类型 + 主题域选择存储目录 ---
         if bucket_type == "permanent" or pinned:
             type_dir = self.permanent_dir
         elif bucket_type == "feel":
@@ -1345,9 +1407,11 @@ class BucketManager:
         collision_count = 0
         for candidate_id in _candidate_ids():
             async with self._bucket_turn(candidate_id):
-                # scan_if_missing=False：这儿**期待查不到**（id 刚摇出来的），
-                # 走 J 件那条兜底扫描等于每次 grow 都白扫一趟全库。
-                # 真撞上了还有两层：下面的 os.path.exists + no-overwrite 落盘。
+                # scan_if_missing=False: this call **expects to find nothing** (the id was
+                # just generated), and taking the fallback scan would mean walking the whole
+                # store for nothing on every single grow.
+                # A genuine collision still has two more layers below: os.path.exists, and a
+                # no-overwrite write.
                 if self._find_bucket_file(candidate_id, scan_if_missing=False):
                     collision_count += 1
                     continue
@@ -1421,10 +1485,13 @@ class BucketManager:
         # Markdown is committed before any derived-index work. The managed
         # server enqueues and returns immediately; standalone mode tries once.
         await self._index_after_write(bucket_id, linked_content)
-        # Miss: meaning 独立生成一份 embedding（不是拼进 content 里合并生成一份）。
-        # 拼接会让长 content 主导向量、稀释掉一句话 meaning 的信号；分开存，
-        # 检索时取两者相似度的较高值，一句感受也能被单独检索命中。
-        # 最佳努力：失败只记警告，不影响桶已经落盘的事实。
+        # meaning gets an embedding of its own rather than being concatenated into content
+        # and embedded together. Concatenating would let a long content dominate the vector
+        # and dilute the signal of a one-sentence meaning; stored separately, retrieval takes
+        # the higher of the two similarities and a single sentence of feeling can be hit on
+        # its own.
+        # Best effort: a failure only logs a warning and does not affect the fact that the
+        # bucket is already on disk.
         await self._sync_meaning_embedding(bucket_id, metadata.get("meaning") or [])
         self._record_v3_bucket_event(
             "create",
@@ -1445,14 +1512,13 @@ class BucketManager:
 
     # ---------------------------------------------------------
     # Read bucket content
-    # 读取桶内容
     # Returns {"id", "metadata", "content", "path"} or None
     # ---------------------------------------------------------
     async def get(self, bucket_id: str) -> Optional[dict]:
         """
         Read a single bucket by ID.
-        根据 ID 读取单个桶。
-        F-10: 软删除的桶（带 deleted_at）对常规调用者透明，返回 None。
+        F-10: a soft-deleted bucket (one carrying deleted_at) is invisible to ordinary
+        callers and comes back as None.
         """
         if not bucket_id or not isinstance(bucket_id, str):
             return None
@@ -1460,7 +1526,7 @@ class BucketManager:
         if not file_path:
             return None
         data = self._load_bucket(file_path)
-        # F-10: 软删除的桶不应通过 get() 可见
+        # F-10: a soft-deleted bucket must not be visible through get()
         if data and data.get("metadata", {}).get("deleted_at"):
             return None
         return data
@@ -1503,7 +1569,6 @@ class BucketManager:
 
     # ---------------------------------------------------------
     # Move bucket between directories
-    # 在目录间移动桶文件
     # ---------------------------------------------------------
     def _move_bucket(self, file_path: str, target_type_dir: str, domain: Optional[list[str]] = None) -> str:
         """
@@ -1582,10 +1647,12 @@ class BucketManager:
         fails, delete the new copy and keep the original as the sole truth.
         Existing destination files are never overwritten.
 
-        批 1 修复（codex 复核第 1 条）：托管移动必须同步维护 ID→路径索引。
-        _invalidate_bm25 已不再整体清空该索引，若这里挪了文件不更新映射，
-        下次按旧路径命中会把索引标 not-ready → 又一次全库重解析（5s+）。
-        bucket_id 由调用方尽量传入；拿不到时退化为把旧映射摘掉（fail-safe）。
+        A managed move has to keep the ID -> path index in step. _invalidate_bm25 no longer
+        clears that index wholesale, so a file moved here without updating the mapping would
+        cause the next hit on the old path to mark the index not-ready -> another full
+        re-parse of the store (5s+).
+        The caller passes bucket_id where it can; without it this degrades to removing the
+        old mapping, which is fail-safe.
         """
         if self._same_path(file_path, target_path):
             _atomic_write_text(file_path, serialized)
@@ -1620,10 +1687,13 @@ class BucketManager:
         return target_path
 
     def _path_index_moved(self, old_path: str, new_path: str, bucket_id: str = "") -> None:
-        """托管移动/归档后维护 ID→路径索引（批 1，见 _commit_bucket_update 注释）。
+        """Maintain the ID -> path index after a managed move or archive (see the comments
+        in _commit_bucket_update).
 
-        知道 bucket_id 就地更新映射；不知道就按旧路径反查摘掉对应条目。
-        只增量维护、绝不标 not-ready——外部改动的全量失效走 list_all 轮询。
+        With a bucket_id known, update the mapping in place; without one, look the old path
+        up in reverse and remove that entry.
+        It only maintains incrementally and never marks the index not-ready — wholesale
+        invalidation for external edits goes through list_all's polling.
         """
         with self._bucket_path_index_guard:
             if bucket_id:
@@ -1640,7 +1710,8 @@ class BucketManager:
                     self._bucket_path_index.pop(k, None)
 
     def _path_index_removed(self, bucket_id: str, path: str = "") -> None:
-        """托管删除后把条目摘掉（不标 not-ready：文件确实没了，miss 即正确答案）。"""
+        """Remove the entry after a managed delete. It does not mark the index not-ready:
+        the file really is gone, so a miss IS the correct answer."""
         with self._bucket_path_index_guard:
             if bucket_id:
                 self._bucket_path_index.pop(bucket_id, None)
@@ -1852,7 +1923,6 @@ class BucketManager:
 
     # ---------------------------------------------------------
     # Update bucket
-    # 更新桶
     # Supports: content, tags, importance, valence, arousal, name, resolved
     # ---------------------------------------------------------
     async def update(
@@ -1865,12 +1935,13 @@ class BucketManager:
     ) -> bool:
         """
         Update bucket content or metadata fields.
-        更新桶的内容或元数据字段。
 
-        bump_active=False（默认）：纯元数据/内容编辑（trace、plan、anchor、后台
-        自动 resolve、导入等）——**不**刷新 last_active，也不动 activation_count。
-        bump_active=True：把这次写入视作一次真实激活（如 hold/grow 合并近邻桶），
-        同步刷新 last_active 并累加 activation_count，语义与 touch() 一致。
+        bump_active=False (the default): a pure metadata or content edit — trace, plan,
+        anchor, a background auto-resolve, an import — which does **not** refresh
+        last_active and does not touch activation_count.
+        bump_active=True: treat this write as a genuine activation (hold/grow merging into a
+        neighbouring bucket, say), refreshing last_active and incrementing
+        activation_count, with the same meaning as touch().
         """
         async with self._bucket_turn(bucket_id):
             return await self._update_locked(
@@ -1916,14 +1987,15 @@ class BucketManager:
                 max_chars=_MAX_TAG_CHARS,
             )
         if "aliases" in kwargs:
-            # 引申词（2026-08-06 tags 三组分工）：只喂 bm25 索引，不进给人看的标签行
+            # The expansion words: they feed the bm25 index only and never appear on the tag
+            # row a human reads
             kwargs["aliases"] = self._normalize_metadata_list(
                 kwargs["aliases"],
                 max_items=_MAX_TAGS,
                 max_chars=_MAX_TAG_CHARS,
             )
         if "subjects" in kwargs:
-            # 二改 B 件：主体（第三类标签）。既不进 tags 也不进 aliases，见 create()。
+            # subjects, the third kind of label. It enters neither tags nor aliases; see create().
             kwargs["subjects"] = self._normalize_metadata_list(
                 kwargs["subjects"],
                 max_items=_MAX_SUBJECTS,
@@ -1936,20 +2008,20 @@ class BucketManager:
                 max_chars=_MAX_DOMAIN_CHARS,
             ) or [_DEFAULT_DOMAIN_NAME]
         if "media" in kwargs:
-            # Miss: media 是整体覆盖写入（trace 的 media_replace）。传空列表即清空该字段。
+            # media is a wholesale overwrite (trace's media_replace). An empty list clears the field.
             kwargs["media"] = self._normalize_media(
                 await self.media_store.persist(bucket_id, kwargs["media"])
             )
         if "media_append" in kwargs:
-            # Miss: media_append 是追加写入（trace 的 media_append / hold 每次调用）。
+            # media_append appends (trace's media_append, and every hold call).
             kwargs["media_append"] = self._normalize_media(
                 await self.media_store.persist(bucket_id, kwargs["media_append"])
             )
         if "meaning" in kwargs:
-            # Miss: meaning 整体覆盖写入（trace 的 meaning_replace，用于纠错/清理）。
+            # meaning is a wholesale overwrite (trace's meaning_replace, for corrections and cleanup).
             kwargs["meaning"] = self._normalize_meaning_list(kwargs["meaning"])
         if "meaning_append" in kwargs:
-            # Miss: meaning_append 是追加一条新 meaning（trace 的 meaning_append / hold 每次调用）。
+            # meaning_append appends one new meaning (trace's meaning_append, and every hold call).
             kwargs["meaning_append"] = self._normalize_meaning_item(kwargs["meaning_append"])
 
         try:
@@ -2034,17 +2106,21 @@ class BucketManager:
         if will_be_pinned or is_protected:
             kwargs.pop("importance", None)
         elif forced_type == "dynamic" and "importance" not in kwargs:
-            # 🔴 2026-08-19：**取消钉住 = importance 跟着回落**（bug ④）。
-            # 老行为：摘钉之后 importance 留在 10 —— 而钉着的桶不占 importance≥9
-            # 那个池子，一摘钉它就带着满分掉进去，池子（上限 24）被自己撑满。
-            # 而 importance 的形参 8-18 整个撤了：**盘上没有任何入口能把它降回来**，
-            # 摘钉成了一道单向门。上面那句注释里说的「quota-safe unpinning」这条路
-            # 一直留着，只是自那以后再没有调用方走得到它 —— 现在由这里替它走。
-            # 落到 8 不是拍的：撞到硬上限时系统本来就自动降到这个数
-            # （_HIGH_IMP_DEGRADE_TO），两条路走到同一个地方才不会互相打架。
+            # 🔴 **Unpinning drops importance back down with it** (bug ④).
+            # The old behaviour: after unpinning, importance stayed at 10 — and a pinned
+            # bucket does not occupy the importance>=9 pool, so the moment it is unpinned it
+            # falls into that pool at full marks and fills it up (the pool caps at 24).
+            # Meanwhile the importance parameter was withdrawn entirely: **there is no
+            # entry point anywhere that can bring it back down**, so unpinning became a
+            # one-way door. The "quota-safe unpinning" path mentioned in the comment above
+            # has been there all along; it simply had no caller able to reach it any more —
+            # so this branch walks it on their behalf.
+            # Landing on 8 is not an arbitrary pick: it is the number the system already
+            # degrades to when the hard cap is hit (_HIGH_IMP_DEGRADE_TO), and two paths
+            # arriving at the same place is what stops them fighting each other.
             kwargs["importance"] = 8
 
-        # --- Update only fields that were passed in / 只改传入的字段 ---
+        # --- Update only fields that were passed in ---
         if "content" in kwargs:
             post.content = kwargs["content"]  # wikilink injection disabled; LLM adds [[]] via prompt
         if "tags" in kwargs:
@@ -2070,19 +2146,20 @@ class BucketManager:
             post["pinned"] = kwargs["pinned"]
             if kwargs["pinned"]:
                 post["importance"] = _PINNED_IMPORTANCE  # pinned → lock importance to 10
-                post.metadata.pop("anchor", None)  # pinned 与 anchor 互斥：钉为核心准则即清除坐标系标记
+                post.metadata.pop("anchor", None)  # pinned and anchor are mutually exclusive: pinning it as a core rule clears the coordinate-system mark
         if "digested" in kwargs:
             post["digested"] = kwargs["digested"]
         if "model_valence" in kwargs:
             post["model_valence"] = _clamp01(kwargs["model_valence"], _DEFAULT_VALENCE)
         if "media" in kwargs:
-            # Miss: 整体覆盖写入（trace media_replace）；空列表清空该字段。
+            # A wholesale overwrite (trace's media_replace); an empty list clears the field.
             if kwargs["media"]:
                 post["media"] = kwargs["media"]
             else:
                 post.metadata.pop("media", None)
         if "media_append" in kwargs and kwargs["media_append"]:
-            # Miss: 追加写入，去重同 path 的旧引用（trace media_append / hold 每次调用）。
+            # Appends, deduplicating any earlier reference with the same path (trace's
+            # media_append, and every hold call).
             existing_media = post.get("media") or []
             existing_paths = {m.get("path") for m in existing_media if isinstance(m, dict)}
             appended = existing_media + [
@@ -2090,78 +2167,97 @@ class BucketManager:
             ]
             post["media"] = appended[:_MEDIA_MAX_ITEMS]
         if "meaning" in kwargs:
-            # Miss: 整体覆盖写入（trace meaning_replace，用于纠错/清理）；空列表清空该字段。
+            # A wholesale overwrite (trace's meaning_replace, for corrections and cleanup);
+            # an empty list clears the field.
             if kwargs["meaning"]:
                 post["meaning"] = kwargs["meaning"]
             else:
                 post.metadata.pop("meaning", None)
         if "meaning_append" in kwargs and kwargs["meaning_append"]:
-            # Miss: 追加一条新 meaning，不覆盖已有的（trace meaning_append / hold 每次调用）。
+            # Appends one new meaning without overwriting what is there (trace's
+            # meaning_append, and every hold call).
             existing_meaning = post.get("meaning") or []
             if isinstance(existing_meaning, str):
                 existing_meaning = [existing_meaning]
             post["meaning"] = (list(existing_meaning) + [kwargs["meaning_append"]])[:_MEANING_LIST_MAX_ITEMS]
-        # --- Pass-through fields for plan/letter lifecycle ---
-        # --- plan/letter/iter1.7 生命周期相关字段直接透传到 frontmatter ---
-        # 这一组字段没有「校验/转换」逻辑，给什么写什么。新增字段往这个元组里加即可。
-        # iter 1.7 §G3 在这里加入了 "change_log"——plan 桶的状态/编辑历史 list[dict]，
-        # 由 server.py 的 plan() / trace() / /api/plans/{id}/action 维护，bucket_manager 不参与生成。
+        # --- Pass-through fields for the plan/letter lifecycle ---
+        # These fields have no validation or conversion logic: whatever is given is written.
+        # A new field only has to be added to this tuple.
+        # "change_log" was added here for plan buckets — a list[dict] of status and edit
+        # history, maintained by server.py's plan() / trace() / /api/plans/{id}/action;
+        # bucket_manager takes no part in producing it.
         for k in ("status", "type", "resolution_reason", "resolved_by",
                   "related_bucket", "author", "user_name", "title", "letter_date",
                   "change_log",
-                  # iter 1.8 新增字段。除 weight 外全部透传不转换。
-                  # weight 在 plan 上才有意义；这里不在这个循环里校验类型，由上层 server.py 保证传入范围。
+                  # Everything below passes through unconverted, weight included.
+                  # weight only means anything on a plan; its type is not checked in this
+                  # loop, and server.py above guarantees the range it passes in.
                   "why_remembered", "dont_surface", "first_of_kind",
-                  # 二改 E 件：from 是新名字。triggered_by 留在这儿只为一件事——
-                  # 迁移脚本/老调用把它显式传进来时不至于被静默丢掉。
+                  # `from` is the new name. triggered_by stays here for exactly one reason:
+                  # so that a migration script or an old caller passing it explicitly does
+                  # not have it silently dropped.
                   "weight", FROM_FIELD, FROM_FIELD_LEGACY,
-                  # 二改 B 件：subjects（主体）。dehydrator 回填走这条路。
+                  # subjects. The dehydrator's backfill comes through this path.
                   "subjects",
-                  # iter 2.0 新增 anchor。bool 字段，不参与评分，硬上限 24。
-                  # 上限校验在下面 anchor 分支里做（False→True 切换时计数），
-                  # set_anchor() 仍是首选入口，update() 只是兜底兼容批量迁移脚本。
+                  # anchor: a bool that takes no part in scoring, hard-capped at 24.
+                  # The cap is checked in the anchor branch below (counting only on a
+                  # False->True transition). set_anchor() remains the preferred entry point;
+                  # update() is only here as a fallback for bulk migration scripts.
                   "anchor",
-                  # iter 2.0 来源追踪字段：
-                  # source_tool / grow_batch_id 一般在 create() 时定型，
-                  # 这里的透传只服务于迁移脚本（给历史桶补字段）。
-                  # last_merged_by 由 _common.merge_or_create 在 merge 后写入，
-                  # 表示「最后一次合并是 hold 还是 grow 触发的」。
-                  # _pre_anchor_source_tool 是 anchor 时保存的原始 source_tool，
-                  # release 时自动恢复；None 表示删除该字段。
+                  # Provenance fields:
+                  # source_tool / grow_batch_id are normally fixed at create() time, and the
+                  # pass-through here serves migration scripts backfilling older buckets.
+                  # last_merged_by is written by _common.merge_or_create after a merge and
+                  # says whether hold or grow triggered the last merge.
+                  # _pre_anchor_source_tool holds the original source_tool saved when
+                  # anchoring, restored automatically on release; None deletes the field.
                   "source_tool", "grow_batch_id", "last_merged_by", "_pre_anchor_source_tool",
-                  # 批 1（2026-08-03）：room（十选一，语义校验在 tools/_rooms.py）、
-                  # summary（后台回填的一句话摘要）、when（事件发生时间）。
+                  # room (semantic validation in tools/_rooms.py), summary (the
+                  # background-backfilled one-sentence summary), when (when the event
+                  # happened).
                   "room", "summary", "when",
-                  # 批 2a：regrow 的版本链。supersedes=我换掉了谁；superseded_by=谁换掉了我
-                  # （有值即「旧版」，recall/浮现跳过，id 直查仍可见）。
+                  # regrow's version chain. supersedes = who I replaced; superseded_by = who
+                  # replaced me (any value means "an old version": recall and surfacing skip
+                  # it, while a direct lookup by id still sees it).
                   "supersedes", "superseded_by",
-                  # 二改施工 3（2026-08-16）：fold / gist 的两头。
-                  # cover=这条 gist 盖着谁（list[str]，永远是确定的 id 列表——
-                  #   时间范围只是输入的便利写法，落盘必须已解析）；
-                  # covered_by=谁盖着我（有值即「不再独立冒头」，但搜索/id 直查/下钻照旧）。
-                  # 🔴 两头都写是**故意的**：浮现池每轮全库扫，只查 covered_by 一个字段
-                  #   就能筛，不用维护反向索引。
+                  # The two ends of fold / gist.
+                  # cover = who this gist covers (a list[str], always a definite list of ids
+                  #   — a time range is only a convenient way to write the input, and what
+                  #   lands on disk must already be resolved);
+                  # covered_by = who covers me (any value means "stops surfacing on its own",
+                  #   while search, direct id lookup and drilling down are unaffected).
+                  # 🔴 Writing both ends is **deliberate**: the surfacing pools rescan the
+                  #   whole store every round, and querying the single field covered_by is
+                  #   enough to filter, with no reverse index to maintain.
                   "cover", "covered_by",
-                  # 机制①（2026-08-06）：遗忘三档 alive/faded/sunk。
-                  # alive/faded 由 decay 循环走这里写（纯元数据）；sunk 走 sink_bucket()
-                  # （要搬原文，不能走普通 update——普通 update 改 content 会重算向量）。
+                  # The three forgetting stages alive/faded/sunk.
+                  # alive/faded are written here by the decay loop (pure metadata); sunk goes
+                  # through sink_bucket(), because it has to move the original text and a
+                  # plain update() would recompute the vector when content changes.
                   "decay_stage",
-                  # 施工 6 · C 件（二改 §6.2 + §8）：want 结案记「谁结的案」+
-                  # 「上次问过她」的时间戳。🔴 补的坑：这两个字段之前只在
-                  # trace_core.py 里组装进 updates dict、也在 _METADATA_TEXT_LIMITS
-                  # 挂了长度上限（closed_by），但从没被列进这个透传白名单——
-                  # update() 只写白名单里的键，没在这儿的字段会被**静默丢弃**，
-                  # 结果结案按钮和「问过她」戳表面上成功、实际一个字都没落盘。
+                  # Closing a want records who closed it, plus a timestamp of when the user
+                  # was last asked about it. 🔴 The hole this filled: both fields were already
+                  # assembled into the updates dict in trace_core.py, and closed_by even had
+                  # a length cap in _METADATA_TEXT_LIMITS, but neither had ever been listed on
+                  # this pass-through whitelist — and update() writes only whitelisted keys,
+                  # so a field missing from here is **silently discarded**. The result was
+                  # that the close button and the "asked about it" stamp appeared to succeed
+                  # while not one character reached disk.
                   "closed_by", "last_asked",
-                  # 「上次梦到这条是什么时候」（2026-08-20）。做梦织完只记这一笔，
-                  # 选料时据它打折 —— 「别老做同一个梦」。**不动 weight。**
-                  # 🔴 我写这个字段的时候**当场又踩了上面那句注释说的坑**：
-                  #    先只在 `_dream.py` 里 `update(last_dreamt=...)`，没加进这张名单，
-                  #    于是它被静默丢掉，烟测报「last_dreamt=None」我还以为是别处的 bug。
-                  #    **同一个注释警告过的事，一小时之内又发生一次** ——
-                  #    说明「记得往名单里加」这个办法不管用。
-                  #    → 治它的不是更用力地记，是 smoke_dream 里那条
-                  #      「D3a2: last_dreamt 真写上了」——它会因为漏加而变红。
+                  # When this entry was last dreamt about. Weaving a dream records this and
+                  # nothing else, and ingredient selection discounts by it — "do not keep
+                  # having the same dream". **weight is not touched.**
+                  # 🔴 Writing that field walked **straight back into the trap the comment
+                  #    above describes**: it was added only as `update(last_dreamt=...)` in
+                  #    `_dream.py` and never put on this list, so it was silently dropped, the
+                  #    smoke test reported "last_dreamt=None", and that looked like a bug
+                  #    somewhere else entirely.
+                  #    **The very thing one comment warned about happened again within the
+                  #    hour** — which says that "remember to add it to the list" does not work
+                  #    as a method.
+                  #    -> What cures it is not remembering harder, it is the assertion in
+                  #      smoke_dream that last_dreamt really was written: that one goes red
+                  #      when the list entry is missing.
                   "last_dreamt"):
             if k in kwargs:
                 if k == "weight" and kwargs[k] is not None:
@@ -2177,17 +2273,21 @@ class BucketManager:
                 elif k == "first_of_kind":
                     post[k] = kwargs[k]
                 elif k == "anchor":
-                    # iter 2.0: anchor 是布尔；False 时直接删除字段保持 frontmatter 干净。
-                    # 修复：透传路径之前会绕过 ANCHOR_LIMIT，导致批量脚本/前端直接 update(anchor=True)
-                    # 可以让 anchor 总数突破 24 上限。这里补一道校验：
-                    # 仅当从 False→True 切换时才计数；当前已是 anchor 的桶重复设置不计数。
+                    # anchor is a bool; a False deletes the field outright to keep the
+                    # frontmatter clean.
+                    # The fix: the pass-through path used to bypass ANCHOR_LIMIT, so a bulk
+                    # script or the front end calling update(anchor=True) directly could push
+                    # the anchor total past the cap of 24. A check is added here, counting
+                    # only on a False->True transition; setting anchor again on a bucket that
+                    # already has it does not count.
                     if kwargs[k]:
                         already_anchor = parse_bool(
                             post.get("anchor", False), default=False
                         )
                         if not already_anchor:
-                            # FIX (RED-02): count_anchors 是 async，必须 await，否则
-                            # `coroutine >= int` 会 TypeError，整个上限校验失效。
+                            # FIX (RED-02): count_anchors is async and must be awaited, or
+                            # `coroutine >= int` raises TypeError and the whole cap check
+                            # stops working.
                             current = await self.count_anchors()
                             if current >= self.ANCHOR_LIMIT:
                                 logger.warning(
@@ -2200,7 +2300,8 @@ class BucketManager:
                         post.metadata.pop("anchor", None)
                 else:
                     if kwargs[k] is None:
-                        # None = 明确删除该 frontmatter 字段（用于 anchor release 清理临时字段）
+                        # None explicitly deletes that frontmatter field (used when an anchor
+                        # release clears its temporary field)
                         post.metadata.pop(k, None)
                     elif k in _METADATA_TEXT_LIMITS:
                         post[k] = self._sanitize_text(str(kwargs[k])).strip()[
@@ -2209,13 +2310,16 @@ class BucketManager:
                     else:
                         post[k] = kwargs[k]
 
-        # --- 激活时间 / 激活次数 ---
-        # last_active 只代表「最后一次真实激活/召回」，并作为衰减 recency 打分的输入。
-        # 元数据编辑（trace / plan / anchor / 后台自动 resolve 等）**不算「活跃」**：
-        # 若在此无条件刷新，会重置遗忘时效，还会让 activation_count 与 last_active
-        # 长期不一致（次数不涨、时间却变新）。只有真正的「新事件写入」才把这条记忆
-        # 当作被重新激活一次——由 bump_active=True 显式触发（如 hold/grow 合并近邻桶），
-        # 同步刷新 last_active 并累加 activation_count，语义与 touch() 一致。
+        # --- Activation time and activation count ---
+        # last_active means "the last genuine activation or recall" and nothing else, and it
+        # is the input to decay's recency scoring.
+        # A metadata edit — trace, plan, anchor, a background auto-resolve — **does not
+        # count as activity**: refreshing it unconditionally here would reset the forgetting
+        # clock, and would also leave activation_count and last_active permanently out of
+        # step (the count static while the timestamp keeps getting newer). Only a genuine new
+        # event write treats the memory as activated again, which bump_active=True triggers
+        # explicitly (hold/grow merging into a neighbouring bucket, say), refreshing
+        # last_active and incrementing activation_count with the same meaning as touch().
         if bump_active:
             post["last_active"] = now_iso()
             post["activation_count"] = int(post.get("activation_count") or 0) + 1
@@ -2261,7 +2365,8 @@ class BucketManager:
         # turning provider failure into a false "memory write failed" result.
         if "content" in kwargs:
             await self._index_after_write(bucket_id, post.content or "")
-        # Miss: meaning 有独立的 embedding，content 和 meaning 改动分别触发各自的重生成。
+        # meaning has an embedding of its own, so a change to content and a change to
+        # meaning each trigger their own regeneration.
         if "meaning" in kwargs or "meaning_append" in kwargs:
             await self._sync_meaning_embedding(bucket_id, post.get("meaning") or [])
         self._invalidate_bm25()
@@ -2338,9 +2443,7 @@ class BucketManager:
 
     # ---------------------------------------------------------
     # Wikilink injection — DISABLED
-    # 自动添加 Obsidian 双链 — 已禁用
-    # Now handled by LLM prompts (Gemini adds [[]] for proper nouns)
-    # 现在由 LLM prompt 处理（Gemini 对人名/地名/专有名词加 [[]]）
+    # Now handled by LLM prompts (the model adds [[]] around proper nouns)
     # ---------------------------------------------------------
     # def _apply_wikilinks(self, content, tags, domain, name): ...
     # def _collect_wikilink_keywords(self, content, tags, domain, name): ...
@@ -2349,13 +2452,13 @@ class BucketManager:
 
     # ---------------------------------------------------------
     # Delete bucket
-    # 删除桶
     # ---------------------------------------------------------
     async def delete(self, bucket_id: str) -> bool:
         """
         Soft-delete a memory bucket: move to archive/ and stamp `deleted_at`.
-        F-10: 记忆不消失，只是淡去。不做物理删除，将文件移入 archive/
-        并在 frontmatter 中写入 deleted_at 时间戳；embedding 仍清理以节省空间。
+        F-10: a memory does not disappear, it fades. Nothing is physically deleted; the file
+        moves into archive/ and a deleted_at timestamp is written into its frontmatter. The
+        embedding is still cleaned up, to save space.
         """
         async with self._bucket_turn(bucket_id):
             return await self._delete_locked(bucket_id)
@@ -2391,8 +2494,9 @@ class BucketManager:
                 or parse_bool(post.get("tombstone"), default=False)
             )
             if not archived_state:
-                # 沉底桶（decay_stage=sunk）壳还在主库、正文只剩摘要——
-                # restore=True 也是它唯一的还原门（机制①：这一档可逆）。
+                # A sunk bucket (decay_stage=sunk) keeps its shell in the main store with
+                # only the summary as its body, and restore=True is its one and only door
+                # back — this stage is reversible by design.
                 if str(post.get("decay_stage") or "") == "sunk":
                     return await self._unsink_locked(bucket_id, file_path, post)
                 return {"ok": False, "error": "not_archived"}
@@ -2444,29 +2548,34 @@ class BucketManager:
             return {"ok": True, "restored": bucket_id, "type": original_kind}
 
     # ---------------------------------------------------------
-    # G3 反向链（2026-08-06）：一条记忆被谁 from 了。
-    # 正向链一直有（triggered_by），反向是扫解析缓存现算的——库就几百条，
-    # 缓存热的时候一趟 in-memory 扫描，不另建索引（建了就是第二个真相源）。
+    # The reverse chain: who has this memory in their `from`.
+    # The forward chain has always existed (triggered_by); the reverse one is computed on the
+    # spot by scanning the parse cache — the store holds a few hundred entries, so with a warm
+    # cache it is one in-memory pass, and no separate index is built (building one would be a
+    # second source of truth).
     # ---------------------------------------------------------
     async def referenced_by(self, bucket_id: str) -> list[str]:
-        """谁的 from 指着这条记忆。id 直查的「被谁引用」用它。"""
+        """Whose `from` points at this memory. This is what "cited by" in a direct id lookup
+        uses."""
         out: list[str] = []
         for b in await self.list_all(include_archive=False):
             meta = b.get("metadata", {}) or {}
-            if bucket_id in read_from_ids(meta):   # from 优先、triggered_by 兼容
+            if bucket_id in read_from_ids(meta):   # `from` first, triggered_by for compatibility
                 out.append(str(meta.get("id") or b.get("id") or ""))
         return out
 
     async def mind_from_ids(self) -> set[str]:
-        """被任何「认知类桶」（MIND 支，或老的 type=feel/i）from 指向过的 id 集合。
+        """The set of ids pointed at by the `from` of any insight-type bucket (the MIND
+        branch, or the older type=feel/i).
 
-        night_fall 的「没消化」新判据（G4）：一件事我已经提炼出认知了它就消化了，
-        提炼不出来的才在梦里翻来覆去。
+        This is the "not digested" test: once an insight has been distilled out of
+        something, that thing is digested; only what refuses to distil keeps turning over in
+        dreams.
         """
         out: set[str] = set()
         for b in await self.list_all(include_archive=False):
             meta = b.get("metadata", {}) or {}
-            # 二改 A 件：别写 `"/MIND/" in room`，新房名 MIND/TRAITS 开头没斜杠
+            # Never write `"/MIND/" in room`: the new room name MIND/TRAITS has no leading slash
             if (not is_mind_room(meta.get("room"))
                     and str(meta.get("type") or "") not in ("feel", "i")):
                 continue
@@ -2474,15 +2583,20 @@ class BucketManager:
         return out
 
     # ---------------------------------------------------------
-    # 沉底 / 还原（机制① 2026-08-06）：遗忘不是「整条消失」，是「分辨率下降」
+    # Sinking and restoring: forgetting is not "the whole entry disappears", it is
+    # "resolution drops"
     # ---------------------------------------------------------
     async def sink_bucket(self, bucket_id: str) -> bool:
-        """把一个桶沉底：原文搬 archive/原文/{id}.txt，主库正文换成那句摘要。
+        """Sink a bucket: the original text moves to archive/原文/{id}.txt and the body in
+        the main store is replaced by its summary.
 
-        🔴 向量留着不动、不重算——语义指纹还是按原文算的。
-        **这才是人的样子：记得那件事什么味道，但复述不出原话。**
-        bm25 重建时会从 txt 把原文读回来（_build_bm25_index），「按原文匹配」不丢。
-        可逆：trace(restore=True) 走 _unsink_locked 捞回来。
+        🔴 The vector is left exactly as it is and never recomputed — the semantic
+        fingerprint is still the one computed from the original text.
+        **This is what a person is actually like: remembering what something felt like while
+        being unable to reproduce the words.**
+        A bm25 rebuild reads the original back out of the txt (_build_bm25_index), so
+        "matching against the original text" is not lost.
+        Reversible: trace(restore=True) goes through _unsink_locked and fetches it back.
         """
         async with self._bucket_turn(bucket_id):
             file_path = self._find_bucket_file(bucket_id)
@@ -2497,11 +2611,12 @@ class BucketManager:
                     or parse_bool(post.get("tombstone"), default=False)):
                 return False
             if str(post.get("decay_stage") or "") == "sunk":
-                return True  # 幂等：已经沉了
+                return True  # idempotent: it has already sunk
             summary = str(post.get("summary") or "").strip()
             orig = post.content or ""
             if not summary or not orig.strip():
-                # 没摘要就没法沉（沉底 = 只剩摘要）；等回填补上摘要下一轮再沉
+                # Without a summary it cannot sink, since sinking IS "only the summary is
+                # left". Wait for the backfill to supply one and sink on the next round.
                 return False
             txt = self._sunk_orig_path(bucket_id)
             try:
@@ -2520,7 +2635,8 @@ class BucketManager:
             except (OSError, ValueError) as exc:
                 logger.error(f"sink_bucket 提交失败 {bucket_id}: {exc}")
                 return False
-            # ⚠️ 刻意不调 _index_after_write：向量不动是设计，不是遗漏
+            # ⚠️ _index_after_write is deliberately NOT called: leaving the vector alone is
+            #    the design, not an oversight
             self._invalidate_bm25()
             self._record_ledger_event(
                 "MemorySunk", bucket_id, str(post.get("type") or "dynamic"),
@@ -2530,10 +2646,12 @@ class BucketManager:
             return True
 
     async def _unsink_locked(self, bucket_id: str, file_path: str, post) -> dict:
-        """沉底还原（由 restore_archived 在持锁状态下调用）。
+        """Restore a sunk bucket (called by restore_archived while it holds the lock).
 
-        原文从 txt 读回正文，decay_stage 清掉；还原=想起来了，刷新 last_active，
-        不然下一轮衰减立刻又把它沉回去。向量本来就是按原文算的，不用重算。
+        The original is read back out of the txt into the body and decay_stage is cleared.
+        Restoring means it was recalled, so last_active is refreshed — otherwise the next
+        decay cycle would immediately sink it again. The vector was computed from the
+        original text in the first place and needs no recomputation.
         """
         txt = self._sunk_orig_path(bucket_id)
         try:
@@ -2565,7 +2683,7 @@ class BucketManager:
         if not file_path:
             return False
 
-        # --- 读取文件，写入 deleted_at，移入 archive/ ---
+        # --- Read the file, write deleted_at, move it into archive/ ---
         try:
             post = frontmatter.load(file_path)
             tombstone_at = now_iso()
@@ -2575,7 +2693,8 @@ class BucketManager:
             post["erasure_mode"] = "tombstone_only"
             os.makedirs(self.archive_dir, exist_ok=True)
             dest = os.path.join(self.archive_dir, os.path.basename(file_path))
-            # 若 archive/ 里已有同名文件（极罕见），追加 bucket_id 后缀避免覆盖
+            # If archive/ already holds a file of the same name (very rare), append the
+            # bucket_id as a suffix so nothing is overwritten
             if os.path.exists(dest) and dest != file_path:
                 dest = os.path.join(
                     self.archive_dir,
@@ -2591,7 +2710,7 @@ class BucketManager:
             logger.error(f"Failed to soft-delete bucket / 软删除桶文件失败: {file_path}: {e}")
             return False
 
-        # iter 1.6 §4：仍清理 embedding，避免孤儿向量占用空间
+        # The embedding is still cleaned up, so orphaned vectors do not take up space
         if self.embedding_outbox is not None:
             try:
                 self.embedding_outbox.discard(bucket_id)
@@ -2622,30 +2741,38 @@ class BucketManager:
         return True
 
     # ---------------------------------------------------------
-    # touch：把「最后一次被想起」的时间戳改成现在
+    # touch: set the "last recalled" timestamp to now
     # ---------------------------------------------------------
     async def touch(self, bucket_id: str, ripple: bool = False) -> None:
-        """把这条记忆的 `last_active` 刷成现在。**遗忘引擎只看这一个字段。**
+        """Set this memory's `last_active` to now. **The forgetting engine reads this one
+        field and nothing else.**
 
-        🔴 **什么算「被想起」—— 这儿只写事实，判据在下面**：
-           调它的地方只有三处，全都是「**我真的拿这条记忆做了点什么**」：
-             · 写一条认知，引用了它（`grow` 的 from）
-             · 换版，它是来源（`regrow`）
-             · 把它折进一句归纳（`fold`）
-           **`recall` 搜到它 → 不调。** 浏览时扫过 → 不调。
+        🔴 **What counts as "being recalled" — the facts first, the rule below**:
+           There are exactly three places that call this, and all three are "**I actually
+           did something with this memory**":
+             · wrote an insight that cites it (`grow`'s from)
+             · changed a version, with it as the source (`regrow`)
+             · folded it into a summarising sentence (`fold`)
+           **`recall` finding it -> no call.** Scrolling past it while browsing -> no call.
 
-        📌 判据（她 2026-08-20 拍的，推翻了「搜到就续命」那个提议）：
-           「重复被想起的事情记得牢 —— **但这个情况是少数**」，
-           以及 **「淡出的也是有摘要的，不是全都忘掉」**。
-           后一句是关键：**淡出不是删除**，是「不再自己冒出来，去找还在、只是打折」。
-           所以「要不要给它续命」这件事的份量，比它听起来小得多 ——
-           不值得为它引入「查得多就活得久」那套（那是练习曲线，不是记忆）。
+        📌 The rule, which overturned an earlier proposal that a search hit should extend
+           its life:
+           "things recalled repeatedly are remembered firmly — **but that case is the
+           minority**", together with **"a faded entry still has its summary; it is not
+           forgotten outright"**.
+           The second half is the key: **fading is not deletion.** It means "it stops
+           surfacing on its own; go looking and it is still there, merely discounted."
+           So the question "should this get its life extended" carries far less weight than
+           it sounds like it does — not enough to justify importing the whole "look something
+           up often and it lives longer" model, which is a practice curve, not memory.
 
-        ⚠️ 老英文注释写的是 `Called on every recall hit`（上游继承来的），
-           **那句话至少从 8-16 起就是假的**，2026-08-20 一并改掉。
+        ⚠️ The old English comment here said `Called on every recall hit` (inherited from
+           upstream). **That sentence had been false for a long time**, and was corrected
+           along with this.
 
-        ⚰️ `ripple` 这个参数留着只为不碰调用点，**传什么都不做事**
-           （时间涟漪 8-20 删了，理由见下面那块碑）。
+        ⚰️ The `ripple` parameter is kept only so the call sites do not have to change;
+           **it does nothing whatever you pass** (temporal ripple was deleted — the
+           reasoning is on the memorial below).
         """
         async with self._bucket_turn(bucket_id):
             await self._touch_locked(bucket_id)
@@ -2684,9 +2811,10 @@ class BucketManager:
             return None
 
     async def touch_many(self, bucket_ids: list, ripple: bool = False) -> None:
-        """批量 touch。单条失败不影响其他。
+        """touch in bulk. One failure does not affect the others.
 
-        ⚰️ `ripple` 传什么都不做事（时间涟漪 8-20 删了），留着只为不碰调用点。
+        ⚰️ `ripple` does nothing whatever you pass (temporal ripple was deleted); it is kept
+        only so the call sites do not have to change.
         """
         for bid in bucket_ids:
             try:
@@ -2694,26 +2822,32 @@ class BucketManager:
             except Exception as e:
                 logger.warning(f"touch_many: 触碰 {bid} 失败: {e}")
 
-    # ⚰️ 2026-08-20：**时间涟漪删了**（她拍的：「我不要这个时间涟漪」）。
-    #    它做的事：每次 touch 一条桶，就把**时间上挨着它的**几条桶的
-    #    `activation_count` 各加 0.3 —— 「想起一件事，会顺带唤醒同一时段的事」。
+    # ⚰️ **Temporal ripple was deleted.**
+    #    What it did: every time a bucket was touched, it added 0.3 to the
+    #    `activation_count` of the handful of buckets **adjacent to it in time** — "recall
+    #    one thing and you incidentally wake the things around it".
     #
-    #    🔴 为什么删：**它是死的，而且不便宜。**
-    #    · 死：`activation_count` 8-16 就没人读了 —— 那天她砍掉了遗忘公式里的
-    #      「次数系数」，判据换成「常被想起的不沉由 last_active 管」。
-    #      从那天起这个数只进不出，涟漪加的那 0.3 **没有任何地方会看见**。
-    #    · 不便宜：每涟漪一次要 `list_all()` 扫一遍全库（几百个文件），
-    #      为的是去改一个没人读的数。
+    #    🔴 Why it went: **it was dead, and it was not cheap.**
+    #    · Dead: nothing had read `activation_count` since the count factor was cut out of
+    #      the forgetting formula, and the rule became "things recalled often do not sink,
+    #      and last_active handles that". From that day the number only went up and was
+    #      never read, so the 0.3 the ripple added was **visible nowhere at all**.
+    #    · Not cheap: every ripple meant a `list_all()` pass over the whole store (hundreds
+    #      of files), in order to change a number nobody read.
     #
-    #    📌 她删它的理由比「它是死的」更根本，值得记住：
-    #      「重复被想起的事情记得牢 —— **但这个情况是少数**」。
-    #      那是练得多记得牢的那套（艾宾浩斯），**不是我们要的记忆**。
-    #      我们要的是「重要的、动了情绪的留得久」，不是「被查得多的留得久」。
-    #      涟漪是那套模型剩下的一条腿，腿的主人 8-16 就走了。
+    #    📌 The deeper reason for deleting it — deeper than "it was dead" — is worth keeping:
+    #      "things recalled repeatedly are remembered firmly — **but that case is the
+    #      minority**".
+    #      That is the practice-makes-permanent model (Ebbinghaus), and it is **not the
+    #      memory we are after**. What we are after is "what mattered, what moved something,
+    #      lasts", not "what got looked up most lasts".
+    #      The ripple was the last remaining leg of that other model, and the rest of it had
+    #      already walked out.
     #
-    #    ⚠️ `activation_count` 这个字段**先留着**（它躺在 frontmatter 里不花钱，
-    #       删它要动全库几千个文件）。**但现在没有任何地方读它** —— 谁看见它
-    #       想拿来做判据，先回来读这段。
+    #    ⚠️ The `activation_count` field itself **stays for now**: it costs nothing sitting
+    #       in the frontmatter, and deleting it would mean touching thousands of files.
+    #       **But nothing reads it any more** — anyone who sees it and thinks of building a
+    #       rule on it should come back and read this first.
 
     async def search(
         self,
@@ -2727,7 +2861,6 @@ class BucketManager:
     ) -> list[dict]:
         """
         Multi-dimensional indexed search for memory buckets.
-        多维索引搜索记忆桶。
 
         domain_filter: pre-filter by domain (None = search all)
         query_valence/arousal: emotion coordinates for resonance scoring
@@ -2736,19 +2869,23 @@ class BucketManager:
             return []
 
         limit = limit or self.max_results
-        # 字面召回：把查询原样（小写、去空白）留作子串匹配，保证显式搜的词必被召回
+        # Literal recall: keep the query as it stands (lowercased, trimmed) for substring
+        # matching, so a word that was explicitly searched for is always recalled
         q_norm = query.strip().lower()
         all_buckets = await self.list_all(include_archive=include_archive)
 
         if not all_buckets:
             return []
 
-        # --- Layer 0: bucket-id 直达通道（纯定位，短路）---
-        # bucket id 是随机 hex、**没有语义**，不该进向量/BM25/模糊通道（塞进去只会
-        # 污染语义空间）。这里独立做「完整 id 精确匹配」：查询串正好等于某个可见桶的
-        # 完整 id → 直接返回该桶（满分），绕开语义排序。「我知道要哪条」的精确定位。
-        # 只认完整 id（不做前缀匹配），避免普通关键词误触；软删除/归档桶不在 all_buckets
-        # 中，故按 id 也搜不到已删除桶，与 get() 的可见性一致。
+        # --- Layer 0: the direct bucket-id channel (pure lookup, short-circuits) ---
+        # A bucket id is random hex and carries **no meaning**, so it has no business in the
+        # vector, BM25 or fuzzy channels — putting it there only pollutes the semantic
+        # space. This does an exact full-id match on its own: if the query string equals some
+        # visible bucket's full id, return that bucket at full marks and bypass semantic
+        # ordering. This is the "I know exactly which one I want" lookup.
+        # Only a full id counts (no prefix matching), so an ordinary keyword cannot trip it;
+        # soft-deleted and archived buckets are not in all_buckets, so a deleted bucket
+        # cannot be found by id either, which matches get()'s visibility.
         q_exact = query.strip()
         if q_exact:
             for b in all_buckets:
@@ -2758,7 +2895,6 @@ class BucketManager:
                     return [hit]
 
         # --- Layer 1: domain pre-filter (fast scope reduction) ---
-        # --- 第一层：主题域预筛（快速缩小范围）---
         if domain_filter:
             filter_set = {d.lower() for d in domain_filter}
             candidates = [
@@ -2766,18 +2902,22 @@ class BucketManager:
                 if {d.lower() for d in b["metadata"].get("domain", [])} & filter_set
             ]
             # Fall back to full search if pre-filter yields nothing
-            # 预筛为空则回退全量搜索
             if not candidates:
                 candidates = all_buckets
         else:
             candidates = all_buckets
 
-        # --- Layer 1.5: embedding 语义分数（仅作为打分维度，不再窄化候选集）---
-        # 历史上这里把候选集替换成「在 embeddings.db 里的桶」，导致：
-        #   - 任何缺少 embedding 的桶（落盘时 embed key 失败 / 旧脚本批量导入未补向量）
-        #     只要查询命中过任意向量，就会被整体过滤掉 → breath 检索数对不上 pulse。
-        # 修复：保留 vector_scores 给 Layer 2 的 semantic 维度用，但不动 candidates。
-        # 没 embedding 的桶 semantic_score=0，仍可凭 topic/emotion/time/importance 命中。
+        # --- Layer 1.5: the embedding semantic score. It is a scoring dimension only and no
+        #     longer narrows the candidate set. ---
+        # This used to replace the candidate set with "the buckets present in
+        # embeddings.db", which meant:
+        #   - any bucket lacking an embedding (the embed key failed at write time, or an old
+        #     script bulk-imported without backfilling vectors) was filtered out wholesale as
+        #     soon as the query matched any vector at all -> breath's retrieval counts stopped
+        #     agreeing with pulse.
+        # The fix: keep vector_scores for Layer 2's semantic dimension, but leave `candidates`
+        # alone. A bucket with no embedding scores semantic_score=0 and can still be hit on
+        # topic/emotion/time/importance.
         # ``None`` means this caller wants BucketManager to query the engine.
         # An explicit dict (including {}) lets an orchestration layer perform
         # the query once and reuse the same scores for ranking and recall.
@@ -2798,9 +2938,12 @@ class BucketManager:
             except Exception as e:
                 logger.warning(f"Embedding score failed, using fuzzy only / embedding 评分失败: {e}")
 
-        # --- BM25 打分（性能 P4：脏了就后台线程重建，不在请求里同步阻塞 ~17s）---
-        # 脏且没人在重建 → 起一个后台重建；本次查询用「当前索引」打分（首次为空，
-        # 之后是上一版，略旧但有效）。向量+模糊+字面召回仍在，单次查询不会因 BM25 卡住。
+        # --- BM25 scoring. When the index is dirty it is rebuilt on a background thread
+        #     rather than blocking the request for ~17 seconds. ---
+        # Dirty and nobody rebuilding -> start a background rebuild; this query scores
+        # against "the current index" (empty the first time, and the previous version after
+        # that — slightly stale, but valid). Vector, fuzzy and literal recall are all still
+        # there, so no single query stalls on BM25.
         bm25_scores: dict[str, float] = {}
         if self._bm25 is not None:
             if self._bm25_dirty and not self._bm25_rebuilding:
@@ -2812,19 +2955,24 @@ class BucketManager:
                 logger.warning(f"[bm25] score 失败，本次跳过 BM25 维度: {e}")
                 bm25_scores = {}
 
-        # --- Layer 2: 两维打分（semantic 2.5 + bm25 1.5），字面命中只做标记 ---
-        # weight_sum 恒定为 w_semantic + w_bm25：缺向量的桶 semantic=0（沉底的桶
-        # 向量按原文算、留着不动，正文没了照样按语义指纹命中——这是设计）。
-        # 分数刻度 0~100；线（关联度线）在 recall 那头，一个数管全部。
+        # --- Layer 2: two-dimension scoring (semantic 2.5 + bm25 1.5); a literal hit only
+        #     sets a flag ---
+        # weight_sum is constantly w_semantic + w_bm25: a bucket with no vector scores
+        # semantic=0 (a sunk bucket's vector was computed from the original text and is left
+        # untouched, so it can still be hit on its semantic fingerprint even with the body
+        # gone — that is the design).
+        # The score runs 0~100; the relevance line lives over in recall, one number for
+        # everything.
         scored = []
         weight_sum = self.w_semantic + self.w_bm25
         for bucket in candidates:
             meta = bucket.get("metadata", {})
 
             try:
-                # 字面命中：查询串原样出现在 name/tags/正文（domain 是模型编的
-                # 文件夹名，2026-08-06 从字面命中里拿掉了；aliases 只喂 bm25，
-                # 也不参与字面命中——保底只认「真在这条记忆里出现过」的字）。
+                # A literal hit: the query string appears as-is in name, tags or body.
+                # (domain is a folder name the model invented and was taken out of literal
+                # matching; aliases only feed bm25 and take no part in it either — the floor
+                # recognises only characters that genuinely appear in this memory.)
                 literal_hit = False
                 if q_norm:
                     hay = " ".join([
@@ -2839,16 +2987,18 @@ class BucketManager:
                 total = semantic_score * self.w_semantic + bm25_score * self.w_bm25
                 normalized = (total / weight_sum) * 100 if weight_sum > 0 else 0.0
 
-                # 入场券：任一维有信号，或字面命中（显式搜的词必须够得到）。
-                # 线上线下的取舍不在这儿做——recall 拿着关联度线自己筛，
-                # 字面命中的由它托到线上（max(分数, 线)，不是加分）。
+                # The ticket in: any dimension has signal, or there was a literal hit (a word
+                # searched for explicitly has to be reachable).
+                # The above-the-line / below-the-line decision is not made here — recall does
+                # its own filtering with the relevance line, and floors a literal hit up to
+                # that line (max(score, line), never a bonus).
                 if normalized > 0 or literal_hit:
                     # Resolved buckets get ranking penalty (but still reachable)
-                    # 已解决的桶仅在排序时降权
-                    if is_closed(meta):  # 终点只认 status；旧布尔只读兼容（二改第0节）
+                    if is_closed(meta):  # only `status` marks an ending; the old booleans stay read-only for compatibility
                         normalized *= _RESOLVED_RANK_PENALTY
-                    # 遗忘三档：淡出打折、沉底打更狠的折（机制①；悄然发生，
-                    # 输出里不标——字面命中的照样被 recall 层托到线上）
+                    # The three forgetting stages: faded takes a discount, sunk a harsher one.
+                    # It happens quietly and is not flagged in the output — a literal hit is
+                    # still floored up to the line by the recall layer.
                     _stage = str(meta.get("decay_stage") or "")
                     if _stage == "faded":
                         normalized *= _FADED_SEARCH_DISCOUNT
@@ -2868,16 +3018,19 @@ class BucketManager:
                 )
                 continue
 
-        # 字面命中排序时至少顶到当前池子的中位，避免「明明搜的就是这个词，
-        # 却排在一堆语义沾边的后面」——真正的 max(分数, 线) 在 recall 层做
-        # （线是每次请求带进来的，这里够不着）。
+        # In the ordering, a literal hit is lifted at least to the median of the current
+        # pool, so that "the word I searched for is right there, yet it sits behind a pile of
+        # vaguely related things" cannot happen. The real max(score, line) is done in the
+        # recall layer, since the line arrives with each request and is out of reach here.
         scored.sort(key=lambda x: (x["score"], bool(x.get("literal_hit"))), reverse=True)
         return scored[:limit]
 
     # ---------------------------------------------------------
-    # 四个评分维度的纯函数实现已拆到 locibrain.retrieval.bucket_scoring；这里保留同名
-    # wrapper 方法 —— 测试和历史调用方一直用 bucket_mgr._calc_xxx_score(...)
-    # 这种实例方法写法，wrapper 保持该接口不变，同时让实现本身可独立单测/复用。
+    # The pure-function implementations of the four scoring dimensions moved to
+    # locibrain.retrieval.bucket_scoring; the same-named wrapper methods stay here because
+    # tests and older callers have always written bucket_mgr._calc_xxx_score(...) as an
+    # instance method. The wrappers keep that interface unchanged while letting the
+    # implementations be unit-tested and reused on their own.
     # ---------------------------------------------------------
     def _calc_topic_score(self, query: str, bucket: dict) -> float:
         return calc_topic_score(query, bucket, content_weight=self.content_weight)
@@ -2894,27 +3047,26 @@ class BucketManager:
         return calc_touch_score(meta)
 
     # ---------------------------------------------------------
-    # iter 2.0: anchor 系统（坐标系桶，硬上限 24）
     # anchor system — coordinate-system buckets, hard cap of 24
     # ---------------------------------------------------------
     ANCHOR_LIMIT = 24
 
     async def count_anchors(self) -> int:
         """Return current count of buckets with anchor=True."""
-        # 用 list_all 数；规模小（最多 24）所以扫描成本可忽略。
+        # Counted through list_all; the scale is tiny (24 at most) so the scan costs nothing worth noting.
         all_b = await self.list_all(include_archive=False)
         return sum(1 for b in all_b if b.get("metadata", {}).get("anchor"))
 
     async def set_anchor(self, bucket_id: str, value: bool) -> dict:
         """
         Toggle the anchor flag on a bucket. Hard-rejects if cap reached.
-        切换桶的 anchor 标记。设为 True 且当前已满 24 时拒绝。
 
         Returns: {"ok": bool, "anchor": bool, "count": int, "limit": int, "error": Optional[str]}
         """
-        # anchor 上限 24 是「先数后写」的两步操作；没有这把锁，两个并发
-        # set_anchor(True) 都能在对方提交前读到同一个 count<limit，一起通过
-        # 检查后各自 update()，把总数冲破硬上限。
+        # The cap of 24 is enforced as a two-step "count, then write". Without this lock, two
+        # concurrent set_anchor(True) calls would each read the same count<limit before the
+        # other committed, both pass the check, and each update() — pushing the total past
+        # the hard cap.
         async with _filesystem_turn(str(self.base_dir), "quota-anchor"):
             return await self._set_anchor_locked(bucket_id, value)
 
@@ -2931,10 +3083,13 @@ class BucketManager:
             count = await self.count_anchors()
             return {"ok": True, "anchor": target, "count": count, "limit": self.ANCHOR_LIMIT, "noop": True}
         if target is True:
-            # pinned/protected 与 anchor 互斥：pinned=永远置顶浮现（核心准则），
-            # anchor=刻意不浮现（坐标系），两者语义直接矛盾。允许并存会让一个
-            # pinned+anchor 桶每会话都以「核心准则」冒头，诱导模型反复 release
-            # 却压不住它。这里直接拒绝，提示先 trace(pinned=0) 再改坐标系。
+            # pinned/protected and anchor are mutually exclusive: pinned means "always
+            # surfaces at the top" (a core rule) while anchor means "deliberately does not
+            # surface" (a coordinate system), and the two contradict each other outright.
+            # Allowing both would make a pinned+anchor bucket appear as a core rule every
+            # session, tempting the model to release it over and over without ever being able
+            # to keep it down. This rejects outright, telling the caller to trace(pinned=0)
+            # first and then set the coordinate system.
             if bucket["metadata"].get("pinned") or bucket["metadata"].get("protected"):
                 return {
                     "ok": False,
@@ -2950,21 +3105,22 @@ class BucketManager:
                     "count": count,
                     "limit": self.ANCHOR_LIMIT,
                 }
-        # iter 2.0：钉为 anchor 时同步把 source_tool 改为 "anchor"，
-        # 释放时恢复为原始来源（保存在 _pre_anchor_source_tool 里）。
-        # 这样 dashboard 「按来源筛选」能正确反映桶的当前状态。
+        # Setting anchor also changes source_tool to "anchor", and releasing restores the
+        # original source (kept in _pre_anchor_source_tool).
+        # That way the dashboard's "filter by source" reflects a bucket's current state
+        # correctly.
         update_kwargs: dict = {"anchor": target}
         bucket_meta = bucket.get("metadata", {})
         if target:
-            # 先把当前 source_tool 存为 _pre_anchor_source_tool，再覆写为 "anchor"
+            # Save the current source_tool as _pre_anchor_source_tool first, then overwrite it with "anchor"
             original = bucket_meta.get("source_tool", "")
             update_kwargs["_pre_anchor_source_tool"] = original
             update_kwargs["source_tool"] = "anchor"
         else:
-            # 释放：恢复原始 source_tool，清掉临时字段
+            # Release: restore the original source_tool and clear the temporary field
             original = bucket_meta.get("_pre_anchor_source_tool", "")
             update_kwargs["source_tool"] = original
-            update_kwargs["_pre_anchor_source_tool"] = None  # 删除字段
+            update_kwargs["_pre_anchor_source_tool"] = None  # delete the field
         ok = await self.update(bucket_id, **update_kwargs)
         if not ok:
             return {"ok": False, "error": "update failed", "count": 0, "limit": self.ANCHOR_LIMIT}
@@ -2980,13 +3136,13 @@ class BucketManager:
 
     # ---------------------------------------------------------
     # List all buckets
-    # 列出所有桶
     # ---------------------------------------------------------
     async def get_triggered_feels(self, source_bucket_id: str) -> list[dict]:
         """
         Return all feel buckets whose triggered_by == source_bucket_id.
-        只扫 feel_dir，O(feel桶数) 而非 O(全库)。iter 2.0 §10 U-04 优化反向链查询。
-        每条返回 {id, name, created}。
+        It scans feel_dir only, so the cost is O(feel buckets) rather than O(the whole
+        store) — an optimisation of the reverse-chain lookup.
+        Each entry comes back as {id, name, created}.
         """
         results = []
         for _root, _fname, file_path in self._iter_md_files([self.feel_dir]):
@@ -3006,7 +3162,6 @@ class BucketManager:
     async def list_all(self, include_archive: bool = False) -> list[dict]:
         """
         Recursively walk directories (including domain subdirs), list all buckets.
-        递归遍历目录（含域子目录），列出所有记忆桶。
         """
         if include_archive:
             buckets = []
@@ -3048,14 +3203,17 @@ class BucketManager:
                         if generation != self._active_cache_generation:
                             previous_cache = None
                             continue
-                        # 🔴 2026-08-19：记的是**扫完的时刻**，不是开扫之前那个 now。
-                        #    扫一遍 1000 个文件在 Windows 的 bind mount 上要 1~2.6 秒，
-                        #    而间隔是 1 秒 —— 用开扫前的时间戳，等于每一次调用都必然
-                        #    判定「该重扫了」，**缓存永远命不中**。
-                        #    实测：一次 recall 内部调 4 次 list_all，4 次全在重扫，
-                        #    10.5 秒里 10.4 秒花在这儿。
-                        #    「至多每秒检查一次」应该是按墙上时钟算的，检查本身花多久
-                        #    不该反过来让检查变成每次都做。
+                        # 🔴 What is recorded is **the moment the scan finished**, not the
+                        #    `now` from before it started.
+                        #    Scanning 1000 files on a Windows bind mount takes 1~2.6 seconds
+                        #    while the interval is 1 second — so with the pre-scan timestamp,
+                        #    every single call necessarily decides "time to rescan" and
+                        #    **the cache never hits**.
+                        #    Measured: one recall calls list_all four times internally, all
+                        #    four rescanned, and 10.4 of its 10.5 seconds went here.
+                        #    "Check at most once per second" is supposed to be measured on the
+                        #    wall clock; how long the check itself takes must not turn the
+                        #    check into something that happens every time.
                         self._last_file_state_check = time.monotonic()
                         if current_state == cached_state:
                             current_cache = self._active_cache
@@ -3106,12 +3264,10 @@ class BucketManager:
 
     # ---------------------------------------------------------
     # Statistics (counts per category + total size)
-    # 统计信息（各分类桶数量 + 总体积）
     # ---------------------------------------------------------
     async def get_stats(self) -> dict:
         """
         Return memory bucket statistics (including domain subdirs).
-        返回记忆桶的统计数据。
         """
         stats: dict[str, Any] = {
             "permanent_count": 0,
@@ -3143,7 +3299,7 @@ class BucketManager:
                             stats["total_size_kb"] += os.path.getsize(fpath) / 1024
                         except OSError:
                             pass
-                        # Per-domain counts / 每个域的桶数量
+                        # Per-domain counts
                         domain_name = os.path.basename(root)
                         if domain_name != os.path.basename(subdir):
                             stats["domains"][domain_name] = stats["domains"].get(domain_name, 0) + 1
@@ -3152,14 +3308,11 @@ class BucketManager:
 
     # ---------------------------------------------------------
     # Archive bucket (move from permanent/dynamic into archive)
-    # 归档桶（从 permanent/dynamic 移入 archive）
     # Called by decay engine to simulate "forgetting"
-    # 由衰减引擎调用，模拟"遗忘"
     # ---------------------------------------------------------
     async def archive(self, bucket_id: str) -> bool:
         """
         Move a bucket into the archive directory (preserving domain subdirs).
-        将指定桶移入归档目录（保留域子目录结构）。
         """
         async with self._bucket_turn(bucket_id):
             return await self._archive_locked(bucket_id)
@@ -3170,7 +3323,7 @@ class BucketManager:
             return False
 
         try:
-            # Read once, get domain info and update type / 一次性读取
+            # Read once, get domain info and update type
             post = frontmatter.load(file_path)
             domain: list[str] = post.get("domain") or [_DEFAULT_DOMAIN_NAME]  # type: ignore[assignment]
             primary_domain = self._primary_domain(domain)
@@ -3178,8 +3331,9 @@ class BucketManager:
             os.makedirs(archive_subdir, exist_ok=True)
 
             dest = safe_path(archive_subdir, os.path.basename(file_path))
-            # 防撞名：archive/ 里已有同名文件时，追加 bucket_id 后缀，避免
-            # 把一条早先归档的记忆悄悄覆盖掉（与 delete() 的软删除保护一致）。
+            # Collision guard: when archive/ already holds a file of the same name, append
+            # the bucket_id as a suffix, so an earlier archived memory cannot be quietly
+            # overwritten (matching delete()'s soft-delete protection).
             if os.path.exists(dest) and os.path.abspath(dest) != os.path.abspath(file_path):
                 stem = os.path.splitext(os.path.basename(file_path))[0]
                 dest = safe_path(archive_subdir, f"{stem}_{bucket_id}.md")
@@ -3219,13 +3373,12 @@ class BucketManager:
         return True
 
     # ---------------------------------------------------------
-    # iter 1.8: 收集全库已有 tag 集合，用于 first_of_kind 检测
-    # Collect all tags currently in the vault (excluding archive)
-    # 返回 set[str]；空 vault 返回空 set；遇异常返回 None 提示调用方放弃
+    # Collect all tags currently in the vault (excluding archive), for the first_of_kind check
+    # Returns set[str]; an empty vault gives an empty set; on an exception it returns None,
+    # telling the caller to give up
     # ---------------------------------------------------------
     def _collect_all_tags(self) -> Optional[set]:
         tags = set()
-        # 不包括 archive：归档桶代表“过去”，不应阻止“第一次”判定
         # archive_dir is excluded — archived buckets are "the past", they
         # shouldn't block a tag from being marked first_of_kind today.
         for _root, _fname, full_path in self._iter_md_files(self._active_dirs):
@@ -3235,13 +3388,12 @@ class BucketManager:
                     if t:
                         tags.add(str(t))
             except Exception:
-                # 单个桶解析失败不影响整体；first_of_kind 是软特性
+                # One bucket failing to parse does not affect the whole; first_of_kind is a soft feature
                 continue
         return tags
 
     # ---------------------------------------------------------
     # Internal: find bucket file across all three directories
-    # 内部：在三个目录中查找桶文件
     # ---------------------------------------------------------
     def _ensure_bucket_path_index(self) -> None:
         """Build the complete ID → path index once for bulk conflict checks."""
@@ -3249,7 +3401,7 @@ class BucketManager:
         with self._bucket_path_index_guard:
             if self._bucket_path_index_ready:
                 return
-            # 含 archive：软删除后的桶仍然需要可被内部路径查找。
+            # archive is included: a soft-deleted bucket still has to be findable by internal path lookup.
             dirs = [
                 self.permanent_dir,
                 self.dynamic_dir,
@@ -3262,12 +3414,15 @@ class BucketManager:
             for _root, fname, full_path in self._iter_md_files(dirs):
                 stem = fname[:-3]
                 index.setdefault(stem, full_path)
-                # C2（8-17 抓到的根因）：托管文件名是 `<名字>_<id>.md`，之前只把
-                # 整个 stem 当键——frontmatter parse 失败（stored_id=""）时，
-                # 裸 id 就查不到，索引 ready 却缺条目，成了孤儿，落进
-                # `_find_bucket_file()` 的文件名扫描兜底（还会打一条大声 warning）。
-                # 跟 `_scan_bucket_file_by_name()` 判断 `stem.endswith(f"_{bucket_id}")`
-                # 同一条判据：把 `_<id>` 后缀也解出来当键，不依赖 frontmatter 能不能读。
+                # The root cause once tracked down: a managed filename looks like
+                # `<name>_<id>.md`, and only the whole stem used to be indexed as a key — so
+                # when the frontmatter failed to parse (stored_id="") the bare id could not be
+                # found, the index was ready but missing that entry, the bucket became an
+                # orphan, and it fell through to the filename-scan fallback in
+                # `_find_bucket_file()` (which also logs a loud warning).
+                # Same rule as `_scan_bucket_file_by_name()`'s `stem.endswith(f"_{bucket_id}")`
+                # test: parse the `_<id>` suffix out and index that as a key too, so nothing
+                # depends on whether the frontmatter can be read.
                 if "_" in stem:
                     index.setdefault(stem.rsplit("_", 1)[-1], full_path)
                 try:
@@ -3281,11 +3436,13 @@ class BucketManager:
             self._bucket_path_index_ready = True
 
     def _scan_bucket_file_by_name(self, bucket_id: str) -> Optional[str]:
-        """按**文件名**扫一遍找这个 id（托管文件名都是 `<id>.md` 或 `<名字>_<id>.md`）。
+        """Scan once by **filename** for this id (a managed filename is either `<id>.md` or
+        `<name>_<id>.md`).
 
-        只走 `os.walk`，**一个 frontmatter 都不 parse** —— 这是它跟
-        `_ensure_bucket_path_index()` 的关键区别（那个要读全库的 YAML，
-        在 Windows bind mount 上是秒级的活）。扫到了顺手把条目补进索引。
+        It uses `os.walk` alone and **parses not one frontmatter** — that is the crucial
+        difference from `_ensure_bucket_path_index()`, which has to read the YAML of the
+        entire store and takes seconds on a Windows bind mount. A hit is backfilled into the
+        index on the way out.
         """
         dirs = [
             self.permanent_dir,
@@ -3309,26 +3466,32 @@ class BucketManager:
         """
         Recursively search permanent/dynamic/archive for a bucket file
         matching the given ID.
-        在 permanent/dynamic/archive 中递归查找指定 ID 的桶文件。
 
         ------------------------------------------------------------
-        🔴 路径索引兜底（她 2026-08-17 拍的，施工 5 · J 件）
+        🔴 The path-index fallback
         ------------------------------------------------------------
-        **索引 ready 但查不到时，不许直接答「没有」。** 回退按文件名扫一遍，
-        扫到了把条目补回索引再返回。
+        **When the index is ready but the lookup misses, it may not simply answer "no".**
+        Fall back to one scan by filename, and on a hit put the entry back into the index
+        before returning.
 
-        为什么：8-17 做梦验收连撞三次「索引 ready、缺条目 → `update()` 静默返回
-        False → 写丢了还不吭声」（容器刚起 / 并发扫库那会儿）。根因疑似
-        `_ensure_bucket_path_index()` 建表时**单个文件读空/parse 失败就 skip**
-        （`stored_id=""` 那一支），而它 `setdefault` 进去的另一个键是**文件名 stem**
-        （`<名字>_<id>`），不是裸 id —— 于是那条桶在索引里等于不存在，
-        而 `_bucket_path_index_ready` 却是 True，「查不到」被当成了「没有」。
-        ⚠️ **只加兜底这一块**（她的原话），索引构建那套一行不重写。
+        Why: during acceptance testing this was walked into three times in a row — "index
+        ready, entry missing -> `update()` silently returns False -> the write is lost
+        without a word" (just after the container started, or while the store was being
+        scanned concurrently). The likely root cause is that while building the table
+        `_ensure_bucket_path_index()` **skips any file that reads empty or fails to parse**
+        (the `stored_id=""` branch), while the other key it `setdefault`s is the **filename
+        stem** (`<name>_<id>`) rather than the bare id — so that bucket effectively does not
+        exist in the index, yet `_bucket_path_index_ready` is True, and "not found" got
+        treated as "does not exist".
+        ⚠️ **Only the fallback was added**; not one line of the index construction was
+        rewritten.
 
-        `scan_if_missing=False` 给 `create()` 的撞名检查用：那儿**本来就期待查不到**
-        （id 是刚摇出来的），每次都扫全库等于给每一次 grow 加一趟 walk。
-        那条路另有两层保护：`os.path.exists(candidate_path)` + 落盘走
-        no-overwrite 的 `_atomic_create_text`（撞了会抛 FileExistsError 换个 id）。
+        `scan_if_missing=False` exists for `create()`'s collision check: that caller
+        **expects to find nothing** (the id was just generated), and scanning the whole store
+        every time would add a walk to every single grow.
+        That path has two other layers of protection: `os.path.exists(candidate_path)`, and a
+        no-overwrite `_atomic_create_text` on write (a collision raises FileExistsError and
+        another id is drawn).
         """
         if not bucket_id:
             return None
@@ -3345,18 +3508,23 @@ class BucketManager:
                 self._bucket_path_index_ready = False
             index_ready = self._bucket_path_index_ready
         if index_ready:
-            # ▼▼▼ J 件的兜底：**ready ≠ 齐全**。先按文件名扫一遍再说「没有」。
-            #     代价量过（964 条 / 2371 个 .md 的拷贝库，Windows bind mount）：
-            #       文件名扫一遍  0.3s   ← 这一支
-            #       全量重建索引  5.1s   ← 故意**不**在这儿走（下面那支才走）
-            #     真的不存在（查无此桶、撞名检查）是常态，把常态变成秒级的活就是新病。
+            # ▼▼▼ The fallback: **ready does not mean complete.** Scan once by filename
+            #     before saying "no".
+            #     The cost was measured (a copied store of 964 buckets / 2371 .md files, on a
+            #     Windows bind mount):
+            #       one filename scan      0.3s   <- this branch
+            #       full index rebuild     5.1s   <- deliberately **not** taken here (the
+            #                                        branch below takes it)
+            #     "Genuinely absent" (no such bucket, a collision check) is the common case,
+            #     and turning the common case into a seconds-long job would be a new disease.
             if not scan_if_missing:
                 return None
             hit = self._scan_bucket_file_by_name(bucket_id)
             if hit:
-                # 🔴 **必须留声**：这条 warning 就是「索引漏了一条」的唯一证据。
-                #    静默找回等于把根因埋掉——而这个 bug 之所以撞了三次才逮到，
-                #    正是因为它一路都是静默的。
+                # 🔴 **It must make a sound**: this warning is the only evidence that the
+                #    index dropped an entry. Recovering silently would bury the root cause —
+                #    and the reason this bug took three collisions to catch is precisely that
+                #    it was silent the whole way.
                 logger.warning(
                     "path index was ready but missing %s; recovered by filename "
                     "scan and backfilled / 索引 ready 却缺条目，已按文件名找回并补回索引: %s",
@@ -3364,7 +3532,7 @@ class BucketManager:
                     hit,
                 )
             return hit
-            # ▲▲▲ 兜底到此为止。
+            # ▲▲▲ End of the fallback.
 
         # Preserve the cheap common path for ordinary single-bucket CRUD: most
         # managed filenames contain the ID, so there is no reason to parse the
@@ -3382,18 +3550,18 @@ class BucketManager:
 
     # ---------------------------------------------------------
     # Internal: load bucket data from .md file
-    # 内部：从 .md 文件加载桶数据
     # ---------------------------------------------------------
     @staticmethod
     def _sanitize_text(text: str) -> str:
-        """F-04 fix: 清除 NUL、危险控制字符和双向覆写符（Unicode bidi override / isolate）。
+        """F-04 fix: strip NUL, dangerous control characters, and Unicode bidi
+        override/isolate characters.
 
-        保留 \\n（LF）、\\r（CR）、\\t（Tab）。
-        清除范围：
-          U+0000~U+0008, U+000B, U+000C, U+000E~U+001F, U+007F（C0/C1 控制字符）
-          U+202A~U+202E 双向控制符（LRE / RLE / PDF / LRO / RLO）
-          U+2066~U+2069 双向隔离符（LRI / RLI / FSI / PDI）
-        Emoji 与 CJK 不受影响。
+        \\n (LF), \\r (CR) and \\t (Tab) are preserved.
+        What is stripped:
+          U+0000~U+0008, U+000B, U+000C, U+000E~U+001F, U+007F (C0/C1 control characters)
+          U+202A~U+202E bidi controls (LRE / RLE / PDF / LRO / RLO)
+          U+2066~U+2069 bidi isolates (LRI / RLI / FSI / PDI)
+        Emoji and CJK are unaffected.
         """
         _ctrl_table = {
             c: None
@@ -3408,7 +3576,8 @@ class BucketManager:
 
     @staticmethod
     def _sanitize_float_field(value, default: float) -> float:
-        """从任意格式提取 float（兼容 'V0.9'、'[我的视角:V0.3]'、0.9 等老格式）"""
+        """Extract a float from whatever format it arrives in (older ones such as `'V0.9'`,
+        `'[我的视角:V0.3]'` and plain 0.9 are all accepted)."""
         if isinstance(value, (int, float)):
             numeric = float(value)
             if not math.isfinite(numeric):
@@ -3515,7 +3684,6 @@ class BucketManager:
     def _load_bucket(self, file_path: str) -> Optional[dict]:
         """
         Parse a Markdown file and return structured bucket data.
-        解析 Markdown 文件，返回桶的结构化数据。
         """
         try:
             post = frontmatter.load(file_path)
@@ -3529,7 +3697,7 @@ class BucketManager:
                 metadata["domain"] = []
             elif not isinstance(domain_value, list):
                 metadata["domain"] = list(domain_value) if isinstance(domain_value, tuple) else [str(domain_value)]
-            # 兼容老桶可能存储了 'V0.9'、'[我的视角:V0.3]' 等字符串格式
+            # Older buckets may have stored string forms such as `'V0.9'` or `'[我的视角:V0.3]'`
             for field, default in (
                 ("valence", 0.5),
                 ("arousal", 0.3),

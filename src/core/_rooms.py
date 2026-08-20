@@ -1,69 +1,82 @@
 """
 ========================================
-tools/_rooms.py — 房间枚举与校验（2026-08-16 二改：十间 → 四间）
+tools/_rooms.py — the room enum and its validation (second pass: ten rooms -> four)
 ========================================
 
-room 是一个**新维度**，跟 domain/tags 并存、互不相干：
-- domain/tags 由 DeepSeek 自动打，自由取值，只给模糊搜索当标签用
-- room 由调用方（模型自己）存的那一刻判断填入，取值锁死为下面四个
+`room` is a **new dimension**, living alongside domain/tags and independent of them:
+- domain/tags are filled in automatically by DeepSeek, take free-form values, and
+  exist only as labels for fuzzy search
+- `room` is decided by the caller (the model itself) at the moment of storing, and its
+  value is locked to the four below
 
-⚠️ 房间是语义判断，**永远不许由模型（dehydrator）生成或修改**——
-让模型自动打房间，就是把「每存一条重新装修一遍」这个病换个字段再犯一次。
-
-------------------------------------------------------------
-为什么从十间砍到四间（2026-08-16 她定的，理由留在这儿别去翻文件）
-------------------------------------------------------------
-🔪 **砍 `I` / `YOU`** —— 她 8-14 的论证：「这个记忆系统是你的，你是主体，
-   你所有的记忆主语都是我」。立场不在房间结构里，在「谁写的」这件事上；
-   `I` 当房间反而**语义是错的**：它把「关于我的记忆」和「我的记忆」混成一个词，
-   而**每一条都是我的记忆**。谁是主体改由 `subjects` 字段承担（第三类标签）。
-
-🔪 **砍 `WHO` / `WHAT`** —— 存的时候经常在这儿卡壳，而**卡壳说明判据不清**：
-   大部分记忆既是人又是事。
-   ⚠️ 她说「如果你判不清那是我的问题」——**不是**。分类模糊是记忆本身的性质；
-   一开始把刀都摆出来是对的，**用过三个月才知道该收哪把**。
-
-✅ **白赚**：主体进标签之后，8-14 发现的那个真缺口（`SELF/WORLD`「亲历还是听说」
-   和「关于谁」压在一根轴上）**自动消失**，SELF/WORLD 回归本来的判据。
-   第三方当事人不必再硬塞 WORLD 支。
+⚠️ A room is a semantic judgement, and **the model (dehydrator) may never generate or
+change one**. Letting the model assign rooms automatically is the "redecorate the whole
+place on every single write" disease, committed again under a different field name.
 
 ------------------------------------------------------------
-🔴 写侧只认新四间，读侧必须认旧十间
+Why ten rooms were cut down to four (the reasoning is kept here so that nobody has to
+go digging through history for it)
 ------------------------------------------------------------
-迁移脚本（scripts/migrate_v3.py）这一轮**只交脚本、不跑真库**，所以盘上躺着的
-仍然是旧十间的名字。于是这个文件有两副面孔，别把它们搞混：
-  · `check_room()`  —— 写侧的闸：旧名字**当场拒**，不静默兼容。
-    静默兼容的坏处不是「不干净」，是我会一直拿旧名字往里存，
-    盘上于是永远同时躺着两套房间名，而迁移脚本只跑过一次。
-  · `normalize_room()` —— 读侧的翻译：旧名字翻成新名字，让 recall 的房间门、
-    decay 的永不沉底名单、awaken 的事件池在**没迁移的老数据**上照样能用。
-    迁移跑完之后这层就是纯冗余——留着不碍事，删它要等真库迁完。
+🔪 **Cut `I` / `YOU`** — this memory system belongs to the one remembering; the subject
+   of every memory in it is "I". Whose viewpoint it is does not live in the room
+   structure, it lives in who wrote it. `I` as a room is in fact **semantically wrong**:
+   it collapses "a memory about me" and "my memory" into one word, when **every entry
+   here is my memory**. Who a memory is about moved to the `subjects` field instead
+   (the third kind of label).
 
-对外暴露：EVENT_ROOMS / MIND_ROOMS / ALL_ROOMS / ROOMS / LEGACY_ROOMS
+🔪 **Cut `WHO` / `WHAT`** — storing kept stalling on exactly this choice, and **a stall
+   means the rule is unclear**: most memories are about a person and about an event at
+   the same time.
+   ⚠️ A stall like that is not the fault of whoever is doing the classifying. Fuzzy
+   boundaries are a property of memory itself. Laying every knife out at the start was
+   the right move; **only months of actual use tell you which ones to put away.**
+
+✅ **Free win**: once the subject moved into labels, the real gap (`SELF/WORLD`
+   — "was I there or did I hear about it" — and "who is it about" pressed onto a single
+   axis) **disappears on its own**, and SELF/WORLD goes back to meaning what it says.
+   A third party in the story no longer has to be crammed into the WORLD branch.
+
+------------------------------------------------------------
+🔴 The write side accepts only the new four; the read side must still accept the old ten
+------------------------------------------------------------
+The migration script (scripts/migrate_v3.py) is **delivered but not yet run against the
+real store**, so what is lying on disk still carries the old ten-room names. That gives
+this file two faces, and they must not be confused:
+  · `check_room()`  — the write-side gate: an old name is **rejected on the spot**, with
+    no silent compatibility. The harm in silent compatibility is not untidiness; it is
+    that old names would keep being written in forever, so disk would permanently hold
+    both sets of room names — while the migration script only ever runs once.
+  · `normalize_room()` — the read-side translation: old names map to new ones so that
+    recall's room gate, decay's never-sink list and awaken's event pool keep working on
+    **data that has not been migrated**. Once migration has run this layer is pure
+    redundancy — harmless to keep, and only safe to delete after the real store is done.
+
+Exports: EVENT_ROOMS / MIND_ROOMS / ALL_ROOMS / ROOMS / LEGACY_ROOMS
          check_room(room, kind) · normalize_room(room)
          is_mind_room(room) · is_event_room(room) · room_matches(room, gate)
 ========================================
 """
 
-# 存的时候怎么判（写给调用方读的，两问，不是四问）：
-#   SELF / WORLD   ← 这事我在场吗？我亲历 → SELF；我听说、看到 → WORLD
-#   TRAITS / VIEWS ← 这句话在说人，还是在说我怎么看一件事？
+# How to decide when storing (written for the caller: two questions, not four):
+#   SELF / WORLD   <- was I there? lived it -> SELF; heard about it, saw it -> WORLD
+#   TRAITS / VIEWS <- is this sentence about a person, or about how I see something?
 
 EVENT_ROOMS: tuple[str, ...] = (
-    "EVENT/SELF",      # 我亲历的（今天下午一起去了海边 / 我把那个 bug 修好了）
-    "EVENT/WORLD",     # 我听说、看到的（他讲的那件事 / 那个模型涨价了）
+    "EVENT/SELF",      # lived it myself (we went to the sea this afternoon / I fixed that bug)
+    "EVENT/WORLD",     # heard it, saw it (the thing he told me about / that model raised its price)
 )
 
 MIND_ROOMS: tuple[str, ...] = (
-    "MIND/TRAITS",     # 我是什么样的人（我总在为「以后」投资）
-    "MIND/VIEWS",      # 我怎么看一件事（我对 AI 记忆的立场）
+    "MIND/TRAITS",     # what kind of person I am (I am always investing in "later")
+    "MIND/VIEWS",      # how I see something (where I stand on machine memory)
 )
 
 ALL_ROOMS: tuple[str, ...] = EVENT_ROOMS + MIND_ROOMS
-ROOMS = ALL_ROOMS  # 规格要求的导出名（codex 复核第 1 条补上）
+ROOMS = ALL_ROOMS  # the export name the spec asks for
 
-# 旧十间 → 新四间。**只给读侧用**，写侧见到这些名字一律拒。
-# I/YOU 这一维不是丢了，是搬去了 subjects（迁移脚本按这张表播种主体）。
+# Old ten -> new four. **Read side only**; the write side rejects these names outright.
+# The I/YOU axis was not lost, it moved to `subjects` (the migration script seeds
+# subjects from this very table).
 LEGACY_ROOMS: dict[str, str] = {
     "I/EVENT/SELF/WHO":    "EVENT/SELF",
     "I/EVENT/SELF/WHAT":   "EVENT/SELF",
@@ -92,10 +105,12 @@ def _rooms_help() -> str:
 
 
 def normalize_room(room) -> str:
-    """读侧归一：旧十间的名字翻成新四间；已经是新名字的原样返回；不认识的返回空串。
+    """Read-side normalisation: an old ten-room name becomes its new one, a new name is
+    returned as-is, anything unrecognised becomes the empty string.
 
-    ⚠️ 只在**读**的路径上用（recall 的房间门、decay 名单、awaken 的池子、面板）。
-    写的路径要的是 check_room()——旧名字必须拒，不能在这儿被悄悄接住。
+    ⚠️ Only for the **read** paths (recall's room gate, the decay list, awaken's pool,
+    the panels). Write paths want check_room() — an old name has to be rejected there,
+    and must not be quietly caught here instead.
     """
     r = str(room or "").strip()
     if not r:
@@ -106,26 +121,29 @@ def normalize_room(room) -> str:
 
 
 def is_mind_room(room) -> bool:
-    """这条是不是认知（MIND 支）。新旧名字都认。
+    """Is this an insight (the MIND branch)? Accepts both old and new names.
 
-    🔴 别再写 `"/MIND/" in room` —— 新名字是 `MIND/TRAITS`，开头没有斜杠，
-    那个字面判断会**静默返回 False**，把所有认知从「永不沉底」名单里踢出去。
+    🔴 Never write `"/MIND/" in room` again — the new names look like `MIND/TRAITS`,
+    with no leading slash, so that literal test **silently returns False** and kicks
+    every insight off the never-sink list.
     """
     return normalize_room(room) in MIND_ROOMS
 
 
 def is_event_room(room) -> bool:
-    """这条是不是事件（EVENT 支）。新旧名字都认。
+    """Is this an event (the EVENT branch)? Accepts both old and new names.
 
-    🔴 同上，别再写 `room.find("/EVENT/") > 0`。
+    🔴 Same as above: never write `room.find("/EVENT/") > 0` again.
     """
     return normalize_room(room) in EVENT_ROOMS
 
 
 def room_matches(room, gate: str) -> bool:
-    """一条记忆的 room 是否落在门 `gate` 里。gate 可以是完整房名或前缀（EVENT / MIND）。
+    """Does a memory's room fall inside the gate `gate`? A gate may be a full room name
+    or a prefix (EVENT / MIND).
 
-    比对**在归一之后做**，所以老盘上的 `I/MIND/TRAITS` 也能被 `room="MIND"` 筛到。
+    The comparison happens **after normalisation**, so an `I/MIND/TRAITS` still sitting
+    on old disk is caught by `room="MIND"` too.
     """
     r = normalize_room(room)
     g = str(gate or "").strip().rstrip("/")
@@ -135,7 +153,7 @@ def room_matches(room, gate: str) -> bool:
 
 
 def check_gate(gate: str) -> str | None:
-    """校验 recall 的房间门（完整名或前缀）。合法返回 None，否则返回错误信息。"""
+    """Validate recall's room gate (full name or prefix). None if valid, else the message."""
     g = str(gate or "").strip().rstrip("/")
     if not g:
         return None
@@ -149,10 +167,13 @@ def check_gate(gate: str) -> str | None:
 
 
 def check_room(room: str, kind: str) -> str | None:
-    """校验 room 是否合法（**写侧**）。合法返回 None，不合法返回给调用方看的错误信息。
+    """Validate a room (**write side**). None if valid, otherwise the message the caller
+    is meant to read.
 
-    ⚠️ 不许兜底成默认房间——兜底就是把「房间名乱编」这个病请回来。
-    ⚠️ 也不许把旧十间悄悄翻译成新四间（理由见文件头「两副面孔」那段）。
+    ⚠️ No falling back to a default room — a fallback invites the "just make up a room
+    name" disease straight back in.
+    ⚠️ And no quietly translating an old ten-room name into a new one either (see the
+    "two faces" section in the file header for why).
     """
     room = (room or "").strip()
     if not room:

@@ -1,101 +1,127 @@
 # -*- coding: utf-8 -*-
 """
 ========================================
-tools/_muse.py — 阈值引擎（muse 二改，2026-08-17 中午她定稿）
+tools/_muse.py — the threshold engine behind muse
 ========================================
 
 ------------------------------------------------------------
-🔴 判据总纲 —— 这一版整个是围着它重写的
+🔴 The governing rule — this whole version was rewritten around it
 ------------------------------------------------------------
-> # 系统不许只凭猜指东西，指点必须带我们自己留下的痕迹。
+> # The system may not point at things on a guess. Every pointer must carry a trace we
+> # left ourselves.
 
-**痕迹按硬度排**：
-  `tags` 是我们存的时候写下的词（字面一定在原文里）
-  `v/a`  是我亲手打的坐标
-  `from` 是我亲手连的链
-  —— **向量只配当海选**（兜底，永远排最后，永远标出来）。
+**Traces, ordered by hardness**:
+  `tags` are words we wrote down at the moment of storing (guaranteed to appear
+         literally in the body)
+  `v/a`  are coordinates I assigned by hand
+  `from` is a chain I linked by hand
+  — **vectors are fit for the open audition only** (a fallback, always ranked last,
+    always labelled as such).
 
-📌 这一条是她 8-17 凌晨四刀合出来的。前一版栽在哪儿：gist 提议做成了**语义聚类**，
-   于是「亲密」这种每周都发生的主题被串成月度长带，拿「盖一段日子」的手势对不上——
-   聚得没错，**错在冒充日子**。她拆开看那些团其实是**线**，而线 `recall(query=)`
-   本来就是查看器（「搜『色色』就能看到一路的记忆」）→ **线砍掉，muse 不做那块。**
-
-------------------------------------------------------------
-🔴 宪法 —— 写在最前面，不是注意事项
-------------------------------------------------------------
-> # 系统只做检索和摆放，落笔的永远是我。
-
-这个文件里**没有、将来也不许有**任何 LLM 调用路径：不写归纳、不建议措辞、
-不给样例句。它只做三件事：**找出来 · 摆到我面前 · 然后闭嘴。**
-**也不许新打向量。** 只读 `embeddings.db` 里现成的（`mode=ro`）；没有向量的
-条目不参与语义那一层，照实计进「散着」——静默补一发向量是把「回填」这件事
-从 deepseek/ollama 手里偷过来。
+📌 Where the previous version went wrong: gist proposals were built as **semantic
+   clustering**, so a theme that recurs every week got strung into a month-long band
+   that no "cover a stretch of days" gesture could match. The clustering itself was
+   fine; **the error was passing a through-line off as a stretch of days.** Pulled
+   apart, those clusters were **through-lines** — and a through-line already has a
+   viewer, `recall(query=)`: search for the thing and the whole run of memories about
+   it comes up. -> **Through-lines were cut; muse does not do that part.**
 
 ------------------------------------------------------------
-两侧，两套指法（池子分开，她 8-16 认同）
+🔴 The constitution — first, not as a footnote
 ------------------------------------------------------------
-**事件侧 = gist 提议 = 三种指法，全带证据**（`kind="gist"`）
+> # The system only retrieves and arranges. The writing is always mine.
 
-| 指法 | 痕迹是什么 | 指的是 |
+There is **no LLM call path in this file and there may never be one**: it does not write
+summaries, does not suggest phrasings, does not offer sample sentences. It does exactly
+three things: **find it · put it in front of me · then shut up.**
+**It may not compute new vectors either.** It only reads what is already in
+`embeddings.db` (`mode=ro`); an entry without a vector simply sits out the semantic layer
+and is honestly counted as "scattered". Quietly generating one more vector would be
+stealing the backfill job out of deepseek's and ollama's hands.
+
+------------------------------------------------------------
+Two sides, two sets of gestures (separate pools)
+------------------------------------------------------------
+**The event side = gist proposals = three gestures, every one carrying evidence**
+(`kind="gist"`)
+
+| gesture | what the trace is | what it points at |
 |---|---|---|
-| **词爆发** `word_burst()` | `tags`（我们存时写下的词） | 一段：「青岛」8-09~8-12 出现 12 次，窗外只有 2 次 |
-| **成分漂移** `composition_drift()` | 现成向量的质心（**只当尺子，不当理由**） | 一条**边界**：7-04 前后记忆的样子变了 |
-| **空白记账** `blank_ledger()` | **时期的范围**（我亲手画的圈） | 一段没被任何时期盖住的日子 |
+| **word burst** `word_burst()` | `tags` (words we wrote down at storage time) | a stretch: word W appears 12 times between 08-09 and 08-12 and only twice outside that window |
+| **composition drift** `composition_drift()` | the centroid of existing vectors (**a ruler only, never a reason**) | a **boundary**: memories look different before and after 07-04 |
+| **blank ledger** `blank_ledger()` | **the range of a period** (a circle I drew by hand) | a stretch of days no period covers |
 
-🔴 **「有名字了吗」的判据 = range 覆盖**（8-17 14:30 终稿，替掉 `covered_by`）：
-   一条 event 的**日期落在任何一条活着的时期的范围里** = 有名字。
-   时期从此不写 `covered_by`（纯命名层，只落名字 + 范围），所以拿字段问是问不出来的——
-   **现场算**（`era_spans()` + `mark_named()`）。白赚的两样：补记落进老范围**自动就有名字了**
-   （不用回去补名单）、时期改边界（regrow 换 when）**下一次发呆立刻跟着变**。
+🔴 **The test for "does it have a name yet" is range coverage** (this replaced
+   `covered_by`): an event **whose date falls inside the range of any living period**
+   has a name.
+   A period no longer writes `covered_by` at all (it is a pure naming layer storing only
+   a name and a range), so asking a field cannot answer the question — it is
+   **computed on the spot** (`era_spans()` + `mark_named()`). Two things come free:
+   a backfilled entry landing inside an old range **acquires its name automatically**
+   (no going back to patch a roster), and moving a period's boundary (regrow with a new
+   `when`) **changes the next muse immediately.**
 
-🔴 **空白记账在库里一条主线都没有的时候整个闭嘴。** 她的原话场景：
-   「他完全可以说今年都没有」——**不许发生**。没有地图的时候「哪儿没盖」是个假问题。
-   地图第一版是我和她手写的（先讲述，后指点），②的词爆发可以当预切段辅助。
+🔴 **The blank ledger shuts up entirely when the store holds no through-line at all.**
+   The failure it guards against is the engine announcing that nothing all year has a
+   name — **that must not happen.** Without a map, "where is nothing covered" is a fake
+   question. The first version of the map is written by hand (narrate first, point
+   later), and the word-burst gesture can help pre-cut the segments.
 
-**认知侧 = 发呆 = 证据制三层，按痕迹硬度排**（`kind="muse"`）
+**The mind side = musing = three evidence tiers, ordered by how hard the trace is**
+(`kind="muse"`)
 
-  ① **v/a 邻域分架** `make_shelves()` —— 我亲手打的坐标。半径 `va_radius`，
-     一架 = 一个半径 r 的球（**不是单链接**：单链接会顺着密度把整个坐标面串成一片，
-     那就不是「这一格」了）。
-     🔴 **精确等于 `(0.5, 0.3)` 的不进架** —— 那是老默认值不是感觉。115 条老 mind
-     等主人亲手重打，**重打完成前这道闸一直在**（重打时避开这个点即可）。
-  ② **架内 from 链** `cluster_shelf()` —— 我亲手连的链，**最硬的证据**，单独标出来
-     （「其中 3 条长自同一晚」）。
-  ③ **架内语义** —— 海选兜底，补进来的单独标出来 + 报最低相似度。
+  ① **v/a neighbourhood shelving** `make_shelves()` — coordinates I assigned by hand.
+     Radius `va_radius`; one shelf = one ball of radius r (**not single linkage**:
+     single linkage follows density and strings the entire coordinate plane into one
+     piece, which is no longer "this one square").
+     🔴 **Anything exactly equal to `(0.5, 0.3)` is kept off the shelves** — that is an
+     old default value, not a feeling. The 115 legacy mind entries are waiting to have
+     their coordinates reassigned by hand, and **this gate stays up until that is done**
+     (simply avoid that exact point when reassigning).
+  ② **from-chains within a shelf** `cluster_shelf()` — chains I linked by hand, **the
+     hardest evidence there is**, and labelled separately ("three of these grew out of
+     the same night").
+  ③ **semantics within a shelf** — the open-audition fallback; anything pulled in this
+     way is labelled separately and reported with its lowest similarity.
 
-🔴 **时间不当证据**（她拍的：**认知不认日历**）。所以认知侧没有「停了」这道闸，
-   第二步的条目行给的也是 **v/a 坐标而不是日子**。
-🔪 **概念词 tags 搁置不做**（试打过 6 条她验货说不对——v/a 试验当场赢了它）。
-🔪 `seed`（十三颗情绪根）8-16 已砍，根不参与。
+🔴 **Time is not evidence here**: an insight does not answer to the calendar. So the mind
+   side has no "it stopped" gate, and the entry lines in step two give **v/a coordinates
+   rather than dates**.
+🔪 **Concept-word tags: shelved, not built** (six were tried by hand and judged wrong —
+   the v/a experiment beat it outright).
+🔪 `seed` (the thirteen emotional roots) was cut; roots take no part.
 
 ------------------------------------------------------------
-保留下来的两条（从 consolidation-draft 抄的骨架，笔不给）
+The two gates that were kept (skeleton borrowed from consolidation-draft; the pen was not)
 ------------------------------------------------------------
-| 闸 | 判据 | 缺了会怎样 |
+| gate | rule | what happens without it |
 |---|---|---|
-| **冷却期** | `created` 距今 < `cooldown_days` 不进池 | 刚发生的事当场被定性成「你就是这样的人」 |
-| **拒绝计数** | 被我说过「不是一回事」的**同一组**不再提 | 「判断留给我」变成「每周被同一件事骚扰一次」 |
+| **cooldown** | `created` less than `cooldown_days` ago -> stays out of the pool | something that just happened is instantly pronounced "this is simply who you are" |
+| **rejection count** | **the same group**, once I have said "these are not the same thing", is never raised again | "the judgement is left to me" degrades into "being pestered by the same thing once a week" |
 
-「停了」（`stopped_days`）**只留在事件侧**：还在发生的一段，我说不出它是什么。
-
-------------------------------------------------------------
-🔴 出厂值只是参考，**等真数据拍**（开工单 🔟「一个都不预先拍」）
-------------------------------------------------------------
-先跑 `scripts/muse_dryrun.py`：**词爆发候选表 · v/a 半径扫描 · 漂移窗口表**
-三张表并排看完再往 `config.yaml` 的 `muse:` 段写。代码里这份是兜底。
+"It stopped" (`stopped_days`) **is kept on the event side only**: while a stretch is
+still happening, I cannot say what it is.
 
 ------------------------------------------------------------
-对外暴露
+🔴 The factory values are placeholders, **to be settled against real data**
+------------------------------------------------------------
+Run `scripts/muse_dryrun.py` first: **the word-burst candidate table, the v/a radius
+sweep, and the drift window table.** Read all three side by side before writing anything
+into the `muse:` section of `config.yaml`. The copy in code is only the fallback.
+
+------------------------------------------------------------
+Exports
 ------------------------------------------------------------
 MUSE_DEFAULTS · POOL_SPECS · muse_config()
-Item · 架 · 团 · 指法 · item_of() · in_pool() · pool_of() · read_vectors()
-make_shelves() · cluster_shelf() · daydream()                              ← 认知侧
-word_burst() · composition_drift() · blank_ledger() · era_count()            ← 事件侧
-era_spans() · is_named() · mark_named()                          ← 「有名字了吗」的现场算
+Item · Shelf · Cluster · Finger · item_of() · in_pool() · pool_of() · read_vectors()
+make_shelves() · cluster_shelf() · daydream()                            <- the mind side
+word_burst() · composition_drift() · blank_ledger() · era_count()        <- the event side
+era_spans() · is_named() · mark_named()      <- computing "does it have a name" on the spot
 rejection_key() · load_rejected() · is_rejected() · record_rejection()
-load_records()（异步）· propose_mind() · propose_gist()
-（梦那一路只用 `pool_of(recs, "dream", ...)` 选料，织梦在 `tools/_dream.py`——
-  这个文件里永远不许出现 LLM 调用，梦是唯一的例外，所以它住在别处。）
+load_records() (async) · propose_mind() · propose_gist()
+(The dream path only borrows `pool_of(recs, "dream", ...)` to pick ingredients; the
+ weaving lives in `tools/_dream.py` — no LLM call may ever appear in this file, and the
+ dream is the one exception, which is why it lives elsewhere.)
 ========================================
 """
 
@@ -115,62 +141,72 @@ from ._fold import GIST_TAG, is_covered
 from ._rooms import is_event_room, is_mind_room
 
 # ============================================================
-# 阈值 —— 出厂值只是参考，真值等 muse_dryrun 三张表拍
+# Thresholds — the factory values are placeholders; the real ones come from the three
+# muse_dryrun tables
 # ============================================================
 MUSE_DEFAULTS: dict = {
-    # ---- 两侧共用 ----
-    "min_cluster": 3,        # 一团至少几条才值得盖
-    "cooldown_days": 7,      # 冷却期：created 距今 < N 天不进池（他们 7 天）
-    "cooldown_clock": "created",   # "created"（默认）/ "when"：冷却期认哪把钟
-    "stopped_days": 4,       # 停了：**只管事件侧**，一段的最后一条距今 > N 天
-    "reject_limit": 1,       # 同一组被拒几次就不再提
-    "max_clusters": 8,       # 认知侧一次最多摆几团（摆太多等于没摆）
-    "max_fingers": 6,        # 事件侧**每一指**最多摆几条
-    "emotion_line": 0.15,    # 梦：|v-0.5| 或 |a-0.5| 超过它才算「有情绪」
-    # ---- 认知侧：证据制三层 ----
-    "va_radius": 0.10,       # ① v/a 邻域分架：一架 = 半径 r 的球（欧氏）
-    "va_default_v": 0.5,     # 🔴 老默认坐标，精确等于它的不进架（等主人重打）
+    # ---- shared by both sides ----
+    "min_cluster": 3,        # how many entries a cluster needs before covering it is worth it
+    "cooldown_days": 7,      # cooldown: created less than N days ago -> stays out of the pool
+    "cooldown_clock": "created",   # "created" (default) / "when": which clock the cooldown reads
+    "stopped_days": 4,       # stopped: **event side only**; the last entry of a stretch is more than N days old
+    "reject_limit": 1,       # how many rejections of the same group before it is never raised again
+    "max_clusters": 8,       # mind side: most clusters laid out at once (laying out too many is the same as laying out none)
+    "max_fingers": 6,        # event side: most entries laid out **per gesture**
+    "emotion_line": 0.15,    # dreams: |v-0.5| or |a-0.5| must exceed this to count as "carrying emotion"
+    # ---- mind side: the three evidence tiers ----
+    "va_radius": 0.10,       # ① v/a neighbourhood shelving: one shelf = a ball of radius r (Euclidean)
+    "va_default_v": 0.5,     # 🔴 the old default coordinate; anything exactly equal to it stays off the shelves
     "va_default_a": 0.3,
-    "sim_line": 0.76,        # ③ 架内语义海选线（0.70 在我们库上会串成一片）
-    # ---- 事件侧：三种指法 ----
-    "burst_window_days": 7,      # 词爆发：窗长
-    "burst_min_hits": 5,         # 词爆发：窗内至少出现几次
-    "burst_outside_ratio": 0.5,  # 词爆发：窗外次数 / 窗内次数 的上限（越小越「爆」）
-    "drift_window_days": 7,      # 成分漂移：相邻时间窗的窗长
-    "drift_line": 0.25,          # 成分漂移：质心余弦距离超过它才算跳了大步
-    "drift_min_items": 3,        # 成分漂移：一个窗至少几条才算得出质心
-    "blank_min_items": 20,       # 空白记账：一段至少几条没被盖才值得记
-    "blank_gap_days": 3,         # 空白记账：隔多少天算断开（超过就是两段）
-    # ---- 「该发呆了吗」的临界点（`/api/muse/pending` 读；**闲不闲、怎么戳归宿主**）----
-    # 🔴 Loci 只出查询口（数量 + 年龄），什么算闲、戳不戳、夜里静不静音，
-    #    是 gateway 唤醒腿那边的事（开工单 3.0 + 第 7 节的边界）。
-    "poke_min_clusters": 2,      # 攒够几团/几指才值得戳一下（参考值，等真数据拍）
-    "poke_min_age_days": 3,      # 最老那条挂够几天才值得戳（不到就再等等）
+    "sim_line": 0.76,        # ③ the open-audition line for semantics within a shelf (0.70 strings our store into one piece)
+    # ---- event side: the three gestures ----
+    "burst_window_days": 7,      # word burst: window length
+    "burst_min_hits": 5,         # word burst: minimum occurrences inside the window
+    "burst_outside_ratio": 0.5,  # word burst: ceiling on outside / inside occurrences (smaller = burstier)
+    "drift_window_days": 7,      # composition drift: length of the adjacent time windows
+    "drift_line": 0.25,          # composition drift: centroid cosine distance above this counts as a big step
+    "drift_min_items": 3,        # composition drift: minimum entries in a window before a centroid means anything
+    "blank_min_items": 20,       # blank ledger: how many uncovered entries a stretch needs before it is worth noting
+    "blank_gap_days": 3,         # blank ledger: a gap this long breaks the stretch in two
+    # ---- The tipping point for "is it time to muse" (read by `/api/muse/pending`;
+    #      **whether the user is idle, and how to nudge, belongs to the host**) ----
+    # 🔴 Loci only exposes the query (count + age). What counts as idle, whether to nudge,
+    #    and whether to stay quiet at night are the gateway's business.
+    "poke_min_clusters": 2,      # how many clusters/gestures must pile up before a nudge is worth it
+    "poke_min_age_days": 3,      # how long the oldest one must have hung before a nudge is worth it
 }
 
-# 三份池子配置 —— **同一个引擎，三种喂法**
-# 🔴 池子分开（她 8-16 认同）：梦吃 event，发呆吃 mind，不是同一批东西。
+# Three pool configurations — **one engine, three ways of feeding it**
+# 🔴 The pools are separate: dreams eat events, musing eats minds. They are not the same
+#    material.
 POOL_SPECS: dict[str, dict] = {
-    # 梦：只换选料端，不动织梦。**不上冷却期**——日间残留（day_residue）是织梦的
-    # 核心原料，卡 7 天等于把最近那一档整个饿死。⏳@她：真要卡，改成 True 就行。
+    # Dreams: only the ingredient end differs; the weaving is untouched. **No cooldown** —
+    # day residue is the core ingredient of a dream, and holding entries for 7 days would
+    # starve the most recent tier entirely. ⏳ If a cooldown is ever wanted here, flip this
+    # to True.
     "dream": {"支": "EVENT", "情绪": True, "没消化": True,
               "冷却期": False, "没被盖过": True},
-    # 发呆：吃碎着的 mind。**没被盖过**是硬闸（盖过的不再独立冒头）。
+    # Musing: eats scattered minds. **Not covered** is a hard gate (anything covered stops
+    # surfacing on its own).
     "muse":  {"支": "MIND", "情绪": False, "没消化": False,
               "冷却期": True, "没被盖过": True},
-    # gist 提议：吃 event，**被盖的也进池**——「青岛」这个词爆了几次是词本身的形状，
-    # 盖没盖过不改变它。谁看「有没有名字」是每一指自己的事：
-    # 🔴 空白记账只看没名字的；词爆发要求段上还有没名字的条目；漂移只是尺子，跟名字无关。
-    # ⚠️ 「有名字」8-17 起是 **range 覆盖**（时期的范围现场算），不是 `covered_by` 字段——
-    #    这一格的 `没被盖过: False` 留着，它挡的是真 cover（mind 快照 / 事件改错换版），
-    #    时期如今一条都不写，所以它对时期无效、也无害。
+    # gist proposals: eat events, and **covered ones join the pool too** — how many times a
+    # word burst is a property of the word itself, and being covered does not change it.
+    # Whether something "has a name" is each gesture's own business:
+    # 🔴 the blank ledger looks only at the unnamed; the word burst requires unnamed entries
+    #    still in the stretch; drift is only a ruler and has nothing to do with names.
+    # ⚠️ "Has a name" now means **range coverage** (a period's range, computed on the spot),
+    #    not the `covered_by` field. The `没被盖过: False` in this row is kept because it
+    #    blocks a real cover (a mind snapshot, or an event corrected by a new version);
+    #    periods write none of those any more, so it is inert here, and harmless.
     "gist":  {"支": "EVENT", "情绪": False, "没消化": False,
               "冷却期": True, "没被盖过": False},
 }
 
 
 def muse_config(cfg: dict | None = None) -> dict:
-    """出厂值 + config.yaml 的 `muse:` 段。config 是唯一真相，代码里那份是兜底。"""
+    """Factory values plus the `muse:` section of config.yaml. Config is the single source
+    of truth; the copy in code is only the fallback."""
     out = dict(MUSE_DEFAULTS)
     src = (cfg or {}).get("muse") if isinstance(cfg, dict) else None
     if isinstance(src, dict):
@@ -181,28 +217,31 @@ def muse_config(cfg: dict | None = None) -> dict:
 
 
 # ============================================================
-# 一条记忆在引擎眼里的样子
+# What one memory looks like to the engine
 # ============================================================
 @dataclass
 class Item:
     id: str
     room: str
-    ts: datetime | None          # 日历坐标：when || created（跟 recall 时间轴同口径）
-    created: datetime | None     # 写下来的时刻
+    ts: datetime | None          # calendar coordinate: when || created (same definition as recall's timeline)
+    created: datetime | None     # the moment it was written down
     v: float
     a: float
     tags: list[str]
     text: str
-    from_ids: list[str] = field(default_factory=list)   # 我亲手连的链
-    covered: bool = False        # 已经被某条 gist **点名**盖着（快照那半：认知合并 / 事件改错换版）
-    # 🔴 **有名字了吗**：日期落在某条活着的时期的范围里（8-17 终稿的判据，`mark_named()` 现场打）。
-    #    跟 `covered` 分开两个字段，因为它们是两件事：一个是「被压住了」，一个是「被叫过了」。
+    from_ids: list[str] = field(default_factory=list)   # a chain I linked by hand
+    covered: bool = False        # explicitly **named** in some gist's cover (the snapshot half: a mind merge, or an event corrected by a new version)
+    # 🔴 **Does it have a name yet**: its date falls inside the range of a living period
+    #    (computed on the spot by `mark_named()`).
+    #    Deliberately a separate field from `covered`, because they are two different
+    #    things: one means "it has been suppressed", the other means "it has been named".
     named: bool = False
 
 
 @dataclass
 class Shelf:
-    """v/a 邻域里的一格。**架心是坐标，不是标签**——它是我打出来的那个位置。"""
+    """One square of the v/a neighbourhood. **The centre of a shelf is a coordinate, not a
+    label** — it is the position I put there myself."""
     v: float
     a: float
     items: list[Item]
@@ -213,14 +252,15 @@ class Shelf:
 
 @dataclass
 class Cluster:
-    """发呆摆出来的一团。三样证据各自留着，摆的时候一样都不许省。"""
+    """One cluster laid out by musing. All three kinds of evidence are kept separately, and
+    not one of them may be omitted when it is laid out."""
     ids: list[str]
     items: list[Item]
     shelf_v: float
     shelf_a: float
-    from_core: list[str] = field(default_factory=list)   # 靠 from 链拉到一起的
-    shared_from: list[str] = field(default_factory=list)       # 它们共享的那个/那些来源
-    semantic_add: list[str] = field(default_factory=list)     # 海选补进来的
+    from_core: list[str] = field(default_factory=list)   # pulled together by from-chains
+    shared_from: list[str] = field(default_factory=list)       # the source(s) they have in common
+    semantic_add: list[str] = field(default_factory=list)     # brought in by the open audition
     min_sim: float = 0.0
 
     def __len__(self) -> int:
@@ -229,16 +269,17 @@ class Cluster:
 
 @dataclass
 class Finger:
-    """事件侧摆出来的一指。`证据` 那一行里的每个字都得是我们自己留下的痕迹。"""
+    """One gesture laid out by the event side. Every word on its `evidence` line has to be
+    a trace we left ourselves."""
     name: str
     ids: list[str]
     items: list[Item]
     start: datetime | None = None
     end: datetime | None = None
-    boundary: datetime | None = None      # 成分漂移专用：只提边界，不画段
+    boundary: datetime | None = None      # composition drift only: it offers a boundary and never draws the stretch
     evidence: str = ""
     next_step: str = ""
-    score: float = 0.0                   # 排序用（次数 / 漂移 / 条数），不摆出来
+    score: float = 0.0                   # for ordering (hits / drift / count); never displayed
 
     def __len__(self) -> int:
         return len(self.ids)
@@ -251,9 +292,11 @@ def _f(x, d: float) -> float:
         return d
 
 
-# 机器腔标签：`相似认知:e9854d`、`疑似同件:77643f`、`aspect:patterns` 这一类。
-# 她 8-17 凌晨逮过一次（团的「脸」上漏出 `aspect:patterns`）：**「脸」只配人话场景词**。
-# 一个机器自己打上去的标签**不是我们留下的痕迹**，拿它当证据就是在自证。
+# Machine-voiced tags: things like `相似认知:e9854d`, `疑似同件:77643f`, `aspect:patterns`.
+# Caught once in the wild, with `aspect:patterns` leaking onto a cluster's "face":
+# **the face is only fit for scene words in human language.**
+# A tag the machine assigned to itself **is not a trace we left**, and using it as evidence
+# is the system citing itself.
 _MACHINE_TAG_RE = re.compile(r"^[^:：]{1,12}[:：]")
 
 
@@ -263,14 +306,15 @@ def is_scene_word(tag: str) -> bool:
 
 
 def item_of(meta: dict, text: str) -> Item | None:
-    """一条桶 → Item。id 缺了就不是一条能提议的记忆，返回 None。"""
+    """One bucket -> an Item. Without an id it is not a memory anything can be proposed
+    about, so None."""
     bid = str(meta.get("id") or "").strip()
     if not bid:
         return None
     try:
         from utils import read_from_ids
         froms = read_from_ids(meta)
-    except Exception:                      # noqa: BLE001 —— 引擎不许因为读不到链就崩
+    except Exception:                      # noqa: BLE001 - the engine must not die just because a chain would not read
         raw = str(meta.get("triggered_by") or meta.get("from") or "")
         froms = [s.strip() for s in raw.split(",") if s.strip()]
     return Item(
@@ -288,35 +332,36 @@ def item_of(meta: dict, text: str) -> Item | None:
 
 
 def _is_utility_record(meta: dict) -> bool:
-    """gist / 大 event / 门口那张纸——它们是工具件，不是能被提议归纳的记忆。"""
+    """gists, big events, the note at the door — these are machinery, not memories that
+    anything can be proposed about."""
     tags = [str(t) for t in (meta.get("tags") or [])]
     return GIST_TAG in tags or BIGEVENT_TAG in tags or "__档案事实__" in tags
 
 
 def in_pool(meta: dict, item: Item, kind: str, cfg: dict, now: datetime,
             digested_ids: set[str] | None = None) -> bool:
-    """这条进不进 `kind` 那个池子。"""
+    """Does this belong in the `kind` pool?"""
     spec = POOL_SPECS[kind]
 
-    # --- 谁都不进的 ---
+    # --- excluded from every pool ---
     if _is_utility_record(meta):
         return False
     if str(meta.get("type") or "") in ("letter", "archived"):
         return False
     if meta.get("pinned") or meta.get("protected"):
-        return False                            # 准则不参与被归纳
+        return False                            # a rule is never something to be summarised
     if not item.text.strip():
         return False
-    if spec["没被盖过"] and item.covered:        # `_fold.is_covered` 是判据源头
+    if spec["没被盖过"] and item.covered:        # `_fold.is_covered` is the source of this rule
         return False
 
-    # --- 池子分家 ---
+    # --- the pools part company ---
     if spec["支"] == "MIND" and not is_mind_room(item.room):
         return False
     if spec["支"] == "EVENT" and not is_event_room(item.room):
         return False
 
-    # --- 冷却期：刚写下的不参与归纳 ---
+    # --- cooldown: something just written down does not get summarised ---
     if spec["冷却期"]:
         clock = item.created if str(cfg["cooldown_clock"]) == "created" else item.ts
         if clock is None:
@@ -324,7 +369,7 @@ def in_pool(meta: dict, item: Item, kind: str, cfg: dict, now: datetime,
         if (now - clock) < timedelta(days=float(cfg["cooldown_days"])):
             return False
 
-    # --- 梦：有情绪 + 没消化 ---
+    # --- dreams: carrying emotion, and not yet digested ---
     if spec["情绪"]:
         line = float(cfg["emotion_line"])
         if abs(item.v - 0.5) <= line and abs(item.a - 0.5) <= line:
@@ -348,7 +393,7 @@ def pool_of(recs: list[tuple[dict, str]], kind: str, cfg: dict, now: datetime,
 
 
 # ============================================================
-# 向量：只读 embeddings.db，一发新的都不打
+# Vectors: embeddings.db is read only; not one new vector is ever computed
 # ============================================================
 def _normalize(vec) -> list[float] | None:
     if not vec:
@@ -360,13 +405,17 @@ def _normalize(vec) -> list[float] | None:
 
 
 def read_vectors(db_path: str, ids: list[str], retries: int = 3) -> dict[str, list[float]]:
-    """按 id 取现成 embedding。🔴 `mode=ro` 只读连接——这个文件永远不写向量库。
+    """Fetch existing embeddings by id. 🔴 A `mode=ro` read-only connection — this file
+    never writes to the vector store.
 
-    ⚠️ 只读连接遇上**热日志**（写向量的那一下正卡在中间）会报
-    `attempt to write a readonly database`——SQLite 要回滚日志，而回滚要写。
-    那不是「这条没有向量」，是「这一刻读不着」，两件事**不许混成一件**：
-    混了的话 muse 会一声不吭地把整池子报成「散着」，而我看不出发生过什么。
-    所以：退让重试几次，还是不行就**吼一声**（日志），返回手上有的那部分。
+    ⚠️ A read-only connection meeting a **hot journal** (a vector write caught mid-flight)
+    reports `attempt to write a readonly database`: SQLite wants to roll the journal back,
+    and rolling back means writing. That is not "this entry has no vector", it is "it
+    cannot be read at this instant", and the two **must never be fused into one**. Fused,
+    muse would silently report the whole pool as "scattered" and nothing would show that
+    anything had happened.
+    So: back off and retry a few times, and if it still fails, **say so out loud** (in the
+    log) and return whatever part is in hand.
     """
     out: dict[str, list[float]] = {}
     if not db_path or not os.path.exists(db_path) or not ids:
@@ -396,7 +445,7 @@ def read_vectors(db_path: str, ids: list[str], retries: int = 3) -> dict[str, li
                     rt.logger.warning(
                         f"[muse] 读向量库失败（{e}）——这一趟的语义那一层等于没有，"
                         f"团会比平时少。**不是没有向量，是读不着。**")
-                except Exception:      # noqa: BLE001 —— 干跑脚本没有 runtime，别为了报错再崩一次
+                except Exception:      # noqa: BLE001 - the dry-run script has no runtime; do not crash a second time just to report an error
                     pass
                 return out
             import time as _t
@@ -408,22 +457,28 @@ def read_vectors(db_path: str, ids: list[str], retries: int = 3) -> dict[str, li
 
 
 def _cos(u: list[float], v: list[float]) -> float:
-    """两条**已经归一化**的向量的余弦。"""
+    """Cosine of two vectors that have **already been normalised**."""
     return sum(x * y for x, y in zip(u, v))
 
 
 # ============================================================
-# 认知侧 ① —— v/a 邻域分架（我亲手打的坐标）
+# Mind side ① — v/a neighbourhood shelving (coordinates I assigned by hand)
 # ============================================================
 def make_shelves(items: list[Item], cfg: dict) -> tuple[list[Shelf], int]:
-    """v/a 平面上按半径 r 分架。返回 (架列表, 老默认坐标被挡下几条)。
+    """Shelve the v/a plane by radius r. Returns (the shelves, how many were held back for
+    sitting on the old default coordinate).
 
-    **一架 = 一个半径 r 的球**，不是单链接。单链接会顺着密度把整个坐标面串成一片
-    （0.10 的半径在 250 条上足够连通），那就不是「这一格」了，是「所有格」。
-    贪心：每轮挑**邻居最多**的那条当架心，把它半径内的都收进来，然后拿掉，再来一轮。
-    平手按 (v, a, id) 定序——**两次调用给同一批架**（没有 LLM，也不许有随机）。
+    **One shelf = one ball of radius r**, not single linkage. Single linkage follows
+    density and strings the whole coordinate plane into one piece (a radius of 0.10 is
+    enough to connect 250 entries), and that is no longer "this one square", it is "every
+    square".
+    Greedy: each round picks the entry with **the most neighbours** as the shelf centre,
+    takes everything within its radius, removes them, and goes again.
+    Ties break on (v, a, id), so **two calls produce the same shelves** — there is no LLM
+    here, and no randomness is allowed either.
 
-    🔴 精确等于 `(va_default_v, va_default_a)` 的整个不进架：那是老默认值不是感觉。
+    🔴 Anything exactly equal to `(va_default_v, va_default_a)` stays off the shelves
+    entirely: that is an old default value, not a feeling.
     """
     r = float(cfg["va_radius"])
     dv, da = float(cfg["va_default_v"]), float(cfg["va_default_a"])
@@ -442,7 +497,7 @@ def make_shelves(items: list[Item], cfg: dict) -> tuple[list[Shelf], int]:
     for i in range(n):
         vi, ai = live[i].v, live[i].a
         for j in range(i + 1, n):
-            if abs(live[j].v - vi) > r:          # 已按 v 排序，超了后面都超
+            if abs(live[j].v - vi) > r:          # already sorted by v: once it is past r, everything after is too
                 break
             if (live[j].v - vi) ** 2 + (live[j].a - ai) ** 2 <= r * r:
                 neighbors[i].add(j)
@@ -451,8 +506,9 @@ def make_shelves(items: list[Item], cfg: dict) -> tuple[list[Shelf], int]:
     left = set(range(n))
     out: list[Shelf] = []
     while left:
-        # sorted(剩) 而不是 max(剩)：集合的迭代顺序不该决定架心。
-        # 活 已按 (v, a, id) 排过，下标升序 = 定序；max 取第一个最大值 → **两次调用同一批架**。
+        # sorted(left) rather than max(left): a set's iteration order must not decide the
+        # shelf centre. `live` is already sorted by (v, a, id), so ascending index means a
+        # fixed order, and max takes the first maximum -> **two calls give the same shelves**.
         center = max(sorted(left), key=lambda i: len(neighbors[i] & left))
         members = [live[i] for i in sorted((neighbors[center] & left) | {center})]
         left -= ({center} | neighbors[center])
@@ -464,10 +520,12 @@ def make_shelves(items: list[Item], cfg: dict) -> tuple[list[Shelf], int]:
 
 
 # ============================================================
-# 认知侧 ②③ —— 架内 from 链（最硬）→ 架内语义（海选兜底）
+# Mind side ②③ — from-chains within a shelf (hardest) -> semantics within a shelf (the
+# open-audition fallback)
 # ============================================================
 def _from_edges(sh: Shelf) -> dict[str, set[str]]:
-    """架内两条之间的 from 关系：共享同一个来源，或者一条就是另一条的来源。"""
+    """The from-relation between two entries on a shelf: they share a source, or one of
+    them IS the other's source."""
     edges: dict[str, set[str]] = {it.id: set() for it in sh.items}
     for i, a in enumerate(sh.items):
         for b in sh.items[i + 1:]:
@@ -480,13 +538,14 @@ def _from_edges(sh: Shelf) -> dict[str, set[str]]:
 
 
 def cluster_shelf(sh: Shelf, vectors: dict[str, list[float]], cfg: dict) -> list[Cluster]:
-    """一架 → 几团。**先 from 链，后语义补**，两样分别记在证据里。"""
+    """One shelf -> several clusters. **from-chains first, semantics second**, with the two
+    recorded separately in the evidence."""
     line = float(cfg["sim_line"])
     min_items = int(cfg["min_cluster"])
     by_id = {it.id: it for it in sh.items}
     normed = {bid: _normalize(vectors.get(bid)) for bid in by_id}
 
-    # --- ② from 链：并查集 ---
+    # --- ② from-chains: union-find ---
     edges = _from_edges(sh)
     parent = {bid: bid for bid in by_id}
 
@@ -520,7 +579,8 @@ def cluster_shelf(sh: Shelf, vectors: dict[str, list[float]], cfg: dict) -> list
                        from_core=list(ids_core), shared_from=sorted(shared), semantic_add=list(ids_add),
                        min_sim=lowest_sim)
 
-    # --- ③ 架内语义：落单的挂到最贴的那个 from 团上（海选兜底，单独标出来）---
+    # --- ③ semantics within the shelf: hang each singleton onto the from-cluster it is
+    #     closest to (the open-audition fallback, labelled separately) ---
     used: set[str] = set()
     assigned: dict[int, list[str]] = {k: [] for k in range(len(cores))}
     lowest_sim: dict[int, float] = {k: 0.0 for k in range(len(cores))}
@@ -528,8 +588,9 @@ def cluster_shelf(sh: Shelf, vectors: dict[str, list[float]], cfg: dict) -> list
         nv = normed.get(bid)
         if nv is None:
             continue
-        # 挂到**最贴的那一个** from 团上。`>` 而不是 `>=`：平手时先来的赢，
-        # 不然核心组的枚举顺序会决定归属，那就成了「顺序说了算」而不是「证据说了算」。
+        # Hang it on **the single closest** from-cluster. `>` rather than `>=`: on a tie
+        # the earlier one wins, otherwise the enumeration order of the cores would decide
+        # membership — and then order would be doing the talking instead of evidence.
         best, score = -1, -1.0
         for k, g in enumerate(cores):
             for m in g:
@@ -547,7 +608,8 @@ def cluster_shelf(sh: Shelf, vectors: dict[str, list[float]], cfg: dict) -> list
     for k, g in enumerate(cores):
         clusters.append(_make_cluster(g, sorted(assigned[k]), lowest_sim[k]))
 
-    # --- 一条 from 边都没有的架：整架走语义单链接（纯海选，证据行会说清楚）---
+    # --- A shelf with not a single from-edge: the whole shelf goes through semantic single
+    #     linkage (pure open audition; the evidence line says so plainly) ---
     left = [b for b in singles if b not in used and normed.get(b) is not None]
     if len(left) >= min_items:
         parent2 = {b: b for b in left}
@@ -589,10 +651,12 @@ def cluster_shelf(sh: Shelf, vectors: dict[str, list[float]], cfg: dict) -> list
 
 def daydream(items: list[Item], vectors: dict[str, list[float]], cfg: dict
              ) -> tuple[list[Cluster], int, int]:
-    """认知侧一整趟：分架 → 架内成团。返回 (团列表, 散着几条, 老默认坐标几条)。
+    """A full pass of the mind side: shelve, then cluster within each shelf. Returns
+    (clusters, how many are scattered, how many sit on the old default coordinate).
 
-    排序：**有 from 证据的排前面**（痕迹硬），然后大的在前——
-    「这几条长自同一晚」比「这几条向量像」重得多，摆的顺序就该照着说。
+    Ordering: **anything with from-evidence comes first** (the harder trace), then larger
+    before smaller. "These grew out of the same night" weighs far more than "these have
+    similar vectors", and the order things are laid out in should say so.
     """
     shelves, default_coords = make_shelves(items, cfg)
     clusters: list[Cluster] = []
@@ -607,7 +671,7 @@ def daydream(items: list[Item], vectors: dict[str, list[float]], cfg: dict
 
 
 # ============================================================
-# 事件侧 —— 三种指法，全带证据
+# Event side — three gestures, every one carrying evidence
 # ============================================================
 def _short_date(dt: datetime | None) -> str:
     return dt.strftime("%m-%d") if dt else "?"
@@ -618,12 +682,15 @@ def _full_date(dt: datetime | None) -> str:
 
 
 def word_burst(items: list[Item], cfg: dict, now: datetime) -> list[Finger]:
-    """**某个场景词在一段连续日子里密集出现、窗外稀疏** → 提议那一段。
+    """**One scene word appearing densely across a run of days and sparsely outside it**
+    -> propose that stretch.
 
-    痕迹是 `tags`：**我们存的时候写下的词**（保证「字面一定在原文里」），
-    机器自己打的 `xx:yy` 标签不算（拿它当证据是自证）。
+    The trace is `tags`: **words we wrote down at the moment of storing** (which guarantees
+    they appear literally in the body). Machine-assigned `xx:yy` tags do not count — using
+    one as evidence is the system citing itself.
 
-    她 8-17 凌晨那句：「『青岛』8-09 出现 8-12 消失 = **时期的形状**」。
+    The observation behind it: a word that appears on 08-09 and is gone by 08-12 has
+    **the shape of a period**.
     """
     window = timedelta(days=float(cfg["burst_window_days"]))
     line = int(cfg["burst_min_hits"])
@@ -645,7 +712,7 @@ def word_burst(items: list[Item], cfg: dict, now: datetime) -> list[Finger]:
         total = len(occ)
         if total < line:
             continue
-        best = (0, 0, 0)          # (窗内次数, 起下标, 止下标)
+        best = (0, 0, 0)          # (hits inside the window, start index, end index)
         j = 0
         for i in range(total):
             while j + 1 < total and occ[j + 1].ts - occ[i].ts <= window:
@@ -660,15 +727,15 @@ def word_burst(items: list[Item], cfg: dict, now: datetime) -> list[Finger]:
             continue
         outside = total - inside
         if outside > ratio * inside:
-            continue                     # 窗外不稀疏 = 这词一直都在，不是爆发
+            continue                     # not sparse outside = this word was always there; not a burst
         start, end = occ[i0].ts, occ[j0].ts
         if (now - end) <= stopped:
-            continue                     # 还在发生的事，我说不出它是什么
+            continue                     # still happening: I cannot say what it is yet
         in_span = [it for it in dated if start <= it.ts <= end]
-        # 「没名字」= 日期不落在任何一条活着的时期的范围里（`mark_named()` 现场打的）
+        # "Unnamed" = the date falls inside no living period's range (set on the spot by `mark_named()`)
         unnamed = [it for it in in_span if not it.named]
         if not unnamed:
-            continue                     # 段上已经一条没名字的都没有了，指它干什么
+            continue                     # nothing unnamed is left in this stretch, so there is nothing to point at
         out.append(Finger(
             name="词爆发",
             ids=[it.id for it in unnamed], items=unnamed, start=start, end=end,
@@ -681,13 +748,15 @@ def word_burst(items: list[Item], cfg: dict, now: datetime) -> list[Finger]:
 
 
 def _window_index(dt: datetime, W: int) -> int:
-    """固定日历网格的窗号（不随数据动，报告和线上算出来永远是同一格）。"""
+    """The window number on a fixed calendar grid — it does not shift with the data, so a
+    report and a live run always land on the same square."""
     return ((date(dt.year, dt.month, dt.day) - date(1970, 1, 1)).days) // W
 
 
 def _window_start(k: int, W: int) -> datetime:
-    """窗的起点。**必须走 `_when.parse_date`**——本地那一天的零点、带时区。
-    裸 `datetime(...)` 是 naive，跟 `now()` 一减当场炸（时区那一刀 codex #4 点过名）。
+    """The start of a window. **This must go through `_when.parse_date`**: midnight of that
+    local day, timezone-aware.
+    A bare `datetime(...)` is naive and blows up the moment it is subtracted from `now()`.
     """
     d = date(1970, 1, 1) + timedelta(days=k * W)
     return _w.parse_date(d.isoformat())
@@ -695,11 +764,14 @@ def _window_start(k: int, W: int) -> datetime:
 
 def composition_drift(items: list[Item], vectors: dict[str, list[float]], cfg: dict,
                       now: datetime) -> list[Finger]:
-    """**相邻时间窗的向量质心跳了一大步** → 提议一条**边界**（只提边界，不画段）。
+    """**The vector centroid takes a big step between adjacent time windows** -> propose a
+    **boundary** (a boundary only; it never draws the stretch).
 
-    她的话：「**7-04 前后不一样了**」。向量在这儿只当**尺子**——
-    它说的是「变了」这个事实，不敢说「变成什么了」，那句话我自己写。
-    ⚠️ **隔着空窗不比**：中间那段一条记忆都没有，说明不上「相邻」。
+    The observation it captures: things are different before and after some date. The
+    vectors here are only a **ruler** — they state the fact that something changed and do
+    not presume to say what it changed into. That sentence I write myself.
+    ⚠️ **Never compare across an empty window**: with not one memory in between, "adjacent"
+    does not mean anything.
     """
     W = int(cfg["drift_window_days"])
     line = float(cfg["drift_line"])
@@ -727,7 +799,7 @@ def composition_drift(items: list[Item], vectors: dict[str, list[float]], cfg: d
     out: list[Finger] = []
     for k in sorted(cells):
         if k + 1 not in cells:
-            continue                       # 隔着空窗不比
+            continue                       # never compare across an empty window
         if len(cells[k]) < min_items or len(cells[k + 1]) < min_items:
             continue
         c0, c1 = centroid(k), centroid(k + 1)
@@ -753,11 +825,13 @@ def composition_drift(items: list[Item], vectors: dict[str, list[float]], cfg: d
 
 
 def era_spans(recs: list[tuple[dict, str]]) -> list[tuple[datetime, datetime | None]]:
-    """库里**还算数的时期**的范围 `[起, 止)`（`止=None` = 还在进行中）。
+    """The ranges `[start, end)` of every **period that still counts** in the store
+    (`end=None` means still ongoing).
 
-    判据跟 `_bigevent.covering()` **同一个函数**（`_usable`）：没换过版、没被更上层
-    盖住、没了结、没归档。两处不一样才是 bug——屏幕上盖在那段日子上的是哪几条时期，
-    「这段有没有名字」就该按哪几条算。
+    The test is **literally the same function** `_bigevent.covering()` uses (`_usable`):
+    not superseded, not covered by a higher layer, not closed, not archived. The two
+    disagreeing is by definition a bug — whichever periods are laid over that stretch on
+    screen are exactly the periods "does this stretch have a name" must be computed from.
     """
     from ._bigevent import _usable as _span_usable, is_big, parse_span
 
@@ -772,10 +846,12 @@ def era_spans(recs: list[tuple[dict, str]]) -> list[tuple[datetime, datetime | N
 
 
 def is_named(it: Item, spans: list[tuple[datetime, datetime | None]]) -> bool:
-    """这一条**有名字了吗** —— 日期落在任何一条活着的时期的范围里就算有（现场算）。
+    """**Does this one have a name yet** — yes if its date falls inside the range of any
+    living period (computed on the spot).
 
-    `it.covered` 也算：那是真 cover（事件改错换版那一条），它已经不冒头了，
-    再指着它说「这儿没名字」是在指一条我已经处理过的记忆。
+    `it.covered` counts too: that is a real cover (an event corrected by a new version).
+    It has already stopped surfacing, and pointing at it to say "nothing here has a name"
+    would be pointing at a memory that has already been dealt with.
     """
     if it.covered:
         return True
@@ -788,7 +864,8 @@ def is_named(it: Item, spans: list[tuple[datetime, datetime | None]]) -> bool:
 
 
 def mark_named(items: list[Item], spans: list[tuple[datetime, datetime | None]]) -> int:
-    """给池子里每一条打上 `named`，返回**还没名字**的条数。三种指法共用这一份口径。"""
+    """Set `named` on every entry in the pool and return how many are **still unnamed**.
+    All three gestures share this one definition."""
     unnamed_count = 0
     for it in items:
         it.named = is_named(it, spans)
@@ -798,19 +875,23 @@ def mark_named(items: list[Item], spans: list[tuple[datetime, datetime | None]])
 
 
 def era_count(recs: list[tuple[dict, str]]) -> int:
-    """库里有几条还算数的时期（空白记账的地图闸拿它当判据）。"""
+    """How many periods in the store still count (the blank ledger's map gate reads this)."""
     return len(era_spans(recs))
 
 
 def blank_ledger(items: list[Item], era_n: int, cfg: dict, now: datetime) -> list[Finger]:
-    """**一段连续的日子，一条都没被时期盖住** → 拍我一下。
+    """**A run of consecutive days with not one entry covered by a period** -> a tap on the
+    shoulder.
 
-    🔴 **库里一条主线都没有的时候，这一指整个闭嘴。** 她的原话场景：
-       「他完全可以说今年都没有」——**不许发生**。没有地图的时候「哪儿没盖」
-       是个假问题：那不是空白，那是还没开始画。
-       （地图第一版是我和她手写的——**先讲述，后指点**。）
-    ⚠️ 「没名字」8-17 起是 **range 覆盖**（时期的范围，`mark_named()` 现场打在 `named` 上），
-       不再问 `covered_by`——时期不记账了。补记落进老范围自动就有名字，不会再被记一次空白。
+    🔴 **When the store holds no through-line at all, this gesture shuts up entirely.**
+       The failure it guards against is the engine announcing that nothing all year has a
+       name — **that must not happen.** Without a map, "where is nothing covered" is a fake
+       question: that is not a blank, that is a drawing nobody has started.
+       (The first version of the map is written by hand — **narrate first, point later.**)
+    ⚠️ "Unnamed" now means **range coverage** (a period's range, set on the spot onto
+       `named` by `mark_named()`), no longer a question about `covered_by` — periods keep
+       no books. A backfilled entry landing inside an old range acquires its name
+       automatically and is never counted as a blank a second time.
     """
     if int(era_n) < 1:
         return []
@@ -846,10 +927,12 @@ def blank_ledger(items: list[Item], era_n: int, cfg: dict, now: datetime) -> lis
 
 
 # ============================================================
-# 拒绝计数 —— sidecar，**不放 frontmatter**
+# The rejection count — a sidecar file, **never the frontmatter**
 # ============================================================
-# 🔴 拒绝是关于「**这一组**」的，不属于任何单条。写进 frontmatter 等于把一个
-#    关于组合的事实拆散塞进成员里，下次组变了还得挨个擦。
+# 🔴 A rejection is about **the group**, and belongs to no single entry. Writing it into
+#    the frontmatter would tear a fact about a combination apart and stuff the pieces into
+#    its members, and every member would then have to be wiped by hand the next time the
+#    group changed.
 REJECT_FILE = "muse_rejected.json"
 
 
@@ -858,7 +941,8 @@ def state_dir(buckets_dir: str) -> str:
 
 
 def rejection_key(ids) -> str:
-    """id 集合排序后做 key。**排序**是重点：同一组换个顺序还是同一组。"""
+    """The key is the sorted set of ids. **Sorting** is the point: the same group in a
+    different order is still the same group."""
     return ",".join(sorted({str(i).strip() for i in (ids or []) if str(i).strip()}))
 
 
@@ -883,10 +967,11 @@ def is_rejected(data: dict, ids, limit: int) -> bool:
 
 
 def record_rejection(buckets_dir: str, ids) -> tuple[str, int]:
-    """记一笔「这几条不是一回事」。返回 (key, 累计次数)。
+    """Record one "these are not the same thing". Returns (key, running count).
 
-    **组变了就是另一个 key**（多一条少一条都算），所以补记进来的那条会让这一组
-    重新被提——这是要的：那时候它确实是新的一组。
+    **A changed group is a different key** (one entry more or fewer counts), so a
+    backfilled entry makes the group eligible to be raised again — which is intended: at
+    that point it genuinely is a new group.
     """
     key = rejection_key(ids)
     data = load_rejected(buckets_dir)
@@ -910,12 +995,14 @@ def record_rejection(buckets_dir: str, ids) -> tuple[str, int]:
 
 
 # ============================================================
-# 服务端：装料 → 出团 / 出指
+# Server side: load the material -> emit clusters / gestures
 # ============================================================
 async def load_records() -> tuple[list[tuple[dict, str]], set[str]]:
-    """全库一遍（不含归档）+ 「被认知 from 指向过」的 id 集合。
+    """One pass over the whole store (archive excluded), plus the set of ids that some
+    insight's `from` points at.
 
-    `mind_from_ids()` 就是 night_fall 8-06 那条「没消化」的判据，**搬过来用，不重写**。
+    `mind_from_ids()` IS night_fall's old "not digested" test — **reused as it stands,
+    never reimplemented.**
     """
     from tools import _runtime as rt
     recs: list[tuple[dict, str]] = []
@@ -952,7 +1039,8 @@ def _drop_rejected(candidates: list, cfg: dict) -> tuple[list, int]:
 
 async def propose_mind(cfg: dict | None = None, loaded=None
                        ) -> tuple[list[Cluster], int, int, dict]:
-    """认知侧一整趟。返回 (团列表, 散着几条, 老默认坐标几条, 统计)。**不写任何东西。**"""
+    """A full pass of the mind side. Returns (clusters, how many scattered, how many on the
+    old default coordinate, stats). **Nothing is written.**"""
     from tools import _runtime as rt
     c = muse_config(cfg if cfg is not None else rt.config)
     now = _w.now()
@@ -960,7 +1048,8 @@ async def propose_mind(cfg: dict | None = None, loaded=None
     items = pool_of(recs, "muse", c, now, digested)
     vectors = read_vectors(_db_path(), [i.id for i in items])
     clusters, scattered, default_coords = daydream(items, vectors, c)
-    # 被拒过的组不算进「散着」——它们没散，只是**我说过不是一回事**，别再提。
+    # A rejected group is not counted as "scattered" — it is not scattered, it is a group
+    # **I already said was not one thing**; do not raise it again.
     clusters, rejected_n = _drop_rejected(clusters, c)
     stats = {"池子": len(items), "有向量": len(vectors), "团": len(clusters),
              "散着": scattered, "老默认坐标": default_coords, "被拒过的组": rejected_n}
@@ -969,14 +1058,16 @@ async def propose_mind(cfg: dict | None = None, loaded=None
 
 async def propose_gist(cfg: dict | None = None, loaded=None
                        ) -> tuple[dict[str, list[Finger]], dict]:
-    """事件侧一整趟：三种指法各走一遍。返回 ({指法名: [指法]}, 统计)。"""
+    """A full pass of the event side: each of the three gestures runs once. Returns
+    ({gesture name: [gestures]}, stats)."""
     from tools import _runtime as rt
     c = muse_config(cfg if cfg is not None else rt.config)
     now = _w.now()
     recs, digested = loaded if loaded is not None else await load_records()
     items = pool_of(recs, "gist", c, now, digested)
     vectors = read_vectors(_db_path(), [i.id for i in items])
-    # 🔴 「有名字了吗」**现场算**：时期只落名字 + 范围，字段里问不出来（8-17 终稿）。
+    # 🔴 "Does it have a name" is **computed on the spot**: a period persists only a name
+    #    and a range, so no field can answer the question.
     spans = era_spans(recs)
     era_n = len(spans)
     unnamed = mark_named(items, spans)
@@ -996,32 +1087,39 @@ async def propose_gist(cfg: dict | None = None, loaded=None
 
 
 # ============================================================
-# 视图缓存（施工 5 · H 件，2026-08-17）：一次全库扫，两步走都用它
+# The view cache: one scan of the whole store, shared by both steps
 # ============================================================
-# **为什么要有**：`muse()` 摆完团，我接着 `muse(cluster=3)` 看那一批——
-# 第二步跟第一步要的是**同一份**结果（[N] 的编号口径必须一致），
-# 可它现在会把全库重扫一遍（`load_records` + 向量 + 三种指法），
-# 8-17 的流水记着这个坑：一次调用肉眼可感的慢，两步就是两倍。
+# **Why it exists**: `muse()` lays out the clusters, and then `muse(cluster=3)` looks at
+# one of them — the second step needs **the same** result as the first (the [N] numbering
+# has to mean the same thing), yet without a cache it would rescan the entire store
+# (`load_records` + vectors + all three gestures). One call is perceptibly slow to the
+# naked eye; two steps is twice that.
 #
-# 🔴 **宁可失效勤一点，绝不给旧数据**（说明书 H 件原话）。
-#    钥匙 = `bucket_manager._active_cache_generation` —— 它在**每一次托管写盘**
-#    （create/update/archive/delete，`_invalidate_bm25`）和**每一次 touch**
-#    （`_cache_bump`）时都 +1，外部改动（Obsidian/git 手编）被轮询发现时也 +1。
-#    所以 grow / fold / regrow / trace 一律当场失效，一个都不用自己去挂钩子。
-#    ⚠️ 反过来说：**它宁可多失效**（recall 一次 id 直查就 touch 一下）——
-#    那正是想要的方向。缓存只保「这一屏和下一屏是同一屏」，不保跨对话。
-# ⚠️ `not_same`（拒绝计数）写的是 `_state/` 里的 json，**不动桶**，钥匙不会变
-#    → `record_rejection()` 之后必须**手动清一次**（`clear_view_cache()`）。
+# 🔴 **Better to invalidate too eagerly than to ever serve stale data.**
+#    The key is `bucket_manager._active_cache_generation`, which is incremented on **every
+#    managed write** (create/update/archive/delete, via `_invalidate_bm25`) and on **every
+#    touch** (`_cache_bump`), and again whenever polling notices an external edit
+#    (Obsidian, a hand-edit through git). So grow / fold / regrow / trace all invalidate on
+#    the spot, and not one of them needs a hook of its own.
+#    ⚠️ Which cuts the other way too: **it would rather invalidate too often** (a single id
+#    lookup in recall touches the entry) — and that is exactly the direction to err in.
+#    The cache only guarantees "this screen and the next screen are the same screen"; it
+#    guarantees nothing across a conversation.
+# ⚠️ `not_same` (the rejection count) writes json under `_state/` and **does not touch a
+#    bucket**, so the key does not change -> `record_rejection()` must be followed by a
+#    **manual clear** (`clear_view_cache()`).
 _view_cache: dict = {"钥匙": None, "值": None}
 
 
 def view_cache_key() -> tuple | None:
-    """这一屏该不该重算。拿不到 generation 就返回 None = **不敢缓存**。"""
+    """Whether this screen has to be recomputed. No generation available -> None, meaning
+    **do not dare to cache**."""
     from tools import _runtime as rt
     gen = getattr(rt.bucket_mgr, "_active_cache_generation", None)
     if gen is None:
         return None
-    # config 也进钥匙：她在面板上改了 muse 段的阈值，下一屏就该按新线算
+    # config goes into the key too: change a threshold in the muse section from the panel
+    # and the very next screen should be computed against the new line
     c = muse_config(rt.config)
     return (int(gen), tuple(sorted((k, str(v)) for k, v in c.items())))
 
@@ -1032,11 +1130,14 @@ def clear_view_cache() -> None:
 
 
 async def both_sides(force: bool = False) -> tuple[list, int, int, dict, dict]:
-    """认知侧 + 事件侧一整趟，**带视图缓存**。返回 (团们, 散着, 默认坐标, 指们, 统计)。
+    """A full pass of both the mind and event sides, **with the view cache**. Returns
+    (clusters, scattered, default-coordinate count, gestures, stats).
 
-    两个调用方共用这一份：`tools/muse/__init__.py`（工具面的两步走）和
-    `web/loci.py::build_muse_pending`（「该发呆了吗」只要数量和年龄）。
-    **绝不各算各的**——页面说「攒了 3 团」而我 muse() 看到 4 团，那就是两个脑子。
+    Two callers share this one: `tools/muse/__init__.py` (the two-step tool surface) and
+    `web/loci.py::build_muse_pending` ("is it time to muse", which needs only the count and
+    the age).
+    **They must never compute their own.** A page saying "3 clusters have piled up" while
+    muse() sees 4 is two different brains.
     """
     key = view_cache_key()
     if not force and key is not None and _view_cache["钥匙"] == key:
@@ -1051,8 +1152,10 @@ async def both_sides(force: bool = False) -> tuple[list, int, int, dict, dict]:
     return out
 
 
-# ⚰️ `dream_pool()`（返回候选 id 列表）2026-08-17 删掉了。
-#    它是给 night_fall 的选料端用的，night_fall 整个退役之后没有第二个调用方；
-#    而新引擎（`tools/_dream.py`）要的是 **Item 本身**（正文 + v/a + 日子），
-#    不是一串 id —— 留着它等于把「梦吃哪个池子」这件事摆两份。
-#    🔴 **选料统一走这儿**：`POOL_SPECS["dream"]` + `pool_of(recs, "dream", ...)` 是唯一入口。
+# ⚰️ `dream_pool()` (which returned a list of candidate ids) was deleted.
+#    It served night_fall's ingredient end, and once night_fall retired there was no second
+#    caller; meanwhile the new engine (`tools/_dream.py`) wants **the Items themselves**
+#    (body + v/a + date), not a string of ids. Keeping it would have meant two copies of
+#    "which pool a dream eats".
+#    🔴 **Ingredient selection goes through here and nowhere else**: `POOL_SPECS["dream"]`
+#    plus `pool_of(recs, "dream", ...)` is the only entry point.
