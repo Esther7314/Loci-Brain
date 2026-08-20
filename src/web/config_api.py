@@ -1,22 +1,27 @@
 """
 ========================================
-web/config_api.py — 引擎配置 / API Key 测试 / 模型列表（E1 留 4 删 7 之后）
+web/config_api.py — engine config / API-key tests / model listing (four routes kept, seven dropped)
 ========================================
 
-E1（2026-08-17）之前这里有 9 条路由、两个入口管着同一份设置（`/api/config`
-跟 `/api/env-config` 都能改 compress/embed 字段）——那是 7-27 双入口坑的源头：
-在没刷新的旧页面点保存就把旧值写回去。**新面板只留一个入口**：
+This file used to hold nine routes, and two separate doorways governed the same settings:
+both `/api/config` and `/api/env-config` could edit the compress/embed fields. That was
+the source of the twin-doorway trap — hitting save on a stale, unrefreshed page wrote the
+old values straight back over the new ones. **The current panel keeps exactly one
+doorway**:
 
-- /api/config (GET/POST)：运行期配置读取 / 热更新（含 embedding 热替换），
-  `config.yaml` 是唯一真相。
-- /api/test/dehydration、/api/test/embedding：压缩 / 向量化连通性自检。
-- /api/models：列目标 provider 可用模型。
+- /api/config (GET/POST): read runtime config and hot-update it (including hot-swapping
+  the embedding backend). `config.yaml` is the single source of truth.
+- /api/test/dehydration, /api/test/embedding: connectivity self-tests for compression and
+  vectorization.
+- /api/models: list the models available from the target provider.
 
-砍掉的 7 条（`/dashboard`、`/api/env-vars`、`/api/env-config` GET+POST、
-`/api/mcp-token/regenerate`、`/api/transport`）见各自删除处的注释。
-E2 之后这四条也不再鉴权（`sh._require_auth` 那道闸摘了，跟面板其它路由一致）。
+The seven that were dropped (`/dashboard`, `/api/env-vars`, `/api/env-config` GET+POST,
+`/api/mcp-token/regenerate`, `/api/transport`) each have a comment at the point of
+deletion.
+These four are no longer authenticated at this layer either — the `sh._require_auth` gate
+was removed, matching the rest of the panel routes.
 
-对外暴露：register(mcp)。
+Public surface: register(mcp).
 ========================================
 """
 
@@ -101,7 +106,8 @@ def _mask_mcp_token(token: str) -> str | None:
 
 
 def _panel_locked() -> bool:
-    """现在这一屏到底锁没锁（开关 + 有没有密码，两个都要）。"""
+    """Whether this screen is actually locked right now — the switch *and* a password
+    both have to be in place."""
     try:
         from . import panel_auth
         return bool(panel_auth.gate_needed())
@@ -144,12 +150,14 @@ def register(mcp) -> None:
             else runtime_public_url,
         }
 
-    # 🔴 E1（2026-08-17，留 4 删 7）：`/dashboard`（页面本体）、`/api/env-vars` +
-    # `/api/env-config`（7-27 双入口坑的源头：跟「引擎」两处管同一个设置，删掉=
-    # 顺手修一个真 bug）、`/api/mcp-token/regenerate`（auth 砍了 token 不需要了）、
-    # `/api/transport`（固定 http）——七条整个删了。新面板只留一个入口，
-    # `config.yaml` 是唯一真相。四条留的下面接着走，且 E2 之后 `/api/*` 不再
-    # 鉴权，`sh._require_auth` 那道闸也一起摘了。
+    # Four kept, seven dropped: `/dashboard` (the page itself), `/api/env-vars` and
+    # `/api/env-config` (the twin-doorway trap — two places governing one setting, so
+    # deleting it fixed a real bug as a side effect), `/api/mcp-token/regenerate` (auth
+    # went, so the token is no longer needed), and `/api/transport` (transport is fixed at
+    # http). Seven routes gone entirely. The panel keeps one doorway and `config.yaml` is
+    # the single source of truth. The four survivors follow below, and `/api/*` is no
+    # longer authenticated at this layer — the `sh._require_auth` gate came out with the
+    # rest.
 
     @mcp.custom_route("/api/config", methods=["GET"])
     async def api_config_get(request: Request) -> Response:
@@ -193,24 +201,30 @@ def register(mcp) -> None:
                 "feel_max_tokens": int(sh.config.get("surfacing", {}).get("feel_max_tokens") or 6000),
             },
             "merge_threshold": sh.config.get("merge_threshold", 75),
-            # 面板的锁：开关本身 + **现在到底锁没锁**（没设密码时开关开着也锁不住）
+            # The panel lock: the switch itself, plus **whether it is actually locked**
+            # (with no password set, the switch can be on and still lock nothing).
             "panel_auth": _parse_bool(sh.config.get("panel_auth", True), default=True),
             "panel_locked": _panel_locked(),
             "transport": desired["transport"],
             "transport_effective": runtime_transport,
             "buckets_dir": sh.config.get("buckets_dir", ""),
-            # MCP OAuth 鉴权开关。默认 true（强制 OAuth）。前端「⑥ MCP 连接」面板用它
-            # 渲染一键开关；关掉后 /mcp 免认证直连（供自有前端 / GPT / GLM 等）。
+            # The MCP OAuth switch. Default true (OAuth enforced). The front-end's MCP
+            # connection panel renders a toggle from it; turned off, /mcp accepts
+            # unauthenticated direct connections (for a self-hosted front-end or other
+            # clients).
             "mcp_require_auth": desired["mcp_require_auth"],
             "mcp_require_auth_effective": runtime_mcp_auth_required,
-            # 鉴权模式（仅 mcp_require_auth=true 时有意义）："oauth"（默认）或 "token"，二者互斥。
+            # Auth mode, meaningful only when mcp_require_auth=true: "oauth" (default) or
+            # "token". The two are mutually exclusive.
             "mcp_auth_mode": desired["mcp_auth_mode"],
             "mcp_auth_mode_effective": runtime_mcp_auth_mode,
-            # 静态 Token 状态：只回掩码/是否已配置，绝不回明文。
+            # Static-token status: report only the mask and whether one is configured.
+            # Never the plaintext.
             "mcp_token_configured": bool(_current_mcp_token()),
             "mcp_token_hint": _mask_mcp_token(_current_mcp_token()),
-            # Dashboard 的公网 MCP 地址是 OAuth resource/audience 的启动期
-            # 配置；同时回传已保存值与本进程实际值，避免假装热切换成功。
+            # The public MCP URL is start-time configuration for the OAuth
+            # resource/audience. Both the saved value and this process's actual value are
+            # returned, so the UI cannot pretend a hot switch succeeded when it did not.
             "deployment": {
                 "public_url": desired["public_url"],
                 "public_url_effective": runtime_public_url,
@@ -221,14 +235,18 @@ def register(mcp) -> None:
                 or desired["transport"] != runtime_transport
                 or desired["public_url"] != runtime_public_url
             ),
-            # 部署信息：数据目录 + 端口 + 是否容器内。前端「系统」区展示，端口可改。
+            # Deployment info: data directory, port, whether we are inside a container.
+            # Shown in the front-end's system section; the port is editable.
             "host_port": sh.config.get("host_port"),
             "in_docker": sh.in_docker(),
-            # AI 一方的显示名（取自环境变量 AI_NAME，回退 "AI"）。前端只读，用于
-            # 面向用户的文案（如删除确认、信件署名占位）。
+            # Display name for the AI side, from the AI_NAME environment variable,
+            # falling back to "AI". Read-only for the front-end; used in user-facing
+            # copy such as delete confirmations and letter-signature placeholders.
             "ai_name": _get_ai_name(),
-            # 记忆归属：多人共用一套 OB 时标明「这份记忆是谁的」。owner_count>=2 时
-            # 前端顶部才显示归属徽标（单人不打扰）；owner_name 为徽标文字。均只读。
+            # Memory ownership: when several people share one store, this says whose
+            # memories these are. The front-end only shows the ownership badge when
+            # owner_count >= 2, so a single user is never bothered by it; owner_name is
+            # the badge text. Both read-only.
             "owner_name": _get_owner_name(),
             "owner_count": _get_owner_count(),
         })
@@ -424,18 +442,21 @@ def register(mcp) -> None:
                         status_code=400,
                     )
 
-        # --- 面板的锁（2026-08-19）---
-        # 热生效：gate_needed() 每次请求现读 sh.config，所以改完立刻生效、不用重启。
-        # 🔴 只在**已经有密码**的时候才真的锁得住（panel_auth.gate_needed 里那条硬线），
-        #    所以这儿不需要额外校验：打开开关但没设密码 = 门还是开着的，不会把人关外面。
+        # --- The panel lock ---
+        # Takes effect immediately: gate_needed() re-reads sh.config on every request, so
+        # a change here applies at once with no restart.
+        # It can only actually lock when **a password already exists** (the hard line
+        # inside panel_auth.gate_needed), so no extra validation is needed here: switch on
+        # with no password set means the door stays open, and nobody gets locked out.
         if "panel_auth" in body:
             sh.config["panel_auth"] = _parse_bool(body["panel_auth"])
             updated.append("panel_auth")
 
-        # --- 两个名字（2026-08-19）---
-        # 面板上能填了，所以这儿得收得下。热更 sh.config 之外**必须落 config.yaml**
-        # （persist=True）：名字是 get_ai_name() 每次现读 config 文件拿的，
-        # 只改内存的话下次读还是老的。
+        # --- The two names ---
+        # They are editable in the panel now, so this has to accept them. Besides the
+        # in-memory sh.config update, they **must** be written to config.yaml
+        # (persist=True): get_ai_name() re-reads the config file every time, so an
+        # in-memory-only change would read back stale on the next call.
         for _k, _cap in (("ai_name", 40), ("owner_name", 40)):
             if _k in body:
                 _v = str(body.get(_k) or "").strip()[:_cap]
@@ -450,15 +471,19 @@ def register(mcp) -> None:
             except (TypeError, ValueError):
                 pass
 
-        # MCP 鉴权开关、鉴权模式与公网地址都是启动期快照。它们只写入
-        # config.yaml，不能提前发布到 sh.config；否则 OAuth/MCP 中间件仍使用
-        # 旧闭包，而诊断与其他路由却会误以为新值已经生效。GET /api/config 会从
-        # 持久配置回显 desired 值，并单独返回 effective 值。
+        # The MCP auth switch, the auth mode and the public URL are all start-time
+        # snapshots. They are written to config.yaml only, and must not be published early
+        # into sh.config — otherwise the OAuth/MCP middleware keeps using its old closure
+        # while diagnostics and other routes believe the new value is already live.
+        # GET /api/config echoes the desired values from the persisted config and returns
+        # the effective values separately.
 
-        # --- 对外端口（host_port）---
-        # 裸机：写 config 后进程自重启即监听新端口（前端「保存并重启」）。
-        # Docker：容器内端口由 Dockerfile 固定，host_port 仅供部署脚本读取注入
-        # LOCI_HOST_PORT，须重建容器才生效（前端会提示）。
+        # --- The externally visible port (host_port) ---
+        # Bare metal: write the config, and the process listens on the new port after its
+        # own restart (the front-end's "save and restart").
+        # Docker: the in-container port is fixed by the Dockerfile, and host_port is only
+        # read by deployment scripts to inject LOCI_HOST_PORT, so the container has to be
+        # rebuilt for it to take effect. The front-end says so.
         if "host_port" in body:
             try:
                 sh.config["host_port"] = int(body["host_port"])
@@ -618,14 +643,15 @@ def register(mcp) -> None:
         })
 
 
-    # 🔴 E1 删 7：`/api/mcp-token/regenerate` 砍了——`mcp_auth_mode="token"` 那颗
-    # 静态密钥现在只能手改 config.yaml 的 `mcp_token` 字段、或设 `LOCI_MCP_TOKEN`
-    # 环境变量（`_is_valid_static_mcp_token` 两条路都认，env 优先级更高）。
-    # 面板不再提供一键轮换按钮——`oauth`（默认模式）走 bridge/oauth.py 的授权页，
-    # 不受影响。
+    # Dropped: `/api/mcp-token/regenerate`. The static secret behind
+    # `mcp_auth_mode="token"` can now only be changed by editing the `mcp_token` field in
+    # config.yaml by hand, or by setting the `LOCI_MCP_TOKEN` environment variable
+    # (`_is_valid_static_mcp_token` accepts both; env wins). The panel no longer offers a
+    # one-click rotation button. `oauth`, the default mode, goes through the authorization
+    # page in bridge/oauth.py and is unaffected.
 
     # =============================================================
-    # /api/test/dehydration — 测试脱水 LLM API Key 是否可用
+    # /api/test/dehydration — check whether the dehydration LLM's API key works
     # =============================================================
     @mcp.custom_route("/api/test/dehydration", methods=["POST"])
     async def api_test_dehydration(request: Request) -> Response:
@@ -657,14 +683,16 @@ def register(mcp) -> None:
 
 
     # =============================================================
-    # /api/test/embedding — 测试向量化 Embedding 是否真的可用
-    # 之前只有脱水(compress)能测，向量化无从验证 → 用户「压缩正常但向量化静默失败」
-    # 时完全无感。这里实际发一次 embedding 请求，把成功/失败如实回给前端。(#2/#3)
+    # /api/test/embedding — check whether embedding really works
+    # Only compression used to be testable; there was no way to verify vectorization, so
+    # "compression fine, vectorization silently failing" was completely invisible to the
+    # user. This actually issues one embedding request and reports success or failure to
+    # the front-end as it happened.
     # =============================================================
     @mcp.custom_route("/api/test/embedding", methods=["POST"])
     async def api_test_embedding(request: Request) -> Response:
         from starlette.responses import JSONResponse
-        eng = sh.embedding_engine  # 读全局（Fix: env-sh.config 保存后已正确重建）
+        eng = sh.embedding_engine  # read the global; it is correctly rebuilt after a config save
         if not getattr(eng, "enabled", False) or getattr(eng, "_backend", None) is None:
             return JSONResponse({
                 "ok": False,
@@ -690,9 +718,9 @@ def register(mcp) -> None:
 
 
     # =============================================================
-    # /api/models — 获取 LLM provider 可用模型列表（供 Dashboard 模型选择器使用）
+    # /api/models — list the models a provider offers, for the panel's model picker
     # POST Body: {api_key, base_url, api_format}
-    # 支持 openai_compat / gemini / anthropic 三种格式
+    # Supports three formats: openai_compat / gemini / anthropic
     # =============================================================
     @mcp.custom_route("/api/models", methods=["POST"])
     async def api_list_models(request: Request) -> Response:
@@ -766,9 +794,12 @@ def register(mcp) -> None:
         except Exception as e:
             return JSONResponse({"ok": False, "error": str(e)[:300]})
 
-    # 🔴 E1 删 7：`/api/env-config`（GET+POST）整个砍了——它跟 `/api/config` 两处
-    # 管同一份设置（compress/embed 那几个字段两边都能改），这是 7-27 双入口坑的
-    # 源头：在没刷新的旧页面点保存就把旧值写回去。删掉 = 顺手修一个真 bug。
-    # 新面板只留 `/api/config` 这一个入口，`config.yaml` 是唯一真相。
-    # `/api/transport` 也砍了（固定 http：`config.yaml` 里 `transport` 这单不留
-    # 热切换入口，改传输模式回去手改 config.yaml / env 再重启）。
+    # Dropped: `/api/env-config` (GET+POST) entirely. It governed the same settings as
+    # `/api/config` — the compress/embed fields were editable from both sides — and that
+    # was the source of the twin-doorway trap: hitting save on a stale, unrefreshed page
+    # wrote the old values back over the new ones. Deleting it fixed a real bug as a side
+    # effect. The panel keeps `/api/config` as its one doorway, and `config.yaml` is the
+    # single source of truth.
+    # `/api/transport` is gone too: transport is fixed at http, and the `transport` key in
+    # `config.yaml` gets no hot-switch entry point. Changing transport means editing
+    # config.yaml or the environment by hand and restarting.

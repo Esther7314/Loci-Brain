@@ -1,29 +1,35 @@
 """
 ========================================
-bridge/oauth.py — MCP 远程鉴权（OAuth 2.1 + PKCE）
+bridge/oauth.py — remote MCP authentication (OAuth 2.1 + PKCE)
 ========================================
 
-脱壳 E2（2026-08-17）从 web/oauth.py 搬来：这不是面板路由，是 `/mcp` 本体的
-远程客户端身份验证——开源版「鉴权默认开」是既定立场，config 只是把我们家关了，
-机制不能跟着面板一起死（详情见 bridge/__init__.py）。内容/逻辑一个字没改，
-只挪了家、把 `from . import _shared` 改成绝对 import、把 `_run_public_password_verification`
-换成 `_shared.py`（现在归了 web 层但仍是"视依赖"共享件）里的同名函数
-——那个函数原来住在 web/auth.py，auth.py 整个砍了，函数跟着密码/登录限速那一族
-一起搬进了 `_shared.py`（oauth 授权页要靠它防爆破，跟砍掉的 dashboard cookie 登录
-用的是同一套原语，不能拆开）。
+Moved here from web/oauth.py during the strip-down. This is not a panel route: it is how
+a remote client proves its identity to `/mcp` itself. "Auth is on by default" is a settled
+position for the open-source build; a deployment may turn it off in config, but the
+mechanism must not die along with the panel (see bridge/__init__.py). Not a word of the
+content or the logic changed in the move — only the home, `from . import _shared` becoming
+an absolute import, and `_run_public_password_verification` now resolving to the function
+of the same name in `_shared.py` (which lives in the web layer but is still a shared
+dependency). That function used to live in web/auth.py; auth.py was removed wholesale, so
+the function moved into `_shared.py` together with the rest of the password and
+login-rate-limit family — the OAuth authorization page relies on it to resist brute force,
+and it is built on the same primitives as the deleted dashboard cookie login, so the two
+could not be pulled apart.
 
-MCP 客户端通过 HTTPS 连接 MCP 时走的 OAuth 流程：
-动态注册 → 授权页（输 Dashboard 密码）→ 换 code → 换 Bearer token + refresh token。
-token 落盘 <buckets_dir>/.dashboard_mcp_tokens.json，长期有效并支持刷新，
-Docker 重启不强制重新授权。
+The OAuth flow an MCP client walks when connecting over HTTPS: dynamic registration ->
+authorization page (enter the dashboard password) -> exchange the code -> receive a Bearer
+token plus a refresh token. Tokens are persisted to
+<buckets_dir>/.dashboard_mcp_tokens.json; they are long-lived and refreshable, so a
+container restart does not force re-authorization.
 
-server.py 的 MCP 鉴权中间件需要 _is_valid_mcp_token 来校验 /mcp(-extra) 的 Bearer，
-故它对外可见。
+`_is_valid_mcp_token` is public because server.py's MCP auth middleware needs it to
+validate the Bearer token on /mcp(-extra).
 
-对外暴露：
-- register(mcp)：注册 /.well-known/* 与 /oauth/* 路由（并在注册时载入持久化 token）
-- _is_valid_mcp_token / _is_valid_static_mcp_token：供 server.py 启动期的
-  _MCPAuthMiddleware 调用
+Public surface:
+- register(mcp): registers the /.well-known/* and /oauth/* routes, and loads the persisted
+  tokens at registration time.
+- _is_valid_mcp_token / _is_valid_static_mcp_token: called by server.py's start-time
+  _MCPAuthMiddleware.
 ========================================
 """
 
@@ -65,7 +71,7 @@ _mcp_token_resources: dict[str, str] = {}  # token -> canonical MCP resource
 _mcp_refresh_tokens: dict[str, dict] = {}  # refresh_token -> {expires, client_id, resource}
 
 _OAUTH_CODE_TTL = 300               # 5 min
-_MCP_TOKEN_TTL = 86400 * 30         # 30 天；避免 100 年秒数溢出部分客户端的 32-bit duration
+_MCP_TOKEN_TTL = 86400 * 30         # 30 days; a 100-year value in seconds overflows the 32-bit duration some clients use
 _MCP_REFRESH_TOKEN_TTL = 86400 * 365
 _MCP_SCOPE = "mcp"
 _OAUTH_CLIENT_TTL = 86400 * 365
@@ -924,7 +930,8 @@ button:disabled{{opacity:.65;cursor:wait}}
 
 
 def register(mcp) -> None:
-    """注册 /.well-known/* 与 /oauth/* 路由，并在装配时载入持久化 token。"""
+    """Register the /.well-known/* and /oauth/* routes, loading persisted tokens as
+    part of assembly."""
     # Keep discovery aligned with the start-time middleware snapshot. Dashboard
     # config edits require a restart, so they must not change metadata early.
     oauth_required = _oauth_required_from_config()
@@ -933,7 +940,7 @@ def register(mcp) -> None:
     # validation in the interval before the documented process restart.
     oauth_public_origin = configured_public_origin(sh.config)
     if oauth_required:
-        _load_mcp_tokens()   # Docker 重启后恢复 token，不强制重新 OAuth
+        _load_mcp_tokens()   # restore tokens after a container restart, rather than forcing OAuth again
         _load_oauth_clients()
 
     @mcp.custom_route("/.well-known/oauth-protected-resource", methods=["GET"])

@@ -1,8 +1,11 @@
-"""记忆足迹：把内部事件镜像压缩成 breath 可读的一行经历。
+"""Memory footprint: compress the internal event mirror into one readable line of
+history for ``breath``.
 
-Footprint 不保存或重写记忆正文，也不是新的真源。它读取兼容的
-``_ledger/events.jsonl``，忽略 touch/索引等技术噪声，只表达对模型有意义的
-创建、补充、遗忘、归档与恢复。旧 LedgerMirror 继续作为落盘适配器。
+A footprint never stores or rewrites memory content, and it is not a second source of
+truth. It reads the compatible ``_ledger/events.jsonl``, ignores technical noise such as
+touches and re-indexing, and expresses only what is meaningful to the model: creation,
+amendment, forgetting, archival, restoration. The older LedgerMirror stays on as the
+on-disk adapter.
 """
 
 from __future__ import annotations
@@ -16,7 +19,8 @@ _ARCHIVED_KINDS = {"archived", "deleted", "tombstone"}
 
 @dataclass(frozen=True)
 class FootprintSnapshot:
-    """一次 breath 内复用的只读足迹快照，避免每个桶重复扫描 JSONL。"""
+    """A read-only footprint snapshot reused for the span of one breath, so that the
+    JSONL is not rescanned once per bucket."""
 
     events_by_trace: dict[str, tuple[dict[str, Any], ...]]
 
@@ -45,7 +49,8 @@ class FootprintSnapshot:
                 compact[-1] = f"{base}×{count}"
             else:
                 compact.append(label)
-        # 创建永远保留；中间过长时只留最早一步和最近三步。
+        # Creation is always kept; when the middle runs long, keep only the earliest step
+        # and the most recent few.
         if len(compact) > 4:
             compact = [compact[0], "…", *compact[-2:]]
         return "👣 Footprint：" + " → ".join(compact)
@@ -73,7 +78,7 @@ def _event_label(event: dict[str, Any]) -> str:
     if event_type == "TraceHardDeleted":
         return "测试痕迹清理"
     if event_type != "TraceUpdated":
-        return ""  # TraceTouched 和未知技术事件不占 breath token。
+        return ""  # TraceTouched and unknown technical events do not spend breath tokens.
 
     fields = {str(item) for item in payload.get("changed_fields") or []}
     if "last_merged_by" in fields:

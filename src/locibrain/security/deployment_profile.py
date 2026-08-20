@@ -1,14 +1,16 @@
 """
 ========================================
-deployment_profile.py — 部署模式与安全默认的纯领域规则
+deployment_profile.py — pure domain rules for deployment mode and secure defaults
 ========================================
 
-把“本机 / 公网安全 / 高级自定义”三种用户选择归一化为明确配置，并校验
-公网匿名暴露、传输方式和 OAuth 等安全不变量。
+Normalizes the three choices a user can make — local machine / secured public / advanced
+custom — into explicit configuration, and checks the security invariants around anonymous
+public exposure, transport, and OAuth.
 
-不做什么：不读写文件、不注册 HTTP 路由、不修改环境变量、不重启服务。
-对外暴露：profile_catalog()、build_profile_patch()、validate_profile_patch()、
-effective_configuration_report()。
+What this does NOT do: no file reads or writes, no HTTP route registration, no changes to
+environment variables, no service restarts.
+Public surface: profile_catalog(), build_profile_patch(), validate_profile_patch(),
+effective_configuration_report().
 ========================================
 """
 
@@ -43,7 +45,8 @@ def normalize_public_https_origin(value: Any) -> str:
 
 
 def profile_catalog() -> list[dict[str, Any]]:
-    """返回前端可展示的三种模式；安全含义只在这里定义一次。"""
+    """The three modes the front-end can display. Their security meaning is defined
+    here once and nowhere else."""
     return [
         {
             "id": PROFILE_LOCAL,
@@ -74,7 +77,8 @@ def profile_catalog() -> list[dict[str, Any]]:
 
 
 def normalize_profile(value: Any) -> str:
-    """归一化部署模式标识；未知值显式报错，不静默猜测。"""
+    """Normalize a deployment-mode identifier. An unknown value raises rather than
+    being silently guessed at."""
     profile = str(value or "").strip().lower()
     aliases = {
         "public": PROFILE_PUBLIC,
@@ -89,7 +93,7 @@ def normalize_profile(value: Any) -> str:
 
 
 def _as_bool(value: Any, *, default: bool) -> bool:
-    """严格解析向导布尔值，拒绝把字符串 false 当作真。"""
+    """Parse a wizard boolean strictly: the string "false" must not come out true."""
     if isinstance(value, bool):
         return value
     normalized = str(value or "").strip().lower()
@@ -101,7 +105,7 @@ def _as_bool(value: Any, *, default: bool) -> bool:
 
 
 def build_profile_patch(profile: Any, options: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    """把用户选择转换成可写入 config.yaml 的最小补丁。"""
+    """Turn the user's choice into the smallest patch that can be written to config.yaml."""
     normalized = normalize_profile(profile)
     opts = dict(options or {})
     if normalized == PROFILE_LOCAL:
@@ -133,7 +137,8 @@ def build_profile_patch(profile: Any, options: Mapping[str, Any] | None = None) 
 
 
 def validate_profile_patch(patch: Mapping[str, Any]) -> list[str]:
-    """返回阻止保存的安全问题；空列表表示可以落盘。"""
+    """Return the security problems that block saving. An empty list means it may be
+    written to disk."""
     deployment = patch.get("deployment")
     if not isinstance(deployment, Mapping):
         return ["缺少 deployment 配置"]
@@ -169,13 +174,15 @@ def effective_configuration_report(
     config_path: str = "",
     persistence: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """生成“已保存值 / 实际值 / 环境覆盖”的单一报告。"""
+    """Produce the single report of "value as saved / value in effect / overridden by
+    the environment"."""
     env = environment if environment is not None else os.environ
     deployment = persisted_config.get("deployment")
     persisted_deployment = deployment if isinstance(deployment, Mapping) else {}
-    # 未走 /onboarding 向导、但已经在 Dashboard「MCP 鉴权」面板里手动保存过一次的用户，
-    # config.yaml 里会显式出现 mcp_require_auth（或 mcp_auth_mode）键——这是他们做过
-    # 主动选择的证据，不该被当成「从没配置过」持续提醒重新走向导。
+    # Someone who skipped the /onboarding wizard but did save once from the dashboard's
+    # MCP-auth panel will have mcp_require_auth (or mcp_auth_mode) explicitly present in
+    # config.yaml. That key is the evidence of a deliberate choice, so they must not be
+    # treated as "never configured" and nagged to run the wizard again.
     manual_auth_configured = (
         "mcp_require_auth" in persisted_config or "mcp_auth_mode" in persisted_config
     )

@@ -1,29 +1,37 @@
 """
 ========================================
-bridge/ —— 联动层（脱壳 + 重排，2026-08-17）
+bridge/ — the outward-facing layer (extracted and regrouped)
 ========================================
 
-装的是「核心引擎跟外面世界打交道」的那几件事，**不是面板、也不是 MCP 工具面**：
-远程 MCP 客户端的身份怎么验（oauth.py）、/mcp 本体的请求体多大算超限
-（request_limits.py）、本地 Ollama 子进程怎么陪它一起活（ollama_child.py）。
+This package holds the few things where the core engine talks to the outside world.
+It is **not** the control panel and it is **not** the MCP tool surface: it is how a
+remote MCP client proves who it is (``oauth.py``), how large a request body ``/mcp``
+itself will accept (``request_limits.py``), and how the local Ollama child process is
+kept alive alongside the server (``ollama_child.py``).
 
-三件都是从 `web/` 挪过来的——它们原来跟一堆面板路由挤在同一个文件里，
-但本身管的是「外面的人/外面的进程」，跟 18002 那屏面板不是一回事。
-砍 E2 那 20 个上游模块时（活库零写入，一次性容器验证），这三件被从各自文件里
-搬出来单独留活：
+All three were moved out of ``web/``. They used to sit in the same files as a pile of
+panel routes, but what they actually govern is *people and processes outside the box*,
+which is a different concern from the panel UI. When the twenty upstream modules were
+dropped (live store untouched, verified once in a throwaway container), these three
+were lifted out of their original files and kept alive on their own:
 
-- `oauth.py`：`/mcp` 的 OAuth 2.1 远程鉴权全流程（发现 → 授权页 → 换 token）。
-  开源版「鉴权默认开」是既定立场（她 2026-08-17 拍板），我们家只是 config 把它关了，
-  机制不能跟着面板一起死。`_is_valid_mcp_token` / `_is_valid_static_mcp_token`
-  是 server.py 启动期 MCP 鉴权中间件直接 import 的两个校验函数。
-- `request_limits.py`：`/mcp` 和 `/api/*` 的请求体大小护栏，server_app.py
-  组装 HTTP app 时直接挂中间件，不是哪个面板按钮能点到的东西。
-- `ollama_child.py`：开源版文档写死「本地 embedding 需要本地 ollama」，
-  这是帮用户拉起/看住那个子进程的机制（server.py lifespan 调
-  `ensure_child_on_boot`/`stop_child`）。**面板那半"一键安装向导"砍了**
-  （下载/校验/解压 ollama 发行包那一串，只有面板按钮能触发，面板死了它就够不着了）；
-  子进程常驻这半留着——我们自己走独立容器用不到，但机制要活。
+- ``oauth.py``: the full OAuth 2.1 remote-auth flow for ``/mcp`` (discovery ->
+  authorization page -> token exchange). "Auth is on by default" is a settled position
+  for the open-source build; a deployment may switch it off in config, but the
+  mechanism must not die along with the panel. ``_is_valid_mcp_token`` and
+  ``_is_valid_static_mcp_token`` are the two validators that ``server.py`` imports
+  directly for its startup-time MCP auth middleware.
+- ``request_limits.py``: the body-size guard for ``/mcp`` and ``/api/*``. ``server_app.py``
+  mounts it as middleware while assembling the HTTP app; it is not something any panel
+  button can reach.
+- ``ollama_child.py``: the docs state flatly that local embedding requires a local
+  Ollama, so this is the machinery that starts that child process for the user and
+  watches it (``server.py``'s lifespan calls ``ensure_child_on_boot`` / ``stop_child``).
+  **The panel-side "one-click install wizard" half was cut** — downloading, verifying
+  and unpacking an Ollama release could only ever be triggered by a panel button, so it
+  became unreachable once the panel went. The keep-the-child-running half stays: a
+  standalone-container deployment does not need it, but the mechanism has to remain.
 
-对外暴露：各自模块内 docstring 写了，这里不重复。
+Public surface: documented in each module's own docstring rather than repeated here.
 ========================================
 """

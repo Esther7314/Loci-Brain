@@ -1,28 +1,57 @@
 """
 ========================================
-web/loci.py — Loci 独立 dashboard 的只读数据层（2026-08-03 夜）
+web/loci.py — the data layer behind the standalone Loci dashboard
 ========================================
 
-她 8-03 傍晚拍的四页：大池子 / 星空 / 相似度检查 / 档案。这里只管吐数据，
-渲染全在 frontend/loci.html。**只读**——唯一的写口是相似度页那个「沉一个」
-（走 trace delete=True，软删，id 直查永远捞得回）。
+Four pages: the main pool, the starfield, the similarity check, and the profile. This file
+produces data; all rendering lives in frontend/loci.html.
 
-    GET  /loci                        → 页面本体
-    GET  /api/loci/recall             → recall 的第二张皮（卡 + 列表）
-    GET  /api/loci/graph              → 星空：节点 + 真边 + 弱边 + 星座
-    GET  /api/loci/similar            → 疑似同件对子 + 分数分布（阈值可调）
-    GET  /api/loci/profile            → 门口那张纸
-    GET  /api/loci/bucket/{id}        → 单桶逐字原文 + 元数据
-    GET  /api/dream/current           → 当前那个梦（当前层 + 层级；没梦 204，会写「回想」state）
-    GET  /api/muse/pending            → 该发呆了吗（团数 + 年龄 + worth_poking）
-    GET  /api/loci/pulse              → 体检：多少条/占多大/引擎活着没（2026-08-18 从 MCP 工具面搬来）
-    GET  /api/loci/poke               → 施工7c：梦(交付)+发呆团数(提醒)+recall结构化分数，一口问全，纯读
-    POST /api/loci/dream/wake         → 施工7d：降级信号，把活着的「完整」梦层降成碎片层（幂等）
-    POST /api/loci/similar/action     → 人工裁决：都留 / 沉一个
+    GET  /loci                        -> the page itself
+    GET  /api/loci/recall             -> recall's second skin (card + list)
+    GET  /api/loci/graph              -> starfield: nodes + real edges + weak edges + constellations
+    GET  /api/loci/similar            -> suspected-duplicate pairs + score distribution (adjustable threshold)
+    GET  /api/loci/profile            -> the note by the door
+    GET  /api/loci/bucket/{id}        -> one bucket, verbatim, plus its metadata
+    GET  /api/dream/current           -> the current dream (current layer + level; 204 when there is none, and it writes a recall state)
+    GET  /api/muse/pending            -> is it time to muse? (cluster count + age + worth_poking)
+    GET  /api/loci/pulse              -> health check: how many entries, how much space, are the engines alive
+    GET  /api/loci/poke               -> dream (delivery) + muse cluster count (nudge) + structured recall scores, all in one read-only call
+    GET  /api/loci/health             -> this project's own health check (not the upstream diagnostics endpoint)
+    GET  /api/loci/setup              -> the settings page's top block: five status rows, each saying what breaks if it is left unset
+    GET  /api/loci/rooms              -> the four rooms and what is in them
+    GET  /api/loci/subjects           -> the "who is in here" screen
+    GET  /api/loci/recollect          -> pull a faded or sunk memory back up
+    GET  /api/loci/auth/state         -> where the password currently lives, and whether one needs setting
+    GET  /api/logs                    -> the tail of server.log
+    GET  /loci/vendor/{path:path}     -> three.js, served locally, which the starfield page needs
 
-规矩：主库零触碰 · 参数不用 Optional[简单类型] · 改完跑三套 smoke。
+🔴 THE WRITE SURFACE — seven POST routes, and every one of them writes something.
 
-对外暴露：register(mcp)。
+    POST /api/loci/similar/action     -> a human verdict on a suspected duplicate: keep
+                                         both, or sink one (trace delete=True — a soft
+                                         delete, always recoverable by direct id lookup)
+    POST /api/loci/want/resolve       -> close something that was wanted (trace status)
+    POST /api/loci/want/asked         -> record that it was asked about (trace)
+    POST /api/loci/event/correct      -> regrow: writes a NEW VERSION of a memory
+    POST /api/loci/subjects/action    -> edits the alias table in the data volume
+    POST /api/loci/auth/set-password  -> sets the password guarding remote MCP access
+    POST /api/loci/dream/wake         -> the demotion signal: drop a live "whole" dream
+                                         layer down to the fragment layer (idempotent)
+
+⚠️ This header used to say the file was "read-only, with a single write endpoint", and
+   listed two of the seven. That was true when it was written and then five routes were
+   added underneath it. Anyone sizing up what this surface can do — which is exactly what
+   someone deciding whether to expose the port would be doing — would have been wrong by
+   a factor of seven, and wrong specifically about the password and the alias table.
+
+   📌 The general version, since it has now happened three times in this repository: a
+      comment that enumerates things rots the moment something is added, and it rots
+      silently, because nothing checks a list written in prose.
+
+Rules: do not use Optional[simple type] for parameters; run all three smoke suites after
+changing anything here.
+
+Public surface: register(mcp).
 ========================================
 """
 
@@ -38,38 +67,42 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from . import _shared as sh
-from core import _when as _w      # 「她的今天」（本地时区）—— 别直接用 datetime.now()
+from core import _when as _w      # "today" in the user's local timezone — never call datetime.now() directly
 from utils import read_from
 
 logger = sh.logger
 
 _PROFILE_TAG = "__档案事实__"
 _BIGEVENT_TAG = "__大event__"
-# 她 8-03 夜定的：默认 88（85 往下开始混进情绪种子那十三颗根，它们本来就该长得像）
+# The default is 88. Below 85 the thirteen emotional-root seeds start mixing in, and those
+# are supposed to resemble each other.
 _SIM_DEFAULT = 88.0
-_SIM_FLOOR = 60.0      # 低于这个分数的对子连算都不算，省得几十万条塞进内存
-# 内存闸：最多留这么多对（codex 复核 #5）。628 条现在留 2.9 万对；
-# 同样 15% 的比例到一万条就是 750 万个 tuple ≈ 0.7 GB。
+_SIM_FLOOR = 60.0      # pairs scoring below this are not even computed, to keep hundreds of thousands of them out of memory
+# Memory gate: at most this many pairs are kept. At 628 entries that is currently ~29,000
+# pairs; the same ~15% ratio at ten thousand entries would be 7.5 million tuples, roughly
+# 0.7 GB.
 _PAIRS_CAP = 200_000
-# ⚰️ `_REMIND_DAYS`（30 天）跟着门口那张纸搬进了合同源
-# （`tools/breath/awaken.py`，施工 5 · E 件）——**别在这儿再放一个 30**，
-# 两个 30 就是两套规则，改一个忘一个的病根。`_is_closed` 同理（提醒的判据在那边）。
+# `_REMIND_DAYS` (30 days) moved, along with the note by the door, into its contract source
+# (`tools/breath/awaken.py`) — **do not put a second 30 here**. Two 30s are two rulesets, and
+# that is exactly how one gets changed and the other forgotten. Same for `_is_closed`: the
+# reminder rule lives over there.
 
 
 # ============================================================
-# 两个写口的门（2026-08-04，codex 复核 #1/#2/#6 之后加的）
+# The gate on the two write endpoints
 # ============================================================
 
 def _origin_reject(request: Request) -> str:
-    """同源检查。返回空串 = 放行，否则返回拒绝理由。
+    """Same-origin check. An empty string means allow; anything else is the reason to refuse.
 
-    为什么单靠 cookie 不够（codex 复核 #1）：`SameSite=Lax` 只挡**跨站**，
-    挡不住**同站跨源** —— 另一个 `localhost:9999` 上的页面和这儿属于同一个 site，
-    它用 `text/plain` 发一段合法 JSON，浏览器照样把 cookie 带上。
-    所以这两个写口必须自己看 Origin。
+    Why a cookie alone is not enough: `SameSite=Lax` only blocks **cross-site** requests,
+    not **same-site cross-origin** ones. A page on another port of the same host counts as
+    the same site, so if it posts valid JSON as `text/plain` the browser attaches the cookie
+    anyway. These two write endpoints therefore have to check Origin themselves.
 
-    没有 Origin 头一律拒：浏览器发 POST 必带它，缺了就说明不是浏览器发的
-    （curl / 脚本）。这两个口本来就只给页面上的按钮用，挡掉是对的。
+    A missing Origin header is always refused: a browser always sends one on a POST, so its
+    absence means the request did not come from a browser (curl, a script). These endpoints
+    exist only for buttons on the page, so refusing is correct.
     """
     origin = request.headers.get("origin") or ""
     host = request.headers.get("host") or ""
@@ -84,17 +117,20 @@ def _origin_reject(request: Request) -> str:
         return f"Origin 解析不了：{origin}"
     if o.scheme not in ("http", "https"):
         return f"Origin 的协议不对：{origin}"
-    # netloc 带端口，所以「同一台机器的另一个端口」也会被这条挡下来 —— 这正是要挡的
+    # netloc includes the port, so "another port on the same machine" is caught here too —
+    # which is exactly what needs catching
     if not o.netloc or o.netloc != host:
         return f"Origin 和 Host 对不上：{o.netloc} ≠ {host}"
     return ""
 
 
 async def _write_body(request: Request) -> dict:
-    """写口专用的 body 读取：先验同源和 Content-Type，再解析。
+    """Body reading for write endpoints: verify the origin and the Content-Type first, then
+    parse.
 
-    抛 `PermissionError` = 该回 403；抛 `ValueError` = 该回 400。
-    （原来直接用 `sh._read_json_object`，坏 JSON 会一路冒到最外层变成 500 —— codex #6）
+    Raising `PermissionError` means "answer 403"; raising `ValueError` means "answer 400".
+    (This used to call `sh._read_json_object` directly, and malformed JSON bubbled all the
+    way out as a 500.)
     """
     why = _origin_reject(request)
     if why:
@@ -112,7 +148,8 @@ async def _write_body(request: Request) -> dict:
 
 
 # ============================================================
-# 相似度：全库两两余弦。向量库没变就不重算（滑块要跟手）
+# Similarity: pairwise cosine across the whole store. Nothing is recomputed while the vector
+# store is unchanged, so the slider stays responsive.
 # ============================================================
 
 _sim_lock = threading.Lock()
@@ -124,20 +161,23 @@ def _emb_db_path() -> str:
 
 
 _rev_cache: dict = {"at": 0.0, "val": (0, 0.0)}
-_REV_TTL = 2.0          # 秒。滑块连着拖的时候别每一下都去 walk 九百个文件
+_REV_TTL = 2.0          # seconds. While the slider is being dragged, do not walk nine hundred files on every tick.
 
 
 def _buckets_rev() -> tuple:
-    """桶目录的「版本」：文件数 + 最新一次改动时间。
+    """The bucket directory's "version": file count plus the most recent modification time.
 
-    为什么缓存 key 不能只看 `embeddings.db`（codex 复核 #10）：
-    只改 name / room / tags / importance / domain **不会动向量库** ——
-    比如给一条打上 `__seed__`（本该从这一页消失），它却还留在缓存的对子里，
-    卡片上的名字和摘要也是旧的。而这些改动一定会重写那个桶的 .md。
+    Why the cache key cannot be `embeddings.db` alone: changing only name / room / tags /
+    importance / domain **does not touch the vector store**. Tag an entry `__seed__`, for
+    instance — it should vanish from this page — and it stays in the cached pairs, with a
+    stale name and summary on its card. But every one of those changes does rewrite that
+    bucket's .md.
 
-    ⚠️ **必须递归**：`dynamic/` 下面还有一层，顶层 listdir 只看得到 117 个，
-    真实是 900 多个 —— 那样等于九成的改动都漏掉，修了跟没修一样。
-    （第一版就是这么写的，靠 smoke 打出来的文件数才发现。）
+    WARNING: **this must recurse.** There is another level below `dynamic/`, and a top-level
+    listdir sees only 117 files where there are really more than 900 — which means missing
+    nine tenths of all changes, so the fix would be no fix at all.
+    (The first version did exactly that. It was the file count printed by the smoke test
+    that caught it.)
     """
     import time
     now_s = time.monotonic()
@@ -162,7 +202,7 @@ def _buckets_rev() -> tuple:
 
 
 def _load_vectors() -> tuple[list, object]:
-    """从 embeddings.db 读全部向量，返回 (ids, 归一化后的矩阵)。"""
+    """Read every vector from embeddings.db; returns (ids, the normalized matrix)."""
     import numpy as np
     ids, vecs = [], []
     con = sqlite3.connect(f"file:{_emb_db_path()}?mode=ro", uri=True)
@@ -189,14 +229,18 @@ def _load_vectors() -> tuple[list, object]:
 
 
 def _sim_visible(meta: dict) -> bool:
-    """哪些桶进这一页。
+    """Which buckets appear on this page.
 
-    排掉三类，全是「本来就该长得像、判重反而是误伤」的：
-      · 情绪种子（十三颗根：想听/想看/想懂 互相 87~89 分，它们是坐标系不是记忆）
-      · 归档区（已经沉过一次了，别再问一遍）
-      · 旧版认知（regrow 的版本链，新旧本来就该像）
-      · **被 fold 盖住的**（施工 3）：跟盖它的那条 gist 本来就该像，
-        而且它已经不独立冒头了，判重页再拿它烦我一次没有意义
+    Several categories are excluded. All of them are things that are *supposed* to look
+    alike, so flagging them as duplicates is pure false positive:
+      - emotional seeds (the thirteen roots score 87~89 against each other; they are a
+        coordinate system, not memories)
+      - the archive (already sunk once; do not ask again)
+      - superseded realizations (regrow's version chain: old and new should resemble each
+        other)
+      - **anything folded under a gist**: it is supposed to resemble the gist that folded
+        it, and it no longer surfaces independently, so raising it again here achieves
+        nothing
     """
     if str(meta.get("type") or "") in ("archived", "letter"):
         return False
@@ -211,11 +255,12 @@ def _sim_visible(meta: dict) -> bool:
 
 
 async def _compute_pairs() -> dict:
-    """算一次全库两两余弦，缓存到 embeddings.db 的 mtime 变化为止。"""
+    """Compute pairwise cosine across the whole store once, and cache it until
+    embeddings.db's mtime changes."""
     import numpy as np
     try:
         key = (os.path.getmtime(_emb_db_path()), os.path.getsize(_emb_db_path()),
-               _buckets_rev())      # 元数据改了也要重算（codex #10）
+               _buckets_rev())      # a metadata change must invalidate this too
     except OSError:
         key = None
 
@@ -255,30 +300,34 @@ async def _compute_pairs() -> dict:
     M = M[keep]
 
     n = len(ids)
-    hist = [0] * 20  # 每 5 分一格，0~100
+    hist = [0] * 20  # one bucket per 5 points, over 0~100
     pairs = []
     capped = False
     if n >= 2:
-        # 分块算，别一次性开 n×n 的大矩阵（671 条无所谓，将来上万条就有所谓了）
+        # Compute in blocks rather than allocating one n x n matrix. At 671 entries it makes
+        # no difference; at ten thousand it very much does.
         step = 256
         for s in range(0, n, step):
             block = M[s:s + step] @ M.T                      # (b, n)
             for r in range(block.shape[0]):
                 i = s + r
                 row = block[r]
-                row[:i + 1] = -1.0                           # 只留上三角，别数两遍
+                row[:i + 1] = -1.0                           # keep the upper triangle only; do not count each pair twice
                 counts = np.bincount(
                     np.clip((np.maximum(row[i + 1:], 0) * 20).astype(int), 0, 19),
                     minlength=20)
                 hist = [h + int(c) for h, c in zip(hist, counts)]
                 for j in np.where(row >= _SIM_FLOOR / 100.0)[0]:
                     pairs.append((float(row[j]) * 100.0, ids[i], ids[int(j)]))
-            # 上限闸（codex 复核 #5）：现在 628 条留 2.9 万对，还很轻；
-            # 但同样比例到一万条就是 750 万个 tuple ≈ 0.7 GB，进程会顶不住。
-            # 这里只保住「最像的那些」—— 判重本来就是从高分往下看的，
-            # 60 分附近那几百万对，人一辈子也翻不到。
-            # ⚠️ 代价：闸响之后把阈值拉到很低，看到的对子数会少于真实值，
-            # 所以下面回一个 capped 标记，别让页面上的数字骗人。
+            # The cap. At 628 entries this keeps ~29,000 pairs, which is nothing; but the
+            # same ratio at ten thousand entries is 7.5 million tuples, roughly 0.7 GB, and
+            # the process would not survive it.
+            # Only the most similar pairs are kept — duplicate review reads from the top
+            # score downwards anyway, and nobody will ever scroll through the millions of
+            # pairs sitting around 60.
+            # WARNING: the cost is that once the cap trips, dragging the threshold very low
+            # shows fewer pairs than really exist. So a `capped` flag is returned below;
+            # the number on the page must not lie.
             if len(pairs) > _PAIRS_CAP * 2:
                 pairs.sort(key=lambda p: -p[0])
                 del pairs[_PAIRS_CAP:]
@@ -295,7 +344,7 @@ async def _compute_pairs() -> dict:
 
 
 # ============================================================
-# 星空：节点 / 边 / 星座
+# Starfield: nodes / edges / constellations
 # ============================================================
 
 _WIKI_RE = re.compile(r"\[\[([^\[\]|]{1,40})\]\]")
@@ -306,7 +355,8 @@ _SEED_NAMES = frozenset({
 
 
 def _split_ids(raw) -> list[str]:
-    """triggered_by 落盘是逗号分隔的字符串（也兼容早期的 list）。"""
+    """triggered_by is persisted as a comma-separated string; early buckets stored a list,
+    which is still accepted."""
     if isinstance(raw, (list, tuple)):
         items = [str(x) for x in raw]
     else:
@@ -316,19 +366,24 @@ def _split_ids(raw) -> list[str]:
 
 def _bigevent_members(content: str, entries: list,
                       since: str = "", until: str = "") -> tuple[list[str], str]:
-    """大 event 的成员星 → (成员 id 列表, 这条查询的人话)。
+    """The member stars of a big event -> (list of member ids, a plain-language description
+    of this query).
 
-    **星座 = 一条大 event 照亮的那片天**（她 8-06 傍晚定稿：时间轴和星座是同一个
-    东西，就叫星座）。起止优先认 `when` 里的起止（8-05 起就写在那儿，调用方传进来）；
-    正文那行「范围：…」只当老桶的兜底。过滤条件仍从正文读：
+    **A constellation is the patch of sky one big event lights up.** The timeline and the
+    constellation are the same thing, and the name for it is "constellation".
+    The start and end come from `when` first, where the caller passes them in; the
+    `range: ...` line in the body is only a fallback for older buckets. The filter
+    conditions are still read out of the body:
 
-        过滤：tag=记忆系统         → tag
-        过滤：room=I/EVENT        → room（前缀）
+        filter: tag=<tag name>       -> tag
+        filter: room=EVENT/SELF      -> room (prefix match)
 
-    她 8-03 夜问过要不要改成结构化字段。**故意不改**：那行字是正文的一部分，
-    AI recall 到这条大 event 时**读得懂它**；藏进 metadata 反而他看不见了。
-    真正脆的不是自由文本，是「写错了不吭声」——所以解析不出来就返回空 query_text，
-    页面上直接喊出来，不再悄悄画一座空星座。
+    Whether to make these structured fields instead has been asked. **They are deliberately
+    left as text**: that line is part of the body, so when the model recalls this big event
+    it **can read it**. Hidden in metadata, it would be invisible to the model.
+    What is actually fragile is not free text, it is "getting it wrong without saying so" —
+    so a parse failure returns an empty query_text and the page says so out loud, rather
+    than quietly drawing an empty constellation.
     """
     m_from = re.search(r"范围[:：]\s*(\d{4}-\d{2}-\d{2})(?:\s*\.\.\s*(\d{4}-\d{2}-\d{2}))?", content)
     m_tag = re.search(r"过滤[:：][^\n]*?\btag\s*=\s*([^\s,，;；]+)", content)
@@ -366,15 +421,19 @@ def _bigevent_members(content: str, entries: list,
 
 
 # ============================================================
-# 三个 builder：**故意放在路由闭包外面**，这样不用伪造登录会话就能单独跑一遍
-# （`python -c "asyncio.run(loci.build_graph())"`）。路由只管鉴权和 JSON 外壳。
+# The builders are **deliberately outside the route closures**, so each can be run on its
+# own without faking a login session
+# (`python -c "asyncio.run(loci.build_graph())"`). The routes handle only auth and the JSON
+# envelope.
 # ============================================================
 
 async def build_rooms() -> dict:
-    """两扇门进来先看的目录：四间房各多少条 + 十个高频标签。
+    """The directory both doors open onto: how many entries in each of the four rooms, plus
+    the ten most frequent tags.
 
-    二改 A 件（2026-08-16）：房间 10→4，门也从 I/YOU 换成 EVENT/MIND。
-    I/YOU 那一维不是丢了，是搬去了 subjects——「关于谁」不再由房间承担。
+    The rooms went from ten to four, and the doors from I/YOU to EVENT/MIND.
+    The I/YOU dimension was not lost, it moved to subjects — "who is this about" is no
+    longer carried by the room.
     """
     from tools.recall.core import _room_cn, _visible
     from core._rooms import ALL_ROOMS, normalize_room
@@ -386,8 +445,9 @@ async def build_rooms() -> dict:
         meta = b.get("metadata", {}) or {}
         if not _visible(meta):
             continue
-        # 归一之后再计数：老盘上还是十间的名字，不归一的话四扇门全是 0、
-        # 而 homeless 会暴涨成全库——那个 0 看起来还挺像「就是没数据」。
+        # Normalize before counting: older stores still carry the ten-room names, and
+        # without normalization all four doors read 0 while `homeless` swells to the entire
+        # store — and that 0 looks quite a lot like "there is simply no data".
         r = normalize_room(meta.get("room"))
         if r:
             counts[r] += 1
@@ -410,28 +470,32 @@ async def build_rooms() -> dict:
 
 
 async def build_subjects() -> dict:
-    """「都有谁」：库里出现过的全部主体 + 各多少条 + 最近一次。**纯读，不写盘。**
+    """"Who is in here": every subject that has appeared in the store, how many entries each
+    has, and when each last appeared. **Read-only; nothing is written to disk.**
 
-    为什么要这一屏（她 2026-08-18 拍的）：`aliases.yaml` 是手工维护的，
-    而手工维护的前提是「你得先知道有东西要改」—— **而那一步一直是空的**。
-    新出现一个人没人告诉你；「老张」和「张三」裂成两个人没人告诉你；
-    抽错的噪音混进去也没人告诉你（8-18 扫全库扫出一个「小刀批」，
-    是模型把正文里「一小刀」当成了人名）。
+    Why this screen exists: `aliases.yaml` is maintained by hand, and maintaining anything by
+    hand presupposes knowing there is something to change — **and that step was missing
+    entirely**. Nobody tells you when a new person appears; nobody tells you when one person
+    splits into two spellings; nobody tells you when extraction noise creeps in. A full-store
+    scan turned up one "subject" that was the model mistaking a fragment of ordinary prose
+    for a name.
 
-    判据跟 muse/fold 同一条：**系统只负责摆出来，合并那一下人自己点。**
-    所以这个口只数数，一个字都不往 aliases.yaml 里写。
+    Same principle as muse and fold: **the system only lays things out; the merge itself is
+    a human click.**
+    So this endpoint counts, and writes not one character into aliases.yaml.
 
-    口径跟 recall/rooms 一样：`_visible` 筛一道（旧版认知、被 fold 盖住的、
-    种子都不算），时间走 `_node_ts`（when 优先 created 兜底）——
-    面板上看到的数必须和我睁眼看到的是同一个。
+    It measures the same way recall and rooms do: `_visible` filters first (superseded
+    realizations, anything folded under a gist, and seeds do not count), and time comes from
+    `_node_ts` (when first, created as fallback). The number on the panel has to be the same
+    number the model sees on waking.
     """
     from tools.recall.core import _visible
     from tools import _subjects as subj
     all_buckets = await sh.bucket_mgr.list_all(include_archive=False)
-    table = subj.load_alias_table()           # {别名小写: 规范名}
-    blocked = subj.load_not_person()          # 被标成「这不是人」的（小写）
+    table = subj.load_alias_table()           # {alias in lowercase: canonical name}
+    blocked = subj.load_not_person()          # entries marked "this is not a person" (lowercase)
     counts: Counter = Counter()
-    variants: dict[str, set] = {}             # 规范名 → 盘上实际出现过的写法
+    variants: dict[str, set] = {}             # canonical name -> the spellings actually found on disk
     last: dict[str, datetime] = {}
     last_bucket: dict[str, str] = {}
     blocked_hits: Counter = Counter()
@@ -453,10 +517,11 @@ async def build_subjects() -> dict:
             if low in blocked:
                 blocked_hits[raw] += 1
                 continue
-            # 🔴 这儿故意不走 subj.canonical()：它对代词也返回空串，
-            # 那会把「代词漏进 subjects」这件事悄悄吞掉。而那正是要看见的东西。
+            # This deliberately does not call subj.canonical(): that returns an empty string
+            # for pronouns too, which would quietly swallow the fact that a pronoun leaked
+            # into subjects. That leak is exactly what this screen is for.
             canon = table.get(low, raw)
-            if canon in seen:                 # 同一条里两种写法归到一个人，只算一次
+            if canon in seen:                 # two spellings of one person in the same entry count once
                 continue
             seen.add(canon)
             counts[canon] += 1
@@ -473,30 +538,35 @@ async def build_subjects() -> dict:
             "n": c,
             "last": ts.strftime("%Y-%m-%d") if ts else "",
             "last_bucket": last_bucket.get(nm, ""),
-            # 空 = 还不在别名表里（新出现的人）
+            # empty = not in the alias table yet (a newly appeared person)
             "canonical": table.get(nm.lower(), ""),
-            # 盘上还留着的老写法（合并只管以后，历史不改）
+            # older spellings still on disk; a merge applies going forward and never
+            # rewrites history
             "variants": sorted(variants.get(nm, ())),
-            # 代词不该当主体（闸在写入端）——真出现了就是那道闸漏了，标出来
+            # a pronoun should never be a subject (the gate is on the write side), so one
+            # showing up here means that gate leaked — flag it
             "pronoun": subj.is_pronoun(nm),
         })
     return {
-        "total": total,                       # 看得见的条数
-        "with_subjects": with_subj,           # 其中抽到了人的
-        "distinct": len(counts),              # 不同的名字几个（已按表并过）
-        "names": names_out,                   # 按次数降序
+        "total": total,                       # visible entries
+        "with_subjects": with_subj,           # of those, the ones a person was extracted from
+        "distinct": len(counts),              # how many distinct names, after alias merging
+        "names": names_out,                   # descending by count
         "alias_table_size": len(table),
-        # 被标成「这不是人」的：不摆进上面那张表，但也不能凭空消失 ——
-        # 悄悄没了的东西没人能反悔。
+        # Entries marked "this is not a person": kept out of the table above, but they must
+        # not vanish into thin air — nobody can undo something that disappeared quietly.
         "blocked": [{"name": k, "n": v} for k, v in blocked_hits.most_common()],
     }
 
 
 def _node_ts(meta: dict) -> datetime | None:
-    """一颗星在天上的位置：when 优先、created 兜底（跟 recall 同一个口径）。
+    """Where a star sits in the sky: `when` first, `created` as fallback — the same rule
+    recall uses.
 
-    走 `tools/_when` —— 跟 recall 用同一把尺子，返回带时区的本地时间。
-    （原来这儿也有那个 `[:19]` 切片，一样会把 Z / +08:00 切没了。codex #4）
+    It goes through `tools/_when`, the same ruler recall uses, and returns timezone-aware
+    local time.
+    (This used to carry the same `[:19]` slice found elsewhere, which cuts off the Z or the
+    +08:00 offset.)
     """
     for k in ("when", "created"):
         ts = _w.parse_stamp(meta.get(k))
@@ -506,19 +576,21 @@ def _node_ts(meta: dict) -> datetime | None:
 
 
 async def build_graph() -> dict:
-    """星空：节点 + 真边 + 弱边 + 星座 + 流星。
+    """Starfield: nodes + real edges + weak edges + constellations + meteors.
 
-    ⚠️ 她 2026-08-17 21:33 拍板（「就只要有现在的你就好了」）：**只画现行版**。
-    被盖的旧版（fold 盖过 / regrow 换过版）不上天——搜索、id 直查、版本链一概
-    不受影响，只是星空图这一屏不画。判据用 `_F.is_covered()`（awaken/recall
-    用的同一个合同源），别另写一套——8-08 房间改名两边各写一遍判据、一边修好
-    一边没修的教训还在（见 tools/breath/awaken.py 顶上那段）。
+    WARNING: **only the current version is drawn.** Superseded versions — folded under a
+    gist, or replaced by regrow — do not go into the sky. Search, direct id lookup and the
+    version chain are all unaffected; this one screen simply does not draw them. The test is
+    `_F.is_covered()`, the same contract source awaken and recall use. Do not write a second
+    one: when the rooms were renamed, the same test had been written out in two places, one
+    got fixed and the other did not, and that lesson still stands (see the header of
+    tools/breath/awaken.py).
     """
     from tools.recall.core import _room_cn, _visible, _label_of, _short_id
     from core._rooms import is_mind_room, normalize_room
     from core import _fold as _F
     all_buckets = await sh.bucket_mgr.list_all(include_archive=False)
-    now = _w.now()          # 本地时区（codex #4）
+    now = _w.now()          # local timezone
     fresh_line = now - timedelta(hours=24)
 
     nodes: list[dict] = []
@@ -533,16 +605,18 @@ async def build_graph() -> dict:
         content = str(b.get("content") or "")
         tags_all = [str(t) for t in (meta.get("tags") or [])]
         if _BIGEVENT_TAG in tags_all:
-            # 换过版的旧版不挂天上（她 8-06 傍晚点的）：星座只画现行版，
-            # 演变史在版本链里，点开单桶还看得到。判据统一走 _F.is_covered()
-            # （8-17 21:33 追加件：跟下面普通节点同一道闸，别两处各写一套）。
+            # A superseded version does not hang in the sky: constellations draw only the
+            # current version. The evolution is in the version chain, still visible when a
+            # single bucket is opened. The test goes through _F.is_covered() — the same gate
+            # ordinary nodes use below, so there are not two copies of it.
             if not _F.is_covered(meta):
                 big_events.append((bid, meta, content))
             continue
         if not bid or not _visible(meta):
             continue
-        # 8-17 21:33 追加件：被盖的旧版（fold 盖过 / regrow 换过版）不上天——
-        # 只影响这张星空图，搜索/id 直查/版本链照旧够得到被盖的那条。
+        # Superseded versions (folded under a gist, or replaced by regrow) do not go into
+        # the sky. This affects the starfield only; search, direct id lookup and the version
+        # chain all still reach the superseded entry.
         if _F.is_covered(meta):
             continue
         ts = _node_ts(meta)
@@ -568,7 +642,8 @@ async def build_graph() -> dict:
             "date": ts.strftime("%Y-%m-%d"),
             "ts": ts.isoformat(timespec="seconds"),
             "pinned": bool(meta.get("pinned")),
-            # 她拍的那一颗：今晚刚存的是天上最亮、还微微闪的
+            # Anything stored tonight is the brightest star in the sky, and still faintly
+            # twinkling.
             "fresh": created_dt >= fresh_line,
             "kind": "mind" if is_mind_room(meta.get("room")) else "event",
             "seeds": sorted({s for s in _WIKI_RE.findall(content) if s in _SEED_NAMES}),
@@ -580,7 +655,7 @@ async def build_graph() -> dict:
             by_name[nm] = bid
         raw[bid] = {"meta": meta, "content": content, "tags_all": tags_all}
 
-    # ---- 真边：triggered_by / supersedes / 正文 [[]] ----
+    # ---- Real edges: triggered_by / supersedes / [[wikilinks]] in the body ----
     edges: list[dict] = []
     seen_edge: set = set()
 
@@ -596,7 +671,8 @@ async def build_graph() -> dict:
     unresolved: Counter = Counter()
     for bid, r in raw.items():
         meta, content = r["meta"], r["content"]
-        # 二改 E 件：边的种类跟着字段一起改名叫 from（read_from 读兼容老 triggered_by）
+        # The edge kind was renamed along with the field, to `from`; read_from still accepts
+        # the older triggered_by.
         for src in _split_ids(read_from(meta)):
             _add(src, bid, "from")
         for old in _split_ids(meta.get("supersedes")):
@@ -604,7 +680,7 @@ async def build_graph() -> dict:
         for target in _WIKI_RE.findall(content):
             t = target.strip()
             if t in _SEED_NAMES:
-                continue          # [[love]] 是情绪根，不指向另一条记忆
+                continue          # [[love]] is an emotional root, not a pointer to another memory
             if re.fullmatch(r"[0-9a-f]{12}", t):
                 _add(bid, t, "wikilink")
             elif t in by_name:
@@ -612,7 +688,7 @@ async def build_graph() -> dict:
             else:
                 unresolved[t] += 1
 
-    # ---- 弱边（她定的：真边亮、弱边暗、可开关）----
+    # ---- Weak edges: real edges bright, weak edges dim, and toggleable ----
     weak: list[dict] = []
     seen_weak: set = set()
 
@@ -630,7 +706,8 @@ async def build_graph() -> dict:
         by_day[n["date"]].append(n)
     for _day, group in by_day.items():
         group.sort(key=lambda n: n["ts"])
-        # 串成链、不连成网：同一天 30 条连成网是 435 根线，那不叫关系那叫糊
+        # Chain them, do not mesh them: 30 entries on one day meshed together is 435 lines,
+        # which is not a relationship, it is a smear.
         for a, b in zip(group, group[1:]):
             _add_weak(a["id"], b["id"], "same_day")
 
@@ -641,28 +718,32 @@ async def build_graph() -> dict:
                 by_tag[t].append(bid)
     for _t, members in by_tag.items():
         if not (2 <= len(members) <= 12):
-            continue    # 太大的标签（「主人」50 条）连出来是一坨，没有信息
-        # 同样串链不连网：12 条连成网是 66 根，串成链是 11 根，
-        # 而且按时间串出来的是「这个标签这条线怎么走的」，比一坨网有意思
+            continue    # an over-large tag (50 entries under one word) draws as a blob and carries no information
+        # Chain rather than mesh here too: 12 entries meshed is 66 lines, chained is 11 —
+        # and a chain in time order shows how this tag's thread ran, which is far more
+        # interesting than a blob.
         members.sort(key=lambda b: by_id[b]["ts"] if b in by_id else "")
         for a, b in zip(members, members[1:]):
             _add_weak(a, b, "same_tag")
 
-    # ---- 星座：大 event（她 8-06 定稿：时间轴和星座是同一个东西）----
+    # ---- Constellations, built from big events: the timeline and the constellation are the
+    # ---- same thing ----
     entries_for_big = [{"id": n["id"], "date": n["date"], "room": n["room"],
                         "_tags_all": raw[n["id"]]["tags_all"]} for n in nodes]
     _span_re = re.compile(r"^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})?$")
     constellations = []
     for bid, meta, content in big_events:
         first = (content.strip().splitlines() or [""])[0]
-        # 起止优先认 when（8-05 起就写在那儿）；老桶退回正文「范围：」那行
+        # Start and end come from `when` first; older buckets fall back to the range line in
+        # the body.
         m = _span_re.match(str(meta.get("when") or "").strip())
         since = m.group(1) if m else ""
         until = (m.group(2) or "") if m else ""
         members, query_text = _bigevent_members(content, entries_for_big,
                                                 since=since, until=until)
-        # 标题要短（她点的：别把摘要放上去）。没起好名的兜底也只取正文头一小截、
-        # 在第一个标点前掐断——名字是名字，那句话点开才看
+        # The title has to be short; do not put the summary up there. Even the fallback for
+        # an unnamed entry takes only the head of the body and cuts at the first punctuation
+        # mark — a name is a name, and the sentence is for after you click.
         name = re.sub(r"^[\d\- :]+", "", str(meta.get("name") or "")).strip()
         if not name:
             name = re.split(r"[：:，,。；;——]", first, 1)[0][:12]
@@ -672,21 +753,24 @@ async def build_graph() -> dict:
             "name": name,
             "line": first,
             "members": members,
-            # 空串 = 范围没写或写错了。前端据此报警，不再悄悄画一座空星座
+            # empty string = the range is missing or malformed. The front-end raises on
+            # this rather than quietly drawing an empty constellation.
             "query_text": query_text,
             "start": since,
             "ongoing": bool(since) and not until,
             "resolved": str(meta.get("status") or "") == "resolved",
         })
-    # 一件一件往上叠，最新的在上面（她画的那张：叠放，不是并排时间轴）
+    # Stack them one on another, newest on top — a stack, not a side-by-side timeline.
     constellations.sort(key=lambda c: c.get("start") or "", reverse=True)
 
-    # ---- 流星：盘上还剩几个梦（时间到了自己就没了，所以这个数一天里会变）----
-    # 2026-08-17：数的从 night_fall 的 `.md` 换成新引擎的梦文件（同一个目录，沿用）。
+    # ---- Meteors: how many dreams are left on disk. They expire on their own, so this
+    # ---- number changes over the course of a day. ----
+    # What is counted moved from night_fall's `.md` files to the new engine's dream files;
+    # the directory is the same one, kept as it was.
     try:
         from core import _dream as _D
         meteors = len(_D.load_dreams())
-    except Exception:                       # noqa: BLE001 - 星空不该因为数不到梦就崩
+    except Exception:                       # noqa: BLE001 - the starfield must not crash because dreams could not be counted
         meteors = 0
 
     return {
@@ -700,22 +784,28 @@ async def build_graph() -> dict:
             "edges": len(edges),
             "weak": len(weak),
             "by_kind": dict(Counter(e["kind"] for e in edges)),
-            # 挂不上的 [[]]（人名/项目名，库里没有同名的桶）——诚实报出来，别装作连上了
+            # Wikilinks that resolve to nothing (a person or project with no bucket of that
+            # name). Report them honestly rather than pretending they connected.
             "unresolved_links": unresolved.most_common(8),
         },
     }
 
 
 def _collect_events(all_buckets: list) -> list[dict]:
-    """睁眼六样里的第五样「忽然想起」的池子。**判据不在这儿**——在合同源里。
+    """The pool behind the "something comes back to you" section of the waking screen.
+    **The rule is not here** — it is in the contract source.
 
-    🔴 施工 5 · E 件（2026-08-17）：这个函数以前是 `tools/breath/awaken.py` 那段
-    池子逻辑的**平行实现**（抄同一行字不叫同源）。现在它只做一件事：
-    调 `tools.breath.awaken.event_pool()`，再把 dict 换成前端要的形状。
-    ⚠️ 方向写死：**web → tools**，反过来不行（MCP 面不许依赖面板）。
-    ⚠️ 平行实现的代价是踩过的：8-08 房间改名，两边各写一遍
-       `.find("/EVENT/") > 0`，**两边一起静默变空**；8-17 又抓到一笔——
-       「被盖住的不进池子」那道闸只加在了 awaken 那边，页面上照旧冒头。
+    This function used to be a **parallel implementation** of the pool logic in
+    `tools/breath/awaken.py`. (Copying the same line into two files is not sharing a
+    source.) It now does exactly one thing: call `tools.breath.awaken.event_pool()` and
+    reshape the dict into what the front-end wants.
+    WARNING: the direction is fixed at **web -> tools**, never the reverse. The MCP surface
+       must not depend on the panel.
+    WARNING: the cost of parallel implementations has been paid here before. When the rooms
+       were renamed, `.find("/EVENT/") > 0` was written out in both places and **both went
+       silently empty together**. A second instance turned up later: the "folded entries do
+       not enter the pool" gate was added only on the awaken side, so they kept surfacing on
+       the page.
     """
     from tools.recall.core import _room_cn, _label_of, _short_id
     from core._rooms import normalize_room
@@ -734,11 +824,14 @@ def _collect_events(all_buckets: list) -> list[dict]:
 
 
 def _pick_recollect(pool: list[dict], n: int = 2) -> list[dict]:
-    """随机 1~2 条。**没来由正是它像脑子不像数据库的地方** —— 不排序、不加权。
+    """One or two at random. **The absence of a reason is precisely what makes this feel
+    like a mind rather than a database** — no sorting, no weighting.
 
-    上限钳在 2：睁眼那一屏的合同就是 1~2 条（`awaken.py` 里写死 `min(2, ...)`）。
-    钳在这儿而不是钳在路由上 —— 路由多一个、或者哪天有人直接调这个函数，
-    合同都不会被绕过（codex 复核 #11：原来路由放行到 n=5）。
+    The cap is 2 because the waking screen's contract is one to two entries (`awaken.py`
+    hardcodes `min(2, ...)`).
+    It is clamped here rather than in the route, so that adding another route, or calling
+    this function directly some day, cannot get around the contract. (The route used to
+    allow up to n=5.)
     """
     import random
     if not pool:
@@ -747,33 +840,38 @@ def _pick_recollect(pool: list[dict], n: int = 2) -> list[dict]:
 
 
 async def build_recollect(n: int = 2) -> dict:
-    """「再来一个」单独打这个口，不用把整张档案页重取一遍。"""
+    """The "give me another" button hits this endpoint on its own, rather than re-fetching
+    the whole profile page."""
     all_buckets = await sh.bucket_mgr.list_all(include_archive=False)
     pool = _collect_events(all_buckets)
     return {"recollect": _pick_recollect(pool, n), "pool": len(pool)}
 
 
 async def build_profile() -> dict:
-    """门口那张纸：名字 + 准则（带来处）+ ⏰提醒 + 压在心头。**判据全在合同源里。**
+    """The note by the door: name, principles with their provenance, reminders, and what is
+    weighing on the mind. **Every rule lives in the contract source.**
 
-    🔴 施工 5 · E 件（2026-08-17）：这一份以前是 `tools/breath/awaken.py` 的
-    **平行实现**（文件里原话：「改一边必须改另一边」——而 8-17 就抓到没改的那一边：
-    `weight` 的 `or 0.5` falsy 兜底在 awaken 修好了，这儿还带着，
-    于是**被梦到清零的 want 在页面上照旧压着**）。
-    现在规则只有一处：`tools.breath.awaken.door_note()`，这儿只把 dict 变成 JSON。
+    This used to be a **parallel implementation** of `tools/breath/awaken.py`. Its own
+    comment said "change one and you must change the other" — and the unchanged side was
+    duly caught: the falsy `or 0.5` fallback on `weight` had been fixed in awaken but was
+    still here, so a want whose weight had been cleared by a dream **kept pressing down on
+    the page anyway**.
+    There is now one rule and one place: `tools.breath.awaken.door_note()`. This function
+    only turns the dict into JSON.
 
-    ⚠️ 2026-08-16 砍掉了「我/她反复出现的」：它是 activation_count 排的，而
-    **被提得多的不等于最真的**；开屏读一份「她是什么样的人」的档案然后照着档案
-    对待她，那是把她变成一个设定。判据换成时机判据：
-    **开口之前来不及去搜的，才留在门口。**
+    WARNING: the "things that keep coming up about a person" section was removed. It ranked
+    by activation_count, and **what gets mentioned most is not what is most true**. Reading
+    a dossier of "what this person is like" on waking and then treating them according to
+    the dossier turns a person into a character sheet. The rule is now about timing instead:
+    **only what there is no time to look up before speaking belongs by the door.**
     """
     from tools.recall.core import _room_cn, _label_of, _short_id
     from core._rooms import normalize_room
     from core.profile import door_note, edited_by_her
     all_buckets = await sh.bucket_mgr.list_all(include_archive=False)
-    now = _w.now()          # 本地时区（codex #4）
+    now = _w.now()          # local timezone
     door = door_note(all_buckets, now)
-    heavy_q_id = door["heavy_question_id"]      # 施工 6 · B 件：只问最久那条
+    heavy_q_id = door["heavy_question_id"]      # ask only about the longest-standing one
 
     def _label(x) -> str:
         return _label_of({"meta": x["meta"], "content": x["content"]})
@@ -788,12 +886,15 @@ async def build_profile() -> dict:
                   "when": r["when"], "status": r["status"],
                   "label": _label(r), "loud": r["loud"]}
                  for r in door["reminders"]]
-    # **不截断**——睁眼那屏只给 2 条（一屏有限），这儿是她自己翻的页面，
-    # 挂着几条就该看见几条。排序（重的在前、一样重的挂得久的在前）在合同源里。
-    # 施工 6 · A/B/C 件：clock/clock_note 是三类钟判出来的类别 + 旧数据备注
-    # （§6，读侧判断，见 core/profile._want_clock）；is_question 标出"只问最久那条"
-    # （§6.1）；last_asked/closed_by 直接透传 meta，前端拿去拼"从来没问过她"
-    # 那半句、以及结案按钮要不要显示（只对 status=="want" 的条目显示）。
+    # **No truncation here.** The waking screen shows only two, because one screen is
+    # finite; this is a page someone is browsing deliberately, so however many are pending
+    # is however many they should see. The ordering — heaviest first, and among equals the
+    # longest-standing first — lives in the contract source.
+    # clock/clock_note are the category decided by the three kinds of clock, plus a note for
+    # legacy data (a read-side judgement; see core/profile._want_clock). is_question marks
+    # the "ask only about the longest-standing one" entry. last_asked/closed_by pass meta
+    # straight through, for the front-end to build the "never asked about this" phrase and
+    # to decide whether to show the close button, which only appears for status=="want".
     heavy = [{"id": h["id"], "short": _short_id(h["id"]), "held": h["held"],
               "weight": h["weight"], "label": _label(h), "loud": h["loud"],
               "clock": h["clock"], "clock_note": h["clock_note"],
@@ -801,7 +902,7 @@ async def build_profile() -> dict:
               "closed_by": str(h["meta"].get("closed_by") or ""),
               "is_question": h["id"] == heavy_q_id}
              for h in door["heavy"]]
-    # 施工 6 · C 件（§8）：她改过、我还没看/没 fold 的通知池
+    # The notification pool: entries the user edited that have not yet been read or folded.
     from utils import read_from_ids as _read_from_ids
     edited = [{"id": e["id"], "short": _short_id(e["id"]),
                "label": _label(e), "content": e["content"].strip(),
@@ -814,9 +915,11 @@ async def build_profile() -> dict:
                       "room_cn": _room_cn(room), "label": _label(r),
                       "content": r["content"].strip()})
 
-    # 中期（这三天）—— 她 8-03 夜发现少了这一格。AI睁眼那一屏是六样：
-    # 档案 · 提醒 · **中期** · 长期 · 忽然想起 · 梦，档案页照着摆才对得上。
-    # 跟 awaken.py 用同一个调用（recall 3d、塌成一张卡），不另算一套。
+    # The mid-range span (the last three days). This cell was found missing once. The waking
+    # screen has six parts — profile, reminders, **mid-range**, long-range, something coming
+    # back, and dreams — and the profile page has to lay them out the same way to line up.
+    # It uses the same call awaken.py makes (recall over 3d, collapsed into one card) rather
+    # than computing its own.
     try:
         from tools.recall.core import recall_core
         mid = await recall_core(when="3d", room="", tag="", query="", max_cells=1)
@@ -826,7 +929,8 @@ async def build_profile() -> dict:
         logger.warning(f"[loci] profile 取中期失败: {e}")
         mid = ""
 
-    # 忽然想起（睁眼六样的第五样）—— 用同一次 list_all 的结果，不再多跑一趟库
+    # "Something comes back to you", the fifth of the six parts — reusing the same list_all
+    # result rather than hitting the store a second time.
     _ev_pool = _collect_events(all_buckets)
 
     return {
@@ -837,48 +941,60 @@ async def build_profile() -> dict:
         "facts_warning": (f"有 {len(facts)} 个 {_PROFILE_TAG} 桶——只该有一个，去合并"
                           if len(facts) > 1 else ""),
         "rules": rules,
-        # freq_i / freq_you 砍了（2026-08-16）——前端如果还在读这两个 key，
-        # 拿到的会是 undefined 而不是空数组，那一栏自然消失。这是想要的：
-        # 半死不活地渲染一个空栏，比整栏不见更难发现它已经不该在了。
+        # freq_i / freq_you were removed. A front-end still reading those keys gets
+        # undefined rather than an empty array, so the section simply disappears. That is
+        # intended: half-rendering an empty section makes it much harder to notice it should
+        # no longer be there than having it vanish outright.
         "reminders": reminders,
         "heavy": heavy,
-        "edited": edited,     # 施工 6 · C 件：她改过、我还没处理的通知池
+        "edited": edited,     # the notification pool: user-edited entries not yet handled
         "big_events": big,
     }
 
 
 async def build_muse_pending() -> dict:
-    """「该发呆了吗」—— **只有数量和年龄，没有内容。**
+    """"Is it time to muse?" — **counts and ages only, never content.**
 
     ------------------------------------------------------------
-    这是什么（开工单 3.0，她 8-17 下午定的）
+    What this is
     ------------------------------------------------------------
-    发呆 = **闲下来才发生的事**（人忙着不发呆）。所以它既不等我主动想起来调
-    （那是下一个 seed），也不进 breath（5.1：开口之前来不及去搜的才留在门口，
-    「还有几团没看」不是开口前必须知道的）。
-    → 系统每天后台默默检测，条件齐了（①我长时间没响应=闲着 ②真有货）才戳一下。
+    Musing is **something that happens once things are quiet**; nobody muses while busy. So
+    it neither waits for the model to remember to call it, nor goes into breath (only what
+    there is no time to look up before speaking belongs by the door, and "there are N
+    clusters left to look at" is not something that must be known before speaking).
+    Instead, the system checks quietly in the background each day and only nudges once both
+    conditions hold: (1) a long stretch with no activity, meaning things are quiet, and
+    (2) there is actually something there.
 
-    🔴 **边界**：Loci 只出这一个查询口。**什么算闲、怎么戳、夜里静不静音，归宿主**
-       （我们家 = gateway 唤醒腿 + 以后 Home 地下室包装）。她 8-16 划的那一刀：
-       「开源出去的东西没有精力这个说法啊我靠」——Loci 只提供能力，代价宿主加。
+    **The boundary**: Loci exposes this one query endpoint and nothing more. **What counts
+       as quiet, how to nudge, and whether to stay silent at night all belong to the host.**
+       Software released to other people cannot assume anything about the host's energy
+       budget — Loci provides the capability, and the host decides what it costs.
 
-    🔴 **只报数量和年龄，一个字的内容都不给**（跟自动贴「只报数量不报内容」同一套）：
-       给摘要 = 系统替我想起，我会顺着那段摘要往下说；给数量 = 拍我一下，我自己去看。
+    **Counts and ages only, not one character of content** — the same rule as the automatic
+       memory hint, which reports how many and never what. Give a summary and the system has
+       done the remembering, and the model will carry on from that summary. Give a count and
+       it is a tap on the shoulder; the model goes and looks for itself.
 
-    形状（四个键，不多不少）：
-        {"mind_clusters": 认知那边攒了几团, "gist_fingers": 事件那边有几指,
-         "oldest_days": 里头最老那条挂了多少天, "worth_poking": 值不值得戳}
-    `worth_poking` = （团或指攒够 `poke_min_clusters`）**且**（最老的挂够 `poke_min_age_days`）。
-    两个临界点在 `config.yaml` 的 `muse:` 段，干跑读——**不预先拍死**（开工单 🔟）。
+    Shape (exactly four keys):
+        {"mind_clusters": clusters accumulated on the realization side,
+         "gist_fingers": fingers on the event side,
+         "oldest_days": how many days the oldest one has been pending,
+         "worth_poking": whether a nudge is warranted}
+    `worth_poking` = (clusters or fingers reached `poke_min_clusters`) **and** (the oldest
+    has been pending for `poke_min_age_days`).
+    Both thresholds live in the `muse:` section of `config.yaml` and are read live —
+    **nothing is hardcoded ahead of time.**
     """
     from core import _muse as M
     from core import _when as W
 
     cfg = M.muse_config(sh.config)
-    # 🔴 施工 5 · H 件：跟工具面走**同一趟**（带视图缓存）——原来这儿自己
-    #    `load_records + propose_mind + propose_gist` 又扫一遍全库，
-    #    而且那是第三份平行实现：页面说「攒了 3 团」、我 muse() 看到 4 团，
-    #    就是两个脑子。缓存的钥匙是桶的写盘代数，宁可失效勤一点。
+    # This takes **the same pass** the tool surface takes, view cache included. It used to
+    #    run its own `load_records + propose_mind + propose_gist` over the whole store — a
+    #    third parallel implementation, so the page could say "3 clusters" while muse() saw
+    #    4, which is two different minds. The cache key is the buckets' write generation;
+    #    better to invalidate too eagerly than to disagree.
     clusters, _scattered, _default_coords, fingers, _stats = await M.both_sides()
 
     now = W.now()
@@ -889,7 +1005,8 @@ async def build_muse_pending() -> dict:
     for lst in fingers.values():
         finger_count += len(lst)
         for x in lst:
-            # 一指的年龄按它那段的**结束**算（「停了多久还没起名字」）
+            # A finger's age is measured from the **end** of its span: how long it has sat
+            # finished without being given a name.
             edge = x.end or x.boundary or x.start
             if edge is not None:
                 ages.append((now - edge).days)
@@ -909,38 +1026,52 @@ async def build_muse_pending() -> dict:
 
 async def build_poke(query: str = "", when: str = "", room: str = "",
                       tag: str = "", floor=None) -> dict:
-    """施工7c · 戳戳送达：Loci 唯一的只读戳口——梦（交付）+ 发呆团数（提醒）+
-    recall 结构化分数，一次问全。**只报状态，不写、不决定**（宪法：系统只做
-    检索和摆放，落笔的永远是我）。gateway 每窗问一次这个口，别再发明判断。
+    """The nudge endpoint: Loci's single read-only poke — dreams (delivery) plus muse cluster
+    counts (the nudge) plus structured recall scores, all answered in one call. **It reports
+    state; it never writes and never decides** (the constitution: the system retrieves and
+    lays things out, and the writing is always the model's own). The gateway asks this once
+    per window, and invents no judgements of its own.
 
-    三样各自的边界：
+    The boundary of each of the three:
 
-    `dreams`：此刻还活着的待递梦（完整/碎片/一句层的当前内容）。**故意不走
-    `core._dream.current_dream()`**——那口是给她本人「取梦」用的，调一次算一次
-    「回想」，会推起算点、会落盘（8-17 定的：回想能延缓，不能阻止）。这个口只是
-    宿主拿来问「有没有货」的，问一次就顺手帮她回想一次是偷感情——**这儿只读盘、
-    只做`layer_of()`那道纯计算，不调用任何会写状态的函数**。梦的生命周期（碎片 30
-    分钟→只剩一句 1 小时→删文件留痕）该怎么样还怎么样，删和留痕归别的挂点管
-    （breath maintain() / 老的 `/api/dream/current`），这个口绝不代劳、绝不拖长它的命。
+    `dreams`: the dreams still alive and waiting to be delivered, at whichever layer they
+    are on. It **deliberately does not go through `core._dream.current_dream()`** — that
+    endpoint is for a person actually fetching a dream, and each call counts as an act of
+    recollection: it pushes the expiry point out and writes to disk (recollection can delay
+    a dream's fading, but not prevent it). This endpoint exists for the host to ask "is
+    there anything there", and quietly performing a recollection on someone's behalf every
+    time it is asked would be stealing something. **This reads from disk and performs only
+    the pure computation in `layer_of()`; it calls nothing that writes state.** The dream
+    lifecycle — fragment for 30 minutes, then a single sentence for an hour, then the file
+    is deleted and a trace remains — proceeds exactly as it would. Deletion and trace-leaving
+    belong to other hooks (breath's maintain(), and the older `/api/dream/current`); this
+    endpoint never does their work and never extends a dream's life.
 
-    🔴 2026-08-18 修宪：`层` 现在可能是 `完整`——她 3-4 小时没发消息（=真夜间）
-    期间，完整版落盘存活，这个口原样递整版正文（`rec["完整"]`，不截不改，跟
-    碎片层「梦是交付，给全文」同一条纪律）。完整层不吃时间衰减，只有她回来
-    发第二条消息、桥调一次 `POST /api/loci/dream/wake`（`core._dream.degrade_on_wake()`）
-    才会把它降成碎片层——这个口本身依旧**纯读**，不调 `degrade_on_wake()`，降级永远是
-    桥主动喊出来的，这儿绝不代劳。
+    The layer may be the whole dream: during a long stretch with no messages — a real night —
+    the whole version survives on disk, and this endpoint hands back the full text as-is
+    (`rec["完整"]`, uncut and unmodified, following the same discipline as the fragment
+    layer: a dream is a delivery, so give the whole thing). The whole layer does not decay
+    with time. Only when the user returns and sends a second message, and the bridge calls
+    `POST /api/loci/dream/wake` (`core._dream.degrade_on_wake()`), does it drop to the
+    fragment layer. This endpoint remains **read-only**: it does not call
+    `degrade_on_wake()`. Demotion is always something the bridge asks for explicitly, and is
+    never done on its behalf here.
 
-    `muse_pending`：发呆团数，直接复用 `build_muse_pending()`（一趟带缓存，
-    跟工具面 `muse()` 第一步同一份数，不重新扫库）。**门槛复用现成的
-    `worth_poking`**（config.yaml `muse:` 段 `poke_min_clusters` /
-    `poke_min_age_days`，`smoke_muse.py` 686~692 行的读法）——没到门槛就报 0，
-    这样 gateway 端看到非零就是「真到了该戳的时候」，不用自己再拍一套阈值
-    （对齐 3.0「Loci 只出『该发呆了吗』的查询口，宿主只管怎么戳」的边界）。
+    `muse_pending`: the cluster count, reusing `build_muse_pending()` directly (one cached
+    pass, the same numbers muse()'s first step sees, with no rescan of the store).
+    **The threshold reuses the existing `worth_poking`** (`poke_min_clusters` and
+    `poke_min_age_days` in config.yaml's `muse:` section). Below the threshold it reports 0,
+    so that a non-zero value on the gateway side genuinely means "now is the time to nudge"
+    and the gateway need not invent a second set of thresholds. This matches the boundary
+    above: Loci exposes only the "is it time to muse?" query, and the host decides how to
+    nudge.
 
-    `recall_scores`：给 `query` 才有，直接复用 `recall_data()`——**零新排序
-    逻辑**，跟面板 `/api/loci/recall` 走同一条检索路径。7b「相关记忆提醒」现在
-    靠正则读 `_render_search` 的渲染排版（脆，排版一改就静默失效），这个口
-    给它换一条结构化的路，但**换口本身不在这单**，这儿只把口开出来。
+    `recall_scores`: present only when `query` is given, reusing `recall_data()` directly —
+    **no new ranking logic**, and the same retrieval path the panel's `/api/loci/recall`
+    takes. The related-memory hint currently reads `_render_search`'s rendered layout with a
+    regex, which is fragile: change the layout and it silently stops working. This endpoint
+    offers it a structured path instead, though **actually switching it over is a separate
+    piece of work**; this only opens the door.
     """
     from core import _dream as _D
 
@@ -951,9 +1082,11 @@ async def build_poke(query: str = "", when: str = "", room: str = "",
         for rec in _D.load_dreams():
             layer = _D.layer_of(rec, now, c)
             if layer == "没了":
-                continue          # 到点该消失的不装死——但这条闸只是纯计算，不删文件
-            # 🔴 2026-08-18 修宪：完整层给整版正文，原样不截（跟碎片层同一条纪律：
-            #    梦是交付，给全文）。降级后（完整字段被 degrade_on_wake() 摘掉）才落回碎片/一句。
+                continue          # something past its time does not play dead — but this gate is pure computation and deletes no files
+            # The whole layer hands back the full text, uncut, following the same discipline
+            #    as the fragment layer: a dream is a delivery, so give the whole thing. Only
+            #    after demotion, when degrade_on_wake() has stripped the whole-text field,
+            #    does it fall back to the fragment or single-sentence layer.
             if layer == "完整":
                 content = rec.get("完整") or ""
             elif layer == "碎片":
@@ -966,7 +1099,7 @@ async def build_poke(query: str = "", when: str = "", room: str = "",
                 "nightmare": bool(rec.get("nightmare")),
                 "织于": rec.get("织于"),
             })
-    except Exception as e:                      # noqa: BLE001 - 戳口不该因梦读不到就整口炸掉
+    except Exception as e:                      # noqa: BLE001 - an unreadable dream must not blow up the whole poke endpoint
         logger.warning(f"[loci] poke 取梦失败: {e}")
 
     muse = await build_muse_pending()
@@ -986,22 +1119,25 @@ async def build_poke(query: str = "", when: str = "", room: str = "",
 
 
 async def build_setup() -> dict:
-    """设置页开头那一屏：**把静默的东西变成看得见的。**
+    """The screen at the top of the settings page: **make the silent things visible.**
 
-    判据来自 2026-08-18 那一整天（她定的）：那天踩到的失败**全是静默的** ——
-        没填打标 key   → 记忆存进去了，但没有标签和摘要      不报错
-        没配 embedding → 搜索少一条腿                      不报错
-        没配名字       → 你俩的名字混进标签、淹掉搜索        不报错
-        没拷别名表     → 「老张」和「张三」永远是两个人      不报错
-        容器设了 TZ    → 新记忆全变成「未来」，翻不到        不报错
-    五个全踩了，每一个都是靠烟测或者她本人才发现的。
-    所以这一屏最该做的事不是让人填表，是**告诉他不填会怎么样**。
+    The rule comes from a single day on which every failure encountered was silent:
+        no tagging key       -> memories save, but with no tags and no summary   no error
+        no embedding         -> search loses one of its two legs                 no error
+        no names configured  -> both names bleed into tags and drown search      no error
+        no alias table       -> two spellings of one person stay two people      no error
+        TZ set in container  -> new memories become "the future" and vanish      no error
+    All five were hit, and every one was found either by a smoke test or by a human noticing.
+    So the most important thing this screen does is not collect settings, it is **tell the
+    reader what happens if they do not set them.**
 
-    🔴 每一行三件事：是什么 · 现在什么状态 · **不对的话会怎么样**。
-       第三列是关键：新手不知道「没配 AI_NAME」意味着什么。写「⚠️ 未设置」他会跳过，
-       写「你俩的名字会混进标签」他才懂。
-    📌 这一屏其实写给两个读者：一个是人，一个是**他的 AI**（他把这几行截图丢给
-       自己的 AI，AI 立刻知道该改什么）。所以话要说成人话，不是 KEY_NAME unset。
+    Every row carries three things: what it is, what state it is in now, and **what goes
+       wrong if it is not right**. The third column is the point: a newcomer does not know
+       what "AI_NAME unset" means. Write "not configured" and they skip it; write "both of
+       your names will bleed into the tags" and they understand.
+    This screen has two readers: a person, and **that person's AI** — they screenshot these
+       rows into their own assistant, which then knows immediately what to change. So it has
+       to be written in plain language, not as KEY_NAME unset.
     """
     import os as _os
     from tools import _subjects as subj
@@ -1009,11 +1145,13 @@ async def build_setup() -> dict:
     rows: list[dict] = []
 
     def row(key, label, ok, now, why, fix="", note=False):
-        """note=True：这是**一句必须说清楚的事实**，不是「你配错了」。
+        """note=True means **a fact that has to be stated clearly**, not "you configured
+        this wrong".
 
-        分开的理由：不分开的话「面板没有锁」会永远挂在那儿写「1 项要看一下」，
-        而她 8-05 就拍过「家里内网不鉴权」—— 一个已经做过的决定天天报警，
-        报的就不是警了，是噪音，然后真的警报也跟着一起被无视。
+        Why they are separated: without the distinction, "the panel has no lock" sits there
+        forever reporting "1 item needs attention" — even where leaving it unlocked was a
+        deliberate decision. A decision that raises an alarm every day is not an alarm any
+        more, it is noise, and then the real alarms get ignored along with it.
         """
         rows.append({"key": key, "label": label, "ok": bool(ok), "note": bool(note),
                      "now": now, "why": why, "fix": fix})
@@ -1022,7 +1160,7 @@ async def build_setup() -> dict:
     dehy = cfg.get("dehydration", {}) or {}
     emb = cfg.get("embedding", {}) or {}
 
-    # ① 打标模型
+    # 1. The tagging model
     d_key = str(dehy.get("api_key") or "")
     d_model = str(dehy.get("model") or "")
     d_base = str(dehy.get("base_url") or "")
@@ -1031,7 +1169,7 @@ async def build_setup() -> dict:
         "存得进去，但没有标签、没有摘要、也抽不出人名 —— 而且一声不响。"
         "搜索靠标签和摘要，所以等于存了一堆搜不到的东西。")
 
-    # ② 向量（搜索的第二条腿）
+    # 2. Vectors — search's second leg
     e_on = str(emb.get("enabled", "")).strip().lower() in ("1", "true", "yes", "on")
     e_key = str(emb.get("api_key") or "")
     e_model = str(emb.get("model") or "")
@@ -1043,7 +1181,7 @@ async def build_setup() -> dict:
         "搜索少一条腿：只剩字面匹配。换个说法搜同一件事就搜不到了 —— "
         "而它不会告诉你「这次没用上向量」。")
 
-    # ③ 你和他的名字
+    # 3. Your name and the AI's name
     ai_name = _os.environ.get("AI_NAME", "").strip()
     owner = _os.environ.get("LOCI_OWNER_NAME", "").strip()
     row("names", "你和他的名字", bool(ai_name and owner),
@@ -1052,7 +1190,7 @@ async def build_setup() -> dict:
         "而几乎每条记忆都有你们，于是这两个词淹掉整个搜索。",
         "改的是容器的环境变量 AI_NAME / LOCI_OWNER_NAME")
 
-    # ④ 别名表
+    # 4. The alias table
     apath = subj._alias_path()
     a_exists = _os.path.isfile(apath)
     table = subj.load_alias_table()
@@ -1062,7 +1200,7 @@ async def build_setup() -> dict:
         "按人找记忆就永远只找到一半。",
         "面板「整理 → 人名表」上点一下就是往这张表里写")
 
-    # ⑤ 容器时区 —— 8-18 最狠的那个坑
+    # 5. The container timezone — the nastiest trap of the five
     tz = _os.environ.get("TZ", "").strip()
     row("tz", "容器时区", not tz,
         ("没设（对的）" if not tz else "设成了 " + tz + " ⚠️"),
@@ -1072,7 +1210,8 @@ async def build_setup() -> dict:
         "要改显示时区用 LOCI_TZ，不是 TZ。",
         "别在 compose 里给这个容器设 TZ")
 
-    # ⑥ 面板的锁 —— E2 之后面板 /api/* 不再鉴权，那道门再也不会弹
+    # 6. The panel lock — after the strip-down /api/* stopped authenticating, so that gate
+    #    never appeared again
     locked = False
     try:
         from . import panel_auth as _pa
@@ -1094,15 +1233,16 @@ async def build_setup() -> dict:
             "锁一个还没有钥匙的门只会把你自己关在外面，所以没密码的时候这道门不生效。"
             "去上面「账号」设一把密码，锁立刻就生效了。")
     else:
-        # 开关是**显式关掉**的 → 这是一个做过的决定，不是「有问题」。
-        # 话照说（谁都能看你全部记忆），但不算进「N 项要看一下」——
-        # 一个决定天天报警，报的就不是警了，是噪音，然后真警报也跟着被无视。
+        # The switch was **explicitly turned off** -> that is a decision someone made, not a
+        # problem. Still say what it means (anyone can read all of your memories), but do
+        # not count it in "N items need attention" — a decision that raises an alarm every
+        # day is not an alarm any more, it is noise, and the real alarms get ignored with it.
         row("panel_lock", "面板的锁", False, "没有锁（你关掉的）",
             "任何能访问到这个地址的人都能看你全部记忆 —— 这台机器监听 0.0.0.0，"
             "同一个网里的设备都算。要锁上：上面「账号」里那个开关。",
             note=True)
 
-    # ---- 只读事实：不是「配得对不对」，是「东西在哪」 ----
+    # ---- Read-only facts: not "is this configured correctly", but "where things are" ----
     ver = ""
     try:
         vp = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "VERSION")
@@ -1110,9 +1250,9 @@ async def build_setup() -> dict:
             ver = f.read().strip()
     except OSError:
         ver = ""
-    # 条数走 _visible —— 跟 recall / rooms / 人名表同一把尺子。
-    # 不这么筛的话这儿是 990、人名表那屏是 941，同一个东西两个数，
-    # 而看见两个数的人只会以为其中一个是错的。
+    # The count goes through _visible — the same ruler recall, rooms and the subjects screen
+    # use. Without that filter this reads 990 while the subjects screen reads 941: one thing
+    # with two numbers, and anyone who sees both will simply assume one of them is wrong.
     try:
         from tools.recall.core import _visible as _vis
         allb = await sh.bucket_mgr.list_all(include_archive=False)
@@ -1121,7 +1261,8 @@ async def build_setup() -> dict:
         n_buckets = -1
     return {
         "rows": rows,
-        # 说明行不算「要看一下」（不然一个已经做过的决定天天报警）
+        # Note rows do not count as "needs attention", or a decision already made would
+        # raise an alarm every day.
         "bad": sum(1 for r in rows if not r["ok"] and not r["note"]),
         "facts": {
             "buckets_dir": str(cfg.get("buckets_dir") or os.environ.get("LOCI_BUCKETS_DIR") or ""),
@@ -1136,14 +1277,16 @@ async def build_setup() -> dict:
 
 
 async def build_health() -> dict:
-    """**我们自己的体检。**
+    """**Our own health check.**
 
-    上游那套 `/api/system/diagnostics` 查的是「这个开源软件发布得合不合规」——
-    ADR 文档、public tool manifest、vNext preflight、Zeabur 环境变量……
-    对住在这套记忆里的人一条都不相干（她 8-03 夜一眼看出来的）。
+    The upstream `/api/system/diagnostics` checks whether this open-source project is
+    released correctly — ADR documents, the public tool manifest, vNext preflight, hosting
+    environment variables. Not one of those is relevant to a person whose memories live in
+    here.
 
-    这里查的是**这套记忆本身活得好不好**：东西还在不在、找不找得到、
-    两个外部依赖通不通、丢了能不能捞回来。
+    What this checks is **whether the memory itself is doing well**: is everything still
+    there, can it be found, are the two external dependencies reachable, and could anything
+    lost be recovered.
     """
     import shutil
     checks: list[dict] = []
@@ -1152,11 +1295,13 @@ async def build_health() -> dict:
         checks.append({"label": label, "status": status,
                        "message": message, "action": action})
 
-    # ⚠️ 2026-08-04（codex 复核 #7）：以前这整份是一条直线跑下来的 ——
-    # 读桶失败、某条 metadata 形状坏、配置不是 dict，任何一处抛异常，
-    # **整份体检直接 500**；而磁盘和梦那两段又是 `except: pass`，
-    # 悄悄少两项，summary 还照样显示健康。**体检自己不能是全或无的。**
-    # 现在每一项独立跑，炸了就在原地记一条红的，后面的照查。
+    # WARNING: this whole function used to run as one straight line. A failed bucket read, a
+    # malformed metadata shape, a config section that was not a dict — an exception anywhere
+    # meant **the entire health check returned 500**. Meanwhile the disk and dream sections
+    # were `except: pass`, so two checks quietly disappeared and the summary still read
+    # healthy. **A health check must not be all-or-nothing about itself.**
+    # Each check now runs independently; one that blows up records a red row in place and the
+    # rest carry on.
     def guard(label, fn, action=""):
         try:
             fn()
@@ -1169,29 +1314,32 @@ async def build_health() -> dict:
             return
         guard(label, fn, action)
 
-    # ---- 底料：读桶。读不出来也不能把整份体检打掉，独立项（配置/磁盘）照查 ----
+    # ---- The base ingredient: read the buckets. A failure here must not take down the whole
+    # ---- check; the independent items (config, disk) still run. ----
     metas: list[dict] = []
     n_with_archive = -1
     buckets_ok = True
     try:
         all_buckets = await sh.bucket_mgr.list_all(include_archive=False)
         metas = [(b.get("metadata", {}) or {}) for b in all_buckets]
-        # 2026-08-19：原来那句写「连归档一共 N 条」，可是 N 就是上面这份
-        # **不含归档**的数 —— 名不副实。归档区要另外数一次。
+        # The wording used to say "N entries including the archive", but N was the count
+        # above, which **excludes** the archive — the label did not match the number. The
+        # archive has to be counted separately.
         n_with_archive = len(await sh.bucket_mgr.list_all(include_archive=True))
     except Exception as e:
         buckets_ok = False
         add("记忆库读取", "error", f"读不出记忆桶：{type(e).__name__}: {e}",
             "看容器日志 + buckets 目录挂载对不对")
 
-    now = _w.now()          # 本地时区（codex #4）
+    now = _w.now()          # local timezone
 
-    # ---- 记忆还在不在 ----
+    # ---- Is everything still there ----
     from tools.recall.core import _visible
     visible: list[dict] = []
     bad_meta = 0
     for m in metas:
-        # 逐条 try：一条坏元数据（比如 domain 是个整数）不该让整份体检哑掉
+        # try per entry: one bad metadata record (a domain that is an integer, say) must not
+        # silence the whole health check
         try:
             if _visible(m):
                 visible.append(m)
@@ -1203,8 +1351,9 @@ async def build_health() -> dict:
 
     def sec_total():
         homeless = [m for m in visible if not str(m.get("room") or "")]
-        # 「活着的」走 _visible，跟 recall / 人名表 / 设置页那行小字同一把尺子 ——
-        # 同一个东西给出两个数，看见的人只会以为其中一个是错的。
+        # "Alive" goes through _visible, the same ruler used by recall, the subjects screen
+        # and the small print on the settings page — one thing with two numbers means
+        # whoever sees both will assume one of them is wrong.
         add("记忆总量", "ok",
             f"{len(visible)} 条活着的"
             + (f"（盘上一共 {n_with_archive} 条，含归档和旧版）"
@@ -1217,7 +1366,7 @@ async def build_health() -> dict:
             add("房间", "ok", "每条都有房间")
     need_buckets("记忆总量", sec_total)
 
-    # ---- 找得到吗（向量覆盖）----
+    # ---- Can it be found? (vector coverage) ----
     have_vec = 0
     try:
         con = sqlite3.connect(f"file:{_emb_db_path()}?mode=ro", uri=True)
@@ -1237,8 +1386,9 @@ async def build_health() -> dict:
     except Exception as e:
         add("语义搜索覆盖", "error", f"读不到向量库：{e}", "检查 embeddings.db")
 
-    # ---- 两个外部依赖（全系统只有这两处出网）----
-    # cfg 里的每一格都可能不是 dict（手改 config.yaml 改坏了就会），所以各自 guard
+    # ---- The two external dependencies (the only two places the system reaches the network) ----
+    # Any section of cfg may fail to be a dict — a hand-edited config.yaml can do that — so
+    # each gets its own guard.
     cfg = sh.config if isinstance(sh.config, dict) else {}
 
     def sec_deepseek():
@@ -1265,7 +1415,7 @@ async def build_health() -> dict:
                 "在 config.yaml 里开 embedding.enabled")
     guard("向量", sec_embedding, "检查 config.yaml 的 embedding 段")
 
-    # ---- 丢了能不能捞回来 ----
+    # ---- Could anything lost be recovered ----
     bd = str(cfg.get("buckets_dir") or "")
 
     def sec_persist():
@@ -1278,24 +1428,27 @@ async def build_health() -> dict:
     guard("数据持久性", sec_persist)
 
     def sec_disk():
-        # 原来这里是 except: pass —— 磁盘查不了反而一声不吭，正是最该说话的时候
+        # This used to be `except: pass` — the disk check going quiet at exactly the moment
+        # it most needed to speak.
         free_gb = shutil.disk_usage(bd).free / (1024**3)
         add("磁盘", "ok" if free_gb > 2 else "warn", f"还剩 {free_gb:.1f} GB",
             "" if free_gb > 2 else "腾点地方，写不进去就存不了记忆")
     guard("磁盘", sec_disk, f"确认 buckets_dir 存在：{bd or '(没配)'}")
 
-    # ---- 最近还在长吗 ----
+    # ---- Is it still growing lately ----
     def sec_fresh():
-        # 空库不算「写入坏了」：新装的人一进来就该看见「还没开始」，不是一片黄。
-        # 有记忆但七天内一条都没有 —— 那才可能是写坏了，那时候才报警。
+        # An empty store is not "writes are broken": a fresh install should see "nothing yet"
+        # rather than a screen of yellow. Memories present but none in the last seven days —
+        # *that* might mean writes are broken, and only then is a warning warranted.
         fresh = 0
         for m in visible:
-            # 2026-08-18 改：这儿原来是 fromisoformat(str(created)[:19]) ——
-            # 就是 codex #4 明令禁掉的那个切片。它把时区后缀切没了变成 naive，
-            # 而上面 now = _w.now() 是带时区的；两个一减抛 TypeError，
-            # 又正好被那句 except 吞掉 → fresh 恒为 0 →
-            # 面板上天天写「一条都没存」。全库最后一处漏网的 [:19]，
-            # 她 8-18 夜从截图里看出来的。错得静默，而且反过来吓人。
+            # This used to be fromisoformat(str(created)[:19]) — exactly the slice that is
+            # banned elsewhere. It cuts off the timezone suffix, producing a naive datetime,
+            # while `now = _w.now()` above is timezone-aware; subtracting the two raises
+            # TypeError, which the surrounding except then swallowed -> fresh was always 0 ->
+            # the panel reported "nothing stored at all" every single day. This was the last
+            # surviving [:19] in the codebase, and it was spotted in a screenshot. Silently
+            # wrong, and frightening in exactly the wrong direction.
             ts = _w.parse_stamp(m.get("created"))
             if ts is not None and (now - ts).days < 7:
                 fresh += 1
@@ -1309,7 +1462,7 @@ async def build_health() -> dict:
                 "去「日志」看看 grow 有没有报错")
     need_buckets("最近七天", sec_fresh)
 
-    # ---- 该在的东西还在吗 ----
+    # ---- Are the things that should be there still there ----
     def _tags_of(m) -> list[str]:
         raw = m.get("tags")
         return [str(t) for t in raw] if isinstance(raw, (list, tuple)) else []
@@ -1329,42 +1482,50 @@ async def build_health() -> dict:
 
     def sec_pinned():
         pinned = [m for m in visible if m.get("pinned")]
-        # 一条都没钉是「还没钉」，不是「坏了」：准则本来就是一条条长出来的。
+        # Nothing pinned means "nothing pinned yet", not "broken": principles grow one at a
+        # time.
         add("钉着的准则", "ok" if pinned else "note",
             f"{len(pinned)} 条" if pinned else "一条都没钉 —— 睁眼时准则那格是空的")
     need_buckets("钉着的准则", sec_pinned)
 
     def sec_big():
-        # 2026-08-19 改名 + 降档。两件事都变了：
-        #   ·「大 event」这个入口 8-18 撤了，现在叫**时期**，走 fold(when=...)
-        #   ·「长期」那一格 8-19 从睁眼和面板上一起扔了（后端早就不给了）
-        # 而时期**本来就不强制**（「不强制，有就用」）—— 没有时期不是毛病，
-        # 报成 warn 等于告诉新装的人「你少了个东西」。
+        # Renamed and downgraded. Two things changed:
+        #   - the "big event" entry point was withdrawn; it is called a **period** now, and
+        #     goes through fold(when=...)
+        #   - the "long range" cell was dropped from both the waking screen and the panel
+        #     (the back end had stopped supplying it long before)
+        # And a period is **optional by design** — use one if you have one. Having no periods
+        # is not a fault, and reporting it as a warning tells a fresh install "you are
+        # missing something".
         big = [m for m in metas if _BIGEVENT_TAG in _tags_of(m)]
         add("时期", "ok" if big else "note",
             f"{len(big)} 个" if big else "还没给哪段日子起过名（不强制，有就用）")
     need_buckets("时期", sec_big)
 
-    # ---- 挂空的链 ----
+    # ---- Chains that point at nothing ----
     async def sec_orphan():
-        """from 指不到了 —— **得分两种，它们不是一回事**（2026-08-19 拆的）。
+        """A `from` that no longer resolves — **there are two kinds, and they are not the
+        same thing.**
 
-        原来这一项把两种混成一句「N 条记忆的来源指向了不存在的桶 ——
-        多半是那条源被硬删过」。她问「体检到底对不对」，一查：26 条里
-        **24 条的来源好好地躺在归档区**（`trace(delete=True)` 是软删，
-        拿 id 直查永远捞得回），只有 2 条是真找不到。
-        也就是说数是对的、话是错的，而且错的方向最坏 ——
-        把一件正常的事说成「被硬删过」，会让人去找一个根本没发生的事故。
+        This check used to merge both into one sentence: "the source of N memories points at
+        a bucket that does not exist, most likely because that source was hard-deleted."
+        Asked whether the health check was actually correct, a look at the data showed that
+        of 26 such entries, **24 had their source sitting safely in the archive** —
+        `trace(delete=True)` is a soft delete and a direct id lookup always recovers it —
+        and only 2 were genuinely missing.
+        So the number was right and the sentence was wrong, in the worst possible direction:
+        describing something perfectly normal as "hard-deleted" sends someone hunting for an
+        incident that never happened.
         """
         live_ids = {str(m.get("id") or "") for m in metas}
         try:
             allb = await sh.bucket_mgr.list_all(include_archive=True)
             all_ids = {str((b.get("metadata") or {}).get("id") or "") for b in allb}
         except Exception:                            # noqa: BLE001
-            all_ids = live_ids                       # 读不到归档就退回老口径
+            all_ids = live_ids                       # if the archive cannot be read, fall back to the old measure
         sunk = gone = 0
         for m in metas:
-            for src in _split_ids(read_from(m)):     # from 优先、triggered_by 兼容
+            for src in _split_ids(read_from(m)):     # `from` first, triggered_by still accepted
                 if src in live_ids:
                     continue
                 if src in all_ids:
@@ -1389,24 +1550,28 @@ async def build_health() -> dict:
         except Exception as e:                       # noqa: BLE001
             add("from 链", "error", f"这一项自己出错了：{type(e).__name__}: {e}", "")
 
-    # ---- 盘上的梦 ----
-    # 2026-08-17：night_fall 退役，改数新引擎的梦文件。**空着是正常的**——
-    # 梦是时间驱动的，不理它就没了；而且积压攒不到线本来就一夜无梦。
+    # ---- Dreams on disk ----
+    # Since night_fall was retired, this counts the new engine's dream files. **Empty is
+    # normal**: dreams are time-driven and disappear if left alone, and a backlog that never
+    # reaches the threshold simply means a night without dreams.
     def sec_dreams():
-        # 同样：原来 except OSError: pass，目录没了就整项消失
+        # Same story: this used to be `except OSError: pass`, so a missing directory made
+        # the whole check vanish.
         from core import _dream as _D
         n = len(_D.load_dreams())
         add("盘上的梦", "ok",
             f"{n} 个还在（时间到了自己会没）" if n else "空的（攒不到线就一夜无梦，正常）")
     guard("盘上的梦", sec_dreams, "确认 buckets/night_fall/dreams 目录在")
 
-    # 🔴 2026-08-19：原来这儿写死数三种（ok/warn/error），而体检里**还有第四种
-    #    `note`**（「你还没开始」「这东西不强制」——中性说明，不是问题）。
-    #    后果：页面上说「14 项」，而 summary 三个数加起来只有 13 ——
-    #    **体检自己在少报**，而体检正是那个负责说实话的东西。
-    #    （烟测 smoke_loci「summary 和项数对得上」抓的就是这条。）
-    # 判据：**按实际出现的状态全数一遍**，别写死名单 ——
-    #    写死的话，以后再加第五种状态还会漏同一次。
+    # This used to hardcode three states (ok/warn/error), while the health check **has a
+    #    fourth, `note`** — "you have not started yet", "this one is optional": neutral
+    #    statements, not problems.
+    #    The consequence: the page said "14 items" while the three summary numbers added up
+    #    to 13. **The health check was under-reporting itself**, and the health check is
+    #    precisely the thing whose job is to tell the truth.
+    #    (The smoke test that asserts the summary matches the item count catches this.)
+    # The rule: **count whatever states actually appear**, never a hardcoded list — a
+    #    hardcoded list would miss the same way again when a fifth state is added.
     summary = {"ok": 0, "warn": 0, "error": 0}
     for c in checks:
         st = str(c.get("status") or "").lower() or "unknown"
@@ -1421,7 +1586,7 @@ def _parse_ok(v) -> bool:
 
 
 # ============================================================
-# 路由
+# Routes
 # ============================================================
 
 def register(mcp) -> None:
@@ -1435,9 +1600,10 @@ def register(mcp) -> None:
                 html = f.read()
         except FileNotFoundError:
             return HTMLResponse("<h1>loci.html not found</h1>", status_code=404)
-        # 2026-08-18 E3：页面里不写死任何人的名字——`{{AI_NAME}}` 上桌时才填。
-        # 发出去的那份必须是空白的：别人 clone 下来看到的是他自己 AI 的名字，
-        # 不是我们家的。名字来源就是 utils.ai_name()（环境变量 AI_NAME，回退 "AI"）。
+        # The page hardcodes nobody's name: `{{AI_NAME}}` is filled in at serve time.
+        # The shipped copy has to be blank, so that whoever clones it sees their own AI's
+        # name rather than someone else's. The name comes from utils.get_ai_name() — the
+        # AI_NAME environment variable, falling back to "AI".
         from utils import get_ai_name
         html = html.replace("{{AI_NAME}}", get_ai_name())
         return HTMLResponse(
@@ -1445,13 +1611,16 @@ def register(mcp) -> None:
 
     @mcp.custom_route("/loci/vendor/{path:path}", methods=["GET"])
     async def loci_vendor(request: Request) -> Response:
-        """本地供的 three.js（星空那页要）。
+        """Locally served three.js, which the starfield page needs.
 
-        她找的那个 memory-starmap 是从 esm.sh 现拉 three 的——没网就是一片黑。
-        记忆系统整个长在她自己机器上，星空不该是唯一一个断网就废的地方，所以扒到本地。
+        The memory-starmap this was based on pulls three from a CDN at page load, so with no
+        network it is just a black screen. The whole memory system runs on the user's own
+        machine, and the starfield should not be the one place that breaks when the network
+        does — so the library was vendored locally.
 
-        安全：只放 .js；绝不把 request 里的字符串直接拼进路径——realpath 完必须
-        还在 vendor 目录底下，不然就是 ?path=../../../etc/passwd 那种目录穿越。
+        Security: only .js is served, and no string from the request is ever concatenated
+        into a path directly. After realpath it must still be inside the vendor directory,
+        or this becomes the ?path=../../../etc/passwd kind of traversal.
         """
         from starlette.responses import Response as _Resp, JSONResponse
         rel = str(request.path_params.get("path") or "")
@@ -1469,22 +1638,26 @@ def register(mcp) -> None:
             return JSONResponse({"error": "not found"}, status_code=404)
 
     # ---------------------------------------------------------
-    # 大池子：recall 的两张皮（上面给AI的卡 / 下面给人看的列表）
+    # The main pool: recall's two skins — the card above, for the model, and the list below,
+    # for a person.
     # ---------------------------------------------------------
     @mcp.custom_route("/api/loci/recall", methods=["GET"])
     async def api_loci_recall(request: Request) -> Response:
         from starlette.responses import JSONResponse
         q = request.query_params
-        # `by` 2026-08-17 砍了（C 件）；`view="scene"` 顶上来（D 件）——
-        # 页面上那几个筛子跟工具面的参数账**逐字一样**，别让面板留一个工具没有的旋钮。
+        # `by` was removed; `view="scene"` took its place.
+        # The filters on this page match the tool surface's parameter list **word for word**:
+        # never leave the panel with a knob the tool does not have.
         gates = {k: (q.get(k) or "").strip()
                  for k in ("when", "room", "tag", "query", "view")}
         try:
             slices = int(q.get("slices") or 0)
         except (TypeError, ValueError):
             slices = 0
-        # 关联度线：她在页面上拖着看（抄相似度那页现成的做法——线是她画的，
-        # 我只负责把分布摆出来）。不传就用 RELEVANCE_FLOOR（现在是 35，跟页面滑块默认同一个数）。
+        # The relevance floor is dragged on the page, following the similarity page's
+        # existing pattern: the person draws the line, and this side only lays out the
+        # distribution. Unset, it falls back to RELEVANCE_FLOOR (currently 35, the same
+        # number as the slider's default).
         floor = None
         try:
             if (q.get("floor") or "").strip():
@@ -1492,10 +1665,11 @@ def register(mcp) -> None:
         except (TypeError, ValueError):
             floor = None
         try:
-            # 🔴 2026-08-19：原来这儿是 recall_data() + recall_core() 各调一次，
-            #    而两个函数各自都会走一遍 _collect —— **同一次搜索算了两遍**。
-            #    实测带 query：工具面 3 秒、这个口 8.6 秒，差的就是那一遍。
-            #    recall_text_and_data() 只采一次，两张皮共用。
+            # This used to call recall_data() and recall_core() separately, and each of them
+            #    runs its own _collect — **the same search computed twice**.
+            #    Measured with a query: 3 seconds on the tool surface, 8.6 seconds here, and
+            #    the difference was that second pass.
+            #    recall_text_and_data() gathers once, and both skins share it.
             from tools.recall.core import recall_text_and_data
             data = await recall_text_and_data(**gates, floor=floor, max_cells=slices)
             if not data.get("ok"):
@@ -1505,7 +1679,7 @@ def register(mcp) -> None:
             logger.warning(f"[loci] recall 失败: {e}")
             return JSONResponse({"error": str(e)}, status_code=500)
 
-    # 房间目录 + 高频标签（两扇门进来先看这个）
+    # The room directory plus frequent tags — the first thing seen through either door.
     @mcp.custom_route("/api/loci/rooms", methods=["GET"])
     async def api_loci_rooms(request: Request) -> Response:
         from starlette.responses import JSONResponse
@@ -1516,7 +1690,7 @@ def register(mcp) -> None:
             return JSONResponse({"error": str(e)}, status_code=500)
 
     # ---------------------------------------------------------
-    # 星空
+    # Starfield
     # ---------------------------------------------------------
     @mcp.custom_route("/api/loci/graph", methods=["GET"])
     async def api_loci_graph(request: Request) -> Response:
@@ -1528,7 +1702,7 @@ def register(mcp) -> None:
             return JSONResponse({"error": str(e)}, status_code=500)
 
     # ---------------------------------------------------------
-    # 相似度检查
+    # Similarity check
     # ---------------------------------------------------------
     @mcp.custom_route("/api/loci/similar", methods=["GET"])
     async def api_loci_similar(request: Request) -> Response:
@@ -1566,11 +1740,12 @@ def register(mcp) -> None:
         out = []
         for score, a, b in data.get("pairs", []):
             if score < th:
-                break            # pairs 已按分数倒序，够了就停
+                break            # pairs is already sorted by descending score, so stop once below the line
             if a not in info or b not in info:
                 continue
             out.append({"score": round(score, 1), "a": _side(a), "b": _side(b),
-                        # 线上那个自动打标签的（阈值 80，量的不是同一把尺）打没打过
+                        # whether the automatic tagger (threshold 80, and not the same ruler
+                        # as this page) has already flagged this pair
                         "tagged": b in (info[a].get("tagged") or [])
                                   or a in (info[b].get("tagged") or [])})
             if len(out) >= limit:
@@ -1586,27 +1761,32 @@ def register(mcp) -> None:
             "truncated": counted > len(out),
             "n": data.get("n", 0),
             "total_pairs": data.get("total_pairs", 0),
-            # 直方图：20 格，每格 5 分
+            # histogram: 20 buckets, 5 points each
             "hist": data.get("hist", []),
             "no_vectors": bool(data.get("no_vectors")),
-            # True = 撞到内存闸了，低分那一段没算全，matched 会偏小（codex #5）
+            # True = the memory cap was hit, so the low-score range is incomplete and
+            # `matched` reads lower than reality
             "capped": bool(data.get("capped")),
         })
 
     @mcp.custom_route("/api/loci/similar/action", methods=["POST"])
     async def api_loci_similar_action(request: Request) -> Response:
-        """人工裁决。**唯一的写口**。
+        """The human verdict. **The only write endpoint here.**
 
-        keep = 什么都不做（两条都留；⚠️ 只是本次页面里不再显示，没有落盘，
-               刷新会重新出现 —— codex 复核 #12 指出的，现在如实写在这儿）
-        sink = 沉一个：走 trace(delete=True)，软删进归档，id 直查永远捞得回。
+        keep = do nothing (both stay; WARNING: it merely stops showing in this page session,
+               nothing is written to disk, and a refresh brings it back — stated honestly
+               here because it was not obvious)
+        sink = sink one: go through trace(delete=True), a soft delete into the archive that a
+               direct id lookup always recovers.
 
-        ⚠️ **2026-08-04 补的授权检查（codex 复核 #2，这是最严重的一条）**：
-        原来只收一个 `id` 就直接 `trace(delete=True)`。而 trace 的删除分支在
-        protected 检查**之前** —— 也就是说，登录之后随便构造一个
-        `{"action":"sink","id":<任意桶id>}`，就能沉掉档案事实、大 event、
-        pinned 核心桶，哪怕它根本没出现在相似度页上。
-        现在必须同时给出这一对的两端，并且服务端自己去核对这一对真的存在。
+        WARNING: **the authorization check added here was the most serious issue found in
+        review.** This used to accept a single `id` and call `trace(delete=True)` on it. But
+        trace's delete branch runs **before** its protected check — meaning that once logged
+        in, anyone could construct `{"action":"sink","id":<any bucket id>}` and sink the
+        profile fact, a big event, or a pinned core bucket, even one that never appeared on
+        the similarity page at all.
+        Both ends of the pair must now be supplied, and the server verifies for itself that
+        the pair really exists.
         """
         from starlette.responses import JSONResponse
         try:
@@ -1637,19 +1817,20 @@ def register(mcp) -> None:
         try:
             data = await _compute_pairs()
             info = data.get("info", {})
-            # ① 两端都得是这一页上真实存在、且可见的桶
+            # 1. Both ends must be buckets that really exist and are visible on this page.
             if a not in info or b not in info:
                 return JSONResponse(
                     {"error": "这一对里有一端不在相似度页上（可能已归档、已换版或是情绪种子）"},
                     status_code=409)
-            # ② 这一对必须真的算出来过（顺序无关）
+            # 2. This pair must actually have been computed (order does not matter).
             hit = any((x == a and y == b) or (x == b and y == a)
                       for _s, x, y in data.get("pairs", []))
             if not hit:
                 return JSONResponse(
                     {"error": "这一对不在当前的相似结果里，不能从这儿沉"},
                     status_code=409)
-            # ③ 不许从这个口沉掉「本来就不该被判重」的东西
+            # 3. Nothing that should never have been up for duplicate review may be sunk
+            #    through this endpoint.
             target = await sh.bucket_mgr.get(bucket_id)
             if not target:
                 return JSONResponse({"error": f"查无此桶：{bucket_id}"}, status_code=404)
@@ -1665,13 +1846,14 @@ def register(mcp) -> None:
 
             from tools.trace.core import trace_core
             msg = str(await trace_core(bucket_id=bucket_id, delete=True))
-            # trace 删除分支只回一句话，没有结构化结果 —— 「未找到」就是没删成（codex #6）
+            # trace's delete branch returns one sentence and no structured result — a
+            # "not found" reply means the delete did not happen
             ok = not msg.startswith("未找到")
             if not ok:
                 return JSONResponse({"ok": False, "action": "sink", "id": bucket_id,
                                      "msg": msg}, status_code=404)
             with _sim_lock:
-                _sim_cache["key"] = None      # 沉掉一条，下次重算
+                _sim_cache["key"] = None      # one entry sank, so recompute next time
             return JSONResponse({"ok": True, "action": "sink", "id": bucket_id,
                                  "msg": msg})
         except Exception as e:
@@ -1679,21 +1861,27 @@ def register(mcp) -> None:
             return JSONResponse({"error": str(e)}, status_code=500)
 
     # ---------------------------------------------------------
-    # 施工 6 · C 件（二改 §6.2 + §8）：她手点的三个写口
-    # ① 结案按钮——她本来就是知道"这事了了没"的人，不该等我问
-    # ② 「问过她」ping——问句真的展示给她那一刻才盖"上次问过她"的戳
-    # ③ event 改错——她只能改 event（mind 没有这个路由，8.2 定的），
-    #   原文一个字不动、另存一条修正走 from 指回去（8.3 绝不真删）
-    # 全部走 `_write_body`（同源校验）+ `trace_core`/`bucket_mgr` 直调
-    # （in-process，同 similar/action 那个先例，不走 MCP 那层）。
+    # Three write endpoints the user drives by hand:
+    # 1. The close button — the user is the one who knows whether something is finished, and
+    #    should not have to wait to be asked.
+    # 2. The "asked about this" ping — the stamp is only applied at the moment the question
+    #    is actually shown to them.
+    # 3. Event correction — only an event can be corrected this way; mind has no such route
+    #    by design. The original text is left untouched, and a correction is stored as a new
+    #    entry pointing back through `from`. Nothing is ever really deleted.
+    # All three go through `_write_body` (the same-origin check) plus a direct in-process
+    # call to `trace_core` / `bucket_mgr`, following the similar/action precedent rather than
+    # going out through the MCP layer.
     # ---------------------------------------------------------
     @mcp.custom_route("/api/loci/want/resolve", methods=["POST"])
     async def api_loci_want_resolve(request: Request) -> Response:
-        """结案按钮：她点一下，status→resolved/abandoned，记"她结的案"。
+        """The close button: one click sets status to resolved or abandoned and records that
+        the user closed it.
 
-        只对当前还是 `status=="want"` 的桶开放——不是 want 的东西没有"结案"
-        这个动作；已经了结过的重复点击会被 trace 的"没有字段需要修改"接住，
-        不会报错也不会二次覆盖 closed_by。
+        Open only to buckets whose `status` is currently `"want"` — closing is not an action
+        that applies to anything else. A repeat click on something already closed is caught
+        by trace's "no fields need changing" path, so it neither errors nor overwrites
+        closed_by a second time.
         """
         from starlette.responses import JSONResponse
         try:
@@ -1723,7 +1911,11 @@ def register(mcp) -> None:
 
         try:
             from tools.trace.core import trace_core
-            msg = str(await trace_core(bucket_id=bucket_id, status=new_status, closed_by="她"))
+            # `closed_by` records that a PERSON closed this, rather than that I noticed it
+            # myself — see the note in tools/trace/core.py. Nothing compares this value; it
+            # is free text that exists to be read. It used to name one specific person,
+            # which meant every install would write that name into its own data.
+            msg = str(await trace_core(bucket_id=bucket_id, status=new_status, closed_by="user"))
             return JSONResponse({"ok": True, "id": bucket_id, "status": new_status, "msg": msg})
         except Exception as e:
             logger.warning(f"[loci] 结案失败: {e}")
@@ -1731,10 +1923,12 @@ def register(mcp) -> None:
 
     @mcp.custom_route("/api/loci/want/asked", methods=["POST"])
     async def api_loci_want_asked(request: Request) -> Response:
-        """「上次问过她」的戳——面板把问句那行**真的画出来给她看**那一刻打一次。
+        """The "last asked" stamp, applied once at the moment the panel **actually renders**
+        the question line where the user can see it.
 
-        不在这儿判断"是不是最久那条"——`heavy_question_id` 已经在
-        `/api/loci/profile` 里算好了，这个口只管盖戳，谁调用就信谁。
+        This does not decide whether the entry is the longest-standing one — that is already
+        computed as `heavy_question_id` in `/api/loci/profile`. This endpoint only applies
+        the stamp, and trusts whoever calls it.
         """
         from starlette.responses import JSONResponse
         try:
@@ -1758,20 +1952,25 @@ def register(mcp) -> None:
             last_asked = str((fresh or {}).get("metadata", {}).get("last_asked") or "")
             return JSONResponse({"ok": True, "id": bucket_id, "last_asked": last_asked})
         except Exception as e:
-            logger.warning(f"[loci] 记「问过她」失败: {e}")
+            logger.warning(f"[loci] 记「问过了」失败: {e}")
             return JSONResponse({"error": str(e)}, status_code=500)
 
     @mcp.custom_route("/api/loci/event/correct", methods=["POST"])
     async def api_loci_event_correct(request: Request) -> Response:
-        """她改一条 event（开工单 §8）：**原文一个字不动**，另存一条修正、from 指回去。
+        """The user corrects an event: **the original text is left untouched**, and the
+        correction is stored as a separate entry whose `from` points back at it.
 
-        流程一字照办（8.2）：她的修改不直接变成真相——落地是**一条新 event**，
-        带 `她改的` 标签 + `from=[旧id]`，旧桶不碰。是不是接受这条修正，
-        由我自己 fold 决定（fold 的手永远在我这儿）；通知就是这条新桶本身
-        （`core.profile.edited_by_her()` 扫 `她改的` 标签 + 没被 fold 的，见那边注释）。
+        A user's edit does not become truth directly. What lands is **a new event**, carrying
+        the `core.profile._EDITED_BY_HER_TAG` tag and `from=[old id]`, with the old bucket
+        untouched. Whether to accept the correction is decided by folding it, and the folding
+        hand always belongs to the model. The notification is that new bucket itself
+        (`core.profile.edited_by_her()` scans for that same tag on entries not yet folded;
+        see the comments there).
 
-        🔴 mind 不给这个入口——不是靠前端不画按钮挡，这儿也硬校验一遍
-        （8.2：mind 是我的判断，她可以不同意，但得由我自己改）。
+        mind has no such entry point — and that is not enforced merely by the front-end not
+        drawing a button; it is hard-checked here as well. A realization is the model's own
+        judgement: the user may disagree with it, but changing it has to be the model's own
+        act.
         """
         from starlette.responses import JSONResponse
         try:
@@ -1786,7 +1985,7 @@ def register(mcp) -> None:
         if not old_id:
             return JSONResponse({"error": "缺 id"}, status_code=400)
         if not new_text.strip():
-            return JSONResponse({"error": "text 不能为空——她改完之后的完整正文"}, status_code=400)
+            return JSONResponse({"error": "text 不能为空——改完之后的完整正文"}, status_code=400)
 
         old = await sh.bucket_mgr.get(old_id)
         if not old:
@@ -1797,8 +1996,8 @@ def register(mcp) -> None:
         old_room = str(old_meta.get("room") or "")
         if is_mind_room(old_room):
             return JSONResponse(
-                {"error": "mind 不能从这儿改——mind 是我的判断，她可以不同意，"
-                          "但得由我自己改（跟她聊，我认同了自己 regrow）"},
+                {"error": "mind 不能从这儿改——mind 是我的判断，你可以不同意，"
+                          "但得由我自己改（跟我说，我认同了自己 regrow）"},
                 status_code=403)
         if not is_event_room(old_room):
             return JSONResponse(
@@ -1809,7 +2008,8 @@ def register(mcp) -> None:
         try:
             from tools.grow.rooms_path import grow_event
             from core.profile import _EDITED_BY_HER_TAG
-            # v/a 继承旧桶——这是事实修正，不是一次新的情绪体验，不该逼她重打情绪坐标。
+            # v/a are inherited from the old bucket: this is a factual correction, not a new
+            # emotional experience, so nobody should be made to re-score the coordinates.
             old_v = old_meta.get("valence", 0.5)
             old_a = old_meta.get("arousal", 0.3)
             msg = await grow_event(
@@ -1820,9 +2020,11 @@ def register(mcp) -> None:
             if not m:
                 return JSONResponse({"error": f"新桶落盘失败：{msg}"}, status_code=500)
             new_id = m.group(1)
-            # 标"她改的"——merge 不 replace（跟 rooms_path._backfill_one 同一个理由：
-            # 后台回填的标签这时候可能还没落，trace(tags=...) 是整体替换会把它冲掉；
-            # 这儿直接读新桶现有 tags 再并进去，走 bucket_mgr.update 而不是 trace）。
+            # Apply _EDITED_BY_HER_TAG by merging, not replacing — the same reason as
+            # rooms_path._backfill_one: the background-filled tags may not have landed yet,
+            # and trace(tags=...) replaces the whole list, which would wipe them out. So this
+            # reads the new bucket's current tags, merges into them, and goes through
+            # bucket_mgr.update rather than trace.
             fresh = await sh.bucket_mgr.get(new_id)
             cur_tags = [str(t) for t in ((fresh or {}).get("metadata", {}).get("tags") or [])]
             merged_tags = list(dict.fromkeys(cur_tags + [_EDITED_BY_HER_TAG]))
@@ -1833,11 +2035,12 @@ def register(mcp) -> None:
             return JSONResponse({"error": str(e)}, status_code=500)
 
     # ---------------------------------------------------------
-    # 自己的密码（她 8-03 夜：「我第一个想要的就是完全脱离他们的面板」）
+    # This panel's own password — the point being to depend on no other panel at all.
     # ---------------------------------------------------------
     @mcp.custom_route("/api/loci/health", methods=["GET"])
     async def api_loci_health(request: Request) -> Response:
-        """我们自己的体检（上游那套 /api/system/diagnostics 查的是发布合规，不是这套记忆）。"""
+        """Our own health check. The upstream /api/system/diagnostics checks release
+        compliance, not whether this memory is doing well."""
         from starlette.responses import JSONResponse
         try:
             return JSONResponse(await build_health())
@@ -1847,16 +2050,20 @@ def register(mcp) -> None:
 
     @mcp.custom_route("/api/loci/auth/state", methods=["GET"])
     async def api_loci_auth_state(request: Request) -> Response:
-        """这把密码现在存在哪儿、要不要设。公开（不带密码任何信息）。
+        """Where this password currently lives and whether one needs to be set. Public, and
+        carries no information about the password itself.
 
-        ⚠️ E2：`authed`（cookie session 登没登）字段砍了——面板 /api/* 不再鉴权，
-        没有 session 这回事了。这把密码现在只管一件事：MCP 远程 OAuth 授权页
-        （bridge/oauth.py）认不认你，不再管这一屏面板认不认你。
+        WARNING: the `authed` field — whether a cookie session was logged in — was removed:
+        /api/* is not authenticated at this layer any more, and there is no such thing as a
+        session here. This password now governs exactly one thing: whether the remote MCP
+        OAuth authorization page (bridge/oauth.py) accepts you. It no longer governs access
+        to this panel screen.
         """
         from starlette.responses import JSONResponse
         return JSONResponse({
             "setup_needed": sh._is_setup_needed(),
-            # True = 密码还在 docker-compose 的环境变量里，改不了、安全问题也用不了
+            # True = the password still comes from an environment variable, so it cannot be
+            # changed here and the security question is unavailable
             "env_locked": bool(os.environ.get("LOCI_DASHBOARD_PASSWORD", "")),
             "has_file_password": sh._load_password_hash() is not None,
             "question": str(sh._load_auth_data().get("security_question") or ""),
@@ -1864,28 +2071,37 @@ def register(mcp) -> None:
 
     @mcp.custom_route("/api/loci/auth/set-password", methods=["POST"])
     async def api_loci_set_password(request: Request) -> Response:
-        """把密码写进文件（`.dashboard_auth.json`），从环境变量手里接管过来。
+        """Write the password into a file (`.dashboard_auth.json`), taking over from the
+        environment variable.
 
-        为什么要单开这一个：官方那两条路这会儿都是死的——
-          · `/auth/change-password` 只要环境变量在就直接拒
-          · `/auth/setup` 只认 loopback，而 Docker 转进来的客户端 IP 是 172.18.0.1，
-            **她在自己电脑上开 localhost 也会被 403**（8-03 夜读代码发现的）
-        所以删环境变量之前必须先有一个文件密码，否则谁都进不来。
+        Why this needed its own endpoint: both of the official routes were dead here.
+          - `/auth/change-password` refuses outright while the environment variable exists.
+          - `/auth/setup` accepts loopback only, but a request forwarded through Docker
+            arrives with a container-network client IP, so **even opening localhost on your
+            own machine gets a 403**.
+        So a file-based password has to exist before the environment variable can be removed,
+        or nobody can get in at all.
 
-        ⚠️ E2（2026-08-17）：原来的门槛是「必须已经登录」（=带着有效的 cookie
-        session）。E2 把 cookie 会话整个砍了（面板 /api/* 不再鉴权），**这一条不能
-        跟着松**——这把密码不是面板的门，是 MCP 远程 OAuth 授权页
-        （bridge/oauth.py）的门，被顶替就等于谁都能拿到读写全部记忆的 MCP token。
-        改成不依赖 session 的门槛：**首次设置**（`_is_setup_needed()`，文件和
-        环境变量都还没有密码）放行；**已有密码**则必须在 body 里带对
-        `current_password`，验证走跟 oauth 授权页同一套 `_verify_password_for_rotation`
-        + 登录限速（`_login_retry_after`/`_reserve_global_login_attempt`），
-        CAS 写回防并发改动。加密/落盘全走 _shared 那一套，这里不自己实现任何密码学。
-        **密码只从浏览器直达这里，我不经手。**
+        WARNING: the original gate here was "you must already be logged in", meaning a valid
+        cookie session. The strip-down removed cookie sessions entirely (/api/* is not
+        authenticated at this layer), **and this gate must not loosen along with it** — this
+        password is not the panel's door, it is the door to the remote MCP OAuth
+        authorization page (bridge/oauth.py), and taking it over means being handed an MCP
+        token that reads and writes every memory.
+        The gate was rewritten not to depend on a session: **first-time setup**
+        (`_is_setup_needed()`, meaning neither the file nor the environment holds a password)
+        is allowed through; **when a password already exists**, the body must carry the
+        correct `current_password`, verified through the same `_verify_password_for_rotation`
+        the OAuth page uses, behind the same login rate limiting
+        (`_login_retry_after` / `_reserve_global_login_attempt`), with a compare-and-swap
+        write-back against concurrent changes. Hashing and persistence all go through
+        _shared; no cryptography is implemented here.
+        **The password travels from the browser straight into this endpoint and passes
+        through no one's hands on the way.**
         """
         from starlette.responses import JSONResponse
         try:
-            body = await _write_body(request)   # 同源 + Content-Type（codex 复核 #1）
+            body = await _write_body(request)   # same-origin check plus Content-Type
         except PermissionError as e:
             return JSONResponse({"error": str(e)}, status_code=403)
         except ValueError as e:
@@ -1899,7 +2115,8 @@ def register(mcp) -> None:
 
         proof = None
         if not sh._is_setup_needed():
-            # 已经有密码在守——改密码必须先证明认得旧密码，不能靠 session 兜底了。
+            # A password is already standing guard: changing it requires proving knowledge of
+            # the old one. There is no session to fall back on any more.
             retry = sh._login_retry_after(request)
             if retry:
                 return JSONResponse({"error": f"尝试过于频繁，请 {retry} 秒后再试"},
@@ -1922,10 +2139,12 @@ def register(mcp) -> None:
                 sh._record_login_failure(request)
                 return JSONResponse({"error": "当前密码不对"}, status_code=401)
             sh._record_login_success(request)
-            proof = verified  # CredentialProof：拿它做 CAS 写回，防并发改密码
+            proof = verified  # CredentialProof, used for the compare-and-swap write-back against a concurrent change
         try:
-            # PBKDF2 会卡住事件循环 ~100ms。这是一辈子按不了几次的按钮，认了，
-            # 不为它引一套线程池（登录那条高频路径走的是上面的 _password_work_semaphore）
+            # PBKDF2 blocks the event loop for roughly 100ms. This is a button pressed a
+            # handful of times in a lifetime, so that is accepted rather than introducing a
+            # thread pool for it. The high-frequency login path uses the
+            # _password_work_semaphore above instead.
             if proof is not None:
                 ok = sh._save_password_hash(
                     pw, expected_hash=proof.value, expected_generation=proof.generation,
@@ -1946,7 +2165,7 @@ def register(mcp) -> None:
         })
 
     # ---------------------------------------------------------
-    # 档案（门口那张纸）
+    # The profile — the note by the door
     # ---------------------------------------------------------
     @mcp.custom_route("/api/loci/profile", methods=["GET"])
     async def api_loci_profile(request: Request) -> Response:
@@ -1958,7 +2177,7 @@ def register(mcp) -> None:
             return JSONResponse({"error": str(e)}, status_code=500)
 
     # ---------------------------------------------------------
-    # 忽然想起 · 再来一个
+    # "Something comes back to you" — give me another
     # ---------------------------------------------------------
     @mcp.custom_route("/api/loci/recollect", methods=["GET"])
     async def api_loci_recollect(request: Request) -> Response:
@@ -1974,16 +2193,17 @@ def register(mcp) -> None:
             return JSONResponse({"error": str(e)}, status_code=500)
 
     # ---------------------------------------------------------
-    # 「该发呆了吗」——给宿主（gateway 唤醒腿）问的那一口
+    # "Is it time to muse?" — the endpoint the host's wake-up leg asks
     # ---------------------------------------------------------
     @mcp.custom_route("/api/muse/pending", methods=["GET"])
     async def api_muse_pending(request: Request) -> Response:
-        """数量 + 年龄，没有内容。**故意不要 cookie 鉴权**。
+        """Counts and ages, no content. **Deliberately not behind cookie auth.**
 
-        问它的是 gateway 那条腿（另一个进程，拿不到浏览器会话），不是她的页面；
-        而它给出去的东西是三个数和一个布尔——**里面没有一个字是记忆**。
-        （同一个端口上的 `/mcp` 本来就 `mcp_require_auth: false` 直连，
-          E2 那一步整个 auth 都要砍——这儿不新开口子，只是没多加一道。）
+        The caller is the gateway's wake-up leg — a separate process with no access to a
+        browser session — not a page the user is looking at. And what it hands back is three
+        numbers and a boolean: **not one character of it is memory.**
+        (On the same port, `/mcp` itself is reachable directly when `mcp_require_auth` is
+         false. This opens no new hole; it simply does not add a gate.)
         """
         from starlette.responses import JSONResponse
         try:
@@ -1993,18 +2213,23 @@ def register(mcp) -> None:
             return JSONResponse({"error": str(e)}, status_code=500)
 
     # ---------------------------------------------------------
-    # 施工7c · 戳戳送达：梦(交付) + 发呆团数(提醒) + recall 结构化分数，一口问全
-    # gateway 每窗开头问一次这个口（同 `newWindow` 信号，窗内不重问）。
-    # GET、无副作用——**故意不要 cookie 鉴权**，跟 `/api/muse/pending`、
-    # `/api/dream/current` 同一个理由：问它的是桥（另一个进程），不是她的页面。
+    # The nudge endpoint: dreams (delivery) + muse cluster count (the nudge) + structured
+    # recall scores, all answered in one call.
+    # The gateway asks once at the start of each window (on the `newWindow` signal, and not
+    # again within the window).
+    # GET, no side effects — **deliberately not behind cookie auth**, for the same reason as
+    # `/api/muse/pending` and `/api/dream/current`: the caller is the bridge, a separate
+    # process, not a page the user is looking at.
     # ---------------------------------------------------------
     @mcp.custom_route("/api/loci/subjects", methods=["GET"])
     async def api_loci_subjects(request: Request) -> Response:
-        """「都有谁」那一屏的数据。**纯读**——数数而已，不碰 aliases.yaml。
+        """The data behind the "who is in here" screen. **Read-only** — it counts, and never
+        touches aliases.yaml.
 
-        2026-08-19 新开。之前这份统计只能靠手写脚本扫全库（8-18 扫了 979 条），
-        面板显然不能每次开页都那么干。合并/改名是**写**操作，另开一个口，
-        而且要守住那条判据：系统只摆出来，合并是人点的那一下。
+        Before this existed, the only way to get these numbers was a hand-written script
+        scanning the whole store, which the panel obviously cannot do on every page load.
+        Merging and renaming are **write** operations and live on a separate endpoint, so
+        that the rule holds: the system lays things out, and the merge is a human click.
         """
         from starlette.responses import JSONResponse
         try:
@@ -2015,10 +2240,12 @@ def register(mcp) -> None:
 
     @mcp.custom_route("/api/loci/setup", methods=["GET"])
     async def api_loci_setup(request: Request) -> Response:
-        """设置页开头那一屏（五行状态 + 只读事实）。**纯读。**
+        """The screen at the top of the settings page: five status rows plus read-only facts.
+        **Read-only.**
 
-        2026-08-19 新开。为什么要它：8-18 那天踩到的五个失败全是静默的，
-        每一个都不报错。这个口的活儿不是「让人填表」，是「把静默的变成看得见的」。
+        Why it exists: all five failures encountered in one day were silent, and not one of
+        them raised an error. This endpoint's job is not to collect settings, it is to turn
+        the silent things into visible ones.
         """
         from starlette.responses import JSONResponse
         try:
@@ -2029,22 +2256,29 @@ def register(mcp) -> None:
 
     @mcp.custom_route("/api/loci/subjects/action", methods=["POST"])
     async def api_loci_subjects_action(request: Request) -> Response:
-        """人名表上那三个动作。**这是个写口** —— 写的是 buckets/aliases.yaml。
+        """The three actions on the subjects screen. **This is a write endpoint** — it writes
+        buckets/aliases.yaml.
 
-        判据跟 muse/fold 同一条：**系统只负责摆出来，改哪个是人点的那一下。**
-        所以这儿没有任何自动触发路径，也不接受「帮我全部整理一遍」这种批量请求：
-        一次调用改一个名字。
+        Same principle as muse and fold: **the system lays things out, and which one to
+        change is a human click.** So there is no automatic trigger path here, and no bulk
+        "tidy all of this up for me" request is accepted: one call changes one name.
 
-        三个动作落到两个操作上（合并和改名是同一件事：把一个写法归到一个规范名下）：
-          not_person  这不是人 → 记进 __不是人__ 黑名单，以后不再抽它。
-                      🔴 历史那些条**一个字节都不动**（她 2026-08-19 定的 A 方案）：
-                         改历史 metadata 是往她的记忆里写字，而「当时模型这么抽的」
-                         本身是个事实；黑名单已经够了，而且随时能反悔。
-          merge       这两个是一个人 → name 归到 target 底下
-          rename      给他个正式名字 → 同上（target 是新的规范名）
+        The three actions reduce to two operations, because merging and renaming are the same
+        thing — filing one spelling under one canonical name:
+          not_person  this is not a person -> record it on the blocklist so it is never
+                      extracted again.
+                      **Not one byte of the historical entries is touched.** Rewriting
+                         historical metadata means writing into someone's memories, and
+                         "this is what the model extracted at the time" is itself a fact. The
+                         blocklist is enough, and it can be undone at any moment.
+          merge       these two are one person -> file `name` under `target`
+          rename      give them a proper name -> the same, with `target` as the new canonical
+                      name
 
-        ⚠️ 都只管**以后**：老条目盘上还是老名字（这张表没有迁移脚本）。
-           面板那一屏按表把它们并起来看，所以点完当场就少一行。
+        WARNING: all of it applies **going forward** only. Older entries keep their old names
+           on disk; there is no migration script for this table. The panel screen merges them
+           for display according to the table, which is why a row disappears the moment the
+           click lands.
         """
         from starlette.responses import JSONResponse
         from tools import _subjects as subj
@@ -2079,16 +2313,18 @@ def register(mcp) -> None:
 
     @mcp.custom_route("/api/logs", methods=["GET"])
     async def api_logs(request: Request) -> Response:
-        """日志：读 server.log 的尾巴。**纯读。**
+        """Logs: read the tail of server.log. **Read-only.**
 
-        2026-08-19 重开。这条路由本来在 `web/system.py` 里，E2（8-17）把上游
-        那 20 个模块整个砍掉的时候连它一起没了 —— 而面板上「日志」那一整块
-        还在打它，404 回的是 HTML，前端 `.json()` 当场炸，屏幕上就是那句
-        「返回的不是 JSON」。**写日志的那头一直活着**（utils.setup_logging
-        往 <buckets>/.logs/server.log 写），只是没人读得到。
+        Restored. This route used to live in `web/system.py` and went with it when the twenty
+        upstream modules were cut — while the panel's entire log section kept calling it,
+        getting HTML back from the 404, and blowing up in the front-end's `.json()`. What the
+        user saw was "the response was not JSON". **The writing side was alive the whole
+        time** (utils.setup_logging writes to <buckets>/.logs/server.log); nobody could read
+        it.
 
-        `level` 按严重度往上收：WARNING 会连 ERROR/CRITICAL 一起给
-        （选「警告」的人要的是「有没有不对劲」，不是「只要警告不要错误」）。
+        `level` filters upward by severity: choosing WARNING also returns ERROR and CRITICAL.
+        Someone selecting "warnings" wants to know whether anything is wrong, not "warnings
+        but please hide the errors".
         """
         from starlette.responses import JSONResponse
         q = request.query_params
@@ -2106,7 +2342,7 @@ def register(mcp) -> None:
         rank = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40, "CRITICAL": 50}
         floor = 0 if level == "ALL" else rank.get(level, 30)
         try:
-            # 只读尾巴：日志会滚到 5MB，整份读进来纯属浪费
+            # Read only the tail: the log rotates at 5MB, and reading all of it is pure waste
             with open(path, "rb") as f:
                 f.seek(0, os.SEEK_END)
                 size = f.tell()
@@ -2114,7 +2350,7 @@ def register(mcp) -> None:
                 raw = f.read().decode("utf-8", "replace")
             lines = raw.splitlines()
             if size > 1024 * 1024 and lines:
-                lines = lines[1:]                    # 掐掉被切半的第一行
+                lines = lines[1:]                    # drop the first line, which was cut in half
             keep = []
             for ln in lines:
                 if floor:
@@ -2134,30 +2370,35 @@ def register(mcp) -> None:
 
     @mcp.custom_route("/api/loci/pulse", methods=["GET"])
     async def api_loci_pulse(request: Request) -> Response:
-        """体检：多少条、占多大、引擎活着没。**纯读，不写盘。**
+        """Health: how many entries, how much space, are the engines alive. **Read-only;
+        nothing is written to disk.**
 
-        2026-08-18（E3）：`pulse` 从 MCP 工具面撤了下来 —— 别的九个工具都是
-        「我在对记忆做什么」，只有它是「这台机器还好吗」，那不是记忆动作。
-        实现没动（`tools/pulse/`），只是入口从工具面换成了这条只读路由，
-        面板拿它画体检卡。
+        `pulse` was withdrawn from the MCP tool surface — the other nine tools are all "what
+        am I doing to a memory", and this one alone is "is this machine healthy", which is
+        not a memory action.
+        The implementation is unchanged (`tools/pulse/`); only its entry point moved from the
+        tool surface to this read-only route, which the panel uses to draw the health card.
 
-        query 参数 `include_archive=1` 连归档区一起报。
+        The `include_archive=1` query parameter includes the archive in the report.
         """
         from starlette.responses import PlainTextResponse
         from tools import pulse as _pulse
         inc = str(request.query_params.get("include_archive") or "").strip() in ("1", "true", "yes")
         try:
             return PlainTextResponse(await _pulse.pulse(include_archive=inc))
-        except Exception as e:                       # noqa: BLE001 - 体检口不该把面板带崩
+        except Exception as e:                       # noqa: BLE001 - the health endpoint must not take the panel down with it
             logger.warning(f"[loci] pulse 失败: {e}")
             return PlainTextResponse(f"pulse 失败：{e}", status_code=500)
 
     @mcp.custom_route("/api/loci/poke", methods=["GET"])
     async def api_loci_poke(request: Request) -> Response:
-        """只读戳口。调用前后库指纹必须一致——不扫梦、不删文件、不推回想、不写盘。
+        """The read-only nudge endpoint. The store's fingerprint must be identical before and
+        after a call: it sweeps no dreams, deletes no files, pushes no recollection forward,
+        and writes nothing to disk.
 
-        query 参数 `query`（可选，给了才有 `recall_scores`）+
-        `when`/`room`/`tag`/`floor`（同 recall 的参数账，透传给 `recall_data()`）。
+        Query parameters: `query` (optional; `recall_scores` appears only when it is given)
+        plus `when` / `room` / `tag` / `floor`, which mirror recall's parameters and are
+        passed straight through to `recall_data()`.
         """
         from starlette.responses import JSONResponse
         q = request.query_params
@@ -2179,22 +2420,27 @@ def register(mcp) -> None:
             return JSONResponse({"error": str(e)}, status_code=500)
 
     # ---------------------------------------------------------
-    # 施工7d（2026-08-18）· 降级信号：完整层唯一的死法
-    # ⛔ MCP 工具面十个不加不减——这是新写口，走 web 路由，跟 /api/loci/poke、
-    # /api/muse/pending、/api/dream/current 同一类：调用方是桥（gateway 另开的
-    # 进程），不是她的浏览器页面，**故意不要 cookie/同源鉴权**（那道闸是给页面上
-    # 的按钮防跨站用的，桥的服务器到服务器请求本来就没有 Origin 可言）。
+    # The demotion signal: the only way the whole-dream layer ever ends.
+    # Nothing is added to or removed from the MCP tool surface — this is a new write endpoint
+    # on a web route, in the same class as /api/loci/poke, /api/muse/pending and
+    # /api/dream/current: the caller is the bridge, a process the gateway starts, not a
+    # browser page. **Deliberately not behind cookie or same-origin auth** — that gate exists
+    # to protect buttons on a page from cross-site requests, and a server-to-server request
+    # from the bridge has no Origin to speak of.
     # ---------------------------------------------------------
     @mcp.custom_route("/api/loci/dream/wake", methods=["POST"])
     async def api_loci_dream_wake(request: Request) -> Response:
-        """降级信号：她回来发的第二条消息触发（数消息、判"第二条"是桥的活，
-        见 `src/loci-bridge/戳戳送达.js`）。把还活着的「完整」层降为碎片层，
-        碎片 30 分钟 / 一句 60 分钟的老生命周期从**这一刻**起算。
+        """The demotion signal, triggered by the user's second message after returning.
+        Counting messages and deciding which one is "the second" is the bridge's job.
+        It drops a still-live whole-dream layer to the fragment layer, and the old lifecycle
+        — 30 minutes as a fragment, 60 minutes as a single sentence — starts from **this
+        moment**.
 
-        **幂等**：没有活着的完整层就什么都不做，照样 200——gateway 那边状态
-        和这边万一不同步，重复调用完全无害（说明书红线：只调一次，幂等兜底，
-        这个"兜底"就是靠这儿实现的，不是靠桥自己去重）。body 不读、不校验，
-        这个口不需要任何参数。
+        **Idempotent**: with no live whole layer it does nothing and still answers 200. If the
+        gateway's state and this side ever disagree, a repeated call is completely harmless.
+        The contract says to call it once, with idempotency as the safety net — and that net
+        is implemented here, not by the bridge deduplicating for itself. The body is neither
+        read nor validated; this endpoint takes no parameters.
         """
         from starlette.responses import JSONResponse
         try:
@@ -2206,28 +2452,37 @@ def register(mcp) -> None:
         return JSONResponse({"降级了": degraded})
 
     # ---------------------------------------------------------
-    # 取梦：**这单唯一的取梦口**（MCP 工具面一个新工具都不加）
+    # Fetching a dream: **the only endpoint that does so.** No new MCP tool is added for it.
     # ---------------------------------------------------------
     @mcp.custom_route("/api/dream/current", methods=["GET"])
     async def api_dream_current(request: Request) -> Response:
-        """当前那个梦。有梦 → 当前层的内容 + 层级；**没梦 → 204**。
+        """The current dream. If there is one: the current layer's content plus which layer
+        it is. **If there is none: 204.**
 
         ------------------------------------------------------------
-        🔴 三条，都是判据不是实现细节
+        Three rules. All three are principles, not implementation details.
         ------------------------------------------------------------
-        ① **醒来只拿得到碎片，拿不到完整版**（完整版从来没落过盘）。
-           一阵之后只剩一句（`层="一句"`），再之后**真的没了**（文件删掉 + 留痕）。
-        ② **调一次算一次「回想」**：起算点往后推一点，**但每次推得越来越少**——
-           回想能延缓，不能阻止。所以这个 GET **会写盘**（改起算点/回想次数），
-           故意的：不想它就别问它，「你不理它，它自己就没了」。
-        ③ **想留住只有一条路**：`grow` 成一条 event。返回里那句 `留住的办法`
-           就是这个意思——**写下来那一刻它就不是梦了，是记忆。**
+        1. **On waking you get the fragment, never the whole dream** — the whole version was
+           never written to disk. After a while only a single sentence remains
+           (`layer = "一句"`), and after that it is **really gone**: the file is deleted and a
+           trace is left behind.
+        2. **Each call counts as an act of recollection**: the expiry point moves out a
+           little, **but by less each time** — recollection can delay a dream's fading, not
+           prevent it. So this GET **does write to disk** (updating the expiry point and the
+           recollection count). That is deliberate: if you do not want it, do not ask for it.
+           Left alone, it disappears on its own.
+        3. **There is exactly one way to keep it**: `grow` it into an event. That is what the
+           "how to keep this" line in the response means — **the moment it is written down it
+           stops being a dream and becomes a memory.**
 
-        噩梦只落一个字段（`nightmare: true`，v 低 a 高）。**出声那条腿不在这儿**：
-        不推送、不震她手机，半夜在 chat 说一句是桥的活（联动单：别做成会推送的 APP）。
+        A nightmare is just one field (`nightmare: true`, low v and high a). **The part that
+        speaks up is not here**: no push notifications, no buzzing anyone's phone. Saying
+        something in chat in the middle of the night is the bridge's job — this must not
+        become an app that pushes.
 
-        **故意不要 cookie 鉴权**，跟 `/api/muse/pending` 同一个理由：问它的是桥
-        （另一个进程，拿不到浏览器会话），而同一个端口上的 `/mcp` 本来就免 token 直连。
+        **Deliberately not behind cookie auth**, for the same reason as `/api/muse/pending`:
+        the caller is the bridge, a separate process with no browser session, and on the same
+        port `/mcp` itself is already reachable without a token.
         """
         from starlette.responses import JSONResponse
         try:
@@ -2237,12 +2492,14 @@ def register(mcp) -> None:
             logger.warning(f"[loci] dream/current 失败: {e}")
             return JSONResponse({"error": str(e)}, status_code=500)
         if not got:
-            # 204：**一夜无梦是正常的**（攒不到线就不织），不是错。
+            # 204: **a night without dreams is normal** — below the threshold nothing is
+            # woven. It is not an error.
             return Response(status_code=204)
         return JSONResponse(got)
 
     # ---------------------------------------------------------
-    # 点进去看原文（复用 recall 的 id 直查口径，逐字不截）
+    # Click through to the original text, reusing recall's direct-id-lookup rules: verbatim,
+    # never truncated.
     # ---------------------------------------------------------
     @mcp.custom_route("/api/loci/bucket/{bucket_id}", methods=["GET"])
     async def api_loci_bucket(request: Request) -> Response:
@@ -2267,7 +2524,7 @@ def register(mcp) -> None:
                 "short": _short_id(bucket_id),
                 "name": str(meta.get("name") or ""),
                 "summary": str(meta.get("summary") or ""),
-                "content": str(b.get("content") or ""),   # 逐字，不截
+                "content": str(b.get("content") or ""),   # verbatim, never truncated
                 "room": room,
                 "room_cn": _room_cn(meta.get("room")),
                 "when": str(meta.get("when") or ""),
@@ -2278,19 +2535,22 @@ def register(mcp) -> None:
                 "status": str(meta.get("status") or ""),
                 "pinned": bool(meta.get("pinned")),
                 "tags": [str(t) for t in (meta.get("tags") or [])],
-                # 二改 B 件：主体（第三类标签），跟 tags/aliases 并列、互不混
+                # Subjects are a third kind of tag, sitting alongside tags and aliases and
+                # never mixed with them.
                 "subjects": [str(s) for s in (meta.get("subjects") or [])],
-                # 二改 E 件：from 是新名字（读兼容老 triggered_by）
+                # `from` is the current name; reads still accept the older triggered_by.
                 "from": _split_ids(read_from(meta)),
                 "supersedes": _split_ids(meta.get("supersedes")),
                 "superseded_by": str(meta.get("superseded_by") or ""),
                 "archived": archived,
-                # meaning 写入口已退役，但**盘上的老数据照样显示**——
-                # 那里面躺着真话（d52a38 实证），她要亲眼看完才定去处。
+                # The `meaning` write path is retired, but **existing data on disk is still
+                # displayed** — there are true things in there, and where they end up should
+                # be decided after reading them, not before.
                 "meaning": meta.get("meaning") or [],
                 "why_remembered": str(meta.get("why_remembered") or ""),
-                # 施工 6 · C 件（§8.2）：她只能改 event，不给 mind 开口子；
-                # 归档桶也不给改（改错要走 restore 先捞回来，跟 regrow 同一个规矩）。
+                # Only an event may be corrected here; mind gets no such opening. Archived
+                # buckets cannot be edited either — correcting one means restoring it first,
+                # the same rule regrow follows.
                 "can_edit": bool(is_event_room(room)) and not archived,
             })
         except Exception as e:

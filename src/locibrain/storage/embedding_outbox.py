@@ -91,10 +91,12 @@ class EmbeddingOutbox:
         self._consecutive_failures = 0
         self._circuit_open_until = 0.0
         self._circuit_trips = 0
-        # 熔断只该在「不同的桶接连失败」时才跳闸——那才是供应商级故障的信号。
-        # 同一个桶反复失败更像是那条内容本身有毒（比如触发了 provider 的内容
-        # 过滤，永远拿不到向量），不该连累队列里所有其他合法待处理的记忆一起
-        # 陪绑最长 10 分钟。见 _record_provider_failure()。
+        # The breaker should only trip when *different* buckets fail in a row — that is
+        # what a provider-level outage looks like. One bucket failing over and over is
+        # far more likely to be that piece of content being poison (it trips the
+        # provider's content filter, say, so it will never get a vector), and that must
+        # not drag every other legitimate pending memory in the queue into a stall of up
+        # to ten minutes. See _record_provider_failure().
         self._last_failure_bucket_id = ""
 
     @property
@@ -520,8 +522,9 @@ class EmbeddingOutbox:
                 next_attempt_at=time.time() + delay,
             )
             self._persist_locked()
-        # 同一个桶连续失败不计入熔断计数：那是内容本身有毒的信号，不是供应商
-        # 挂了的信号。只有失败发生在不同的桶身上，才可能是供应商级故障。
+        # Repeat failures on the same bucket do not count toward the breaker: that is a
+        # signal about the content, not about the provider being down. Only failures
+        # spread across different buckets can mean a provider-level outage.
         if bucket_id != self._last_failure_bucket_id:
             self._last_failure_bucket_id = bucket_id
             self._record_provider_failure()

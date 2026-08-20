@@ -1,25 +1,28 @@
 """
 ========================================
-utils.py — 整个项目共享的小工具集合
+utils.py — small helpers shared across the whole project
 ========================================
 
-配置加载、日志初始化、路径安全校验、ID 生成、token 估算、时间格式化——
-所有「跨模块要用、又不属于任何业务逻辑」的小函数都在这里。
+Config loading, logger setup, path-safety checks, ID generation, token estimation, time
+formatting: every small function that several modules need and that belongs to no
+particular piece of business logic lives here.
 
-关键行为：
-- load_config()：读 config.yaml，处理环境变量覆盖（LOCI_VAULT_DIR 等），mkdir 必要目录
-- setup_logger()：统一日志格式，控制台 + 可选文件
-- safe_path()：禁止路径穿越（OWASP）
-- generate_bucket_id()：12 位 hex，碰撞概率忽略
-- count_tokens_approx()：按字符数粗估 token，离线用
-- now_iso() / parse_iso()：统一时间字符串
+Key behaviour:
+- load_config(): read config.yaml, apply environment overrides (LOCI_VAULT_DIR and the
+  rest), mkdir the directories that must exist.
+- setup_logger(): one log format, console plus an optional file.
+- safe_path(): refuse path traversal (OWASP).
+- generate_bucket_id(): 12 hex characters; collision probability is negligible.
+- count_tokens_approx(): rough token estimate from character counts, usable offline.
+- now_iso() / parse_iso(): one time-string format.
 
-不做什么（边界）：
-- 不依赖任何业务模块（被所有模块依赖，不能反向 import）
-- 不做 LLM / 网络调用
-- 不做记忆桶相关业务逻辑
+What this does NOT do (the boundary):
+- It depends on no business module. Everything depends on it, so it must never import
+  back the other way.
+- No LLM calls, no network calls.
+- No memory-bucket business logic.
 
-对外暴露：上述所有函数
+Public surface: all of the above.
 ========================================
 """
 
@@ -40,41 +43,46 @@ from typing import Callable, Optional
 
 
 # ============================================================
-# 常量 / Named constants
+# Named constants
 # ------------------------------------------------------------
-# rule.md §⑩：禁止裸魔法数字。下面这几个值原本散在函数体内，
-# 抽到这里是为了：① 一眼能看清"调参面板"；② 改一处全文生效。
+# No bare magic numbers. These values used to be scattered through function bodies; they
+# are gathered here so that (1) the whole "tuning panel" is visible at a glance and
+# (2) changing one place changes every use.
 # ============================================================
 
-# count_tokens_approx() 用的粗估系数。
-# 经验值，不追求精确——只为判断"是否需要脱水压缩"。
-_TOKEN_RATIO_PER_CN_CHAR = 1.5   # 每个中文字 ≈ 1.5 token
-_TOKEN_RATIO_PER_EN_WORD = 1.3   # 每个英文词 ≈ 1.3 token
-_TOKEN_RATIO_PER_CHAR = 0.05     # 标点/空格等其它字符的兜底贡献
+# Rough coefficients used by count_tokens_approx().
+# Empirical, and not meant to be precise — they only have to answer "does this need
+# compressing?".
+_TOKEN_RATIO_PER_CN_CHAR = 1.5   # one Chinese character ~ 1.5 tokens
+_TOKEN_RATIO_PER_EN_WORD = 1.3   # one English word ~ 1.3 tokens
+_TOKEN_RATIO_PER_CHAR = 0.05     # catch-all contribution from punctuation, spaces, etc.
 
-# setup_logging() 文件日志轮转配置。
-_LOG_FILE_MAX_BYTES = 1_000_000  # 单个日志文件 1 MB 后轮转
-_LOG_FILE_BACKUP_COUNT = 3       # 保留 3 个历史文件
+# File-log rotation settings for setup_logging().
+_LOG_FILE_MAX_BYTES = 1_000_000  # rotate a log file once it passes 1 MB
+_LOG_FILE_BACKUP_COUNT = 3       # keep three historical files
 _LOG_FALLBACK_DIR = os.path.join(tempfile.gettempdir(), "loci_logs")
 
-# sanitize_name() 桶名最大长度（防止文件名过长导致 OS 报错）。
+# Maximum bucket-name length for sanitize_name(); an over-long filename makes the OS error.
 _BUCKET_NAME_MAX_LEN = 80
 
 _BOOL_TRUE = frozenset({"1", "true", "yes", "on"})
 _BOOL_FALSE = frozenset({"0", "false", "no", "off"})
 
-# 进程启动那一刻就被「真实 OS / 平台」注入的可配置环境变量名集合（值非空才算）。
-# 在任何 dashboard 保存动作 mutate os.environ 之前快照——这是「平台级 env」与
-# 「运行时被 dashboard 写进 os.environ 的值」唯一可靠的区分依据。
-# 用途：dashboard 据此提示「这些字段由平台环境变量提供，重启会覆盖你这里保存的值」，
-# 修复「config.yaml 存了 Gemini，但平台 LOCI_COMPRESS_BASE_URL=DeepSeek 每次重启盖回」的坑。
+# The set of configurable environment-variable names that the real OS or hosting platform
+# injected at the moment this process started (non-empty values only).
+# Snapshotted before any dashboard save can mutate os.environ — that snapshot is the only
+# reliable way to tell "platform-level env" apart from "a value the dashboard wrote into
+# os.environ at runtime".
+# It is used so the dashboard can warn: "these fields come from platform environment
+# variables and a restart will overwrite whatever you save here." That fixes the trap where
+# config.yaml holds one provider while the platform's LOCI_COMPRESS_BASE_URL points at
+# another and quietly wins on every restart.
 BOOT_ENV_CONFIG: frozenset[str] = frozenset(
     k for k, v in os.environ.items()
     if (k.startswith("LOCI_") or k == "AI_NAME") and str(v).strip()
 )
 def _project_root() -> str:
-    """Return absolute path to the project root (parent of src/ where utils.py lives).
-    项目根目录（src/ 的上一层）。"""
+    """Return absolute path to the project root (parent of src/ where utils.py lives)."""
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -149,21 +157,27 @@ def _migrate_legacy_render_config(legacy_path: str, persistent_path: str) -> Non
 
 
 def config_file_path() -> str:
-    """config.yaml 的绝对路径 —— 读 / 写 / entrypoint 三方共用的单一真相。
+    """Absolute path of config.yaml — the single source of truth shared by readers,
+    writers and the entrypoint.
 
-    顺序：
-      1. $LOCI_CONFIG_PATH —— 显式指定即采纳，**即便文件尚不存在**
-         （entrypoint 会在服务启动前据此创建；Dashboard 写配置时也据此落盘）。
-      2. Render 旧实例未设 LOCI_CONFIG_PATH 时，跟随已有的
-         LOCI_BUCKETS_DIR / LOCI_VAULT_DIR 落到持久盘，并安全复制旧 cwd 配置。
-      3. <cwd>/config.yaml —— 存在才用。
-      4. <project_root>/config.yaml —— 兜底默认。
+    Order:
+      1. $LOCI_CONFIG_PATH — taken as given when set, **even if the file does not exist
+         yet**. The entrypoint creates it from this before the service starts, and the
+         dashboard writes here too.
+      2. If an older hosted instance has no LOCI_CONFIG_PATH, follow the existing
+         LOCI_BUCKETS_DIR / LOCI_VAULT_DIR onto persistent storage, safely copying the old
+         cwd config across.
+      3. <cwd>/config.yaml — used only if it exists.
+      4. <project_root>/config.yaml — the fallback default.
 
-    为什么独立成函数：load_config 读、Dashboard（config_api/buckets/github/
-    embedding）写、entrypoint 初始化——以前各处都硬编码 <repo_root>/config.yaml。
-    一旦把 config 挪进数据目录（修 Docker 单文件 bind mount 在 Windows 被建成
-    目录、容器崩溃重启的坑），读和写就会分叉到不同路径、Dashboard 存的 key 重启即丢。
-    统一到这里，LOCI_CONFIG_PATH 一处生效、读写永远同一个文件。"""
+    Why this is its own function: load_config reads it, the dashboard routes (config_api,
+    buckets, github, embedding) write it, and the entrypoint initializes it. Every one of
+    those used to hardcode <repo_root>/config.yaml. The moment the config moved into the
+    data directory — which was itself a fix for a single-file Docker bind mount being
+    created as a directory on Windows and crash-looping the container — reads and writes
+    forked to different paths, and any key the dashboard saved was lost on restart.
+    Centralizing it here means LOCI_CONFIG_PATH takes effect in one place and reads and
+    writes always hit the same file."""
     env_cfg = os.environ.get("LOCI_CONFIG_PATH", "").strip()
     if env_cfg:
         return env_cfg
@@ -190,10 +204,13 @@ def config_file_path() -> str:
     return os.path.join(_project_root(), "config.yaml")
 
 
-# 所有往 config.yaml 写东西的 Dashboard 接口（github/tunnel/config_api/buckets……）
-# 共用这一把锁 + 同一套原子写：谁都不能绕开它自己再开 open(path, "w") 整份覆盖。
-# 背景：github 备份配置曾经用「open(w) 直接整份覆盖、写失败只记 warning 但仍回 200」
-# 这种不安全写法，写失败时用户会看到「保存成功」、下次重启却发现配置又清空了。
+# Every dashboard endpoint that writes to config.yaml (github, tunnel, config_api,
+# buckets, ...) shares this one lock and this one atomic write. Nobody may bypass it and
+# open(path, "w") over the whole file themselves.
+# Background: the GitHub backup settings once used exactly that unsafe pattern — open(w)
+# over the whole file, log a warning on failure, and still return 200. When the write
+# failed the user saw "saved successfully" and then found the settings blank again after
+# the next restart.
 
 
 _MOUNTINFO_ESCAPES = {
@@ -278,19 +295,24 @@ def read_config_yaml() -> dict:
 
 
 def atomic_update_config_yaml(mutate: Callable[[dict], None]) -> dict:
-    """线程安全地读改写 config.yaml：加锁读现有内容，交给 ``mutate`` 原地 patch。
+    """Thread-safe read-modify-write of config.yaml: take the lock, read what is there,
+    and hand it to ``mutate`` to patch in place.
 
-    普通文件通过临时文件 + ``os.replace`` 原子落盘。Docker 的旧式单文件
-    bind mount 是一个不可替换的挂载点，Linux 会对 ``os.replace`` 返回
-    ``EBUSY``；这种情况下退回到锁内覆盖、flush + fsync，并继续执行同一套
-    回读校验。降级路径不具备崩溃原子性，但能兼容无法 rename 的挂载点，且
-    仍由全局锁避免应用内部的并发读改写互相覆盖。
+    An ordinary file is written atomically via a temp file plus ``os.replace``. An old-style
+    single-file Docker bind mount is a mount point that cannot be replaced, and Linux
+    answers ``os.replace`` with ``EBUSY``; in that case this falls back to overwriting in
+    place under the lock, with flush + fsync, and still runs the same read-back check. The
+    fallback path is not crash-atomic, but it works on mount points that cannot be renamed,
+    and the global lock still prevents concurrent in-process read-modify-writes from
+    clobbering each other.
 
-    任何一步失败都直接抛异常——调用方必须把异常转成对用户如实的错误响应，
-    不能吞掉后仍然回「保存成功」，那样用户会以为配置在，其实只在内存里，
-    下次进程重启（崩溃/热更新/手动重启按钮）就会被磁盘上没写成功的旧内容盖掉。
+    Any failure raises. The caller must turn that exception into an honest error response.
+    It must not swallow it and answer "saved successfully" — the user would then believe
+    the config is stored when it only exists in memory, and the next restart (crash, hot
+    update, or the manual restart button) overwrites it with the stale contents that never
+    made it to disk.
 
-    返回值是写入后的完整 config dict（等价于重新读盘一次）。"""
+    Returns the complete config dict as written, equivalent to re-reading the file."""
     config_path = config_file_path()
     tmp = ""
     with _config_yaml_lock:
@@ -401,19 +423,17 @@ def parse_iso_datetime(value) -> datetime:
 def load_config(config_path: Optional[str] = None) -> dict:
     """
     Load configuration file.
-    加载配置文件。
 
     Priority: environment variables > config.yaml > built-in defaults.
-    优先级：环境变量 > config.yaml > 内置默认值。
     """
     project_root = _project_root()
     # --- Built-in defaults (fallback so it runs even without config.yaml) ---
-    # --- 内置默认配置（兜底，保证即使没有 config.yaml 也能跑）---
     defaults = {
         "transport": "stdio",
         "log_level": "INFO",
         "mcp_require_auth": True,
-        # 只有 mcp_require_auth=true 时才生效："oauth"（默认）或 "token"，二选一、互斥。
+        # Only meaningful when mcp_require_auth=true: "oauth" (default) or "token".
+        # Pick one; they are mutually exclusive.
         "mcp_auth_mode": "oauth",
         "mcp_token": "",
         "buckets_dir": os.path.join(project_root, "buckets"),
@@ -454,9 +474,9 @@ def load_config(config_path: Optional[str] = None) -> dict:
     }
 
     # --- Load user config from YAML file ---
-    # --- 从 YAML 文件加载她/他的自定义配置 ---
     if config_path is None:
-        # 读写共用同一解析逻辑（config_file_path）：$LOCI_CONFIG_PATH > cwd > project_root。
+        # Readers and writers share one resolution path (config_file_path):
+        # $LOCI_CONFIG_PATH > cwd > project_root.
         config_path = config_file_path()
 
     config = defaults.copy()
@@ -484,12 +504,12 @@ def load_config(config_path: Optional[str] = None) -> dict:
     )
 
     # --- Environment variable overrides (highest priority) ---
-    # --- 环境变量覆盖敏感/运行时配置（优先级最高）---
-    # 这里曾经有 6 段几乎一模一样的 if-block，每段都在做同一件事：
-    #   "若环境变量非空 → 写到 config 的某个嵌套 key 上"
-    # 现在统一走 _apply_env_override()，新增一项只要加一行表项。
+    # This used to be six near-identical if-blocks, each doing the same thing:
+    #   "if the env var is non-empty -> write it to some nested key in config"
+    # They all go through _apply_env_override() now, so adding one is adding one table row.
 
-    # v1.x 兼容：旧变量不得因重构而静默失效。新变量显式设置时始终优先。
+    # v1.x compatibility: a refactor must not silently break the old variable names. An
+    # explicitly set new variable always wins.
     legacy_api_key = os.environ.get("LOCI_API_KEY", "").strip()
     legacy_base_url = os.environ.get("LOCI_BASE_URL", "").strip()
     if legacy_api_key and not os.environ.get("LOCI_COMPRESS_API_KEY", "").strip():
@@ -503,7 +523,8 @@ def load_config(config_path: Optional[str] = None) -> dict:
             "LOCI_BASE_URL 是兼容变量；请迁移到 LOCI_COMPRESS_BASE_URL，旧名仍会继续生效。"
         )
 
-    # v1.3 Zeabur 模板曾使用通用 PASSWORD；只在正式变量缺失时兼容映射。
+    # An older deployment template used a generic PASSWORD variable; map it across only
+    # when the proper variable is absent.
     legacy_password = os.environ.get("PASSWORD", "").strip()
     if legacy_password and not os.environ.get("LOCI_DASHBOARD_PASSWORD", "").strip():
         os.environ["LOCI_DASHBOARD_PASSWORD"] = legacy_password
@@ -511,7 +532,7 @@ def load_config(config_path: Optional[str] = None) -> dict:
             "PASSWORD 是兼容变量；请迁移到 LOCI_DASHBOARD_PASSWORD，旧名仍会继续生效。"
         )
 
-    # 压缩组（脱水/打标/合并）—— 写到 config["dehydration"][*]
+    # The compression group (dehydration, tagging, merging) -> config["dehydration"][*]
     _apply_env_override(config, "LOCI_COMPRESS_API_KEY", "dehydration", "api_key")
     _apply_env_override(config, "LOCI_COMPRESS_BASE_URL", "dehydration", "base_url")
     _apply_env_override(config, "LOCI_COMPRESS_MODEL", "dehydration", "model")
@@ -520,7 +541,7 @@ def load_config(config_path: Optional[str] = None) -> dict:
     _apply_env_override(config, "LOCI_COMPRESS_API_FORMAT", "dehydration", "api_format")
     _apply_env_float_override(config, "LOCI_COMPRESS_TIMEOUT_SECONDS", "dehydration", "timeout_seconds")
 
-    # 向量化组（embedding）—— 写到 config["embedding"][*]
+    # The vectorization group (embedding) -> config["embedding"][*]
     _apply_env_override(config, "LOCI_EMBED_API_KEY", "embedding", "api_key")
     _apply_env_override(config, "LOCI_EMBED_BASE_URL", "embedding", "base_url")
     _apply_env_override(config, "LOCI_EMBED_MODEL", "embedding", "model")
@@ -535,15 +556,19 @@ def load_config(config_path: Optional[str] = None) -> dict:
         "external_change_poll_seconds",
     )
 
-    # 顶层运行时
+    # Top-level runtime settings
     _apply_env_override(config, "LOCI_TRANSPORT", "transport")
-    # transport 名归一化 —— 单一真源，让 server.py / 诊断接口拿到的都是规范值。
-    # 背景：远程接入（Operit / 安卓 / 自建前端等）该填 "streamable-http"，但很多人凭
-    # 直觉写成 "http" / "streamable_http" / "streamablehttp" 等变体；server.py 的入口用
-    # `transport in ("sse","streamable-http")` 精确匹配，写错就悄悄退回 stdio ——
-    # 于是根本不开 HTTP 服务、客户端一直连不上（Operit 表现为黄灯）。这里把所有等价写法
-    # 收敛成规范的 "streamable-http"，避免因一个连字符/下划线的差异排查半天。
-    # 只收敛已知别名；不认识的值原样保留，交给 server.py 走 mcp.run() 报明确的错。
+    # Normalize the transport name — one source of truth, so that server.py and the
+    # diagnostic endpoints all see the canonical value.
+    # Background: remote clients should be configured with "streamable-http", but people
+    # reasonably guess "http", "streamable_http", "streamablehttp" and other variants.
+    # server.py's entry point matches exactly, with
+    # `transport in ("sse","streamable-http")`, so a near-miss silently fell back to stdio
+    # — meaning the HTTP server never started at all and the client could never connect.
+    # Collapsing every equivalent spelling into the canonical "streamable-http" here saves
+    # hours of debugging over one hyphen or underscore.
+    # Only known aliases are collapsed. An unrecognized value is passed through untouched,
+    # so server.py's mcp.run() can raise a clear error about it.
     _raw_transport = str(config.get("transport", "stdio")).strip().lower()
     _transport_aliases = {
         "http": "streamable-http",
@@ -560,22 +585,31 @@ def load_config(config_path: Optional[str] = None) -> dict:
     _apply_env_override(config, "LOCI_BUCKETS_DIR", "buckets_dir")
     env_buckets_dir = os.environ.get("LOCI_BUCKETS_DIR", "")
 
-    # MCP OAuth 开关（布尔，单独处理）—— LOCI_MCP_REQUIRE_AUTH
-    # 不能走 _apply_env_override：它只写字符串，而鉴权中间件和诊断接口都要求
-    # 配置中保存真正的 bool；否则字符串 "false" 仍可能被普通真值判断误当成开启。
-    # 用途：把 OB 接进自有前端 / GPT / GLM 等不走 OAuth 的客户端时，
-    # 设 LOCI_MCP_REQUIRE_AUTH=false（或 config.yaml: mcp_require_auth: false）即可免认证直连 /mcp。
-    # 仅在显式设置为可识别的值时才覆盖；不设 / 设成乱七八糟的值都保持默认（安全：默认开启）。
+    # The MCP OAuth switch (boolean, handled on its own) — LOCI_MCP_REQUIRE_AUTH
+    # It cannot go through _apply_env_override, which only writes strings: the auth
+    # middleware and the diagnostic endpoints both require a real bool in the config.
+    # Otherwise the string "false" is still truthy under an ordinary truth test and reads
+    # as "enabled".
+    # Purpose: when wiring this into a self-hosted front-end or a client that does not
+    # speak OAuth, setting LOCI_MCP_REQUIRE_AUTH=false (or mcp_require_auth: false in
+    # config.yaml) allows unauthenticated direct connections to /mcp.
+    # It only overrides when explicitly set to a recognized value. Unset, or set to
+    # something unparseable, keeps the default — which is on, because the safe default is
+    # protected.
     _env_mcp_auth = os.environ.get("LOCI_MCP_REQUIRE_AUTH", "").strip()
     if _env_mcp_auth:
         config["mcp_require_auth"] = parse_bool(
             _env_mcp_auth, default=config["mcp_require_auth"]
         )
 
-    # MCP 鉴权模式（枚举，仅 mcp_require_auth=true 时生效）—— mcp_auth_mode / LOCI_MCP_AUTH_MODE
-    # "oauth"（默认）沿用上面的 OAuth 2.1 + PKCE；"token" 改走静态密钥（mcp_token / LOCI_MCP_TOKEN）。
-    # 二者互斥——选 token 模式时 OAuth 的 discovery/register/authorize/token 路由全部 404（见 web/oauth.py）。
-    # 不能走 _apply_env_override：这里需要做枚举校验，非法值一律回退默认 "oauth"。
+    # The MCP auth mode (an enum, only in effect when mcp_require_auth=true) —
+    # mcp_auth_mode / LOCI_MCP_AUTH_MODE
+    # "oauth" (the default) uses the OAuth 2.1 + PKCE flow above; "token" switches to a
+    # static secret (mcp_token / LOCI_MCP_TOKEN).
+    # The two are mutually exclusive: in token mode the OAuth discovery, register,
+    # authorize and token routes all return 404 (see bridge/oauth.py).
+    # It cannot go through _apply_env_override, because this needs enum validation: an
+    # invalid value always falls back to the default "oauth".
     _raw_auth_mode = str(config.get("mcp_auth_mode", "oauth")).strip().lower()
     config["mcp_auth_mode"] = _raw_auth_mode if _raw_auth_mode in ("oauth", "token") else "oauth"
     _env_mcp_auth_mode = os.environ.get("LOCI_MCP_AUTH_MODE", "").strip().lower()
@@ -584,8 +618,10 @@ def load_config(config_path: Optional[str] = None) -> dict:
 
     _apply_env_override(config, "LOCI_MCP_TOKEN", "mcp_token")
 
-    # 安全兜底：选了 token 模式却没配密钥——宁可继续用更强的 OAuth 兜底，也不要让用户
-    # 误以为已经开了保护、实际上 /mcp 会因校验函数拿不到密钥而被意外锁死或裸奔。
+    # Safety fallback: token mode selected but no secret configured. Better to fall back to
+    # the stronger OAuth than to let the user believe protection is on while /mcp is in
+    # fact either accidentally locked shut or wide open, depending on how the validator
+    # handles a missing secret.
     if config["mcp_auth_mode"] == "token" and not str(config.get("mcp_token") or "").strip():
         logging.warning(
             "mcp_auth_mode=token 但未配置 mcp_token / LOCI_MCP_TOKEN，已自动回退为 oauth 模式 / "
@@ -593,7 +629,7 @@ def load_config(config_path: Optional[str] = None) -> dict:
         )
         config["mcp_auth_mode"] = "oauth"
 
-    # iter 1.9 F: 统一推荐 LOCI_VAULT_DIR；老变量 LOCI_BUCKETS_DIR 仍兼容
+    # LOCI_VAULT_DIR is the recommended name; the older LOCI_BUCKETS_DIR still works.
     # Priority: LOCI_BUCKETS_DIR (legacy explicit) > LOCI_VAULT_DIR > config.yaml.buckets_dir
     # We keep BUCKETS_DIR with higher priority than VAULT_DIR for two reasons:
     #   1) Existing tests use monkeypatch.setenv("LOCI_BUCKETS_DIR", ...) extensively;
@@ -614,8 +650,9 @@ def load_config(config_path: Optional[str] = None) -> dict:
         except Exception:
             pass
 
-    # 媒体必须和记忆一起落在持久卷；默认使用数据目录下独立的 _media。
-    # LOCI_MEDIA_DIR 仅在确实挂载了另一块持久盘时覆盖。
+    # Media has to land on the same persistent volume as the memories; the default is a
+    # separate _media directory inside the data directory.
+    # Override with LOCI_MEDIA_DIR only when a second persistent disk really is mounted.
     media_dir = os.environ.get("LOCI_MEDIA_DIR", "").strip()
     config["media_dir"] = media_dir or os.path.join(str(config["buckets_dir"]), "_media")
     try:
@@ -627,7 +664,6 @@ def load_config(config_path: Optional[str] = None) -> dict:
         config["media_max_bytes"] = 25 * 1024 * 1024
 
     # --- Ensure bucket storage directories exist ---
-    # --- 确保记忆桶存储目录存在 ---
     buckets_dir: str = str(config["buckets_dir"])
     for subdir in ["permanent", "dynamic", "archive"]:
         os.makedirs(os.path.join(buckets_dir, subdir), exist_ok=True)
@@ -639,7 +675,6 @@ def load_config(config_path: Optional[str] = None) -> dict:
 def _deep_merge(base: dict, override: dict) -> dict:
     """
     Deep-merge two dicts; override values take precedence.
-    深度合并两个字典，override 的值覆盖 base。
     """
     result = base.copy()
     for key, value in override.items():
@@ -651,32 +686,35 @@ def _deep_merge(base: dict, override: dict) -> dict:
 
 
 def _apply_env_override(config: dict, env_name: str, *path: str) -> None:
-    """把单个环境变量按 path 写入嵌套 dict（仅当值非空）。
+    """Write one environment variable into a nested dict along `path`, if it is non-empty.
 
-    设计原因：load_config() 里曾有 6 段几乎一模一样的覆盖代码——
+    Why this exists: load_config() used to contain six near-identical override blocks —
         env = os.environ.get("XXX", "")
         if env:
             config["a"]["b"] = env
-    长度膨胀且新增一项就要再抄一遍。统一抽出后：
-      * 新增覆盖只要写一行 `_apply_env_override(config, "LOCI_FOO", "a", "b")`
-      * 行为一致：空字符串视为"未设置"，绝不覆盖默认值
-      * 自动 setdefault 中间层 dict，避免 KeyError
+    which is bulky and has to be copied again for every new entry. Hoisted into one place:
+      * adding an override is one line,
+        `_apply_env_override(config, "LOCI_FOO", "a", "b")`
+      * behaviour is uniform: an empty string counts as "unset" and never overwrites a
+        default
+      * intermediate dicts are setdefault'ed automatically, so there is no KeyError
 
-    参数：
-        config   ：被修改的配置字典（in-place）
-        env_name ：环境变量名
-        *path    ：嵌套 key 路径。一层 key 传 1 个，两层传 2 个。
-                   例如 ("dehydration", "api_key") 会写到
-                   config["dehydration"]["api_key"]。
+    Arguments:
+        config   : the config dict, modified in place
+        env_name : the environment variable's name
+        *path    : the nested key path. One key for one level, two for two, and so on.
+                   ("dehydration", "api_key") writes to
+                   config["dehydration"]["api_key"].
 
-    边界（rule.md §⑨ 防御式编程）：
-      * 环境变量为空 / 未设置 → 直接 return，不动 config
-      * path 为空 → 直接 return（调用方写错路径不应静默覆盖整个 config）
+    Edges (defensive programming):
+      * env var empty or unset -> return immediately, leaving config alone
+      * empty path -> return immediately; a caller that got the path wrong must not
+        silently overwrite the entire config
     """
     value = os.environ.get(env_name, "").strip()
     if not value or not path:
         return
-    # 走到倒数第二层，逐层 setdefault 出嵌套 dict
+    # Walk to the second-to-last level, setdefault'ing each nested dict on the way
     cursor = config
     for key in path[:-1]:
         cursor = cursor.setdefault(key, {})
@@ -734,14 +772,14 @@ def clean_llm_json(raw: str) -> str:
 
 
 def _resolve_log_dir(explicit: str | None) -> str:
-    """决定 server.log 落到哪个目录。
+    """Decide which directory server.log lands in.
 
-    优先级（rule.md §1.13 + iter 1.6 §3）：
-        explicit 参数 > $LOCI_LOG_DIR > <buckets_dir>/.logs > /tmp 兜底
+    Priority:
+        the explicit argument > $LOCI_LOG_DIR > <buckets_dir>/.logs > /tmp as a last resort
 
-    抽出来的原因：原 setup_logging() 内联了 4 段 if-fallback，逻辑分支
-    挤在一起读不清。独立后单元测试可以直接打它，且改优先级不必动
-    setup_logging 主体。
+    Why it is separate: setup_logging() used to inline four if-fallback blocks, and the
+    branches crowded together were hard to read. On its own it can be unit-tested directly,
+    and changing the priority order does not mean touching the body of setup_logging.
     """
     if explicit:
         return explicit
@@ -757,24 +795,23 @@ def _resolve_log_dir(explicit: str | None) -> str:
 def setup_logging(level: str = "INFO", log_dir: str | None = None) -> None:
     """
     Initialize logging system.
-    初始化日志系统。
 
     Note: In MCP stdio mode, stdout is occupied by the protocol;
     logs must go to stderr.
-    注意：MCP stdio 模式下 stdout 被协议占用，日志只能走 stderr。
 
-    iter 1.6 §3：除 stderr 外，同时写一份 ``server.log``（RotatingFileHandler）。
-    Dashboard 的「日志」标签页通过 ``/api/logs`` 读取这个文件，方便她/他在网页上
-    直接看 ERROR/WARNING。日志路径优先级：
-        log_dir 参数 > 环境变量 LOCI_LOG_DIR > <buckets_dir>/.logs > /tmp/loci_logs
+    Besides stderr, a copy is written to ``server.log`` via a RotatingFileHandler. The
+    panel's log tab reads that file through ``/api/logs``, so ERROR and WARNING lines can
+    be read in the browser. Path priority:
+        the log_dir argument > $LOCI_LOG_DIR > <buckets_dir>/.logs > /tmp/loci_logs
     """
     log_level = getattr(logging, level.upper(), None)
     if not isinstance(log_level, int):
         log_level = logging.INFO
 
-    handlers: list[logging.Handler] = [logging.StreamHandler()]  # 默认 stderr
+    handlers: list[logging.Handler] = [logging.StreamHandler()]  # stderr by default
 
-    # ---- 文件日志（按需开启，失败时静默降级到仅 stderr）----
+    # ---- File logging: enabled on demand, and degrades silently to stderr-only on
+    # ---- failure.
     chosen_dir = _resolve_log_dir(log_dir)
 
     try:
@@ -789,10 +826,10 @@ def setup_logging(level: str = "INFO", log_dir: str | None = None) -> None:
         )
         fh.setLevel(log_level)
         handlers.append(fh)
-        # 暴露给 server.py，供 /api/logs 读取
+        # Expose the path to server.py, so /api/logs can read it
         os.environ["LOCI_LOG_FILE"] = log_path
     except Exception as e:
-        # 文件日志失败不应阻塞服务启动
+        # A failure to open the log file must not block the service from starting
         sys.stderr.write(f"[setup_logging] file handler disabled: {e}\n")
 
     logging.basicConfig(
@@ -802,7 +839,7 @@ def setup_logging(level: str = "INFO", log_dir: str | None = None) -> None:
         handlers=handlers,
     )
 
-    # 接入统一错误体系的 in-memory log buffer，给 E 级报错附 tail
+    # Attach the shared error system's in-memory log buffer, so E-class errors carry a tail
     try:
         try:
             from core.errors import attach_log_buffer_handler  # type: ignore
@@ -816,31 +853,31 @@ def setup_logging(level: str = "INFO", log_dir: str | None = None) -> None:
 def generate_bucket_id() -> str:
     """
     Generate a unique bucket ID (12-char short UUID for readability).
-    生成唯一的记忆桶 ID（12 位短 UUID，方便人类阅读）。
     """
     return uuid.uuid4().hex[:12]
 
 
 def strip_wikilinks(text: str) -> str:
     """
-    Remove Obsidian wikilink brackets: [[word]] → word
-    去除 Obsidian 双链括号
+    Remove Obsidian wikilink brackets: [[word]] -> word
     """
     return re.sub(r"\[\[([^\]]+)\]\]", r"\1", text) if text else text
 
 
 # ===============================================================
-# Wikilinks / 双链解析（iter 1.7 §F1）
+# Wikilink parsing
 # ---------------------------------------------------------------
-# 设计：Obsidian 用 `[[目标桶名]]` 写双向链接，可带 alias 和 section：
-#   [[Memory]]                 → target = "Memory"
-#   [[Memory#section]]         → target = "Memory"     (# 后是段落锚)
-#   [[Memory|这件事]]          → target = "Memory"     (| 后是显示别名)
-# 正则只抓「第一段」目标名；遇到 # 或 | 就停止。
-# Python 小知识：
-#   * re.compile 把正则预编译，反复用时比 re.findall 每次现编译快
-#   * 字符类里 `[^\]\|#]+` 表示「不是 ] 不是 | 不是 # 的连续字符」
-#   * (?:...)  非捕获分组，只为分支选择，不占 group 编号
+# Obsidian writes bidirectional links as `[[target bucket name]]`, optionally with an alias
+# and a section:
+#   [[Memory]]                 -> target = "Memory"
+#   [[Memory#section]]         -> target = "Memory"     (after # is a heading anchor)
+#   [[Memory|display text]]    -> target = "Memory"     (after | is a display alias)
+# The regex captures only the first segment, the target name, and stops at # or |.
+# Notes on the regex:
+#   * re.compile precompiles it, which beats re.findall recompiling on every call
+#   * the character class `[^\]\|#]+` means "a run of characters that are not ], | or #"
+#   * (?:...) is a non-capturing group: it only groups alternatives, and does not consume a
+#     group number
 # ===============================================================
 _WIKILINK_RE = re.compile(r"\[\[([^\]\|#]+)(?:[#\|][^\]]*)?\]\]")
 
@@ -848,21 +885,24 @@ _WIKILINK_RE = re.compile(r"\[\[([^\]\|#]+)(?:[#\|][^\]]*)?\]\]")
 def extract_wikilinks(text: str) -> list[str]:
     """Extract Obsidian-style [[wikilinks]] target names from text.
 
-    抽取正文里所有 `[[xxx]]` 的目标名，去重保序，去掉 `|alias` 和 `#section`。
-    返回 list[str]（不是 set，因为下游希望保持出现顺序）。
+    Pull every `[[xxx]]` target name out of the text, deduplicated but order-preserving,
+    with `|alias` and `#section` stripped off.
+    Returns list[str] rather than a set, because callers want the order of appearance.
 
-    Example / 例：
-        >>> extract_wikilinks("see [[A]] and [[B|别名]] also [[A]]")
+    Example:
+        >>> extract_wikilinks("see [[A]] and [[B|alias]] also [[A]]")
         ['A', 'B']
     """
-    # 防御：传 None 或空串直接返回空列表，避免下游 for 循环崩
+    # Defensive: None or an empty string returns an empty list, so a caller's for-loop
+    # cannot blow up on it.
     if not text:
         return []
-    # 用 list + 手工查重而不是 set()，是为了保留首次出现顺序
-    # （Python 3.7+ 的 dict 也保序，用 dict.fromkeys 也行，这里写法更直观）
+    # A list plus a manual membership check, not a set(), so that first-appearance order
+    # survives. (dict has preserved insertion order since Python 3.7, so dict.fromkeys
+    # would work too; this is just more obvious.)
     seen: list[str] = []
     for m in _WIKILINK_RE.finditer(text):
-        target = m.group(1).strip()  # group(1) = 第一个括号 ([^\]\|#]+) 抓到的内容
+        target = m.group(1).strip()  # group(1) = what the first ([^\]\|#]+) captured
         if target and target not in seen:
             seen.append(target)
     return seen
@@ -871,28 +911,33 @@ def extract_wikilinks(text: str) -> list[str]:
 def get_version() -> str:
     """Read project version from `<repo_root>/VERSION`.
 
-    存在两份 VERSION：src/VERSION 与根目录 VERSION。读取顺序：src/VERSION 优先。
-    任何路径都读不到时返回 "0.0.0+unknown"，方便排查。
+    There are two VERSION files: src/VERSION and the one at the repository root.
+    src/VERSION is read first. When neither can be read, this returns "0.0.0+unknown", which
+    is at least diagnosable.
 
-    ⚠️ 为什么是 src 优先（别再改成根目录优先）：
-      热更新（web/meta.py do-update）解压时只覆盖 src/ 和 frontend/，所以 src/VERSION
-      一定被刷新，而很多用户的根目录 VERSION 是历史安装遗留的老版本（从没人读、也没人更）。
-      若改成根目录优先，用户一更新就会读到那个尘封的旧根 VERSION → 版本号当场倒退
-      （2.3.10 真踩过：有人从 2.3.8 更新后显示成 2.1.3）。
-      一致性由 do-update「强制把 zip 的根 VERSION 同写到两处」保证；这里只管读那个
-      最可靠新鲜的 src/VERSION。
-      发版请同时 bump 两个 VERSION（根 + src/）。
+    WARNING: why src wins, and why this must not be flipped back to root-first.
+      The hot update path only overwrites src/ and frontend/ when it unpacks, so src/VERSION
+      is guaranteed to be refreshed — while many users' root VERSION is a leftover from
+      whenever they first installed (nothing reads it, so nothing updates it). Root-first
+      means that the moment a user updates, the stale root VERSION is what gets read, and
+      the displayed version goes *backwards*. That happened for real: someone updated from
+      one release and the UI showed a version two minor releases older.
+      Consistency is maintained by the updater force-writing the zip's root VERSION into
+      both locations; this function's job is only to read the freshest, most reliable one,
+      which is src/VERSION.
+      When cutting a release, bump both VERSION files (root and src/).
 
-    Python 小知识：
-      * `with open(...) as f:` 是「上下文管理器」，离开 with 块自动关文件
-        即使中途抛异常也会关——比 try/finally 干净
-      * `OSError` 涵盖文件不存在、权限不够、磁盘错误等所有 IO 异常
-        比裸 `except:` 安全，比 `except FileNotFoundError` 全面
+    Notes:
+      * `with open(...) as f:` is a context manager: the file closes on leaving the block,
+        including when an exception is raised on the way out — cleaner than try/finally.
+      * `OSError` covers missing files, permission problems, disk errors — every IO
+        exception. Safer than a bare `except:`, and broader than `except FileNotFoundError`.
     """
     candidates = [
-        # 优先：src/ 旁的副本——热更新一定会刷新它，最可靠新鲜
+        # First: the copy next to src/. Hot updates always refresh it, so it is freshest.
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "VERSION"),
-        # fallback：项目根目录 VERSION（Docker 里由 Dockerfile COPY 进 /app/VERSION）
+        # Fallback: the repository-root VERSION (in Docker the Dockerfile COPYs it to
+        # /app/VERSION).
         os.path.join(_project_root(), "VERSION"),
     ]
     for path in candidates:
@@ -902,7 +947,8 @@ def get_version() -> str:
                 if v:
                     return v
         except OSError:
-            # 这一条候选路径读不到就试下一条，不打日志（启动期无日志器）
+            # If this candidate cannot be read, try the next. No logging: there is no
+            # logger yet this early in startup.
             continue
     return "0.0.0+unknown"
 
@@ -911,13 +957,16 @@ _NAME_CACHE = {"mtime": -1.0, "data": {}}
 
 
 def _persisted_names() -> dict:
-    """config.yaml 里存的两个名字（带 mtime 缓存，这东西几个月才改一次）。
+    """The two names stored in config.yaml, cached on mtime — they change once every few
+    months.
 
-    2026-08-19 加的。为什么名字要能落进 config.yaml：原来它们**只能**来自
-    容器的环境变量，于是面板上那一栏只能是只读的 —— 而对刚装上的人来说，
-    「去改 docker-compose 再重启」是第一步就撞上的一堵墙。
-    顺序是 **config 优先、环境变量兜底**：面板上填了就得算数，
-    不然那个输入框就是在骗人（存了不生效是最坏的一种）。
+    Why the names have to be storable in config.yaml at all: they used to come **only** from
+    the container's environment variables, which forced that field in the panel to be
+    read-only — and for someone who has just installed this, "go edit docker-compose and
+    restart" is a wall they hit on step one.
+    The order is **config first, environment as fallback**: what is typed into the panel has
+    to count, or that input box is lying to the user. Saving something that does not take
+    effect is the worst version of this.
     """
     path = os.environ.get("LOCI_CONFIG_PATH", "").strip()
     if not path:
@@ -938,17 +987,17 @@ def _persisted_names() -> dict:
                 v = str(raw.get(k) or "").strip()
                 if v:
                     data[k] = v
-    except Exception:      # noqa: BLE001 - 配置读不动不该让名字这种小事把服务打掉
+    except Exception:      # noqa: BLE001 - an unreadable config must not take the service down over something as small as a display name
         data = {}
     _NAME_CACHE["mtime"], _NAME_CACHE["data"] = mtime, data
     return data
 
 
 def get_ai_name() -> str:
-    """AI 一方的显示名 / display name for the AI side.
+    """Display name for the AI side.
 
-    顺序：config.yaml 的 `ai_name` → 环境变量 `AI_NAME` → "AI"。
-    面向用户的文本（prompt / UI / 错误信息）、letter 署名都用它。
+    Order: `ai_name` in config.yaml -> the `AI_NAME` environment variable -> "AI".
+    Used in user-facing text (prompts, UI, error messages) and in letter signatures.
     """
     return (_persisted_names().get("ai_name")
             or os.environ.get("AI_NAME", "").strip()
@@ -956,24 +1005,29 @@ def get_ai_name() -> str:
 
 
 def get_owner_name() -> str:
-    """当前实例记忆归属者的显示名 / display name of this instance's memory owner.
+    """Display name of this instance's memory owner.
 
-    多人共用一套 OB 时，每个人跑一个独立实例（独立数据目录 + 端口），实例通过
-    环境变量 `LOCI_OWNER_NAME` 标明「这份记忆是谁的」，供 Dashboard 顶部归属徽标
-    显示。未设置时回退空串（前端配合 owner_count 决定是否显示）。
-    顺序：config.yaml 的 `owner_name` → 环境变量 `LOCI_OWNER_NAME` → 空串。
-    ⚠️ 绝不写共享的 .env——同码多实例会互相串名；config.yaml 是**每个实例
-       自己数据目录里**的那一份，所以它安全。
+    When several people share one deployment, each runs a separate instance with its own
+    data directory and port, and the instance declares whose memories these are through the
+    `LOCI_OWNER_NAME` environment variable, for the ownership badge at the top of the panel.
+    Unset falls back to an empty string; the front-end decides whether to show the badge
+    based on owner_count.
+    Order: `owner_name` in config.yaml -> the `LOCI_OWNER_NAME` environment variable -> "".
+    WARNING: never write this into a shared .env — instances running from the same code
+       would cross-contaminate each other's names. config.yaml is the copy **inside each
+       instance's own data directory**, which is why it is safe.
     """
     return (_persisted_names().get("owner_name")
             or os.environ.get("LOCI_OWNER_NAME", "").strip())
 
 
 def get_owner_count() -> int:
-    """共用这套 OB 的总人数 / total number of people sharing this OB.
+    """Total number of people sharing this deployment.
 
-    由启动器按配置的人数注入 `LOCI_OWNER_COUNT`（手动部署时自行设置）。前端据此
-    决定是否显示归属徽标：`>= 2` 才显示（单人不打扰）。非法 / 未设置回退 1。
+    The launcher injects `LOCI_OWNER_COUNT` from the configured headcount; a manual
+    deployment sets it itself. The front-end uses it to decide whether to show the
+    ownership badge: only at `>= 2`, so a single user is never bothered by it. Invalid or
+    unset falls back to 1.
     Read from the `LOCI_OWNER_COUNT` env var; falls back to 1 when unset/invalid.
     """
     raw = os.environ.get("LOCI_OWNER_COUNT", "").strip()
@@ -987,7 +1041,6 @@ def sanitize_name(name: str) -> str:
     """
     Sanitize bucket name, keeping only safe characters.
     Prevents path traversal attacks (e.g. ../../etc/passwd).
-    清洗桶名称，只保留安全字符。防止路径遍历攻击。
     """
     if not isinstance(name, str):
         return "unnamed"
@@ -1000,13 +1053,12 @@ def safe_path(base_dir: str, filename: str) -> Path:
     """
     Construct a safe file path, ensuring it stays within base_dir.
     Prevents directory traversal.
-    构造安全的文件路径，确保最终路径始终在 base_dir 内部。
     """
     base = Path(base_dir).resolve()
     target = (base / filename).resolve()
-    # 用 is_relative_to 而不是 startswith，避免前缀混淆：
-    # 例如 base=/data/buckets，target=/data/buckets_evil/f.md，
-    # str 前缀检查会误判为安全，is_relative_to 不会。
+    # is_relative_to rather than startswith, to avoid prefix confusion: with
+    # base=/data/buckets and target=/data/buckets_evil/f.md, a string prefix check calls it
+    # safe. is_relative_to does not.
     if not target.is_relative_to(base):
         raise ValueError(
             f"Path safety check failed / 路径安全检查失败: "
@@ -1053,12 +1105,9 @@ def atomic_write_text(path: str | Path, text: str) -> None:
 def count_tokens_approx(text: str) -> int:
     """
     Rough token count estimate.
-    粗略估算 token 数。
 
-    Chinese ≈ 1 char = 1.5 tokens, English ≈ 1 word = 1.3 tokens.
+    Chinese ~ 1 char = 1.5 tokens, English ~ 1 word = 1.3 tokens.
     Used to decide whether dehydration is needed; precision not required.
-    中文 ≈ 1字=1.5token，英文 ≈ 1词=1.3token。
-    用于判断是否需要脱水压缩，不追求精确。
     """
     if not text:
         return 0
@@ -1074,29 +1123,31 @@ def count_tokens_approx(text: str) -> int:
 def now_iso() -> str:
     """
     Return current time as ISO format string.
-    返回当前时间的 ISO 格式字符串。
     """
     return datetime.now().isoformat(timespec="seconds")
 
 
 # ============================================================
-# from —— 来源链（二改 E 件，2026-08-16）
+# `from` — the provenance chain
 # ------------------------------------------------------------
-# 同一个东西以前有两个名字：工具参数叫 `from`，落进 frontmatter 叫 `triggered_by`。
-# 读代码的人每次都要在心里翻译一遍，而「翻译一遍」这种动作迟早有一次会漏。
-# 现在统一成 `from`：**写只写 from，读两个都认**（老盘上还全是 triggered_by，
-# 迁移脚本只交了脚本没跑真库）。
+# One thing used to have two names: the tool parameter was `from`, and what landed in the
+# frontmatter was `triggered_by`. Anyone reading the code had to translate between them in
+# their head every time, and a translation step performed by hand eventually gets skipped.
+# It is `from` everywhere now: **writes only ever write `from`, reads accept both**. Old
+# stores are still full of `triggered_by` — the migration script was delivered but never run
+# against a real store.
 #
-# ⚠️ `from` 是 Python 关键字，所以只能当字符串 key 用，不能写成 meta.from。
-# 这也是当初落盘取名 triggered_by 的原因——但那个理由只在 Python 里成立，
-# 而 frontmatter 是给人看的。
+# WARNING: `from` is a Python keyword, so it can only be used as a string key; `meta.from`
+# is a syntax error. That is exactly why the persisted name was `triggered_by` in the first
+# place — but that reason only holds inside Python, and frontmatter is for people to read.
 # ============================================================
 FROM_FIELD = "from"
 FROM_FIELD_LEGACY = "triggered_by"
 
 
 def read_from(meta: Optional[dict]) -> str:
-    """一条记忆的来源链原始串（逗号分隔的 id）。新字段 from 优先，老字段兼容。"""
+    """A memory's raw provenance chain: comma-separated ids. The new `from` field wins; the
+    old field is still accepted."""
     m = meta or {}
     raw = m.get(FROM_FIELD)
     if raw is None or str(raw).strip() == "":
@@ -1105,18 +1156,22 @@ def read_from(meta: Optional[dict]) -> str:
 
 
 def read_from_ids(meta: Optional[dict]) -> list[str]:
-    """来源链拆成 id 列表（去空白、去空项，保序）。"""
+    """The provenance chain split into a list of ids: whitespace trimmed, empties dropped,
+    order preserved."""
     return [s.strip() for s in read_from(meta).split(",") if s.strip()]
 
 
 def is_closed(meta: Optional[dict]) -> bool:
     """
-    Whether a memory has been explicitly closed (放下/不做了).
-    这条记忆是不是已经被亲手了结（resolved / abandoned）。
+    Whether a memory has been explicitly closed — let go of, or given up on.
 
-    二改第 0 节：终点只认 status——resolved 布尔和 status 管同一件事还能打架
-    （87f84e 实证：resolved: true 但 status: want，breath 追着喊了 10 天）。
-    写入口已全部改走 status；旧 resolved 布尔只读兼容，字段清理那一步整个删掉。
+    Closure is decided by `status` alone. The `resolved` boolean and `status` governed the
+    same thing and could therefore contradict each other: one real bucket carried
+    `resolved: true` alongside `status: want`, and breath kept nagging about it for ten
+    days.
+    Every write path goes through `status` now. The old `resolved` boolean is still read for
+    compatibility, and the field-cleanup step that would have removed it was dropped
+    entirely.
     """
     m = meta or {}
     if str(m.get("status") or "").strip().lower() in ("resolved", "abandoned"):

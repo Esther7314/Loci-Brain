@@ -1,9 +1,10 @@
-"""OB 媒体持久化存储。
+"""Persistent media storage for the vault.
 
-本模块把 MCP 调用携带的服务器可读临时文件或 Base64 数据复制到持久媒体目录，
-并返回可写入 Markdown frontmatter 的稳定元数据。它不理解记忆内容、不操作桶文件，
-也不会因为记忆归档而删除媒体。对外暴露 ``MediaStore`` 和
-``MediaPersistenceError``。
+Copies whatever an MCP call carried — a server-readable temporary file, or Base64
+data — into the persistent media directory, and returns stable metadata that can be
+written into Markdown frontmatter. It does not understand memory content, does not
+touch bucket files, and never deletes media just because a memory was archived.
+Public surface: ``MediaStore`` and ``MediaPersistenceError``.
 """
 
 from __future__ import annotations
@@ -24,11 +25,11 @@ _DEFAULT_MAX_MEDIA_BYTES = 25 * 1024 * 1024
 
 
 class MediaPersistenceError(ValueError):
-    """媒体无法在 OB 服务器上永久保存。"""
+    """Media could not be stored permanently on the server."""
 
 
 class MediaStore:
-    """把媒体复制到持久目录，并生成稳定引用。"""
+    """Copy media into the persistent directory and mint a stable reference."""
 
     def __init__(
         self,
@@ -66,7 +67,8 @@ class MediaStore:
 
     @staticmethod
     def _atomic_write(target: Path, data: bytes) -> None:
-        """在目标目录内写临时文件后原子替换，避免崩溃留下半张媒体。"""
+        """Write to a temp file inside the target directory, then rename over the
+        target. A crash mid-write must not leave half an image behind."""
         fd, temporary = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
         try:
             with os.fdopen(fd, "wb") as handle:
@@ -140,7 +142,8 @@ class MediaStore:
         return result
 
     async def persist(self, bucket_id: str, media: Any) -> list[dict[str, Any]]:
-        """永久保存一项或多项媒体；任何一项失败则明确报错。"""
+        """Persist one or many media items; any single failure raises rather than
+        silently dropping the item."""
         if not media:
             return []
         items = media if isinstance(media, list) else [media]

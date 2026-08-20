@@ -460,17 +460,21 @@ class NgrokHeaderMiddleware:
 class SecurityHeadersMiddleware:
     """Apply browser hardening headers to success and error responses."""
 
-    # 允许同机上的别的自建前端把这个页面嵌进去（改成你自己的地址）。
+    # Let another self-hosted front-end on the same machine embed this page in an
+    # iframe. Point the list below at your own front-end origin.
     #
-    #    她要的：「点击 basement 的那一格 **放上那个星空那个 dashboard**」。
-    #    原来是 `frame-ancestors 'none'` + `X-Frame-Options: DENY` —— 谁都不许嵌，
-    #    所以 iframe 是一片空白。
+    #    This used to be `frame-ancestors 'none'` plus `X-Frame-Options: DENY` —
+    #    nobody may embed it — so any such iframe rendered as a blank rectangle.
     #
-    #    ⚠️ **这不是把门打开，是点名放行自己家那一页。** 别的来源照样全拒。
-    #    ⚠️ `X-Frame-Options` **必须整条拿掉**，不能改成 ALLOW-FROM ——
-    #       那个语法现代浏览器早就不支持了，留着 DENY 会跟下面的 CSP 打架
-    #       （规范说 CSP frame-ancestors 在场时该忽略 XFO，但别赌浏览器都守规矩）。
-    #    📌 **她家的内网 IP 换了，这一行要跟着改** —— 记在 交接/环境速查.md 里。
+    #    WARNING: this is not "opening the door", it is naming one origin. Every
+    #    other origin is still refused.
+    #    WARNING: `X-Frame-Options` has to be removed *entirely*, not changed to
+    #       ALLOW-FROM. Modern browsers dropped that syntax long ago, and leaving
+    #       DENY in place fights with the CSP below. (The spec says XFO should be
+    #       ignored when CSP frame-ancestors is present, but do not bet on every
+    #       browser honouring that.)
+    #    NOTE: when the front-end moves to a different origin, this list has to move
+    #       with it — nothing detects the mismatch for you, the iframe just goes blank.
     _FRAME_ANCESTORS = " ".join([
         "'self'",
         "http://localhost:3010",

@@ -1,30 +1,37 @@
 """
 ========================================
-web/panel_auth.py — 面板的门（2026-08-19）
+web/panel_auth.py — the panel's gate
 ========================================
 
-E2（2026-08-17）把 cookie 会话那一族连同 web/auth.py 一起砍了，判据是她 8-05 拍的
-「家里内网不鉴权」。那对**这一台机器**成立；对**发出去给别人用**不成立 ——
-别人会把端口放到公网上，而 `#gate` 那道门只在 API 回 401 的时候才弹，
-没有鉴权就永远不回 401，于是那道门再也不会出现：**看起来有锁，其实没有**。
+The strip-down removed the whole cookie-session family along with web/auth.py, on the
+grounds that a machine on a trusted home LAN does not need authentication. That holds for
+**one particular machine**; it does not hold for **software handed to other people** —
+someone will put the port on the public internet. And the `#gate` overlay only appears
+when an API returns 401, so with no authentication nothing ever returns 401 and the gate
+never shows up again: **it looks like there is a lock, and there is not.**
 
-所以这个模块把门装回去。**没有重造轮子**：密码哈希、限流、安全问题找回、
-原子落盘全在 `_shared.py` 里活得好好的，这儿只补两样 ——
-四条路由，和一个签名 cookie。
+So this module puts the gate back. **No wheels were reinvented**: password hashing, rate
+limiting, security-question recovery and atomic persistence are all alive and well in
+`_shared.py`. Only two things are added here — four routes, and a signed cookie.
 
-🔴 三条安全判据（改之前先读）：
+Three security rules (read these before changing anything):
 
-1. **没设过密码就不锁。** 新装的人打开就该能用；锁一个还没有钥匙的门，
-   等于把人关在自己家外面（8-03 夜真发生过一次，二十分钟）。
-2. **会话密钥从密码哈希派生**，不另存文件：`sha256("loci-panel-v1:" + hash)`。
-   白赚一件事 —— **改密码自动让所有旧会话失效**，不用再写一套撤销。
-3. **桥用的那几条口不进这道门**（dream/wake、muse/pending、dream/current、poke）：
-   调用方是另一个进程，不是浏览器，它没有 cookie 也不该有。
+1. **No password set means no lock.** A fresh install must be usable the moment it opens;
+   locking a door before a key exists locks the owner out of their own house. (That has
+   actually happened once, for twenty minutes.)
+2. **The session key is derived from the password hash** rather than stored in a file of
+   its own: `sha256("loci-panel-v1:" + hash)`. That buys one thing for free — **changing
+   the password invalidates every existing session**, with no separate revocation
+   machinery to write.
+3. **The bridge-facing endpoints do not pass through this gate** (dream/wake,
+   muse/pending, dream/current, poke): the caller is another process, not a browser. It
+   has no cookies and should not have any.
 
-开关：config.yaml 的 `panel_auth`（默认 **true**，发出去那份就该是锁着的）。
-她自己这台在 config 里显式写了 false —— 判据没变，只是那条判据只适用于内网。
+The switch is `panel_auth` in config.yaml, default **true** — the build that ships should
+be the locked one. A deployment that really is confined to a trusted LAN can set it to
+false explicitly; the reasoning has not changed, it just only applies inside that network.
 
-对外暴露：register(mcp) · has_session(request) · gate_needed() · PUBLIC_PATHS
+Public surface: register(mcp) · has_session(request) · gate_needed() · PUBLIC_PATHS
 ========================================
 """
 
@@ -41,33 +48,39 @@ from . import _shared as sh
 logger = logging.getLogger("loci_brain.web.panel_auth")
 
 _COOKIE = "loci_panel"
-_TTL = 14 * 24 * 3600          # 两周。家用面板，两周输一次密码不算烦。
+_TTL = 14 * 24 * 3600          # Two weeks. For a personal panel, typing the password
+                               # once a fortnight is not a burden.
 
-# 不进这道门的路径。**只有两类能进这个名单**：
-#   ① 门本身要用的（不然登不进来）
-#   ② 调用方不是浏览器的（桥是另一个进程，它没有 cookie）
+# Paths that skip the gate. **Only two kinds of entry belong on this list**:
+#   1. what the gate itself needs (otherwise nobody can log in)
+#   2. routes whose caller is not a browser (the bridge is a separate process; it has
+#      no cookies)
 PUBLIC_PATHS = frozenset([
     "/auth/login",
     "/auth/logout",
     "/auth/recovery-question",
     "/auth/recover",
-    "/api/loci/auth/state",          # 门要读它才知道有没有安全问题
-    "/api/loci/auth/set-password",   # 首启设密那条路（它自己有 loopback 校验）
-    "/loci",                         # 页面本身要能打开，否则门无处显示
+    "/api/loci/auth/state",          # the gate reads this to learn whether a security question exists
+    "/api/loci/auth/set-password",   # first-run password setup (it does its own loopback check)
+    "/loci",                         # the page itself must open, or the gate has nowhere to appear
 ])
 
-# 🔴 **给桥用的四条路由**（2026-08-20 从上面那张免检名单里挪下来的）。
+# **The four bridge-facing routes**, moved down out of the exemption list above.
 #
-#    之前它们在 PUBLIC_PATHS 里，理由写着「调用方是桥，不是浏览器，它没有 cookie」。
-#    **理由成立，解法错了** —— 那是把门拆掉，不是给桥配钥匙。后果是：
-#    面板设了密码的人以为锁上了，而这四条一直敞着，
-#    **既能读到梦的正文，又能改状态**（`dream/wake` 会动 recall_count 和生命周期）。
-#    只在本机跑基本没事；一旦经过隧道 / 反代 / 局域网 / 误配置，边界就直接开了。
+#    They used to sit in PUBLIC_PATHS, justified as "the caller is the bridge, not a
+#    browser, and it has no cookie". **The justification was right and the solution was
+#    wrong** — that removes the door rather than giving the bridge a key. The consequence:
+#    someone who set a panel password believed it was locked, while these four stood open
+#    the whole time, **both readable and state-changing** (`dream/wake` moves recall_count
+#    and the lifecycle along). Harmless enough on loopback; the moment a tunnel, a reverse
+#    proxy, a LAN, or a misconfiguration is involved, the boundary is simply open.
 #
-# 📌 现在的规矩一句话：**锁上了就没有例外。**
-#      门没锁（没设密码）→ 一切照旧，这四条照样谁都能调
-#      门锁了            → 这四条要带钥匙（Header），或者本来就是登录着的浏览器
-#    ⚠️ **钥匙走 Header，不走地址栏** —— 地址栏会被日志、Referer、浏览器历史带出去。
+# The rule now, in one line: **once it is locked, there are no exceptions.**
+#      Gate unlocked (no password set) -> unchanged, anyone may call these four.
+#      Gate locked                     -> these four need a key (in a header), or an
+#                                         already-logged-in browser.
+#    WARNING: **the key travels in a header, not in the URL** — URLs leak through logs,
+#    Referer, and browser history.
 HOOK_PATHS = frozenset([
     "/api/loci/dream/wake",
     "/api/muse/pending",
@@ -76,14 +89,15 @@ HOOK_PATHS = frozenset([
 ])
 HOOK_HEADER = "x-loci-hook-token"
 
-_PUBLIC_PREFIXES = ("/loci/vendor/",)   # 页面的静态件
+_PUBLIC_PREFIXES = ("/loci/vendor/",)   # the page's static assets
 
 
 def gate_needed() -> bool:
-    """现在要不要锁。
+    """Whether the gate should be locked right now.
 
-    两个条件都成立才锁：开关开着 **且** 已经设过密码。
-    第二个条件是硬安全线 —— 没有密码的时候锁上，谁都进不来，包括主人。
+    It locks only when both conditions hold: the switch is on **and** a password has been
+    set. The second condition is a hard safety line — locking while no password exists
+    shuts everyone out, the owner included.
     """
     raw = sh.config.get("panel_auth", True)
     on = str(raw).strip().lower() not in ("0", "false", "no", "off", "none", "")
@@ -96,7 +110,8 @@ def gate_needed() -> bool:
 
 
 def _key() -> bytes:
-    """签 cookie 的密钥：从密码哈希派生，不另存。改密码 → 密钥变 → 旧会话全失效。"""
+    """The cookie-signing key: derived from the password hash, never stored separately.
+    Change the password -> the key changes -> every old session dies."""
     h = ""
     try:
         h = sh._load_password_hash() or ""
@@ -125,7 +140,8 @@ def has_session(request: Request) -> bool:
         return False
     if exp < int(time.time()):
         return False
-    # compare_digest：别用 == 比签名，那会把「对了几个字符」按时间漏出去
+    # compare_digest: never compare signatures with ==, which leaks "how many characters
+    # were right" through timing.
     return hmac.compare_digest(sig, _sign(exp))
 
 
@@ -138,7 +154,7 @@ def is_hook(path: str) -> bool:
 
 
 def hook_token() -> str:
-    """桥的钥匙。环境变量优先，其次 config。没配就是空串。"""
+    """The bridge's key. Environment variable first, then config. Empty string if unset."""
     import os
     v = str(os.environ.get("LOCI_HOOK_TOKEN") or "").strip()
     if v:
@@ -150,18 +166,21 @@ def hook_token() -> str:
 
 
 def hook_ok(request: Request) -> tuple[bool, str]:
-    """这条给桥的请求放不放行。返回 (放不放, 不放的话说什么)。
+    """Whether to let this bridge request through. Returns (allowed, why not).
 
-    三条路都能进：
-      ① **门没锁**（没开面板密码 / 还没设密码）→ 放行。锁都没有，这儿也不该有。
-      ② 已经登录的浏览器 → 放行（面板自己也要读这几条）。
-      ③ 带对了钥匙 → 放行。
+    Three ways in:
+      1. **The gate is unlocked** (panel password disabled, or none set yet) -> allow.
+         There is no lock anywhere else, so there should not be one here.
+      2. An already-logged-in browser -> allow (the panel itself reads these routes).
+      3. The right key -> allow.
 
-    🔴 **门锁了但没配钥匙 → 不放行。** 这是故意的（fail-closed）：
-       「配漏了就默认打开」是这一整条 bug 的老根 —— 一个只在配置正确时才存在的锁，
-       等于没有锁。所以宁可当场坏掉，也不安静地敞着。
-       ⚠️ 坏掉的时候要**说清楚怎么修**，见下面那句 401 的话 ——
-          静默失灵比报错坏得多（今晚已经在别处见过三次了）。
+    **Locked but no key configured -> refuse.** That is deliberate (fail-closed).
+       "Default to open when the config is incomplete" is the root of this entire class of
+       bug: a lock that exists only when the configuration is correct is not a lock. Better
+       to break loudly right here than to stand quietly open.
+       WARNING: when it does break, it has to **say how to fix it** — see the 401 message
+          below. Silent malfunction is far worse than an error. (Three separate instances
+          of that same failure mode turned up while writing this.)
     """
     if not gate_needed():
         return True, ""
@@ -188,7 +207,8 @@ def register(mcp) -> None:
 
     @mcp.custom_route("/auth/login", methods=["POST"])
     async def auth_login(request: Request) -> Response:
-        """进门。限流走 `_shared` 现成的那套（按来源 + 全局两层）。"""
+        """Come in. Rate limiting reuses what `_shared` already has: a per-origin layer
+        and a global one."""
         wait = sh._login_retry_after(request)
         if wait > 0:
             return JSONResponse({"error": f"试得太密了，{wait} 秒后再来"},
@@ -223,7 +243,7 @@ def register(mcp) -> None:
 
     @mcp.custom_route("/auth/recover", methods=["POST"])
     async def auth_recover(request: Request) -> Response:
-        """忘了密码：安全问题答对了就能设一把新的。"""
+        """Forgot the password: answer the security question correctly and set a new one."""
         wait = sh._login_retry_after(request)
         if wait > 0:
             return JSONResponse({"error": f"试得太密了，{wait} 秒后再来"},
@@ -244,11 +264,12 @@ def register(mcp) -> None:
         if not proof:
             sh._record_login_failure(request)
             return JSONResponse({"error": "答案不对"}, status_code=401)
-        # proof 带的是「校验答案那一刻的 auth 代次」，传进去做 compare-and-swap：
-        # 这中间要是有人改过密码，这次重置就不该盖上去（_shared 那套自己会拒）。
+        # `proof` carries the auth generation as of the moment the answer was verified;
+        # passing it in makes this a compare-and-swap. If anyone changed the password in
+        # between, this reset must not overwrite theirs — `_shared` refuses it for us.
         if not sh._save_password_hash(newpw, expected_generation=proof.generation):
             return JSONResponse({"error": "这中间密码被改过了，重来一次"},
                                 status_code=409)
         sh._record_login_success(request)
-        # 换了密码 = 密钥换了 = 旧会话全失效，这儿顺手发一把新的
+        # New password = new key = every old session is dead, so hand out a fresh one here.
         return _set_cookie(JSONResponse({"ok": True}), _make_cookie(), _TTL)

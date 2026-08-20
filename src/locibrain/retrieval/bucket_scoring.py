@@ -1,24 +1,28 @@
 """
 ========================================
-locibrain.retrieval.bucket_scoring — 检索多维评分子函数
+locibrain.retrieval.bucket_scoring — the per-dimension retrieval sub-scores
 ========================================
 
-从 bucket_manager.py 拆出。BucketManager.search() 用加权多维评分给候选桶
-排序：文本相关性(topic) + 情感共鸣(emotion) + 时间亲近(time) + 触碰频率
-(touch)，这四维是纯函数（只读传入参数 + 本模块常量），不碰文件系统/网络，
-所以独立成模块，方便单测和复用。
+Split out of bucket_manager.py. BucketManager.search() ranks candidate buckets with a
+weighted multi-dimensional score: text relevance (topic) + emotional resonance (emotion)
++ temporal proximity (time) + touch frequency (touch). Those four are pure functions —
+they read only their arguments and this module's constants, and never touch the
+filesystem or the network — so they live on their own, where they are easy to unit-test
+and to reuse.
 
-importance / semantic(embedding) / bm25 三个维度的计算逻辑较短，仍留在
-bucket_manager.search() 内联（importance 是一行归一化，semantic/bm25 依赖
-self.embedding_engine / self._bm25 等实例状态，硬抽出去反而增加耦合）。
+The importance / semantic (embedding) / bm25 dimensions are short enough to stay inline
+in bucket_manager.search(): importance is a one-line normalization, and semantic and
+bm25 depend on instance state such as self.embedding_engine and self._bm25, so pulling
+them out here would add coupling rather than remove it.
 
-不做什么：
-- 不做加权求和/归一化（那是 search() 的事，这里只给出单维度 0~1 分）
-- 不读 bucket 文件、不碰 self.config（topic 分需要的 content_weight 由
-  调用方显式传入，不在这里读配置）
+What this does NOT do:
+- No weighted sum, no normalization across dimensions. That is search()'s job; each
+  function here returns a single 0~1 score for its own dimension.
+- No reading of bucket files and no access to self.config. The content_weight that the
+  topic score needs is passed in explicitly rather than looked up here.
 
-对外暴露：calc_topic_score / calc_emotion_score / calc_time_score /
-         calc_touch_score
+Public surface: calc_topic_score / calc_emotion_score / calc_time_score /
+                calc_touch_score
 ========================================
 """
 
@@ -29,34 +33,32 @@ from typing import Optional
 from rapidfuzz import fuzz
 from utils import parse_iso_datetime
 
-# --- topic 文本维度权重 ---
+# --- topic: text-dimension weights ---
 TOPIC_NAME_W = 3.0
 TOPIC_DOMAIN_W = 2.5
 TOPIC_TAG_W = 2.0
-TOPIC_BODY_SLICE = 1000   # body 文本参与 fuzzy 的首部截断长度
+TOPIC_BODY_SLICE = 1000   # how much of the body head is fed to the fuzzy match
 
-# --- emotion 维度 ---
+# --- emotion dimension ---
 _DEFAULT_VALENCE = 0.5
 _DEFAULT_AROUSAL = 0.3
-EMOTION_MAX_DIST = math.sqrt(2)  # Russell 理论最大欧氏距离
+EMOTION_MAX_DIST = math.sqrt(2)  # the theoretical max Euclidean distance in Russell's space
 
-# --- time 维度 ---
-TIME_DECAY_LAMBDA = 0.02  # e^(-λ*days)，越小 → 起冷起慢
-TIME_FALLBACK_DAYS = 30   # 无可解析 last_active 时的默认天数
+# --- time dimension ---
+TIME_DECAY_LAMBDA = 0.02  # e^(-lambda*days); smaller -> cools off more slowly
+TIME_FALLBACK_DAYS = 30   # assumed age when last_active cannot be parsed
 
-# --- touch 维度 ---
-TOUCH_NORMALIZE_CAP = 10.0   # activation_count / 该值，裁到 1.0
+# --- touch dimension ---
+TOUCH_NORMALIZE_CAP = 10.0   # activation_count divided by this, clipped to 1.0
 
 
 # ---------------------------------------------------------
 # Topic relevance sub-score:
-# name(×3) + domain(×2.5) + tags(×2) + body(×1)
-# 文本相关性子分：桶名(×3) + 主题域(×2.5) + 标签(×2) + 正文(×1)
+# name(x3) + domain(x2.5) + tags(x2) + body(x1)
 # ---------------------------------------------------------
 def calc_topic_score(query: str, bucket: dict, content_weight: float = 1.0) -> float:
     """
     Calculate text dimension relevance score (0~1).
-    计算文本维度的相关性得分。
     """
     meta = bucket.get("metadata", {})
 
@@ -85,18 +87,16 @@ def calc_topic_score(query: str, bucket: dict, content_weight: float = 1.0) -> f
 # ---------------------------------------------------------
 # Emotion resonance sub-score:
 # Based on Russell circumplex Euclidean distance
-# 情感共鸣子分：基于环形情感模型的欧氏距离
-# No emotion in query → neutral 0.5 (doesn't affect ranking)
+# No emotion in query -> neutral 0.5 (doesn't affect ranking)
 # ---------------------------------------------------------
 def calc_emotion_score(
     q_valence: Optional[float], q_arousal: Optional[float], meta: dict
 ) -> float:
     """
     Calculate emotion resonance score (0~1, closer = higher).
-    计算情感共鸣度（0~1，越近越高）。
     """
     if q_valence is None or q_arousal is None:
-        return 0.5  # No emotion coordinates → neutral / 无情感坐标时给中性分
+        return 0.5  # No emotion coordinates -> neutral score
 
     try:
         b_valence = float(meta.get("valence", _DEFAULT_VALENCE))
@@ -111,13 +111,11 @@ def calc_emotion_score(
 
 # ---------------------------------------------------------
 # Time proximity sub-score:
-# More recent activation → higher score
-# 时间亲近子分：距上次激活越近分越高
+# More recent activation -> higher score
 # ---------------------------------------------------------
 def calc_time_score(meta: dict) -> float:
     """
     Calculate time proximity score (0~1, more recent = higher).
-    计算时间亲近度。
     """
     last_active_str = meta.get("last_active", meta.get("created", ""))
     try:
@@ -129,14 +127,13 @@ def calc_time_score(meta: dict) -> float:
 
 
 # ---------------------------------------------------------
-# Touch frequency sub-score (iter 2.1)
-# 触碰频率子分：被主动召回次数越多分越高
+# Touch frequency sub-score: the more often a bucket was deliberately recalled,
+# the higher it scores.
 # ---------------------------------------------------------
 def calc_touch_score(meta: dict) -> float:
     """
     Calculate touch frequency score (0~1).
     Normalizes activation_count over 10; capped at 1.0.
-    计算触碰频率得分（0~1），以 10 次为上限归一化。
     """
     count = float(meta.get("activation_count") or 0)
     return min(count / TOUCH_NORMALIZE_CAP, 1.0)

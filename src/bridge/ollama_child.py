@@ -1,22 +1,27 @@
 """
 ========================================
-bridge/ollama_child.py — 本地 Ollama 子进程常驻（脱壳 E2 从 web/ollama_local.py 搬来）
+bridge/ollama_child.py — keeping the local Ollama child process alive
+(moved here from web/ollama_local.py during the strip-down)
 ========================================
 
-原 web/ollama_local.py 是「一键搭建」面板：检测宿主 → 免提权自动装 ollama →
-常驻子进程 → 面板路由。E2 砍上游面板时，**面板那半整个砍了**——下载/校验/解压
-ollama 发行包、进度条、`/api/embedding/local/*` 三个路由，一个按钮都够不着了，
-留着就是死代码。
+The old web/ollama_local.py was a one-click setup panel: detect the host -> install
+Ollama without elevation -> keep the child process up -> panel routes. When the upstream
+panels were cut, **the whole panel half went with them** — downloading, verifying and
+unpacking an Ollama release, the progress bar, and the three `/api/embedding/local/*`
+routes. Not one button could reach any of it any more, so keeping it would have been
+keeping dead code.
 
-**子进程常驻这半留着**：开源版文档写死「本地 embedding 需要本地 ollama」，
-这是核心配套机制，server.py 的 lifespan 直接调
-`ensure_child_on_boot()` / `stop_child()`（不是哪个面板按钮触发的）。
-我们自己走独立容器用不到（`sh.in_docker()` 为真时两个函数都直接跳过），
-但机制要留着——这跟 E2 「auth 连锁」是同一条判据：**这一半不是面板，是运行时**。
+**The keep-the-child-running half stays.** The docs state flatly that local embedding
+requires a local Ollama, which makes this core supporting machinery: server.py's lifespan
+calls `ensure_child_on_boot()` / `stop_child()` directly, not via any panel button. A
+standalone-container deployment does not need it — both functions return immediately when
+`sh.in_docker()` is true — but the mechanism has to stay. Same test as the auth interlock:
+**this half is not panel, it is runtime.**
 
-对外暴露：
-- ensure_child_on_boot() / stop_child()：server.py lifespan 启停调用
-- find_ollama_bin()：只在没装的时候原样返回 None，不再触发自动安装向导
+Public surface:
+- ensure_child_on_boot() / stop_child(): called by server.py's lifespan on start and stop.
+- find_ollama_bin(): returns None when Ollama is not installed, and no longer kicks off
+  an automatic install wizard.
 ========================================
 """
 
@@ -35,15 +40,16 @@ logger = sh.logger
 _OLLAMA_PORT = 11434
 _LOCAL_BASE = f"http://127.0.0.1:{_OLLAMA_PORT}"
 
-# 子进程管理
+# Child-process state
 _child_proc: "subprocess.Popen | None" = None
 _child_managed = False
 _child_monitor_task: "asyncio.Task | None" = None
 
 
 # ============================================================
-# 环境探测（只留子进程常驻用得到的这几个；`_arch()`/`_detect()`/`_recommend()`
-# 那些是面板专用，跟着安装向导一起砍了）
+# Environment probing — only the few probes the child process actually needs.
+# `_arch()` / `_detect()` / `_recommend()` were panel-only and went with the
+# install wizard.
 # ============================================================
 
 def _os_key() -> str:
@@ -56,14 +62,17 @@ def _os_key() -> str:
 
 
 def _user_install_root() -> str:
-    """免提权安装目标根目录（用户家目录下，不需 sudo/管理员）。"""
+    """Root of the no-elevation install target: under the user's home directory, so
+    neither sudo nor Administrator is needed."""
     return os.path.join(os.path.expanduser("~"), ".ollama", "local")
 
 
 def find_ollama_bin() -> "str | None":
-    """找 ollama 可执行文件：PATH 优先，再查各系统免提权安装位置。
+    """Locate the ollama executable: PATH first, then each platform's no-elevation
+    install location.
 
-    找不到就返回 None——**不再触发自动安装**（那是面板向导的活，已经砍了）。
+    Returns None when it cannot be found — it **no longer triggers an install**. That
+    was the panel wizard's job, and the wizard is gone.
     """
     p = shutil.which("ollama")
     if p:
@@ -92,8 +101,9 @@ def find_ollama_bin() -> "str | None":
 
 
 async def _is_running(base: str = _LOCAL_BASE) -> bool:
-    # trust_env=False：本地 ollama 必须绕过系统代理（Clash/V2Ray 等会把 127.0.0.1
-    # 也丢给代理 → 502，明明 serve 在跑却判定挂了）。
+    # trust_env=False: a local Ollama must bypass the system proxy. Proxy clients happily
+    # route 127.0.0.1 through the proxy too, which comes back as a 502 — so `serve` is
+    # running fine and we conclude it is dead.
     try:
         async with httpx.AsyncClient(timeout=3.0, trust_env=False) as c:
             r = await c.get(f"{base}/api/version")
@@ -103,7 +113,7 @@ async def _is_running(base: str = _LOCAL_BASE) -> bool:
 
 
 # ============================================================
-# 子进程常驻
+# Keeping the child process alive
 # ============================================================
 
 def _spawn() -> "subprocess.Popen | None":
@@ -121,7 +131,8 @@ def _spawn() -> "subprocess.Popen | None":
 
 
 async def ensure_child() -> dict:
-    """确保 ollama 在跑：已可达→直接用；装了没跑→拉起子进程并等就绪；没装→报缺失。"""
+    """Make sure Ollama is running. Already reachable -> use it. Installed but not
+    running -> spawn the child and wait for readiness. Not installed -> report that."""
     global _child_proc, _child_managed
     if await _is_running():
         return {"running": True, "managed": _child_managed, "reason": "already_running"}
@@ -135,9 +146,11 @@ async def ensure_child() -> dict:
         return {"running": False, "managed": False, "reason": f"spawn_failed: {e}"}
     if _child_proc is None:
         return {"running": False, "managed": False, "reason": "not_installed"}
-    # 等就绪：首次冷启动很慢——实测 Windows 全新安装后第一次 `ollama serve`
-    # 要做运行时/GPU 探测，可能 >150s 才开始监听 11434。给到 ~180s，
-    # 每秒探一次（_is_running 自带 3s 超时，端口已开但慢响应时不会误判失败）。
+    # Wait for readiness. The very first cold start is slow: measured on a fresh Windows
+    # install, the first `ollama serve` does runtime and GPU probing and can take more
+    # than 150s before it starts listening on 11434. So allow ~180s, probing once a
+    # second. (_is_running carries its own 3s timeout, so a port that is open but slow to
+    # answer is not mistaken for a failure.)
     for _ in range(180):
         if await _is_running():
             _child_managed = True
@@ -155,7 +168,7 @@ def _start_monitor() -> None:
 
 
 async def _monitor() -> None:
-    """子进程挂了自动拉起（仅限我们托管的那只）。"""
+    """Respawn the child if it dies — only the one we ourselves manage."""
     global _child_proc
     while _child_managed:
         await asyncio.sleep(5)
@@ -168,7 +181,7 @@ async def _monitor() -> None:
 
 
 async def stop_child() -> None:
-    """OB 关停时一并停掉我们托管的 ollama 子进程。"""
+    """On server shutdown, stop the Ollama child process we manage."""
     global _child_proc, _child_managed
     _child_managed = False
     if _child_monitor_task:
@@ -186,8 +199,9 @@ async def stop_child() -> None:
 
 
 async def ensure_child_on_boot() -> None:
-    """server.py lifespan 调用：仅当裸机 + 配置成本地向量化时，开机就把子进程拉起来。
-    Docker / 云端向量化 → 不动（裸机才有「OB 托管 ollama」一说）。"""
+    """Called by server.py's lifespan: start the child at boot, but only on bare metal
+    and only when the config asks for local vectorization. Under Docker, or with cloud
+    vectorization, do nothing — "the server manages Ollama" is a bare-metal idea only."""
     try:
         if sh.in_docker():
             return

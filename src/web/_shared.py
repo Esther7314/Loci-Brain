@@ -1,34 +1,45 @@
 """
 ========================================
-web/_shared.py — 面板/MCP 边界共享的运行期依赖与密码工具
+web/_shared.py — runtime dependencies and password tooling shared across the panel/MCP boundary
 ========================================
 
-类比 tools/_runtime.py：web/ 和 bridge/ 下的模块都从这里取运行期依赖（config）
-和横切工具（密码哈希、登录限速、安全问题急救）。
+The counterpart of tools/_runtime.py: modules under web/ and bridge/ take their runtime
+dependency (config) and their cross-cutting helpers (password hashing, login rate
+limiting, security-question recovery) from here.
 
-🔴 E2（2026-08-17，脱壳）之后这里**不再是「Dashboard 鉴权」**——cookie 会话
-那一族（_sessions/_is_authenticated/_require_auth/…）跟着 web/auth.py 一起砍了：
-面板 /api/* 不再鉴权（她拍板，跟 8-05「家里内网不鉴权」一致）。
-**留下来的密码/限速原语**是因为 bridge/oauth.py 的 MCP 远程 OAuth 授权页
-还要用同一套密码防爆破——那是「同一把密码，两个入口」，不是「鉴权还活着」。
+Since the strip-down this is **no longer "dashboard authentication"**. The cookie-session
+family (_sessions / _is_authenticated / _require_auth / ...) went with web/auth.py: the
+panel's /api/* routes are not authenticated at this layer any more.
+**The password and rate-limit primitives stayed** because the remote MCP OAuth
+authorization page in bridge/oauth.py still needs the same password, and the same brute-
+force resistance around it. That is "one password, two doorways", not "authentication is
+still alive here".
 
-为什么单独抽出来：
-- server.py 历史上把 93 个 @mcp.custom_route 全平铺在一个 5000 行文件里，难维护。
-- 密码校验是 bridge/oauth.py 唯一横切依赖，必须有一个单一来源，否则一拆就到处重复。
+Why it is a separate file at all:
+- server.py historically laid all 93 @mcp.custom_route handlers flat in one 5000-line
+  file, which was unmaintainable.
+- Password verification is bridge/oauth.py's single cross-cutting dependency, so it needs
+  exactly one source. Without that, splitting the file duplicates it everywhere.
 
-关键行为：
-- init(config)：启动时由 server.py 注入 config（之后函数按需读 config["buckets_dir"]）。
-- 密码：PBKDF2-HMAC-SHA256 存 <buckets_dir>/.dashboard_auth.json；支持环境变量
-  LOCI_DASHBOARD_PASSWORD 覆盖；安全问题用于忘密码急救。
-- credential generation（_credential_state_guard 等）：密码轮换让在途的 OAuth
-  code/token 派生失效，MCP OAuth 的持久化落这套锁。
+Key behaviour:
+- init(config): server.py injects the config at startup; functions then read
+  config["buckets_dir"] as needed.
+- Passwords: PBKDF2-HMAC-SHA256, stored in <buckets_dir>/.dashboard_auth.json. The
+  LOCI_DASHBOARD_PASSWORD environment variable overrides it. The security question exists
+  for forgotten-password recovery.
+- Credential generation (_credential_state_guard and friends): rotating the password
+  invalidates in-flight OAuth code/token derivations, and MCP OAuth persistence takes this
+  same lock.
 
-不做什么：
-- 不定义任何路由（路由在 web/<模块>.py / bridge/<模块>.py 里，用 register(mcp) 注册）。
-- 不持有业务引擎（bucket_mgr 等仍在 server.py / tools/_runtime；需要时再按同样方式注入）。
-- 不再管 cookie 会话（那半已经不存在）。
+What this does NOT do:
+- It defines no routes. Routes live in web/<module>.py and bridge/<module>.py and are
+  registered with register(mcp).
+- It holds no business engines. bucket_mgr and the rest still live in server.py /
+  tools/_runtime, and would be injected the same way if ever needed here.
+- It no longer deals with cookie sessions; that half does not exist.
 
-对外暴露：init + 密码/登录限速 helper（名字与原 server.py 完全一致，便于 import 回去）。
+Public surface: init, plus the password and login rate-limit helpers. The names match the
+originals in server.py exactly, so they can be imported straight back.
 ========================================
 """
 
@@ -55,14 +66,16 @@ from locibrain.policy.update_policy import evaluate_update_manifest as _evaluate
 
 logger = logging.getLogger("loci_brain")
 
-# --- 运行环境探测（Docker vs 裸机）---
-# 本地向量化要按宿主类型分流：Docker 里 ollama 是独立容器（连 ollama），
-# 裸机/原生则连本机 127.0.0.1。结果缓存一次，避免每次 IO。
+# --- Runtime environment probe: Docker vs bare metal ---
+# Local vectorization has to branch on the host type: inside Docker, Ollama is a separate
+# container and is reached by service name; on bare metal it is reached on 127.0.0.1.
+# The result is cached once so this is not I/O on every call.
 _in_docker_cache: "bool | None" = None
 
 
 def in_docker() -> bool:
-    """是否运行在 Docker 容器里。看 /.dockerenv 与 /proc/1/cgroup。结果缓存。"""
+    """Whether we are running inside a Docker container. Checks /.dockerenv and
+    /proc/1/cgroup. Cached."""
     global _in_docker_cache
     if _in_docker_cache is not None:
         return _in_docker_cache
@@ -104,13 +117,19 @@ def _path_is_on_non_root_mount(path: str) -> bool:
 
 
 def data_dir_persistence(buckets_dir: str) -> dict:
-    """判断记忆数据目录是不是真的在持久盘上（记忆最怕的就是「以为存住了其实没有」）。
+    """Work out whether the memory data directory is really on persistent storage. The
+    worst thing that can happen to a memory system is believing something was saved when
+    it was not.
 
-    - 裸机：目录就在用户磁盘上 → 本地持久。
-    - Docker 且该目录不是挂载点：躺在容器临时层，容器一重建/删除记忆全丢 → 危险，硬告警。
-    - Docker 且已挂载：至少能扛住重启/常规重建；若显式挂了宿主/命名卷则更稳。
+    - Bare metal: the directory is on the user's own disk -> locally persistent.
+    - Docker, directory is not a mount point: it is sitting in the container's ephemeral
+      layer, and everything is lost the moment the container is rebuilt or removed ->
+      dangerous, warn loudly.
+    - Docker, mounted: survives restarts and ordinary rebuilds at least; an explicit host
+      or named volume is sturdier still.
 
-    只做检测与提示，绝不阻断启动（阻断会伤部署体验）。返回 {persistent, mode, note}。
+    This only detects and reports. It must never block startup — blocking would make
+    deployment miserable. Returns {persistent, mode, note}.
     """
     # Render's native Python runtime is not a Docker container from inside the
     # process, but its root filesystem is ephemeral.  Only an attached disk
@@ -162,15 +181,19 @@ def data_dir_persistence(buckets_dir: str) -> dict:
     }
 
 
-# --- 注入的运行期配置（server.py 启动时 init 进来）---
+# --- Injected runtime config; server.py calls init() at startup ---
 config: dict = {}
 
-# --- 注入的业务引擎与运行期信息（类比 tools/_runtime；server.py 启动时 init_runtime）---
-# 各 web 路由模块通过 sh.<name> 读取，避免和 server.py 各持一份不一致。
-# embedding_engine 会被热重载替换 —— 替换方必须写 sh.embedding_engine（属性赋值），
-# 这样所有模块下次读 sh.embedding_engine 都拿到新实例。
+# --- Injected engines and runtime info (the tools/_runtime pattern; server.py calls
+#     init_runtime() at startup) ---
+# Route modules read these as sh.<name>, so that server.py and the routes cannot drift
+# apart holding two copies.
+# embedding_engine is replaced by hot reload — whoever replaces it MUST assign to
+# sh.embedding_engine as an attribute, so that every module's next read of
+# sh.embedding_engine picks up the new instance.
 version: str = ""
-repo_root: str = ""   # 仓库根目录（server.py 注入；用于定位 frontend/ 等，避免各模块各算 __file__）
+repo_root: str = ""   # repository root, injected by server.py; used to locate frontend/ and
+                      # such, so that modules do not each compute it from __file__
 bucket_mgr = None
 dehydrator = None
 decay_engine = None
@@ -183,16 +206,16 @@ v3_runtime = None
 
 
 def init(cfg: dict) -> None:
-    """启动时由 server.py 调用，注入全局 config。"""
+    """Called by server.py at startup to inject the global config."""
     global config
     config = cfg
 
 
 def init_runtime(**kwargs) -> None:
-    """启动时注入业务引擎与版本等运行期对象。
+    """Inject engines, version, and other runtime objects at startup.
 
-    用法：init_runtime(version=..., bucket_mgr=..., decay_engine=..., ...)
-    只更新传入的键，未传的保持不变。
+    Usage: init_runtime(version=..., bucket_mgr=..., decay_engine=..., ...)
+    Only the keys passed in are updated; anything omitted is left alone.
     """
     globals().update(kwargs)
 
@@ -298,32 +321,38 @@ def run_v3_web_operation(
     return runner(envelope, handler)
 
 
-# --- 心跳 / 活跃时间戳（原 server.py；移到这里让 heartbeat 路由与工具共用同一来源）---
+# --- Heartbeat / last-activity timestamp (originally in server.py; moved here so the
+#     heartbeat route and the tools read one source) ---
 _SERVER_START_TS = time.time()
 _LAST_OP_TS = _SERVER_START_TS
 
 
 def _mark_op(name: str = "") -> None:
-    """记录一次工具/接口活跃时间，供 /api/heartbeat 上报。
+    """Record one tool/endpoint activity timestamp for /api/heartbeat to report.
 
-    server.py 启动时把本函数注入 tools._runtime.mark_op，工具调用即更新；
-    /api/heartbeat（web/system.py）读 _LAST_OP_TS。两边同一来源，不会不一致。
+    server.py injects this function as tools._runtime.mark_op at startup, so any tool call
+    updates it; /api/heartbeat reads _LAST_OP_TS. One source on both sides, so the two
+    cannot disagree.
     """
     global _LAST_OP_TS
     _LAST_OP_TS = time.time()
 
 
-# --- server.py 级 helper 的注入位（保持定义在 server.py，这里只持引用）---
-# 这些函数读/写 server.py 的 webhook 全局等，搬过来会引发级联，故用注入而非搬迁。
-# 在它们各自定义之后由 server.py 调 init_runtime(...) 填入。
+# --- Injection slots for server.py-level helpers: they stay defined in server.py and only
+#     a reference is held here ---
+# These functions read and write server.py globals such as the webhook state, so moving
+# them would cascade. They are injected instead. server.py calls init_runtime(...) to fill
+# them in once each has been defined.
 fire_webhook = None            # async def(event: str, payload: dict) -> None
 write_deletion_notice = None   # def(names: list) -> None
 pop_deletion_notice = None     # def() -> str
-restart_github_auto_task = None # def(interval_minutes: int) -> None（起停后台 GitHub 同步任务）
+restart_github_auto_task = None # def(interval_minutes: int) -> None; starts/stops the background GitHub sync task
 
 
-# --- 项目 .env 读写（config / env-config / host-vault 路由共用，故放共享层）---
-# 与原 server.py 行为一致：.env 落在 src/.env。本文件在 src/web/ 下，上两级即 src/。
+# --- Project .env read/write; shared because the config, env-config and host-vault routes
+#     all use it ---
+# Same behaviour as the original in server.py: .env lives at src/.env. This file is under
+# src/web/, so two levels up is src/.
 def _project_env_path() -> str:
     return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
 
@@ -382,13 +411,14 @@ def _write_env_var(name: str, value: str) -> None:
         f.writelines(lines)
 
 
-# --- Dashboard 鉴权常量（原 server.py 调参面板）---
-# 🔴 E2（2026-08-17）：cookie 会话那一族（_sessions/_session_ttl_seconds/
-# _load_sessions/_save_sessions/_revoke_session/...）跟着 web/auth.py 一起砍了——
-# 面板 cookie 登录是真的死了（她拍板："/api/* 不再鉴权，跟她 8-05『家里内网不鉴权』一致"）。
-# **密码/登录限速那一族没有砍**：MCP OAuth 的 /oauth/authorize 页面（bridge/oauth.py）
-# 还要靠它防爆破——那是同一套密码，不是两件事。
-_PASSWORD_SALT_BYTES = 16            # secrets.token_hex(该值) → 32 char hex salt
+# --- Dashboard auth constants ---
+# The cookie-session family (_sessions / _session_ttl_seconds / _load_sessions /
+# _save_sessions / _revoke_session / ...) went with web/auth.py in the strip-down: panel
+# cookie login is genuinely dead, and /api/* is not authenticated at this layer.
+# **The password and login rate-limit family was not cut**: bridge/oauth.py's
+# /oauth/authorize page still relies on it to resist brute force. That is the same
+# password, not a second thing.
+_PASSWORD_SALT_BYTES = 16            # secrets.token_hex(this) -> 32-char hex salt
 _auth_mutation_lock = threading.RLock()
 _credential_generation = 0
 _credential_proof_key = secrets.token_bytes(32)
@@ -449,14 +479,17 @@ def _environment_password_proof(password: str) -> str:
     ).hexdigest()
 
 
-# --- 登录失败限流 / 指数退避锁定（防在线密码爆破）---
-# 纯内存滑窗，无外部依赖；进程重启即清零（可接受：重启本身打断了攻击者的连续尝试）。
-# 按客户端标识（X-Forwarded-For 首段，回退 request.client.host）分桶，避免一个坏客户端
-# 把所有人都锁死。成功登录立即清零。
-_LOGIN_WINDOW_SECONDS = 900          # 15 分钟滑窗内统计失败
-_LOGIN_MAX_FAILURES = 5              # 窗口内允许的失败次数，超过即进入锁定
-_LOGIN_BASE_LOCK_SECONDS = 60        # 首次锁定时长，按超出次数指数增长
-_LOGIN_MAX_LOCK_SECONDS = 3600       # 锁定时长上限（1 小时）
+# --- Failed-login throttling with exponential back-off lockout (against online password
+#     brute force) ---
+# A pure in-memory sliding window with no external dependency; a process restart clears it.
+# That is acceptable, because the restart itself interrupts the attacker's run of attempts.
+# Buckets are keyed per client (first segment of X-Forwarded-For, falling back to
+# request.client.host) so that one bad client cannot lock everybody out. A successful login
+# clears the bucket immediately.
+_LOGIN_WINDOW_SECONDS = 900          # failures are counted within a 15-minute sliding window
+_LOGIN_MAX_FAILURES = 5              # failures allowed in the window before lockout begins
+_LOGIN_BASE_LOCK_SECONDS = 60        # first lockout duration; grows exponentially with excess failures
+_LOGIN_MAX_LOCK_SECONDS = 3600       # lockout ceiling (1 hour)
 
 # Bound the amount of attacker-controlled state retained by this single-user
 # service. The global window also caps how many expensive password KDF jobs can
@@ -467,8 +500,8 @@ _LOGIN_FAILURE_HISTORY_LIMIT = 16
 _LOGIN_GLOBAL_WINDOW_SECONDS = 60
 _LOGIN_GLOBAL_MAX_ATTEMPTS = 60
 
-_login_failures: dict[str, list[float]] = {}      # {client_key: [失败时间戳...]}
-_login_locked_until: dict[str, float] = {}        # {client_key: 解锁时间戳}
+_login_failures: dict[str, list[float]] = {}      # {client_key: [failure timestamps...]}
+_login_locked_until: dict[str, float] = {}        # {client_key: unlock timestamp}
 _login_source_lru: OrderedDict[str, float] = OrderedDict()
 _login_global_attempts: deque[float] = deque()
 _login_state_lock = threading.RLock()
@@ -601,7 +634,8 @@ def _trusted_forwarded_value(request: Request, header: str) -> str:
 
 
 def _login_retry_after(request: Request) -> int:
-    """>0 = 当前被锁，返回建议等待秒数；0 = 允许尝试。"""
+    """>0 means currently locked out, and is the number of seconds to wait; 0 means an
+    attempt is allowed."""
     key = _client_key(request)
     with _login_state_lock:
         now = time.time()
@@ -617,7 +651,8 @@ def _login_retry_after(request: Request) -> int:
 
 
 def _record_login_failure(request: Request) -> None:
-    """记一次失败；窗口内累计超阈值则按指数退避锁定该客户端。"""
+    """Record one failure. Past the threshold within the window, lock this client out with
+    exponential back-off."""
     key = _client_key(request)
     with _login_state_lock:
         now = time.time()
@@ -647,7 +682,7 @@ def _record_login_failure(request: Request) -> None:
 
 
 def _record_login_success(request: Request) -> None:
-    """成功登录：清空该客户端的失败计数与锁定。"""
+    """Successful login: clear this client's failure count and lockout."""
     key = _client_key(request)
     with _login_state_lock:
         _login_failures.pop(key, None)
@@ -713,23 +748,26 @@ def _load_password_hash() -> str | None:
     return _load_auth_data().get("password_hash")
 
 
-# --- 密钥派生（密码 / 安全问题答案）---
-# 历史格式是单轮 `salt:sha256hex`，auth 文件一旦泄露离线爆破成本极低。
-# 改用 PBKDF2-HMAC-SHA256（慢 KDF）。存储格式：pbkdf2_sha256$<迭代数>$<salt_hex>$<hash_hex>。
-# 旧格式仍能校验（向后兼容），并在下次校验成功时静默升级到新格式（见 _verify_any_password）。
+# --- Key derivation for passwords and security-question answers ---
+# The historical format was a single-round `salt:sha256hex`, which makes offline cracking
+# almost free once the auth file leaks. It is PBKDF2-HMAC-SHA256 now — a deliberately slow
+# KDF. Storage format: pbkdf2_sha256$<iterations>$<salt_hex>$<hash_hex>.
+# The old format still verifies, for backward compatibility, and is silently upgraded to
+# the new one on the next successful verification (see _verify_any_password).
 _PBKDF2_ALGO = "pbkdf2_sha256"
 _PBKDF2_ITERATIONS = 240_000
 
 
 def _hash_secret(secret: str) -> str:
-    """把明文口令/答案派生成 pbkdf2_sha256$iter$salt$hash 存储串。"""
+    """Derive a plaintext password or answer into a pbkdf2_sha256$iter$salt$hash string."""
     salt = secrets.token_hex(_PASSWORD_SALT_BYTES)
     dk = hashlib.pbkdf2_hmac("sha256", secret.encode(), bytes.fromhex(salt), _PBKDF2_ITERATIONS)
     return f"{_PBKDF2_ALGO}${_PBKDF2_ITERATIONS}${salt}${dk.hex()}"
 
 
 def _verify_secret(secret: str, stored: str) -> bool:
-    """校验明文与存储串是否匹配。支持新 PBKDF2 格式与旧 `salt:sha256hex` 格式。"""
+    """Check plaintext against a stored string. Accepts both the current PBKDF2 format and
+    the legacy `salt:sha256hex` one."""
     if not stored:
         return False
     if stored.startswith(_PBKDF2_ALGO + "$"):
@@ -740,7 +778,7 @@ def _verify_secret(secret: str, stored: str) -> bool:
         except (ValueError, TypeError):
             return False
         return hmac.compare_digest(dk.hex(), expected)
-    # 旧格式：salt:sha256(salt:secret)
+    # Legacy format: salt:sha256(salt:secret)
     if ":" in stored:
         salt, h = stored.split(":", 1)
         return hmac.compare_digest(h, hashlib.sha256(f"{salt}:{secret}".encode()).hexdigest())
@@ -748,7 +786,8 @@ def _verify_secret(secret: str, stored: str) -> bool:
 
 
 def _needs_rehash(stored: str) -> bool:
-    """旧格式或迭代数低于当前标准 → 建议校验成功时静默升级。"""
+    """Legacy format, or an iteration count below the current standard -> silently upgrade
+    on the next successful verification."""
     if not stored or not stored.startswith(_PBKDF2_ALGO + "$"):
         return True
     try:
@@ -788,13 +827,16 @@ def _credential_proof_matches(
 
 
 # ------------------------------------------------------------
-# 公开密码校验的并发/限速原语（E2 从 web/auth.py 搬来）
+# Concurrency and rate-limit primitives for public password verification
+# (moved here from web/auth.py during the strip-down)
 # ------------------------------------------------------------
-# auth.py 整个砍了（面板 cookie 登录死了），但这一小簇不能跟着陪葬：
-# bridge/oauth.py 的 /oauth/authorize 页面（她当场输 Dashboard 密码，授权一个
-# 远程 MCP 客户端）也要验同一个密码、也要过同一套登录限速——这是**同一套密码**，
-# 不是两件事。auth.py 原来还有 `_run_password_work`/`_setup_lock`（首启设密、
-# 改密码用），那两个只有 auth.py 自己的路由在调，跟着面板一起死了，没搬。
+# auth.py was removed wholesale — panel cookie login is dead — but this small cluster could
+# not go down with it: bridge/oauth.py's /oauth/authorize page, where the user types the
+# dashboard password to authorize a remote MCP client, verifies the *same* password and has
+# to pass the *same* login throttling. One password, not two separate things.
+# auth.py also had `_run_password_work` and `_setup_lock` (first-run setup and password
+# change). Only auth.py's own routes called those, so they died with the panel and were not
+# moved.
 class _CrossLoopSemaphore:
     """Small async context manager backed by a process-wide thread semaphore.
 
@@ -1002,7 +1044,8 @@ def _verify_any_password(password: str) -> bool:
         return False
     if proof.source == "environment_password":
         return _credential_proof_matches(proof)
-    # 校验通过：若存的是旧格式或低迭代数，趁手里有明文静默升级到当前 PBKDF2 标准。
+    # Verified. If what was stored is the legacy format or a low iteration count, use the
+    # plaintext we happen to be holding to silently upgrade it to the current standard.
     if _needs_rehash(proof.value):
         try:
             upgraded = _save_password_hash(
@@ -1018,9 +1061,10 @@ def _verify_any_password(password: str) -> bool:
     return _credential_proof_matches(proof)
 
 
-# 🔴 E2：cookie 会话那一族（_create_session/_is_authenticated/_require_auth/
-# _set_session_cookie/_is_https_request/_authenticated_credential_generation）
-# 到这儿整个删完了——面板 /api/* 不再鉴权，没有谁再需要「这个请求带没带有效
-# session cookie」这句话。密码本身（_verify_password_for_rotation 等）和
-# credential generation（_credential_state_guard 等）没有删：MCP OAuth 的
-# /oauth/authorize 页面还要靠它们防爆破，那是同一套密码，不是两件事。
+# The cookie-session family (_create_session / _is_authenticated / _require_auth /
+# _set_session_cookie / _is_https_request / _authenticated_credential_generation) is
+# entirely gone as of here: /api/* is not authenticated at this layer any more, so nobody
+# needs to ask "does this request carry a valid session cookie?".
+# The password itself (_verify_password_for_rotation and friends) and credential generation
+# (_credential_state_guard and friends) were NOT deleted: the /oauth/authorize page still
+# relies on them to resist brute force. Same password, not a second thing.

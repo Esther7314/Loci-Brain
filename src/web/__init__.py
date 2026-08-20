@@ -1,27 +1,35 @@
 """
 ========================================
-web/ — 面板 HTTP 路由层（脱壳 E2 之后：只剩这一屏该留的）
+web/ — the panel's HTTP route layer (after the strip-down: only what this one screen needs)
 ========================================
 
-历史上 server.py 把 93 个 @mcp.custom_route 全平铺在一个 5000 行文件里，后来按域
-拆成独立模块。E2（2026-08-17）把上游那 20 个模块砍了——认证/OAuth 登录页/
-GitHub 同步/一键装 ollama/隧道管理/搜索/桶浏览/导入导出/webhook/plans/onboarding/
-v3 debug/旧 dashboard，一个字都不剩；四组还活着但不是「面板」的东西
-（MCP 远程 OAuth 校验、/mcp 请求体护栏、本地 ollama 子进程常驻）挪去了 `bridge/`。
+Historically ``server.py`` laid all 93 ``@mcp.custom_route`` handlers flat in a single
+5000-line file; they were later split into per-domain modules. The strip-down then cut
+twenty of those upstream modules outright — auth, the OAuth login page, GitHub sync,
+one-click Ollama install, tunnel management, search, bucket browsing, import/export,
+webhooks, plans, onboarding, v3 debug, the old dashboard: nothing left of any of them.
+Four things that were still alive but were never really "panel" (remote MCP OAuth
+validation, the ``/mcp`` body-size guard, keeping the local Ollama child process up)
+moved to ``bridge/`` instead.
 
-**现在有三个模块**：
-- `config_api`：E1 留 4 删 7 之后的引擎设置（`/api/config` GET+POST ·
-  `/api/test/dehydration` · `/api/test/embedding` · `/api/models`）。
-- `import_api`：导入的四条路由（preflight/upload/status/pause），2026-08-19 补回来。
-- `loci`：我们自己的新面板本体（房间四间、breath/recall 预览、档案、
-  发呆、密码设置……），`web/` 下唯一全新写的模块。
+**Three modules remain**:
+- ``config_api``: engine settings, four routes kept and seven dropped (``/api/config``
+  GET+POST, ``/api/test/dehydration``, ``/api/test/embedding``, ``/api/models``).
+- ``import_api``: the four import routes (preflight/upload/status/pause), restored after
+  the cut.
+- ``loci``: the current panel itself — the four rooms, the breath/recall preview, the
+  archive, musing, password setup. The only module under ``web/`` written from scratch.
 
-共享依赖（config、密码/登录限速工具）放在 web/_shared.py（类比 tools/_runtime.py）。
-⚠️ `_shared.py` 里已经**没有 cookie 会话/鉴权**了——面板 `/api/*` 不再鉴权
-（她拍板，跟 8-05「家里内网不鉴权」一致）。_shared 留下的密码原语是给
-`bridge/oauth.py` 的 MCP 远程 OAuth 授权页用的，两回事。
+Shared dependencies (config, password and login rate-limit helpers) live in
+``web/_shared.py`` (the counterpart of ``tools/_runtime.py``).
 
-对外暴露：register_all(mcp) —— 注册当前已迁移的所有 web 路由模块。
+Note that ``_shared.py`` no longer carries **cookie sessions or authentication** — the
+panel's ``/api/*`` routes are not authenticated at that layer any more; the gate lives in
+``panel_auth`` and is wrapped on at registration time (see ``_Gated`` below). The password
+primitives left in ``_shared`` serve the MCP remote-OAuth authorization page in
+``bridge/oauth.py``, which is a separate concern.
+
+Public surface: ``register_all(mcp)`` — registers every web route module migrated so far.
 ========================================
 """
 
@@ -33,26 +41,32 @@ from . import panel_auth
 
 
 _WEB_MODULES = (
-    # 门要第一个注册：它那四条路由自己在白名单里，不会被自己锁住。
+    # The gate registers first: its own four routes are on the allowlist, so it cannot
+    # lock itself out.
     ("web.panel_auth", panel_auth.register),
     ("web.config_api", config_api.register),
     ("web.loci", loci.register),
-    # 2026-08-19 补回来的：导入那四条路由。引擎 core/import_memory.py 一直活着，
-    # 是 E2 砍上游模块时把它的门一起砍了，面板上三个按钮点下去打的是 404。
+    # Restored later: the four import routes. The engine behind them,
+    # core/import_memory.py, had been alive the whole time — the strip-down removed its
+    # doorway along with the upstream modules, so three buttons in the panel were
+    # quietly hitting 404.
     ("web.import_api", import_api.register),
 )
 
 
 class _Gated:
-    """把 `mcp` 包一层，让**每一条 web 路由**自动带上面板那道门。
+    """Wrap `mcp` so that **every** web route automatically sits behind the panel gate.
 
-    为什么在注册这一层包，而不是去每个路由里加一句：
-    二十多个路由，靠人记得加，早晚漏掉一个 —— 而漏掉的那一个不会报错，
-    它只是**悄悄不设防**。这种错今晚已经见过太多次了。
-    在这儿包一次，新加的路由自动就在门里面，除非显式写进白名单。
+    Why the wrapping happens here, at registration, rather than a line added inside each
+    route: there are twenty-odd routes, and relying on a human to remember the line means
+    one gets missed eventually — and the missed one does not raise. It is just **quietly
+    unprotected**. That failure mode has shown up too many times to leave to memory.
+    Wrapping once here means a newly added route is inside the gate by default, unless it
+    is explicitly written onto the allowlist.
 
-    白名单只有两类（见 panel_auth.PUBLIC_PATHS）：门本身要用的、
-    以及调用方不是浏览器的（桥是另一个进程，它没有 cookie）。
+    The allowlist has only two kinds of entry (see panel_auth.PUBLIC_PATHS): what the gate
+    itself needs, and routes whose caller is not a browser (the bridge is a separate
+    process; it has no cookies).
     """
 
     def __init__(self, mcp):
@@ -66,8 +80,9 @@ class _Gated:
         if panel_auth.is_public(path):
             return inner
 
-        # 给桥用的那四条：不要 cookie（桥没有），但门锁着的时候要钥匙。
-        # 判据和碑文都在 panel_auth.HOOK_PATHS 上面。
+        # The four bridge-facing routes: no cookie required (the bridge has none), but a
+        # key is required whenever the gate is locked. The reasoning and the epitaph are
+        # both written above panel_auth.HOOK_PATHS.
         if panel_auth.is_hook(path):
             def hook_deco(fn):
                 import functools
@@ -91,9 +106,10 @@ class _Gated:
             @functools.wraps(fn)
             async def guarded(request):
                 if panel_auth.gate_needed() and not panel_auth.has_session(request):
-                    # 401 是**约定好的信号**：前端拿到它就弹门（页面里那句
-                    # `if (r.status === 401){ openGate(); }` 一直都在，
-                    # 只是 E2 之后再没有东西会回 401 了）。
+                    # 401 is the **agreed signal**: the front-end pops the gate open when
+                    # it sees one. That line in the page —
+                    # `if (r.status === 401){ openGate(); }` — was there all along; after
+                    # the strip-down there was simply nothing left that ever returned 401.
                     return JSONResponse({"error": "请先登录"}, status_code=401)
                 return await fn(request)
 
@@ -103,7 +119,7 @@ class _Gated:
 
 
 def register_all(mcp) -> None:
-    """注册所有已迁移到 web/ 的路由模块。后续每迁一个模块加一行。"""
+    """Register every route module migrated into web/. One more line per module."""
     gated = _Gated(mcp)
 
     def _register():

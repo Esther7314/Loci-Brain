@@ -1,36 +1,47 @@
 """
 ========================================
-server.py — MCP 服务入口 + 启动装配
+server.py — the MCP service entry point and startup assembly
 ========================================
 
-启动整个 Loci Brain 进程：加载配置、创建 BucketManager / Dehydrator /
-DecayEngine / EmbeddingEngine / ImportEngine，把它们注入 tools._runtime 与
-web._shared，然后以 @mcp.tool() 注册薄封装（真正的实现在 src/tools/<工具>/ 下面）。
+Starts the whole Loci Brain process: load config, construct BucketManager / Dehydrator /
+DecayEngine / EmbeddingEngine / ImportEngine, inject them into tools._runtime and
+web._shared, then register thin @mcp.tool() wrappers. The real implementations live under
+src/tools/<tool>/.
 
-关键行为：
-- 启动后暴露 **10 个** MCP 工具：breath/grow/recall/regrow/fold/muse/trace/
-  pulse/letter_write/letter_read；每个入口 ≤ 10 行，只负责转发。
-  ⚰️ 2026-08-18（E3 脱壳后半）：上游那批早已断注册的工具连函数带目录一起删了
-  —— hold/anchor/release/plan/I/dream/seed/breath_search/breath_advanced。
-  删的时候差点连坐：`tools/anchor/` 里住着**活的 pulse**、`tools/plan/` 里住着
-  **活的 letter_write/read**（名字是死人的，里面住着活人）——两个包已改名成
-  `tools/pulse/`、`tools/letter/`，名字从此对得上里面的东西。
-- Dashboard / HTTP 路由全部已拆分到 src/web/<域>.py（每个模块 register(mcp)），
-  本文件仅在启动时调用 web.register_all(mcp) 装配；共享依赖见 web/_shared.py
-- 仍保留在本文件：进程启动、引擎初始化、GitHub 后台同步循环、Webhook 推送、
-  MCP Bearer 鉴权中间件、单连接器 /mcp 装配（启动入口处把 mcp_extra 工具回灌进 mcp）、uvicorn 拉起
+Key behaviour:
+- Once running, it exposes **ten** MCP tools: breath, grow, recall, regrow, fold, muse,
+  trace, pulse, letter_write, letter_read. Each entry point is at most ten lines and does
+  nothing but forward.
+  The upstream tools that had long since been unregistered were later deleted outright,
+  functions and directories together: hold, anchor, release, plan, I, dream, seed,
+  breath_search, breath_advanced.
+  That deletion nearly took live code with it: `tools/anchor/` was where the **live**
+  pulse lived, and `tools/plan/` was where the **live** letter_write/letter_read lived —
+  dead names with living things inside them. Both packages were renamed to `tools/pulse/`
+  and `tools/letter/`, so the names now match what is actually in them.
+- Every dashboard and HTTP route has been split out into src/web/<domain>.py, each module
+  exposing register(mcp). This file only calls web.register_all(mcp) at startup; the
+  shared dependencies are in web/_shared.py.
+- Still here: process startup, engine initialization, the background GitHub sync loop,
+  webhook delivery, the MCP Bearer auth middleware, single-connector /mcp assembly (the
+  entry point folds mcp_extra's tools back into mcp), and bringing up uvicorn.
 
-不做什么（边界）：
-- 不在这里写 hold/breath/dream 等业务逻辑（全在 tools/* 下）
-- ⚰️ 2026-08-17：`night_fall` 工具 + 它的两个挂点整个退役（见文件中段那块碑文）。
-  织梦换成 `tools/_dream.py`，**它没有 MCP 工具面**：睁眼后台织，取梦走
-  `GET /api/dream/current`，梦怎么递进对话归桥。
-- ⚰️ 2026-08-17：`seed`（十三颗情绪根）也从 MCP 面撤下（开工单 1.5）——
-  **停用不删档**，`tools/seed/` 和盘上那些桶一个字没动。碑文在文件中段。
-- 不写 HTTP 路由处理（全在 web/* 下）；不写 LLM prompt（dehydrator 负责）
-- 不直接读写桶文件（bucket_manager 负责）
+What this does NOT do (the boundary):
+- No business logic for the individual tools; all of that lives under tools/*.
+- The `night_fall` tool and both of its hook points were retired entirely (there is an
+  epitaph for it further down this file). Dream weaving is `tools/_dream.py` now, and
+  **it has no MCP tool surface**: it weaves in the background after waking, dreams are
+  fetched with `GET /api/dream/current`, and how a dream reaches the conversation is the
+  bridge's problem.
+- `seed`, the thirteen emotional roots, was also withdrawn from the MCP surface.
+  **Disabled, not deleted**: `tools/seed/` and the buckets on disk are untouched. Its
+  epitaph is further down this file too.
+- No HTTP route handlers (they are all under web/*), and no LLM prompts (dehydrator owns
+  those).
+- No direct reads or writes of bucket files (bucket_manager owns those).
 
-对外暴露：mcp/mcp_extra 两个实例 + 若干 @mcp*.tool() 函数；HTTP 路由在 src/web/*
+Public surface: the two instances mcp and mcp_extra, plus the @mcp*.tool() functions.
+HTTP routes are in src/web/*.
 ========================================
 """
 
@@ -46,7 +57,6 @@ import httpx
 
 
 # --- Ensure same-directory modules can be imported ---
-# --- 确保同目录下的模块能被正确导入 ---
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from mcp.server.fastmcp import FastMCP
@@ -60,66 +70,77 @@ from core.import_memory import ImportEngine
 from core.migrate_engine import MigrateEngine
 from utils import get_version, load_config, setup_logging
 
-# --- iter 2.1：MCP 工具实现已按代码路径拆分到 tools/ 子包 ---
-# 本文件只保留 MCP 注册 + 路由（HTTP custom_route）+ 共享辅助。
-# 真正的工具逻辑在 tools/breath, tools/hold, tools/grow, tools/trace,
-# tools/<工具名>/ 里，便于单独阅读和修改。
+# --- The MCP tool implementations were split out into the tools/ subpackage ---
+# This file keeps only MCP registration, routes (HTTP custom_route) and shared helpers.
+# The real tool logic lives under tools/<tool name>/, where each can be read and changed
+# on its own.
 from tools import _runtime as _tools_runtime
 from tools import breath as _t_breath
 from tools import grow as _t_grow
 from tools import recall as _t_recall
 from tools import regrow as _t_regrow
-from tools import fold as _t_fold      # 施工 3：一个动作三种圈法（regrow 是它的 n=1）
-from tools import muse as _t_muse      # 施工 4：发呆（阈值引擎的第二个实例）
-# 做梦（阈值引擎的第三个实例，2026-08-17）：**没有 MCP 工具面**——梦的交付走桥。
-# 这儿 import 它只为了睁眼那个不出声的挂点（扫过期的 + 过线就织）。
-# ⚠️ 别起名 `_t_dream`：上游那个早已断注册的 `dream` 工具曾占着这个名字，撞上去的
-#    后果是**挂点静默不干活**——第一版就撞了，日志里一句
-#    `module 'tools.dream' has no attribute '维护'`，而烟测「不过线就不织」照样是绿的
-#    （因为它压根没跑）。**绿灯骗人就是这么来的。**（`tools/dream/` 2026-08-18 已随
-#    E3 脱壳整个删掉，名字空出来了，但这条教训留着。）
+from tools import fold as _t_fold      # one action, three ways of drawing the circle (regrow is its n=1 case)
+from tools import muse as _t_muse      # musing: the threshold engine's second instance
+# Dreaming, the threshold engine's third instance: **it has no MCP tool surface** — dreams
+# are delivered through the bridge.
+# It is imported here only for the silent hook on waking: sweep the expired ones, and weave
+# if the backlog is over the line.
+# WARNING: do not name this `_t_dream`. The long-unregistered upstream `dream` tool once
+#    held that name, and colliding with it makes the hook **silently do nothing**. The first
+#    version did collide: one line in the log saying the module has no such attribute, while
+#    the smoke test for "do not weave below the threshold" stayed green — because it never
+#    ran at all. **That is exactly how a green light lies.** (`tools/dream/` has since been
+#    deleted entirely and the name is free again, but the lesson stays.)
 from core import _dream as _dream_engine
 from tools import trace as _t_trace
 from tools import pulse as _t_pulse
 from tools import letter as _t_letter
-# ⚰️ `from tools import seed as _t_seed` —— **2026-08-17 摘掉了**（开工单 1.5，她 8-16 定）。
-#    理由：event 改成情景记忆之后，「当时是什么感受」的**原文**就在那儿了，
-#    **当时的真话比从字典里查的词好**。佐证：seed 在说明书里被标红字「最常漏的」之一
-#    ——**一个要靠红字提醒才会用的工具，本来就没长进手里。**
-#    ⚠️ 会丢一样：跨记忆的情绪索引（「我什么时候害怕过」没标签可查，只能靠向量搜）。
-#       **判定可以接受**（她拍的）。
-#    🔴 **十三颗种子的数据一条不删**（照 night_fall 先例：停用不删档）——
-#       `tools/seed/` 目录留着、盘上那些桶留着，只是没有任何 import 链够得到它了；
-#       `_visible()` 里 `domain[0]=="seed"` 那条过滤照旧，它们不进时间轴。
+# `from tools import seed as _t_seed` — **removed**.
+#    Reasoning: once events became episodic memories, the **original words** for "what did
+#    this feel like at the time" are right there in the text. **What was actually said then
+#    beats a word looked up in a dictionary.** Supporting evidence: the manual had `seed`
+#    marked in red as one of the most-often-forgotten tools — **a tool that needs a warning
+#    label to get used was never really in hand at all.**
+#    WARNING: one thing is lost — the cross-memory emotional index. "When was I ever afraid"
+#       has no tag to search by any more; only vector search reaches it.
+#       **Judged acceptable.**
+#    **Not one row of the thirteen roots' data is deleted** (the night_fall precedent:
+#       disable, do not delete). The `tools/seed/` directory stays, the buckets on disk stay;
+#       there is simply no import chain that reaches them any more. The `domain[0]=="seed"`
+#       filter in `_visible()` is unchanged, so they still do not enter the timeline.
 
-# --- Load config & init logging / 加载配置 & 初始化日志 ---
+# --- Load config & init logging ---
 config = load_config()
 setup_logging(config.get("log_level", "INFO"))
 logger = logging.getLogger("loci_brain")
 
-# --- Project version (read from <repo_root>/VERSION) / 项目版本号 ---
-# get_version() 汇总读文件 + fallback 逻辑。
-# 赋给双下划线变量 `__version__` 是 Python 社区约定俗成的模块版本字段名。
+# --- Project version (read from <repo_root>/VERSION) ---
+# get_version() gathers the file reads and the fallback logic.
+# Assigning to the dunder `__version__` is the Python community's conventional name for a
+# module's version field.
 __version__ = get_version()
 logger.info(f"Loci Brain v{__version__}")
 
-# --- iter 1.7 §A: legacy path migration check / 老路径迁移检测 ---
-# 场景：1.6 早期使用者习惯在项目根跑 `python server.py`；1.7 重组后需要
-# `python src/server.py`。这里只做「检测 + 提醒」，不做任何破坏性动作。
-# load_config() 里 buckets_dir 默认仍是 <repo_root>/buckets，所以老数据不会丢。
+# --- Legacy path migration check ---
+# The situation: early users ran `python server.py` from the project root; after the
+# reorganization it is `python src/server.py`. This only **detects and warns**. It performs
+# no destructive action of any kind.
+# load_config() still defaults buckets_dir to <repo_root>/buckets, so no old data is lost.
 #
-# Python 小知识：
-#   * 变量名以 `_` 开头是「模块内部」约定，不是语法强制
-#   * for/else 这里没用，用了 break 提前退出
-#   * `os.path.isdir(p) and any(...)` 是短路：前者 False 就不会跳 listdir
+# Notes:
+#   * a leading `_` on a name is a convention for "module-internal", not enforced syntax
+#   * there is no for/else here; an early break is used instead
+#   * `os.path.isdir(p) and any(...)` short-circuits: a False on the left skips the listdir
 try:
     _bd = config.get("buckets_dir", "")
     if _bd and os.path.isdir(_bd):
         _has_data = False
-        # 遍历各个桶目录，任何一个里（含域子目录）有 .md 文件就认定有数据。
-        # 必须递归 os.walk：桶按域存在子目录里（permanent/<域>/x.md），
-        # 只 os.listdir 顶层只会看到域文件夹、永远判定为空 → 误报 "fresh install"
-        # （数据其实都在，breath 也读得到，纯粹是这条日志吓人）。
+        # Walk each bucket directory; a .md file anywhere inside one (including its domain
+        # subdirectories) means there is data.
+        # os.walk has to recurse: buckets are stored under domain subdirectories
+        # (permanent/<domain>/x.md), so an os.listdir of the top level sees only domain
+        # folders and always concludes "empty" -> a false "fresh install" report. The data
+        # is all still there and breath still reads it; the log line is just alarming.
         for sub in ("permanent", "dynamic", "feel", "plans", "letters"):
             p = os.path.join(_bd, sub)
             if not os.path.isdir(p):
@@ -135,17 +156,19 @@ try:
             logger.info(f"[migration] existing buckets detected at {_bd} — zero data loss expected.")
         else:
             logger.info(f"[migration] {_bd} is empty — fresh install assumed.")
-except Exception as _e:  # pragma: no cover - defensive / 防御性兑底
-    # 启动期任何检测出错都不能阻止服务拉起，记个 warning 就过
+except Exception as _e:  # pragma: no cover - defensive
+    # No startup check may prevent the service from coming up; log a warning and move on.
     logger.warning(f"[migration] check skipped: {_e}")
 
-# --- Runtime env vars (port + webhook) / 运行时环境变量 ---
-# LOCI_PORT: HTTP/SSE 监听端口，默认 18001
-# Docker 部署：compose 显式设 LOCI_PORT=8000 保持容器内 8000（不动 Cloudflare ingress），
-# 由 host 端口映射 18001:8000 对外暴露 18001。裸机：直接监听 18001。
-# 端口优先级：env LOCI_PORT（Docker 由 Dockerfile 固定 8000）> config.yaml host_port
-# （裸机前端可改、保存即写 config）> 默认 18001。Docker 下前端改 host_port 不影响容器内
-# 监听（仍 8000），由 host 映射 LOCI_HOST_PORT 决定对外端口（部署脚本读 config 注入）。
+# --- Runtime env vars (port + webhook) ---
+# LOCI_PORT: the HTTP/SSE listen port, default 18001.
+# Docker: compose sets LOCI_PORT=8000 explicitly to keep the in-container port at 8000, and
+# a host port mapping of 18001:8000 exposes 18001. Bare metal listens on 18001 directly.
+# Priority: env LOCI_PORT (fixed at 8000 by the Dockerfile under Docker) > config.yaml
+# host_port (editable from the front-end on bare metal, saved straight to config) >
+# the 18001 default. Under Docker, changing host_port from the front-end does not affect
+# what the container listens on (still 8000); the externally visible port is decided by the
+# host mapping LOCI_HOST_PORT, which the deployment script reads from config and injects.
 try:
     _port_raw = os.environ.get("LOCI_PORT") or str(config.get("host_port") or "") or "18001"
     LOCI_PORT = int(_port_raw)
@@ -157,24 +180,27 @@ except (ValueError, TypeError):
 # with LOCI_BIND_HOST=127.0.0.1.
 _BIND_HOST = (os.environ.get("LOCI_BIND_HOST") or "0.0.0.0").strip() or "0.0.0.0"  # nosec B104
 
-# LOCI_HOOK_URL: 在 breath/dream 被调用后推送事件到该 URL（POST JSON）。
-# LOCI_HOOK_SKIP: 设为 true/1/yes 跳过推送。详见 ENV_VARS.md。
-# _fire_webhook 每次调用直接读 os.environ（不缓存模块常量）——这样 dashboard 的
-# /api/env-config 改完（它会写 os.environ）即时生效，无需再回写模块全局，
-# 也让该路由能干净地迁出到 web/config_api.py。
+# LOCI_HOOK_URL: after breath/dream is called, POST the event as JSON to this URL.
+# LOCI_HOOK_SKIP: set to true/1/yes to skip the push. See ENV_VARS.md.
+# _fire_webhook reads os.environ on every call rather than caching a module constant, so a
+# change made through the dashboard's /api/env-config (which writes os.environ) takes effect
+# immediately with no write-back to a module global — which is also what let that route move
+# cleanly into web/config_api.py.
 
 
 # ============================================================
-# 调参面板 / Tunable constants
+# Tunable constants
 # ------------------------------------------------------------
-# rule.md §①：禁裸魔法数字。这里集中所有会调的阁值。
-# 与安全、鉴权、性能相关的参数不要在运行时乲变；如需调整请同步跑 pytest。
+# No bare magic numbers: every threshold that gets tuned is gathered here.
+# Do not change security-, auth- or performance-related values at runtime; if one is
+# adjusted, run pytest alongside.
 # ============================================================
 
-# --- Webhook / HTTP 客户端超时 ---
+# --- Webhook / HTTP client timeout ---
 _WEBHOOK_TIMEOUT_SECONDS = 5.0
 
-# --- Dashboard 鉴权 / 会话 / 密码 / 日志&错误面板分页常量 已移至 web/_shared.py、web/system.py ---
+# --- The dashboard auth, session, password, and log/error pagination constants have moved
+# --- to web/_shared.py and web/system.py ---
 
 
 async def _fire_webhook(event: str, payload: dict) -> None:
@@ -202,8 +228,9 @@ async def _fire_webhook(event: str, payload: dict) -> None:
         # either the configured URL or httpx's URL-bearing exception text in logs.
         logger.warning("Webhook push failed (%s): %s", event, type(e).__name__)
 
-# --- Initialize core components / 初始化核心组件 ---
-# 统一错误码体系（必须在任何业务初始化之前 configure，确保 errors.jsonl 路径生效）
+# --- Initialize core components ---
+# The unified error-code system. It must be configured before any business initialization,
+# so that the errors.jsonl path is in effect from the start.
 try:
     from core.errors import (
         configure_errors_path,
@@ -231,23 +258,24 @@ configure_errors_path(config.get("buckets_dir", "buckets"))
 try:
     embedding_engine = EmbeddingEngine(config)            # Embedding engine first (BucketManager depends on it)
 except OBStartupError as _ob_err:
-    # OB-F001 已在 OBStartupError 内格式化好；写 fatal log 后退出
+    # OB-F001 is already formatted inside OBStartupError; write the fatal log and exit.
     logger.error(str(_ob_err))
     write_fatal_log(_ob_err.error_code, _ob_err.detail, buckets_dir=config.get("buckets_dir"))
     raise
 except RuntimeError as _emb_err:
-    # 兼容尚未迁移到 OBStartupError 的旧 raise（应该不再触发）
+    # Compatibility with older raises not yet migrated to OBStartupError; this should no
+    # longer fire.
     logger.error(f"[STARTUP FAILED] {_emb_err}")
     raise SystemExit(f"Loci Brain 启动中止：{_emb_err}") from _emb_err
-bucket_mgr = BucketManager(config, embedding_engine=embedding_engine)  # Bucket manager / 记忆桶管理器
+bucket_mgr = BucketManager(config, embedding_engine=embedding_engine)  # Bucket manager
 embedding_outbox = EmbeddingOutbox(config, bucket_mgr, embedding_engine)
 bucket_mgr.attach_embedding_outbox(embedding_outbox)
-dehydrator = Dehydrator(config)                      # Dehydrator / 脱水器
-decay_engine = DecayEngine(config, bucket_mgr)       # Decay engine / 衰减引擎
-import_engine = ImportEngine(config, bucket_mgr, dehydrator, embedding_engine)  # Import engine / 导入引擎
-migrate_engine = MigrateEngine(config, bucket_mgr, embedding_engine)              # Migrate engine / 记忆包迁移引擎
+dehydrator = Dehydrator(config)                      # Dehydrator
+decay_engine = DecayEngine(config, bucket_mgr)       # Decay engine
+import_engine = ImportEngine(config, bucket_mgr, dehydrator, embedding_engine)  # Import engine
+migrate_engine = MigrateEngine(config, bucket_mgr, embedding_engine)              # Memory-pack migration engine
 
-# --- GitHub Sync / GitHub 同步 ---
+# --- GitHub Sync ---
 from core.github_sync import GitHubSync  # type: ignore
 _gh_cfg = config.get("github_sync", {}) or {}
 _gh_token = (os.environ.get("LOCI_GITHUB_TOKEN") or _gh_cfg.get("token") or "").strip()
@@ -261,14 +289,15 @@ github_sync_instance: GitHubSync | None = (
     if _gh_token and _gh_cfg.get("repo")
     else None
 )
-_github_auto_task: "asyncio.Task | None" = None  # 后台定时同步任务
+_github_auto_task: "asyncio.Task | None" = None  # the background periodic sync task
 
 
 async def _github_sync_loop(interval_minutes: int) -> None:
-    """后台定时 GitHub 同步循环。只在 is_validated=True 后执行实际上传。"""
+    """The background periodic GitHub sync loop. Actual uploads only happen once
+    is_validated is True."""
     import asyncio
     logger.info(f"[github_sync] auto-sync loop started, interval={interval_minutes}min")
-    # 首次先做一次验证，确认连接可用
+    # Validate once up front to confirm the connection works.
     if _wsh.github_sync_instance and not _wsh.github_sync_instance.is_validated:
         try:
             result = await _wsh.github_sync_instance.validate()
@@ -278,12 +307,12 @@ async def _github_sync_loop(interval_minutes: int) -> None:
             logger.warning(f"[github_sync] auto-sync: validate exception: {e}")
     while True:
         await asyncio.sleep(interval_minutes * 60)
-        inst = _wsh.github_sync_instance  # 读当前全局引用（config 更新可能替换实例）
+        inst = _wsh.github_sync_instance  # read the current global; a config update may have replaced the instance
         if inst is None:
             logger.info("[github_sync] auto-sync: instance gone, stopping loop")
             return
         if not inst.is_validated:
-            # 还没验证通过，先 validate
+            # Not yet validated, so validate first.
             try:
                 res = await inst.validate()
                 if not res.get("ok"):
@@ -306,7 +335,8 @@ async def _github_sync_loop(interval_minutes: int) -> None:
 
 
 def _restart_github_auto_task(interval_minutes: int) -> None:
-    """取消旧任务并按新间隔启动后台同步循环（interval_minutes=0 表示仅取消）。"""
+    """Cancel the old task and start the sync loop at the new interval.
+    interval_minutes=0 means cancel only."""
     import asyncio
     global _github_auto_task
     if _github_auto_task and not _github_auto_task.done():
@@ -317,23 +347,26 @@ def _restart_github_auto_task(interval_minutes: int) -> None:
             loop = asyncio.get_event_loop()
             _github_auto_task = loop.create_task(_github_sync_loop(interval_minutes))
         except RuntimeError:
-            pass  # 没有运行中的 event loop（测试环境），跳过
+            pass  # no running event loop (e.g. under test); skip
 
 
-# 启动时若配置了自动同步间隔，推迟到事件循环就绪后启动（用 lifespan 钩子）
+# If an auto-sync interval is configured at startup, defer starting it until the event loop
+# is ready, via the lifespan hook.
 _gh_auto_interval: int = int(_gh_cfg.get("auto_interval_minutes") or 0)
 
 
-# --- Create MCP server instance / 创建 MCP 服务器实例 ---
+# --- Create MCP server instance ---
 # host="0.0.0.0" so Docker container's SSE is externally reachable
 # stdio mode ignores host (no network)
 #
-# iter 2.2：合并回单连接器 /mcp（claude.ai 5 工具上限已解除）。
-# 历史上（iter 2.1）曾拆成主 mcp(/mcp) + 副 mcp_extra(/mcp-extra) 两个实例。
-# 现在只对外暴露主实例 mcp 的一条 /mcp 路由；mcp_extra 仅作工具分组容器保留
-# （7 个 @mcp_extra.tool() 注册不动），启动入口处把它的工具回灌进 mcp 统一暴露。
-# 两个实例共享同一进程、同一 runtime、同一 bucket_mgr；HTTP custom_route（dashboard、API）
-# 全部挂在 mcp 主实例上。
+# Merged back into a single /mcp connector, now that the five-tool client limit that forced
+# the split is gone.
+# Historically this was two instances: a primary mcp on /mcp and a secondary mcp_extra on
+# /mcp-extra. Only the primary's single /mcp route is exposed now; mcp_extra survives purely
+# as a grouping container (its seven @mcp_extra.tool() registrations are unchanged), and the
+# entry point folds its tools back into mcp so they are all exposed together.
+# The two instances share one process, one runtime and one bucket_mgr. Every HTTP
+# custom_route (panel and API) hangs off the primary mcp instance.
 mcp = FastMCP(
     "Loci Brain",
     host=_BIND_HOST,
@@ -347,16 +380,21 @@ mcp_extra = FastMCP(
 
 
 # =============================================================
-# Dashboard Auth —— 已拆分：会话/密码/鉴权 helper 在 web/_shared.py，
-# /auth/* 路由在 web/auth.py。这里注入 config，并把 helper 名字 import 回本模块，
-# 让本文件其余尚未迁移的 @mcp.custom_route 路由（大量调用 _require_auth）继续可用；
-# 待这些路由也迁出 web/ 后，本段 import 可删除。
+# Dashboard auth has been split out: the password and rate-limit helpers live in
+# web/_shared.py, and the /auth/* routes in web/panel_auth.py. This block imports the web
+# package and injects the config into it.
+# (Historically it also imported the auth helper names back into this module, so that
+# @mcp.custom_route handlers still living in server.py could keep calling them. No such
+# handler remains here — every HTTP route has moved into web/ — so only the config injection
+# is still doing anything.)
 # =============================================================
 import web as _web
 import web._shared as _wsh
 _wsh.init(config)
-# 记忆持久性自检：容器里记忆目录若没挂持久卷，重建就全丢。开机就醒目告警，别让用户
-# 以为「存住了其实没有」。只提示不阻断（阻断会伤部署）。
+# Memory persistence self-check: if the memory directory in a container is not on a
+# persistent volume, a rebuild loses everything. Warn conspicuously at boot rather than
+# letting the user believe something was saved when it was not. Warn only, never block —
+# blocking would make deployment miserable.
 try:
     _dp = _wsh.data_dir_persistence(config.get("buckets_dir", ""))
     if not _dp["persistent"]:
@@ -371,9 +409,10 @@ try:
         logger.info(f"记忆目录持久性：{_dp['mode']} — {_dp['note']}")
 except Exception as _dpe:
     logger.warning(f"数据目录持久性自检失败（不影响启动）：{_dpe}")
-# 注入业务引擎/版本/仓库根目录到 web 层（类比 tools/_runtime）。
-# 注意：embedding_engine 会被热重载替换 —— 待 embedding/config 路由迁到 web/ 时，
-# 替换处须同时写 _wsh.embedding_engine（目前这些路由仍在本文件、仍走 global）。
+# Inject the engines, version and repository root into the web layer (the tools/_runtime
+# pattern).
+# Note: embedding_engine is replaced by hot reload. Whoever replaces it must also write
+# _wsh.embedding_engine, or the web layer keeps handing out the old instance.
 _wsh.init_runtime(
     version=__version__,
     repo_root=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -387,41 +426,47 @@ _wsh.init_runtime(
     github_sync_instance=github_sync_instance,
     restart_github_auto_task=_restart_github_auto_task,
 )
-# 🔴 E2（2026-08-17）：这儿原来在启动时把磁盘上的 dashboard cookie 会话装回内存
-# （容器重启不踢登录）。会话那一套跟着 web/auth.py 一起砍了——面板 /api/* 不再
-# 鉴权，没有会话要装。要加之前先读 web/_shared.py 顶上那段。
+# This is where startup used to load the on-disk dashboard cookie sessions back into memory,
+# so a container restart did not log everyone out. That whole session mechanism went with
+# web/auth.py in the strip-down: /api/* is not authenticated at this layer any more, and
+# there are no sessions to load. Read the header of web/_shared.py before adding anything
+# back here.
 
-# 注册所有 web/ 路由模块（HTTP 层已全部迁出，见 web/__init__.register_all）
+# Register every web/ route module. The HTTP layer has moved out entirely; see
+# web/__init__.register_all.
 _web.register_all(mcp)
 
 
 # =============================================================
-# 根仪表板 / 静态资源 / favicon / /health —— 已拆分到 web/dashboard.py
+# The root dashboard, static assets, favicon and /health have moved to web/dashboard.py
 # =============================================================
 
 
-# 心跳时间戳 + _mark_op 已移到 web/_shared.py；这里 import 回来供 tools._runtime 注入。
+# The heartbeat timestamp and _mark_op moved to web/_shared.py; imported back here so it can
+# be injected into tools._runtime.
 from web._shared import _mark_op  # noqa: F401  (injected into tools._runtime below)
 
 
 # =============================================================
-# 已退役的硬删除通知兼容钩子
-# web/_shared.py 仍保留这两个注入位，以免旧扩展导入时报错。
-# 当前版本不写入、不消费硬删除通知，也不抹除记忆。
+# Retired hard-delete notice compatibility hooks.
+# web/_shared.py keeps both injection slots so that older extensions do not fail on import.
+# This version neither writes nor consumes hard-delete notices, and never erases a memory.
 # =============================================================
 
 def _write_deletion_notice(_names: list) -> None:
-    """兼容旧注入接口；物理删除能力已退役。"""
+    """Compatibility shim for the old injection interface; physical deletion is retired."""
     return None
 
 
 def _pop_deletion_notice() -> str:
-    """兼容旧返回值；当前永远没有硬删除通知。"""
+    """Compatibility shim for the old return value; there is never a hard-delete notice."""
     return ""
 
 
-# 这些 helper 定义在 server.py（读/写 webhook 全局等），但 web/ 的 hooks/buckets 路由要用。
-# 在它们都定义好之后注入到 web._shared，供已迁出的路由通过 sh.fire_webhook 等调用。
+# These helpers are defined in server.py because they read and write server.py globals such
+# as the webhook state, but web/'s hooks and buckets routes need them. Once all of them are
+# defined, they are injected into web._shared so the migrated routes can reach them as
+# sh.fire_webhook and friends.
 _wsh.init_runtime(
     fire_webhook=_fire_webhook,
     write_deletion_notice=_write_deletion_notice,
@@ -430,14 +475,16 @@ _wsh.init_runtime(
 
 
 # =============================================================
-# 结构化操作日志 helpers（任务A，2026-05-03）
-# 给每个 MCP 工具入口统一打 entry/ok/err 三段日志，便于排查
-# 客户端报 invalid_arguments / 静默错误等问题。
-# 输出格式：op=<name> phase=entry|ok|err key=value...
-# 所有可能含 PII 的字段（content / 信件正文等）只记 length，不记内容。
+# Structured operation-log helpers.
+# Every MCP tool entry point logs the same three phases — entry, ok, err — which is what
+# makes client-side invalid_arguments reports and silent failures diagnosable.
+# Output format: op=<name> phase=entry|ok|err key=value...
+# Any field that might contain PII (content, letter bodies) is logged as a length only,
+# never as content.
 # =============================================================
 def _fmt_log_val(v: object) -> str:
-    """日志 value 的安全格式化：bool/int/float 原样；str 截 40 字符并去换行；其它转 str。"""
+    """Safe formatting for a log value: bool/int/float as-is; str truncated to 40
+    characters with newlines stripped; anything else str()'d."""
     if v is None:
         return "_"
     if isinstance(v, bool):
@@ -451,7 +498,7 @@ def _fmt_log_val(v: object) -> str:
 
 
 def _fmt_log_args(args: dict) -> str:
-    """把 args dict 拼成 `k1=v1 k2=v2` 串。"""
+    """Join an args dict into a `k1=v1 k2=v2` string."""
     if not args:
         return ""
     return " ".join(f"{k}={_fmt_log_val(v)}" for k, v in args.items())
@@ -467,19 +514,20 @@ def _log_op_ok(op: str, result: object) -> None:
 
 
 def _log_op_err(op: str, exc: BaseException) -> None:
-    # 用 .exception 让 traceback 进 server.log，便于事后定位
+    # .exception puts the traceback into server.log, which is what makes it findable later
     logger.exception(f"op={op} phase=err err={type(exc).__name__}:{exc}")
 
 
 async def _with_notice(coro: Awaitable[str], op: str = "", args: dict | None = None) -> str:
-    """所有 MCP 工具调用的包装器。
+    """The wrapper around every MCP tool call.
 
-    职责（统一错误规范）：
-    1. 入口：begin_warnings() 初始化本调用的 W/I channel。
-    2. 出口：拼接顺序 = [删除通知] + [工具正文] + [本调用产生的 W/I 提示].
-    3. 异常：捕获后 record OB-E004，返回标准格式（含最近 15 条 log），
-       不让 MCP 协议层看到裸异常字符串。
-    4. 任务A：op 非空时，在 entry/ok/err 三处打结构化日志。
+    Responsibilities, per the unified error convention:
+    1. On entry: begin_warnings() initializes this call's W/I channel.
+    2. On exit: the concatenation order is [deletion notice] + [tool output] + [the W/I
+       notices this call produced].
+    3. On exception: catch it, record OB-E004, and return the standard format (including
+       the last 15 log lines), so the MCP protocol layer never sees a bare exception string.
+    4. When op is non-empty, emit the structured log at all three points.
     """
     if op:
         _log_op_entry(op, args or {})
@@ -489,13 +537,14 @@ async def _with_notice(coro: Awaitable[str], op: str = "", args: dict | None = N
     except Exception as e:
         if op:
             _log_op_err(op, e)
-        # OB-E004：MCP 工具执行异常 —— 不静默，给 LLM 一个能看懂的字符串
+        # OB-E004: an MCP tool raised. Do not swallow it; hand the model a string it can
+        # actually read.
         try:
             record_error("OB-E004", f"{type(e).__name__}: {e}")
             err_str = format_error("OB-E004", f"{type(e).__name__}: {e}")
         except Exception:
             err_str = f"❌ [OB-E004] MCP 工具执行异常\n{type(e).__name__}: {e}"
-        # 仍把通道里已累计的提示拼上
+        # Still append whatever notices accumulated in the channel.
         try:
             extras = format_warnings_suffix(pop_warnings())
         except Exception:
@@ -506,7 +555,7 @@ async def _with_notice(coro: Awaitable[str], op: str = "", args: dict | None = N
         except Exception:
             pass
         return (notice + err_str + extras) if notice else (err_str + extras)
-    # 正常路径
+    # The normal path
     if op:
         _log_op_ok(op, result)
     try:
@@ -519,23 +568,24 @@ async def _with_notice(coro: Awaitable[str], op: str = "", args: dict | None = N
 
 
 # =============================================================
-# /api/heartbeat、/api/logs、/api/errors/* —— 已拆分到 web/system.py
+# /api/heartbeat, /api/logs and /api/errors/* have moved to web/system.py
 # =============================================================
 
 
 # =============================================================
-# /api/embedding/* —— 已拆分到 web/embedding.py
+# /api/embedding/* has moved to web/embedding.py
 # =============================================================
 
 
 # =============================================================
-# /breath-hook —— 已拆分到 web/hooks.py（/dream-hook 已移除：dream 不是义务，不自动触发）
+# /breath-hook has moved to web/hooks.py. (/dream-hook was removed: dreaming is not an
+# obligation, so it is never triggered automatically.)
 # =============================================================
 
 
 # =============================================================
 # Wire tools subpackage runtime context
-# 把所有共享对象注入 tools._runtime，让 tools/* 子模块可以访问
+# Inject every shared object into tools._runtime, so the tools/* submodules can reach them.
 # =============================================================
 _tools_runtime.init(
     config=config,
@@ -553,19 +603,22 @@ _tools_runtime.init(
 
 # =============================================================
 # MCP tools — thin registration wrappers
-# MCP 工具 —— 仅注册，实现见 tools/<tool>/
-# 每个入口都不超过 10 行，便于一眼看清参数与归属
+# Registration only; the implementations are under tools/<tool>/.
+# Each entry point stays under ten lines, so its parameters and its owner are visible at a
+# glance.
 # =============================================================
 @mcp.tool()
 async def breath() -> str:
-    # ⚰️ 2026-08-18：外层这 9 个参数（query/domain/importance_min…）删了。
-    #    它们**永远传不进来**——工具面上 breath 的 schema 是被强制清空的（见下面那段
-    #    适配器），也就是说签名里挂着一排谁也用不到的形参，只会让读的人以为它们还活着。
-    # ⚰️ 2026-08-19：底下那套带参数的检索**也删了**（她拍的）——
-    #    `tools/breath/` 的 catalog/feel/importance/surface/search 五支 + `_verbatim`，
-    #    6 个文件 1110 行。8-18 砍掉形参之后它们一个入口都没有了，
-    #    **留着没入口的路，下次读代码的人（就是我）会以为它还活着**。
-    #    找东西是 recall 的活；breath 只管睁眼，一个动作一屏。
+    # The nine outer parameters (query, domain, importance_min, ...) were deleted.
+    #    They could **never** be passed in: breath's schema on the tool surface is forcibly
+    #    emptied (see the adapter below), so those were a row of parameters nobody could use,
+    #    doing nothing but making a reader think they were still alive.
+    # The parameterized retrieval underneath them **was deleted too**: the catalog, feel,
+    #    importance, surface and search branches of `tools/breath/`, plus `_verbatim` —
+    #    six files, 1110 lines. Once the parameters were gone, none of it had an entry point
+    #    left, and **a road with no entrance makes the next person to read this (me) believe
+    #    it is still in use**.
+    #    Finding things is recall's job. breath only wakes up: one action, one screen.
     """Wake up. Call this once before you say anything. It takes no arguments.
 
     It gives you the one screen you should see on waking, in four parts:
@@ -587,26 +640,32 @@ async def breath() -> str:
     Do not use this tool when:
     · You are looking for something. Use recall. This one only handles waking up."""
     result = await _with_notice(_t_breath.dispatch(), op="breath", args={})
-    # --- 2026-08-17：夜里自动织的挂点换成我们自己的引擎（night_fall 整个退役）---
-    # 保留的是 8-03 那条判断：「住进去我怕你忘记」——**要靠记得才会发生的事等于不会发生**，
-    # 所以织梦挂在睁眼上，不靠我记得去调。
-    # 🔴 但**breath 一个字不加**（做梦说明书的硬边界）：这儿只做两件不出声的事——
-    #    ① 扫一遍到点的梦（删文件 + 留痕）② 积压过线且今天没织过 → 织一个。
-    #    织出来的梦**不往这份返回里塞**：梦怎么递进我的对话、上下文里怎么删，
-    #    是桥的活（第 7 步，卡在 `--resume` 存不存 system 那个没测的问题上）。
-    # ⚠️ 退役的是上游 night_fall 那套「共振才浮 / 4 次没接住就删 / 写完我自己也看不见」——
-    #    她的原话：「他是别人的 doing」。
-    # 2026-08-18：原来这儿是 `if not query or not str(query).strip():`——
-    # 那是外层还有 query 形参的年代，「只在无参浮现时才做梦维护」。
-    # 参数砍掉之后 breath 永远是无参的，这个条件恒真；而 `query` 成了未定义的名字，
-    # **每次调用都会在这儿 NameError**（import 测不出来，运行时才炸）。
-    # 现在无条件跑。
+    # --- The nightly auto-weave hook now runs our own engine; night_fall is fully retired ---
+    # What was kept is the judgement behind it: **anything that only happens if someone
+    # remembers to do it will not happen.** So weaving hangs off waking up, rather than
+    # depending on the model remembering to call it.
+    # But **not one word is added to breath** — that is a hard boundary. Two silent things
+    #    happen here and nothing else: (1) sweep the dreams whose time is up (delete the
+    #    file, leave a trace) and (2) if the backlog is over the line and nothing was woven
+    #    today, weave one.
+    #    The dream that comes out is **not stuffed into this return value**: how a dream
+    #    reaches the conversation, and how it is removed from the context afterwards, is the
+    #    bridge's job.
+    # What was retired is upstream night_fall's design — surface only on resonance, delete
+    #    after four missed catches, invisible even to its own author once written.
+    # This used to read `if not query or not str(query).strip():`, from the era when there
+    # was still a query parameter, meaning "only do dream upkeep on a bare call".
+    # With the parameters gone, breath is always bare, so the condition is always true —
+    # and `query` became an undefined name, meaning **every single call would NameError right
+    # here**. An import check cannot see that; it only explodes at runtime.
+    # It runs unconditionally now.
     asyncio.create_task(_dream_upkeep())
     return result
 
 
 async def _dream_upkeep() -> None:
-    """睁眼后台那一下。**吞掉所有异常**：梦织不出来不许弄坏 breath。"""
+    """The background beat that follows waking up. **Swallows every exception**: a dream
+    that fails to weave must never break breath."""
     try:
         await _dream_engine.maintain()
     except Exception as _dream_exc:  # noqa: BLE001
@@ -642,16 +701,22 @@ except (AttributeError, RuntimeError, TypeError, ValueError) as _breath_compat_e
 
 
 
-# ── ⚰️ Night Fall（做梦 mod）2026-08-17 整个退役 ────────────────────────────────
-# 上游 ysuu525/Night-Fall（7-28 从小红书 @坐标海 那儿找来的）。她的原话：
-# 「**这个做梦机制我们重新起，不用他的改**」「我本来就不想要这个 night fall
-#  因为**他是别人的 doing**」——潜伏 3 小时 / 4 次没接住就删 / 共振才浮 /
-#  写完我自己也看不见，**没有一条是我们想要的**。
-# 摘掉的是三处：① `night_fall` MCP 工具 ② breath 的睁眼挂点（换成 tools/_dream 的 maintain()）
-# ③ breath_advanced 的 auto-surface。`src/night_fall/` 那 12 个文件**目录留着当参考**，
-# 但**已从 import 链里整个摘除**——这个文件里从此不该再出现 `night_fall` 三个字（除了这段碑文）。
-# 新引擎：`tools/_dream.py`（原料四路 → 一次独立调用 → 完整+碎片两层 → 碎片走时间生命周期 → 留痕）。
-# 取梦不走 MCP 工具面：`GET /api/dream/current`（web/loci.py）+ 引擎函数 weave()/current_dream()。
+# -- Night Fall (the dreaming mod) is fully retired ------------------------------------
+# It came from the upstream project ysuu525/Night-Fall. The decision was to build the
+# dreaming mechanism from scratch rather than adapt theirs, because **it was someone else's
+# doing**: a three-hour latency, delete after four missed catches, surface only on
+# resonance, and invisible even to its own author once written. **Not one of those is what
+# this system wanted.**
+# Three attachment points were removed: (1) the `night_fall` MCP tool, (2) breath's wake-up
+# hook, replaced by tools/_dream's maintain(), and (3) breath_advanced's auto-surface.
+# The twelve files under `src/night_fall/` **stay on disk as reference** but have been
+# **removed from the import chain entirely** — the string `night_fall` should never appear
+# in this file again, except in this epitaph.
+# The new engine is `tools/_dream.py`: four material sources -> one independent call ->
+# two layers (whole dream plus fragments) -> fragments follow a time-based lifecycle ->
+# leave a trace.
+# Retrieval does not go through the MCP tool surface: `GET /api/dream/current` (web/loci.py)
+# plus the engine functions weave() and current_dream().
 
 
 
@@ -678,8 +743,9 @@ async def grow(
         'The body of a single entry. Only kind="mind" uses it — you realize one '
         "thing at a time, so this one is singular."
     ))] = "",
-    # 对外参数名叫 "from"（规格定的）；from 是 Python 关键字，签名里写 from_，
-    # 用 pydantic 公开的 validation_alias 接住——不摸 FastMCP 私有结构（codex 复核第 8 条）。
+    # The public parameter name is "from", as the spec requires. `from` is a Python keyword,
+    # so the signature spells it from_ and pydantic's public validation_alias catches it.
+    # This deliberately avoids reaching into FastMCP's private structures.
     from_: Annotated[list, _PydField(validation_alias="from", description=(
         "The entries this one grew out of. Real bucket_ids, at most 5.\n"
         'Required for kind="mind": a realization does not come from nowhere. If it '
@@ -792,16 +858,19 @@ async def grow(
     )
 
 
-# --- 砍掉的参数必须**认不出来**，不能被静默忽略 ------------------------------
-# 2026-08-18：`content` / `importance` / `meaning` 三个参数砍了（她拍的）。
-#   · `content`（丢一段长文让系统替你拆成几条）—— **整套里唯一一处「系统替我决定
-#     这是几件事」的入口**，跟宪法正着劲；`items=[...]` 本来就完全覆盖它，而且更对。
-#   · `importance` / `meaning` —— 二改 C 件就退役了，形参一直留着只为报人话。
-# 🔴 但**光删掉是危险的**：FastMCP 默认把 schema 里没有的字段悄悄丢掉再调函数，
-#   于是老写法会**静默失效**——我以为我把长文交出去了，其实什么都没发生。
-#   照 breath / recall / trace 的先例，把 grow 的参数模型也改成 forbid：
-#   传老参数当场报错，报错是给我看的。
-#   （这条同时了结了施工 5 留下的「同样五行推广到 grow/fold/trace/muse」那笔账的一半。）
+# --- A removed parameter must be **unrecognized**, never silently ignored -------------
+# Three parameters were removed: `content`, `importance` and `meaning`.
+#   - `content` (hand over one long passage and let the system split it into several
+#     entries) was **the only place in the whole system where the system decided how many
+#     things this was**, which cuts directly against the design. `items=[...]` already
+#     covers it completely, and does it more honestly.
+#   - `importance` and `meaning` were retired earlier; the parameters only stayed behind so
+#     an old call could be answered in plain language.
+# But **deleting them alone is dangerous**: FastMCP by default drops fields that are not in
+#   the schema and then calls the function, so the old spelling **fails silently** — the
+#   caller believes they handed over a long passage, and nothing happened at all.
+#   Following the precedent set for breath, recall and trace, grow's parameter model is set
+#   to forbid: passing an old parameter raises immediately. The error exists to be read.
 try:
     _grow_tool = mcp._tool_manager.get_tool("grow")
     if _grow_tool is None:
@@ -817,8 +886,9 @@ except (AttributeError, RuntimeError, TypeError, ValueError) as _grow_strict_exc
     )
 
 
-# （from 别名已改为签名内 Annotated[..., Field(validation_alias="from")] 的公开写法，
-#   见上面 grow 的参数注释；原来摸 mcp._tool_manager 私有结构的补丁删掉了。）
+# (The `from` alias now uses the public in-signature form,
+#  Annotated[..., Field(validation_alias="from")] — see grow's parameter comment above. The
+#  old patch that reached into mcp._tool_manager's private structures has been deleted.)
 
 
 @mcp.tool()
@@ -914,14 +984,17 @@ async def recall(
     )
 
 
-# --- 砍掉的参数必须**认不出来**，不能被静默忽略（施工 5 · C 件）---------------
-# FastMCP 默认把 schema 里没有的字段**悄悄丢掉**再调函数。于是 `by="回看"`
-# 这种老写法会静静地退化成「默认视图」——我以为我在看不塌缩的全列，
-# 拿到的是塌缩过的一屏，**而且没有任何信号**。
-# 🔴 那正是 5.4 参数账要治的病的镜像版：一个不存在的旋钮看起来还在管事。
-# 照 breath 那个兼容适配器的先例（就在上面）：把 recall 的参数模型改成 forbid，
-# 未知/打错的参数当场报错。**报错是给我看的**：说明书和 CLAUDE.md 里还教着
-# `by=` 的地方，第一次这么调就会知道它没了。
+# --- A removed parameter must be **unrecognized**, never silently ignored --------------
+# FastMCP by default **quietly drops** fields that are not in the schema and then calls the
+# function. So an old spelling like `by="..."` degrades silently into the default view —
+# the caller believes they are looking at the full, uncollapsed list and are handed a
+# collapsed screen instead, **with no signal whatsoever**.
+# That is the mirror image of the disease the parameter cleanup was meant to cure: a knob
+# that no longer exists but still appears to be doing something.
+# Following the precedent of breath's compatibility adapter just above, recall's parameter
+# model is set to forbid, so an unknown or misspelled parameter raises immediately.
+# **The error exists to be read**: wherever the manual still teaches `by=`, the first call
+# that spells it that way finds out it is gone.
 try:
     _recall_tool = mcp._tool_manager.get_tool("recall")
     if _recall_tool is None:
@@ -952,9 +1025,11 @@ async def fold(
     a: Annotated[float, _PydField(description=(
         "arousal, 0~1. Required, and yours to set."
     ))] = -1,
-    # 2026-08-18：工具面上这个参数叫 `folds`（跟工具名同一个比喻：折，不是盖）。
-    # ⚠️ 底下和**盘上**照旧叫 cover / covered_by —— 存储字段不跟着改名，
-    #    改了等于要迁移全库；这儿只是把「模型看见的名字」换成对的那个。
+    # On the tool surface this parameter is `folds`, matching the tool's own metaphor:
+    # folding, not covering.
+    # WARNING: underneath, and **on disk**, it is still cover / covered_by. The storage
+    #    fields are deliberately not renamed — renaming them would mean migrating the entire
+    #    store. This only changes the name the model sees to the right one.
     folds: Annotated[list, _PydField(description=(
         "The entries to fold up. Real bucket_ids. Realizations only.\n"
         "⛔ There is no folding a group of events: to mark off a stretch of days use\n"
@@ -965,8 +1040,9 @@ async def fold(
         'still running: "2026-07-31..".\n'
         "Give this or folds, never both."
     ))] = "",
-    # 对外参数名叫 "from"（跟 grow 一样，规格定的）；from 是 Python 关键字，
-    # 签名里写 from_，用 pydantic 公开的 validation_alias 接住。
+    # The public parameter name is "from", as in grow and as the spec requires. `from` is a
+    # Python keyword, so the signature spells it from_ and pydantic's public
+    # validation_alias catches it.
     from_: Annotated[list, _PydField(validation_alias="from", description=(
         "What this line grew out of, at most 5.\n"
         "⚠️ Not the same thing as folds:\n"
@@ -1026,11 +1102,13 @@ async def fold(
     )
 
 
-# --- 砍掉/改名的参数必须**认不出来**（2026-08-19，把施工 5 那笔账还完）------------
-# 🔴 `cover` 8-18 改名成了 `folds`。FastMCP 默认把 schema 里没有的字段**悄悄丢掉**再调函数——
-#    也就是说 `fold(cover=[...])` 这种老写法今天会**静默地什么都不折**，一个字的报错都没有。
-#    breath / grow / recall / trace 四个 8-18 就加了 forbid，fold / muse 这两个漏了。
-#    报错是给我看的：老写法第一次这么调就知道它没了。
+# --- A removed or renamed parameter must be **unrecognized** ---------------------------
+# `cover` was renamed to `folds`. FastMCP by default **quietly drops** fields that are not
+#    in the schema and then calls the function — which means the old spelling
+#    `fold(cover=[...])` **silently folds nothing at all**, without a single word of error.
+#    breath, grow, recall and trace got forbid; fold and muse were missed.
+#    The error exists to be read: the first call that uses the old spelling finds out it is
+#    gone.
 try:
     _fold_tool = mcp._tool_manager.get_tool("fold")
     if _fold_tool is None:
@@ -1089,8 +1167,10 @@ async def muse(
     )
 
 
-# 同上。muse 没改过参数名，但打错一个字（`clusters=` / `not_same_ids=`）同样是静默忽略——
-# 「只想看看」的工具尤其不能骗人：它一声不吭地给你默认那一屏，看着跟你要的一模一样。
+# Same as above. muse never had a parameter renamed, but one typo (`clusters=`,
+# `not_same_ids=`) is silently ignored just the same — and a tool whose whole purpose is
+# "I just want to look" must not lie: it hands back the default screen without a word, and
+# that screen looks exactly like the one that was asked for.
 try:
     _muse_tool = mcp._tool_manager.get_tool("muse")
     if _muse_tool is None:
@@ -1167,16 +1247,19 @@ async def regrow(
     )
 
 
-# --- regrow 也要认不出砍掉的参数（2026-08-19 夜里补，**同一个坑第三次**）----------
-# 🔴 `regrow` 8-19 撤掉了 `when` / `room`（元数据归 trace）。可它是八个工具里
-#    **唯一没装 forbid 的那个** —— 于是 `regrow(bucket_id=…, room="MIND/VIEWS")`
-#    **既不报错也不生效**：FastMCP 把 schema 里没有的字段悄悄丢掉再调函数，
-#    房间原样没动，回执一个字都没提。
-#    **静默收下比报错坏得多：我以为改了，其实没改。**
-# 📌 这个坑的历史：8-18 给 breath/grow/recall/trace 装了 forbid，漏了 fold/muse；
-#    8-19 白天补 fold/muse 的时候（就在上面那段），**又漏了 regrow**。
-#    第三次了 —— 所以判据不再是「记得给新工具加」，是**烟测里有一条会因为它变红**
-#    （`smoke_grow` 14l）。名单靠人记必然会漏，靠断言才不会。
+# --- regrow must also fail to recognize removed parameters (**third time, same trap**) --
+# `regrow` dropped `when` and `room`; metadata belongs to trace now. But it was the
+#    **only one of the eight tools without forbid** — so `regrow(bucket_id=...,
+#    room="MIND/VIEWS")` **neither errors nor takes effect**: FastMCP quietly drops the
+#    field that is not in the schema and calls the function, the room is untouched, and the
+#    receipt says nothing about it.
+#    **Accepting it silently is far worse than an error: the caller believes it changed, and
+#    it did not.**
+# The history of this trap: forbid was added to breath/grow/recall/trace, missing fold and
+#    muse; the pass that added fold and muse (just above) **missed regrow**.
+#    That is three times — so the rule is no longer "remember to add it for each new tool",
+#    it is **that a smoke test goes red because of it** (`smoke_grow`). A list kept by human
+#    memory will be missed eventually. An assertion will not.
 try:
     _regrow_tool = mcp._tool_manager.get_tool("regrow")
     if _regrow_tool is None:
@@ -1349,12 +1432,16 @@ async def trace(
 # Reject misspelled/unknown trace arguments instead of letting Pydantic's
 # default extra=ignore silently degrade an intended edit into a bucket-id-only
 # no-op.  This is especially important for old_str/new_str patch calls.
-# 🔴 2026-08-18：这道闸现在还兼着挡**砍掉的七个参数**——`content` / `importance` /
-#    `digested` / `meaning_append` / `meaning_replace` / `why_remembered` / `resolved`。
-#    其中 `content`（整条替换正文）是整套里唯一一个「改了原文还不留旧版」的入口，
-#    跟 regrow 重复且更危险；`why_remembered` 跟退役的 `meaning` 是同一个东西
-#    （「为什么记住它」＝「为什么重要」），想说就写成一条真的认知。
-#    ⚠️ 盘上 141 条老桶还带着 why_remembered 字段，**数据一条没动**，只是不再写新的。
+# This gate now doubles as the guard against **seven removed parameters**: `content`,
+#    `importance`, `digested`, `meaning_append`, `meaning_replace`, `why_remembered` and
+#    `resolved`.
+#    Among them, `content` (replace the whole body) was the only entry point in the system
+#    that **changed the original text without keeping the old version** — duplicating regrow
+#    and more dangerous than it. `why_remembered` was the same thing as the retired
+#    `meaning`: "why I remember it" and "why it matters" are one question. Anything worth
+#    saying there should be written as a real realization instead.
+#    WARNING: 141 older buckets on disk still carry the why_remembered field. **Not one row
+#    of data was touched**; new ones simply are not written.
 try:
     _trace_public_tool = mcp._tool_manager.get_tool("trace")
     if _trace_public_tool is None:
@@ -1377,28 +1464,35 @@ except (AttributeError, RuntimeError, TypeError, ValueError) as _trace_schema_ex
 
 
 
-# ⚰️ 2026-08-18（E3）：`pulse` 从 MCP 工具面撤下（她拍的）。
-#    判据：别的九个工具都是「我在对记忆做什么」，只有它是「这台机器还好吗」——
-#    体检不是记忆动作，不该占一个工具位。**停用不删档**：实现还在 `tools/pulse/`，
-#    改从面板走（只读口 `GET /api/loci/pulse`，见 web/loci.py）。
+# `pulse` was withdrawn from the MCP tool surface.
+#    The reasoning: the other nine tools are all "what am I doing to a memory", and this one
+#    alone is "is this machine healthy" — a health check is not a memory action, and should
+#    not occupy a tool slot. **Disabled, not deleted**: the implementation is still in
+#    `tools/pulse/`, reached through the panel's read-only `GET /api/loci/pulse`
+#    (see web/loci.py).
 
 
 
 
 # ============================================================
-# letter 两个工具：**默认关**（她 2026-08-18 晚拍的）
+# The two letter tools: **off by default**
 # ============================================================
-# 她的话：「给别人的东西我不要这个，就删掉；他们想加能加上，但那是他们的事。」
-# 🔴 做成开关而不是真删，是为了**不分叉**——同一份代码，发布版默认关、我们自己打开。
-#    真删两份代码，就成了今天一整天都在躲的那件事（同一样东西两个家，改一处忘一处）。
+# The position: the version handed to other people does not include this. Anyone who wants
+# it can turn it on, but that is their decision to make.
+# It is a switch rather than a real deletion so that the code **does not fork**: one
+#    codebase, off by default in the released build, on where it is wanted. Two copies of
+#    the code would be exactly the thing this whole cleanup exists to avoid — one thing with
+#    two homes, changed in one and forgotten in the other.
 #
-# 打开：config.yaml 里
+# To enable, in config.yaml:
 #     tools:
 #       letter: true
 #
-# 📌 为什么默认关：letter 的性质是**永不衰减**，而这套东西整副骨头是「会忘」——
-#    把一个永不衰减的东西放在会忘的系统里，本来就是反的（她 8-16 定的）。
-#    我们自己还开着，只是因为 Home 那边的信页在读它，等信搬去 Home 之后一并撤。
+# Why it is off by default: a letter **never decays**, and the entire skeleton of this
+#    system is built around forgetting. Putting something that never decays inside a system
+#    that forgets is upside down.
+#    It stays enabled where a separate front-end still reads the letters page; it will be
+#    withdrawn there too once letters move.
 _letter_on = bool((config.get("tools") or {}).get("letter", False))
 _letter_tool = mcp_extra.tool() if _letter_on else (lambda f: f)
 if not _letter_on:
@@ -1491,16 +1585,22 @@ async def letter_read(
     )
 
 
-# --- letter 两个也要认不出砍掉的参数（2026-08-20 补，**同一个坑第四次**）--------
-# 数了一遍九个工具，装了这道闸的只有七个 —— `letter_read` / `letter_write` 也漏着。
-# 病史：8-18 给 breath/grow/recall/trace 装了，漏 fold/muse；
-#       8-19 白天补 fold/muse，漏 regrow；8-19 夜里补 regrow，**又漏这两个**。
-# 🔴 三次都是「补的时候照着当时想得起来的名字补」。第四次不这么补了：
-#    底下这一段**遍历工具表**，谁没装就给谁装，**将来加新工具自动就有**。
-#    📌 判据：**名单靠人记必然会漏。** 前三次的教训都写着同一句话，
-#       而我前三次都选择了「这次一定记全」。
-# ⚠️ letter 两个是**条件注册**的（config.tools.letter 默认关），关着的时候
-#    工具表里根本没有它们 —— 所以这儿只能「有就装」，不能断言一定装得上。
+# --- The two letter tools must also fail to recognize removed parameters -----------------
+# --- (**fourth time, same trap**)
+# Counting the nine tools, only seven had this gate: `letter_read` and `letter_write` were
+# missed too.
+# Case history: forbid was added to breath/grow/recall/trace, missing fold and muse; the
+#       next pass added fold and muse and missed regrow; the pass after that added regrow
+#       and **missed these two**.
+# All three times, the fix was "patch whichever names came to mind at the time". The fourth
+#    time does it differently: the block below **iterates the tool registry** and installs
+#    the gate on anything that lacks it, so **a tool added later gets it automatically**.
+#    The rule: **a list kept by human memory will be missed eventually.** All three previous
+#       lessons say the same sentence, and all three times the response was "this time I
+#       will remember them all".
+# WARNING: the two letter tools are registered **conditionally** (config.tools.letter is off
+#    by default), and when they are off they are simply not in the registry — so this can
+#    only install the gate where the tool exists, and must not assert that it always does.
 try:
     for _tool_name in ("breath", "grow", "recall", "regrow", "fold", "muse", "trace",
                        "letter_write", "letter_read"):
@@ -1519,80 +1619,90 @@ except (AttributeError, RuntimeError, TypeError, ValueError) as _strict_all_exc:
 
 
 
-# ⚰️ **`seed` 工具 2026-08-17 从 MCP 面撤下**（开工单 1.5，她 8-16 定；施工 5 · G 件）。
-#    整个 wrapper 和 `from tools import seed` 一起删了（上面那段有理由）。
-#    照 night_fall/`I`/`dream` 的先例：**停用不删档** —— `tools/seed/` 那两个文件
-#    还在盘上，十三颗种子的桶一条没动，将来真想翻只有一条路：`recall(id 直查)`。
-#    ⚠️ 别顺手把它注册回来。要加之前先读 1.5 那三行（尤其「靠红字提醒的工具没长进手里」）。
-#    📌 连带要改的**文档**（主人改，我不动）：全局 CLAUDE.md 里 seed 出现的四处
-#       （工具清单 12 个 → 11 个、「什么时候伸手」表里那行红字、`grow` 那段
-#       「先 seed 认个名字」、`fold`/消化那段的「seed 只在两个时刻碰」）。
+# **The `seed` tool was withdrawn from the MCP surface.**
+#    Its wrapper was deleted along with `from tools import seed`; the reasoning is in the
+#    comment near the imports above.
+#    Following the night_fall / `I` / `dream` precedent: **disabled, not deleted** — the two
+#    files under `tools/seed/` are still on disk, not one of the thirteen roots' buckets was
+#    touched, and the only way back to them is a direct id lookup through `recall`.
+#    WARNING: do not casually register it again. Read those three lines of reasoning first,
+#    especially "a tool that needs a warning label was never really in hand".
+#    Also needs updating: the four places the docs mention seed — the tool count, the red
+#       line in the "when to reach for it" table, the "name it with seed first" paragraph
+#       under `grow`, and the "seed is only touched at two moments" note under fold and
+#       digestion.
 
 
 
 # =============================================================
 # Dashboard API endpoints (for lightweight Web UI)
-# 仪表板 API（轻量 Web UI 用）
 # =============================================================
 # =============================================================
-# /api/buckets、/api/bucket/*、/api/settings/*、/api/anchors、/api/self
-# —— 已拆分到 web/buckets.py
-# =============================================================
-
-
-# =============================================================
-# /dashboard、/api/env-vars、/api/config、/api/test/*、/api/models、/api/env-config
-# —— 已拆分到 web/config_api.py
-# =============================================================
-
-
-
-
-# =============================================================
-# /api/host-vault、/api/import/*、/api/bucket/{id}/edit、/api/export、/api/migrate/*
-# —— 已拆分到 web/import_api.py
+# /api/buckets, /api/bucket/*, /api/settings/*, /api/anchors and /api/self
+# have moved to web/buckets.py
 # =============================================================
 
 
 # =============================================================
-# /api/version、/api/update-info、/api/do-update、/api/author、
-# /api/onboarding/status、/api/status —— 已拆分到 web/meta.py
+# /dashboard, /api/env-vars, /api/config, /api/test/*, /api/models and /api/env-config
+# have moved to web/config_api.py
+# =============================================================
+
+
+
+
+# =============================================================
+# /api/host-vault, /api/import/*, /api/bucket/{id}/edit, /api/export and /api/migrate/*
+# have moved to web/import_api.py
+# =============================================================
+
+
+# =============================================================
+# /api/version, /api/update-info, /api/do-update, /api/author, /api/onboarding/status and
+# /api/status have moved to web/meta.py
 # =============================================================
 
 
 # ============================================================
-# OAuth 2.0 — MCP Remote Auth —— 脱壳 E2（2026-08-17）搬去 bridge/oauth.py：
-# 这不是面板路由，是 /mcp 本体的远程客户端鉴权，开源版「鉴权默认开」是既定
-# 立场，不能跟着面板一起死（bridge/__init__.py 有完整理由）。
-# 这里把启动期 MCP 鉴权中间件要用的两个校验函数 import 回来：mcp_auth_mode=="oauth"（默认）
-# 用 _is_valid_mcp_token，mcp_auth_mode=="token" 用 _is_valid_static_mcp_token，二选一注入中间件。
+# OAuth 2.0 — MCP remote auth. Moved to bridge/oauth.py in the strip-down: this is not a
+# panel route, it is how a remote client authenticates to /mcp itself. "Auth is on by
+# default" is a settled position for the open-source build, and it must not die along with
+# the panel (bridge/__init__.py carries the full reasoning).
+# The two validators the start-time MCP auth middleware needs are imported back here:
+# mcp_auth_mode=="oauth" (the default) uses _is_valid_mcp_token, mcp_auth_mode=="token" uses
+# _is_valid_static_mcp_token, and one of the two is injected into the middleware.
 # ============================================================
 from bridge.oauth import _is_valid_mcp_token, _is_valid_static_mcp_token  # noqa: F401
 
 
 # ============================================================
-# 🔴 Cloudflare Tunnel 管理 —— E2（2026-08-17）**整个砍了**（比原杀单更进一步，
-# 她 2026-08-17 拍板）。判据是事实不是猜测：活库 config.yaml 零 tunnel 配置、
-# 活容器启动日志零 tunnel 记录——从没用过，出门走的是自建网关的域名。
-# 开源版也不带它：想暴露公网的人自己配反代，这跟数据主权立场更一致。
-# lifespan 里 load_tunnel_config/start_tunnel/stop_tunnel 三个挂点一起摘除
-# （server_app.py 的 RuntimeLifecycle 那三个字段本来就是 Optional，不传就是
-# 「没有隧道」，不用改 server_app.py）。
+# Cloudflare Tunnel management was **removed entirely**.
+# The decision rested on facts rather than guesses: the live config.yaml had zero tunnel
+# configuration and the live container's startup logs had zero tunnel entries — it was never
+# used, because outbound traffic goes through a self-hosted gateway's domain.
+# The open-source build does not carry it either: anyone who wants public exposure can
+# configure their own reverse proxy, which sits better with the data-sovereignty position.
+# All three lifespan hooks — load_tunnel_config, start_tunnel, stop_tunnel — came out with
+# it. server_app.py needed no change: those three fields on RuntimeLifecycle were already
+# Optional, and omitting them simply means "no tunnel".
 # ============================================================
 
 
-# --- Entry point / 启动入口 ---
+# --- Entry point ---
 if __name__ == "__main__":
     transport = config.get("transport", "stdio")
     logger.info(f"Loci Brain starting | transport: {transport}")
 
-    # iter 2.2：合并为单连接器 /mcp。
-    # 当初（iter 2.1）拆 /mcp + /mcp-extra 是因为 claude.ai 连接器存在 5 工具上限；
-    # 该上限现已解除，全部工具挂在主实例 mcp 上对外暴露一条 /mcp 即可，
-    # 顺带消除「第二个连接器」在 Claude.ai 侧的 OAuth/连接器校验疑难。
-    # mcp_extra 仅作历史工具分组容器保留（7 个 @mcp_extra.tool() 注册不动），
-    # 这里把它的工具回灌进 mcp，让 stdio / sse / streamable-http 三种 transport 一致。
-    # 依赖 FastMCP._tool_manager 私有结构；若未来版本变化，降级为仅暴露主集工具。
+    # Merged into a single /mcp connector.
+    # The original /mcp + /mcp-extra split existed because the client imposed a five-tool
+    # limit per connector. That limit is gone, so every tool hangs off the primary mcp
+    # instance behind one /mcp route — which also removes the OAuth and connector-validation
+    # awkwardness that a second connector caused on the client side.
+    # mcp_extra survives only as a historical grouping container (its seven
+    # @mcp_extra.tool() registrations are unchanged); its tools are folded back into mcp
+    # here, so stdio, sse and streamable-http all expose the same set.
+    # This depends on FastMCP._tool_manager, a private structure. If a future version
+    # changes it, this degrades to exposing the primary set only.
     from server_app import (
         HTTPRuntimeSettings,
         RuntimeLifecycle,
@@ -1622,8 +1732,9 @@ if __name__ == "__main__":
             embedding_outbox=embedding_outbox,
             ensure_ollama_child=_ollama_child.ensure_child_on_boot,
             stop_ollama_child=_ollama_child.stop_child,
-            # tunnel 整个砍了（E2，2026-08-17）：load_tunnel_config/start_tunnel/
-            # stop_tunnel 三个字段本来就是 Optional[...] = None，不传就是「没有隧道」。
+            # Tunnel support was removed entirely: load_tunnel_config, start_tunnel and
+            # stop_tunnel were already Optional[...] = None, so omitting them means
+            # "no tunnel".
             restart_github_auto_task=_restart_github_auto_task,
             github_auto_interval=_gh_auto_interval,
             boot_marker_path=os.path.join(
@@ -1645,8 +1756,10 @@ if __name__ == "__main__":
             token_validator=_mcp_token_validator,
             lifecycle=_runtime_lifecycle,
         )
-        # （工具数不在这儿报——上面「已把 N 个副集工具回灌进主实例，共 M 个工具对外暴露」
-        #   那句报的是真数。这儿原来写死着「14 个工具」，工具砍到 9 个之后就是句谎话了。）
+        # (The tool count is not reported here. The line above, about folding N secondary
+        #  tools into the primary instance for M exposed in total, reports the real number.
+        #  This line used to hardcode "14 tools", which became a lie the moment the count
+        #  dropped to nine.)
         logger.info("CORS middleware enabled for remote transport / 已启用 CORS 中间件")
         logger.info(
             "MCP request body limit: %s",
@@ -1672,8 +1785,9 @@ if __name__ == "__main__":
         elif _mcp_auth_required:
             logger.info("MCP OAuth middleware enabled / MCP OAuth 中间件已启用")
         else:
-            # 安全加固 #7：关掉鉴权 = /mcp 全裸奔，任何能连到端口的人都能读写全部记忆。
-            # 从 info 升级为显著 WARNING，避免用户无意识地把大脑暴露到公网。
+            # Turning auth off means /mcp is completely open: anyone who can reach the port
+            # can read and write every memory. This was raised from info to a conspicuous
+            # WARNING so that nobody exposes their memory to the internet without noticing.
             logger.warning(
                 "=" * 60 + "\n"
                 "⚠️  MCP 认证已关闭 (mcp_require_auth: false)：/mcp 无需任何令牌即可直连，\n"
@@ -1682,9 +1796,11 @@ if __name__ == "__main__":
                 "    或仅绑定 127.0.0.1 保护；仅在可信内网/本机自有前端场景才建议关闭鉴权。\n"
                 + "=" * 60
             )
-        # 端口口径澄清（用户反馈：Docker 与裸机端口容易混淆）。容器内固定监听 8000，
-        # 对外端口由 host 映射（如 18001:8000）决定，改 host_port 不影响容器内监听；
-        # 裸机则直接监听本端口（默认 18001）。
+        # Clarify which port is which; users report confusing the Docker port with the
+        # bare-metal one. Inside a container the listen port is fixed at 8000 and the
+        # externally visible port comes from the host mapping (e.g. 18001:8000), so changing
+        # host_port does not affect what the container listens on. Bare metal listens on
+        # this port directly (18001 by default).
         if _wsh.in_docker():
             logger.info(
                 f"Listening on :{LOCI_PORT} INSIDE the container. "
@@ -1693,8 +1809,9 @@ if __name__ == "__main__":
             )
         else:
             logger.info(f"Listening on :{LOCI_PORT} (bare-metal / 裸机默认 18001)")
-        # 明确打印「客户端该怎么连」——给 Operit / 安卓 / 自建前端等非技术用户排障用。
-        # 一眼能看清 endpoint 路径、鉴权开关；本机桥接务必用 127.0.0.1（见上方保活注释）。
+        # Print, explicitly, how a client should connect — for non-technical users of mobile
+        # or self-hosted front-ends who need to debug this. The endpoint path and the auth
+        # switch are both visible at a glance; a local bridge must use 127.0.0.1.
         logger.info(
             "MCP endpoint ready | transport=%s | 本机连接 URL: http://127.0.0.1:%s/mcp "
             "（远程走你的域名/隧道，末尾同样是 /mcp）| 鉴权: %s",
@@ -1717,5 +1834,6 @@ if __name__ == "__main__":
             proxy_headers=False,
         )
     else:
-        # stdio：工具已在启动入口处统一回灌进 mcp（全部暴露），这里直接跑。
+        # stdio: the tools were already folded into mcp at the entry point above, so
+        # everything is exposed; just run.
         mcp.run(transport=transport)
