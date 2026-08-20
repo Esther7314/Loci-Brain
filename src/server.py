@@ -894,8 +894,11 @@ except (AttributeError, RuntimeError, TypeError, ValueError) as _grow_strict_exc
 @mcp.tool()
 async def recall(
     when: Annotated[str, _PydField(description=(
-        "A stretch of time. Understood forms: 48h / 7d / 今天 / 昨天 / 本周 / 上周 / "
-        "本月 / 上月 / 今年 / 2026-07 / 2026-07-15 / start..end.\n"
+        "A stretch of time. Understood forms: 48h / 7d / today / yesterday / "
+        "day before yesterday / this week / last week / this month / last month / "
+        "this year / 2026-07 / 2026-07-15 / start..end.\n"
+        "The Chinese spellings (今天 / 昨天 / 前天 / 本周 / 上周 / 本月 / 上月 / 今年) "
+        "name exactly the same stretches and are equally accepted.\n"
         "It only narrows where to look. It does not change the shape of what comes "
         "back. That is decided by whether there is a query."
     ))] = "",
@@ -963,7 +966,7 @@ async def recall(
     Do not keep rewording the search. That is how you end up inventing an answer.
 
     Example — look through a stretch of time:
-      recall(when="上周")
+      recall(when="last week")
 
     Example — find one thing:
       recall(query="青岛")
