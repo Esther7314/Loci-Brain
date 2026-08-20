@@ -1144,14 +1144,18 @@ async function loadCfg(){
     $("#cfgOwnerName").value = c.owner_name || "";
     $("#setNamesHint").textContent =
       "这两个名字会被挡在标签外面。不填的话，你俩的名字会被当成普通词抽进标签，把搜索淹掉。";
-    // The password row: say exactly what it controls, and cut everything else.
-    // Since the panel's /api/* stopped requiring auth, this password has one remaining
-    // use — the MCP authorisation page. And when MCP auth is switched off, that page is
-    // not served either, which means it is used NOWHERE AT ALL.
-    const mcpOn = !!c.mcp_require_auth_effective;
-    $("#pwWhat").textContent = mcpOn
-      ? "给 MCP 远程连接的授权页用的。不是这一屏的门。"
-      : "给 MCP 远程连接的授权页用的。你这台机器 MCP 鉴权关着，所以它现在没用上。";
+    // ⚰️ There was a line here that wrote an explanation into `#pwWhat`. That element was
+    //    removed on purpose — once the panel had its own lock back, the password no longer
+    //    needed explaining — but this line was left behind, and `$()` returns null for an
+    //    element that does not exist.
+    //
+    // 🔴 What that cost, which is why it is worth a headstone rather than a silent delete:
+    //    assigning to `null.textContent` threw, the throw was caught by the handler below,
+    //    and the handler wrote "cannot read the current config" into the settings page.
+    //    So every single load of this page reported a failure to read a config that had in
+    //    fact been read perfectly. **It did not break anything. It said something untrue** —
+    //    and an interface that lies about its own state is worse than one that just fails,
+    //    because there is nothing to go and fix.
   }catch(err){ $("#cfgSaveMsg").textContent = "读不到现在的配置：" + err.message; }
 }
 $("#cfgEOn").onclick = () => {
