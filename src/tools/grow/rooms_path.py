@@ -20,7 +20,7 @@ tools/grow/rooms_path.py — 批 1 新 grow：kind=event|mind（2026-08-03）
 - tense="want" → create 后补 update(status="want", weight=…)
 - 施工 6（二改 §6）：tense="want" 时 when 多认一种写法——时长记号
   （3w/10d/2m/1y），跟绝对日期一起构成 want 的"三类钟"；正文是等触发（when 留空，
-  条件写在正文里）；怎么读三类归 `core/profile._三类钟`，这儿只管校验存不存得进去
+  条件写在正文里）；怎么读三类归 `core/profile._want_clock`，这儿只管校验存不存得进去
 - 校验先行：任何一条不合法 → 整个调用报错，不创建任何桶
 
 不做什么（边界）：
@@ -369,7 +369,7 @@ async def grow_event(items: list, tense: str = "", weight=None,
         if not text.strip():
             return f"items[{idx}]: text 不能为空。"
         # 施工 6 · A 件：tense="want" 时 when 多一种合法写法——时长记号（"有量级"）。
-        # 三类怎么读见 core/profile.py._三类钟；这儿只管"存不存得进去"。
+        # 三类怎么读见 core/profile.py._want_clock；这儿只管"存不存得进去"。
         if when:
             _when_ok = bool(_WHEN_RE.match(when))
             if not _when_ok and tense == "want" and _WANT_DURATION_RE.match(when):
@@ -474,7 +474,7 @@ async def grow_event(items: list, tense: str = "", weight=None,
 # ------------------------------------------------------------
 
 # ⚰️ 2026-08-18：`grow_big` 连同 `kind="big"` 那个入口一起删了。
-#    它只是把 fold 的核心（`_F.落一条gist`）包了一层——立一个「时期」有两个入口，
+#    它只是把 fold 的核心（`_F.save_gist`）包了一层——立一个「时期」有两个入口，
 #    而两个入口迟早说两套话。现在只剩 fold(when="起..止") 一条路。
 
 

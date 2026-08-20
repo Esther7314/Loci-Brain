@@ -19,8 +19,8 @@ WHAT THIS FREEZES AND WHY IT IS FROZEN NOW
       "backwards" are one line of code apart and read identically in a diff.
 
     Two removals, two traces:
-        the whole version is dropped by `唤醒()`   → leaves a `降级于` stamp on the record
-        the file is deleted by `扫一遍()`          → leaves a grown memory: there was a
+        the whole version is dropped by `degrade_on_wake()`   → leaves a `降级于` stamp on the record
+        the file is deleted by `sweep_expired()`          → leaves a grown memory: there was a
                                                      dream here, and I cannot remember it
       Neither may remove its half silently, because a dream that vanishes with no trace
       is indistinguishable from a dream that was never woven.
@@ -90,8 +90,8 @@ def run(coro):
 
 def test_a_dream_round_trips_through_the_disk(dreams):
     tmp, _ = dreams
-    path = D.落盘(a_dream())
-    back = D.读盘()
+    path = D.save_record(a_dream())
+    back = D.load_dreams()
     assert len(back) == 1
     assert back[0]["碎片"] == a_dream()["碎片"]
     assert back[0]["_路径"] == path
@@ -107,11 +107,11 @@ def test_the_private_path_key_is_not_written_to_the_file(dreams):
     #    nothing; the key only exists on a record that came back off the disk — which is
     #    exactly the record every write after the first one is made from.
     tmp, _ = dreams
-    D.落盘(a_dream())
-    round_tripped = D.读盘()[0]
+    D.save_record(a_dream())
+    round_tripped = D.load_dreams()[0]
     assert "_路径" in round_tripped, "the reader does add it — otherwise this test is vacuous"
 
-    D.落盘(round_tripped)
+    D.save_record(round_tripped)
     raw = json.loads(next((tmp / "night_fall" / "dreams").iterdir()).read_text(encoding="utf-8"))
     assert "_路径" not in raw
 
@@ -136,11 +136,11 @@ def test_the_old_engines_dreams_are_left_alone(dreams):
         {"id": "old0000engine", "碎片": "from the retired engine",
          "织于": "2026-01-01T00:00:00+08:00"}), encoding="utf-8")
 
-    D.落盘(a_dream())
+    D.save_record(a_dream())
 
-    assert len(D.读盘()) == 1, "only our own files are read"
+    assert len(D.load_dreams()) == 1, "only our own files are read"
     clock[0] = WOVEN_AT + timedelta(days=200)
-    run(D.扫一遍(CFG))
+    run(D.sweep_expired(CFG))
     assert prose.exists(), "a file we do not own is never deleted by our sweep"
     assert lookalike.exists(), "not even one that parses and looks long expired"
 
@@ -148,10 +148,10 @@ def test_the_old_engines_dreams_are_left_alone(dreams):
 def test_an_unreadable_dream_file_is_skipped_not_fatal(dreams):
     # Criterion: one corrupt file must not stop the others from being read or swept.
     tmp, _ = dreams
-    D.落盘(a_dream())
+    D.save_record(a_dream())
     folder = tmp / "night_fall" / "dreams"
     (folder / f"{D.FILE_PREFIX}broken.json").write_text("{ not json", encoding="utf-8")
-    assert len(D.读盘()) == 1
+    assert len(D.load_dreams()) == 1
 
 
 # ───────────────────────── whole: outside time ─────────────────────────
@@ -163,7 +163,7 @@ def test_the_whole_version_does_not_decay_with_the_clock(dreams):
     _, clock = dreams
     rec = a_dream()
     clock[0] = WOVEN_AT + timedelta(hours=9)
-    assert D.层of(rec, clock[0], CFG) == "完整"
+    assert D.layer_of(rec, clock[0], CFG) == "完整"
 
 
 def test_the_whole_version_ignores_turns_too(dreams):
@@ -171,7 +171,7 @@ def test_the_whole_version_ignores_turns_too(dreams):
     # sneak past the short circuit either.
     _, clock = dreams
     rec = a_dream(轮次=99)
-    assert D.层of(rec, clock[0], CFG) == "完整"
+    assert D.layer_of(rec, clock[0], CFG) == "完整"
 
 
 def test_an_empty_whole_field_is_not_a_whole_version(dreams):
@@ -179,7 +179,7 @@ def test_an_empty_whole_field_is_not_a_whole_version(dreams):
     # `完整: ""` has already been degraded, and reading presence alone would freeze it at
     # the top layer forever — it would never sink, never expire, never leave a trace.
     _, clock = dreams
-    assert D.层of(a_dream(完整=""), clock[0], CFG) == "碎片"
+    assert D.layer_of(a_dream(完整=""), clock[0], CFG) == "碎片"
 
 
 # ───────────────────────── the slide, forwards only ─────────────────────────
@@ -199,7 +199,7 @@ def test_the_layers_follow_the_clock(dreams, minutes, expected):
     _, clock = dreams
     rec = a_dream(完整="")
     now = WOVEN_AT + timedelta(minutes=minutes)
-    assert D.层of(rec, now, CFG) == expected
+    assert D.layer_of(rec, now, CFG) == expected
 
 
 @pytest.mark.parametrize("turns,expected", [(0, "碎片"), (15, "一句"), (30, "没了")])
@@ -207,7 +207,7 @@ def test_turns_can_get_there_first(dreams, turns, expected):
     # Criterion: whichever clock arrives first wins. A long conversation in ten minutes
     # ages a dream as surely as an hour of silence does.
     _, clock = dreams
-    assert D.层of(a_dream(完整="", 轮次=turns), WOVEN_AT, CFG) == expected
+    assert D.layer_of(a_dream(完整="", 轮次=turns), WOVEN_AT, CFG) == expected
 
 
 def test_a_recall_can_slow_the_slide_but_never_reverse_it(dreams):
@@ -219,7 +219,7 @@ def test_a_recall_can_slow_the_slide_but_never_reverse_it(dreams):
     rec = a_dream(完整="", 到过的最低层="一句")
     # The start point has been pushed forward so the arithmetic says "fragment"...
     rec["起算点"] = (WOVEN_AT + timedelta(minutes=55)).isoformat(timespec="seconds")
-    assert D.层of(rec, WOVEN_AT + timedelta(minutes=60), CFG) == "一句"
+    assert D.layer_of(rec, WOVEN_AT + timedelta(minutes=60), CFG) == "一句"
 
 
 def test_the_floor_does_not_hold_it_above_where_it_has_got_to(dreams):
@@ -227,7 +227,7 @@ def test_the_floor_does_not_hold_it_above_where_it_has_got_to(dreams):
     # further down — otherwise recording a floor would freeze the dream at that layer.
     _, clock = dreams
     rec = a_dream(完整="", 到过的最低层="碎片")
-    assert D.层of(rec, WOVEN_AT + timedelta(minutes=90), CFG) == "没了"
+    assert D.layer_of(rec, WOVEN_AT + timedelta(minutes=90), CFG) == "没了"
 
 
 def test_a_record_with_no_timestamps_at_all_is_treated_as_expired(dreams):
@@ -235,7 +235,7 @@ def test_a_record_with_no_timestamps_at_all_is_treated_as_expired(dreams):
     # "immortal". A dream that can never expire is one that never leaves a trace either,
     # and it would sit in the folder forever.
     _, clock = dreams
-    assert D.层of({"id": "x", "碎片": "..."}, WOVEN_AT, CFG) == "没了"
+    assert D.layer_of({"id": "x", "碎片": "..."}, WOVEN_AT, CFG) == "没了"
 
 
 # ───────────────────────── removal #1: the whole version is dropped ─────────────────────────
@@ -245,12 +245,12 @@ def test_waking_drops_the_whole_version_and_stamps_when(dreams):
     # records that it went — this is its trace. Without the stamp, "the whole version is
     # missing" and "there never was one" read the same on disk.
     _, clock = dreams
-    D.落盘(a_dream())
+    D.save_record(a_dream())
     clock[0] = WOVEN_AT + timedelta(hours=5)
 
-    assert D.唤醒() == ["d0000000feed"]
+    assert D.degrade_on_wake() == ["d0000000feed"]
 
-    rec = D.读盘()[0]
+    rec = D.load_dreams()[0]
     assert not rec.get("完整"), "the whole version is gone"
     assert rec["降级于"] == clock[0].isoformat(timespec="seconds")
     assert rec["碎片"], "the fragment is what survives it"
@@ -261,13 +261,13 @@ def test_waking_restarts_the_clock_from_that_moment(dreams):
     # was woven. Measured from weaving, a dream from 3am would already be half rotted
     # before she read it — which contradicts the one rule the whole layer exists for.
     _, clock = dreams
-    D.落盘(a_dream())
+    D.save_record(a_dream())
     clock[0] = WOVEN_AT + timedelta(hours=5)
-    D.唤醒()
+    D.degrade_on_wake()
 
-    rec = D.读盘()[0]
-    assert D.层of(rec, clock[0], CFG) == "碎片"
-    assert D.层of(rec, clock[0] + timedelta(minutes=31), CFG) == "一句"
+    rec = D.load_dreams()[0]
+    assert D.layer_of(rec, clock[0], CFG) == "碎片"
+    assert D.layer_of(rec, clock[0] + timedelta(minutes=31), CFG) == "一句"
 
 
 def test_waking_clears_the_recall_history_from_the_previous_life(dreams):
@@ -275,9 +275,9 @@ def test_waking_clears_the_recall_history_from_the_previous_life(dreams):
     # from while the whole version was alive would age the fragment on the strength of
     # attention paid to something that no longer exists.
     _, clock = dreams
-    D.落盘(a_dream(回想次数=4, 到过的最低层="一句"))
-    D.唤醒()
-    rec = D.读盘()[0]
+    D.save_record(a_dream(回想次数=4, 到过的最低层="一句"))
+    D.degrade_on_wake()
+    rec = D.load_dreams()[0]
     assert rec["回想次数"] == 0
     assert rec["到过的最低层"] == "碎片"
 
@@ -288,13 +288,13 @@ def test_waking_twice_is_harmless(dreams):
     # not an error, and above all not a second degradation that resets the clock again
     # and keeps the fragment alive indefinitely.
     _, clock = dreams
-    D.落盘(a_dream())
-    D.唤醒()
-    stamped = D.读盘()[0]["降级于"]
+    D.save_record(a_dream())
+    D.degrade_on_wake()
+    stamped = D.load_dreams()[0]["降级于"]
 
     clock[0] = WOVEN_AT + timedelta(hours=1)
-    assert D.唤醒() == []
-    assert D.读盘()[0]["降级于"] == stamped, "the second call must not restamp anything"
+    assert D.degrade_on_wake() == []
+    assert D.load_dreams()[0]["降级于"] == stamped, "the second call must not restamp anything"
 
 
 # ───────────────────────── removal #2: the file goes, the fact stays ─────────────────────────
@@ -312,10 +312,10 @@ def test_an_expired_dream_is_deleted_and_leaves_a_memory(dreams, monkeypatch):
     monkeypatch.setattr(grow_mod, "dispatch", fake_dispatch)
 
     _, clock = dreams
-    path = D.落盘(a_dream(完整=""))
+    path = D.save_record(a_dream(完整=""))
     clock[0] = WOVEN_AT + timedelta(minutes=90)
 
-    out = run(D.扫一遍(CFG))
+    out = run(D.sweep_expired(CFG))
 
     assert out["删了"] == ["d0000000feed"]
     import os
@@ -333,9 +333,9 @@ def test_the_trace_is_an_ordinary_memory_not_something_pressing(dreams, monkeypa
                         lambda **kw: _record_and_return(grown, kw))
 
     _, clock = dreams
-    D.落盘(a_dream(完整=""))
+    D.save_record(a_dream(完整=""))
     clock[0] = WOVEN_AT + timedelta(minutes=90)
-    run(D.扫一遍(CFG))
+    run(D.sweep_expired(CFG))
 
     call = grown[0]
     assert call["kind"] == "event"
@@ -355,9 +355,9 @@ def test_the_trace_does_not_borrow_the_dreams_own_feeling(dreams, monkeypatch):
                         lambda **kw: _record_and_return(grown, kw))
 
     _, clock = dreams
-    D.落盘(a_dream(完整="", v=0.05, a=0.95))
+    D.save_record(a_dream(完整="", v=0.05, a=0.95))
     clock[0] = WOVEN_AT + timedelta(minutes=90)
-    run(D.扫一遍(CFG))
+    run(D.sweep_expired(CFG))
 
     item = grown[0]["items"][0]
     assert (item["v"], item["a"]) == (0.5, 0.3), "neutral, not the dream's own numbers"
@@ -373,10 +373,10 @@ def test_a_dream_that_has_not_expired_is_left_alone(dreams, monkeypatch):
                         lambda **kw: _record_and_return(grown, kw))
 
     _, clock = dreams
-    path = D.落盘(a_dream(完整=""))
+    path = D.save_record(a_dream(完整=""))
     clock[0] = WOVEN_AT + timedelta(minutes=10)
 
-    out = run(D.扫一遍(CFG))
+    out = run(D.sweep_expired(CFG))
     import os
     assert out["删了"] == [] and grown == []
     assert os.path.exists(path)
@@ -393,10 +393,10 @@ def test_a_failed_trace_does_not_stop_the_sweep(dreams, monkeypatch):
     monkeypatch.setattr(grow_mod, "dispatch", boom)
 
     _, clock = dreams
-    D.落盘(a_dream(完整=""))
+    D.save_record(a_dream(完整=""))
     clock[0] = WOVEN_AT + timedelta(minutes=90)
 
-    out = run(D.扫一遍(CFG))
+    out = run(D.sweep_expired(CFG))
     assert out["删了"] == ["d0000000feed"]
     assert out["留痕"] == []
 
@@ -407,21 +407,21 @@ def test_the_last_line_is_cut_out_of_the_fragment_mechanically(dreams):
     # Criterion: "only one line left" takes the first sentence of what was already there.
     # It does not go back to a model. A remnant is what survives of the thing; a freshly
     # generated sentence would be a new thing wearing its clothes.
-    assert D.一句("门一直开着。后来是海。") == "门一直开着。"
-    assert D.一句("走廊没有尽头\n然后是海") == "走廊没有尽头"   # the cut is kept, the whitespace around it is not
+    assert D.first_sentence("门一直开着。后来是海。") == "门一直开着。"
+    assert D.first_sentence("走廊没有尽头\n然后是海") == "走廊没有尽头"   # the cut is kept, the whitespace around it is not
 
     # ⚠️ Recorded, not asserted as desirable: the sentence splitter only knows 。！？…
     #    and a newline. An English fragment with no newline comes back whole, because
     #    there is nothing in the pattern that matches a full stop. That is fine while
     #    the dreams are written in Chinese, and it is a real gap the day they are not.
-    assert D.一句("A corridor. Then the sea.") == "A corridor. Then the sea."
+    assert D.first_sentence("A corridor. Then the sea.") == "A corridor. Then the sea."
 
 
 
 def test_a_fragment_with_no_sentence_end_still_yields_something(dreams):
     # Criterion: models do not always punctuate. Returning empty here would show her a
     # blank where a remnant should be, which reads as "the dream is gone" one layer early.
-    out = D.一句("a corridor that kept going and going with no end in sight at all")
+    out = D.first_sentence("a corridor that kept going and going with no end in sight at all")
     assert out.strip()
 
 

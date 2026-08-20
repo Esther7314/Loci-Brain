@@ -36,7 +36,7 @@ from .._common import check_metadata_size
 
 
 
-def _多久以前(秒: float) -> str:
+def _ago(秒: float) -> str:
     if 秒 < 0:
         return "刚刚"
     if 秒 < 90:
@@ -48,7 +48,7 @@ def _多久以前(秒: float) -> str:
     return f"{int(秒 / 86400)} 天前"
 
 
-async def _在不在工作(all_buckets: list) -> str:
+async def _working_section(all_buckets: list) -> str:
     """「它在不在工作」—— 跟上面那段「它还活着吗」不是同一个问题。
 
     🔴 2026-08-20 加的，起因是网关那个 bug：超时设成 5 秒，于是它**从上线起一次
@@ -97,12 +97,12 @@ async def _在不在工作(all_buckets: list) -> str:
             最近一次打标 = 建
     if 最近一次打标:
         行.append("打标：最近一条打上标的记忆，是 "
-                  f"{_多久以前((_w.now() - 最近一次打标).total_seconds())}建的")
+                  f"{_ago((_w.now() - 最近一次打标).total_seconds())}建的")
     else:
         行.append("打标：⚠️ 一条打上标的记忆都没有 —— 它可能从来没成功过")
     if 没标:
         挂了 = (_w.now() - min(没标)).total_seconds()
-        行.append(f"　　还有 {len(没标)} 条在排队，最老的那条 {_多久以前(挂了)}就建了"
+        行.append(f"　　还有 {len(没标)} 条在排队，最老的那条 {_ago(挂了)}就建了"
                   + ("  ⚠️ 挂太久了，去看一眼打标那条路" if 挂了 > 3600 else ""))
     else:
         行.append("　　没有排队的（每一条都打上标了）")
@@ -111,14 +111,14 @@ async def _在不在工作(all_buckets: list) -> str:
     库 = str((rt.config or {}).get("buckets_dir") or "")
     db = os.path.join(库, "embeddings.db") if 库 else ""
     if db and os.path.exists(db):
-        行.append(f"向量：最近一次写入 {_多久以前(现在 - os.path.getmtime(db))}")
+        行.append(f"向量：最近一次写入 {_ago(现在 - os.path.getmtime(db))}")
     else:
         行.append("向量：⚠️ 找不到 embeddings.db —— 搜索会**安静地**退化成只认关键词")
 
     # ── 做梦：它整个是后台活、一声不吭，所以最需要这一行 ────────────────
     梦 = os.path.join(库, "_state", "dream_state.json") if 库 else ""
     if 梦 and os.path.exists(梦):
-        行.append(f"做梦：最近一次动 {_多久以前(现在 - os.path.getmtime(梦))}")
+        行.append(f"做梦：最近一次动 {_ago(现在 - os.path.getmtime(梦))}")
     else:
         行.append("做梦：还没织过（刚装的话正常，装了好几天还这样就不正常）")
 
@@ -196,7 +196,7 @@ async def pulse(include_archive: Optional[bool] = False) -> str:
     # 「它在不在工作」挂在清单之前 —— 它比清单要紧得多。
     # 这一段自己出岔子也不许把体检带崩：**体检正是那个负责说实话的东西。**
     try:
-        status += await _在不在工作(buckets) + "\n"
+        status += await _working_section(buckets) + "\n"
     except Exception as e:
         status += f"\n=== 它在不在工作 ===\n⚠️ 这一段自己算不出来了：{e}\n"
         rt.logger.warning(f"pulse liveness section failed: {e}")

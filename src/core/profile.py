@@ -11,7 +11,7 @@ breath 这一个工具——`web/loci.py` 的档案页跟睁眼要读的是同�
 挪来 `core/`：跟 `_fold`/`_rooms`/`_when` 这些引擎件放一起，`tools/breath/awaken.py`
 和 `web/loci.py` 都改成从这儿 import，判据只有一处没变。
 
-⚠️ **只挪家不改逻辑**：`门口那张纸()` / `事件池()` 两个函数、连同它们各自的
+⚠️ **只挪家不改逻辑**：`door_note()` / `event_pool()` 两个函数、连同它们各自的
 判据注释，逐字照搬，一个字没改；只有 import 路径跟着新家变了。
 
 施工 6（2026-08-18，二改 §6+§8）在这份合同源上加了三块，都只在**读侧**判断，
@@ -24,11 +24,11 @@ breath 这一个工具——`web/loci.py` 的档案页跟睁眼要读的是同�
 ② **问句只问最久那条**（§6.1）：`heavy` 列表照旧全给，另外多给一个
    `heavy_question_id`——**挂得最久**（不是最重）的那条 id，渲染层拿它去
    决定哪条该问句、哪条照旧陈述。
-③ **「她改过」的通知**（§8）：`事件池()` 之外新增 `她改过()`，扫「她改的」
+③ **「她改过」的通知**（§8）：`event_pool()` 之外新增 `edited_by_her()`，扫「她改的」
    标签 + 没被我 fold 掉的（`_F.is_covered()`）——这就是"给我留一条通知"的
    全部机制：标签本身既是标记也是通知，没有另开一张单独的通知表。
 
-对外暴露：门口那张纸(all_buckets, now) / 事件池(all_buckets) / 她改过(all_buckets)
+对外暴露：door_note(all_buckets, now) / event_pool(all_buckets) / edited_by_her(all_buckets)
 ========================================
 """
 
@@ -60,7 +60,7 @@ _DURATION_RE = re.compile(r"^(\d+)([dwmy])$")
 _DURATION_UNIT_DAYS = {"d": 1, "w": 7, "m": 30, "y": 365}
 
 
-def _量级天数(w: str) -> float | None:
+def _magnitude_days(w: str) -> float | None:
     """时长记号 → 约等于多少天。认不出返回 None（不是"有量级"这一类）。"""
     m = _DURATION_RE.match(w)
     if not m:
@@ -69,7 +69,7 @@ def _量级天数(w: str) -> float | None:
     return n * _DURATION_UNIT_DAYS[m.group(2)]
 
 
-def _量级多大声(ratio: float) -> str:
+def _magnitude_loudness(ratio: float) -> str:
     """有量级这一类专属的曲线：挂的天数 ÷ 量级天数。
 
     两个校准点（她 8-18 给的，写死在 smoke 里）：
@@ -87,7 +87,7 @@ def _量级多大声(ratio: float) -> str:
     return "now"
 
 
-def _三类钟(meta: dict, created, now: datetime) -> tuple[str, str, str]:
+def _want_clock(meta: dict, created, now: datetime) -> tuple[str, str, str]:
     """给一条 want 判「有期限 / 有量级 / 等触发 / 旧数据待复核」，算出这一类该多大声。
 
     返回 (clock, loud, note)：clock 只给内部/调试用，note 是给人看的一句解释
@@ -95,17 +95,17 @@ def _三类钟(meta: dict, created, now: datetime) -> tuple[str, str, str]:
 
     🔴 这函数只处理**已经落进"压在心头"池子**的 want（=已过期或没有未来
     when 的那些）——还没到期的有期限项走的是既有的 `reminders` 分支
-    （下面 `门口那张纸()` 里那段一个字没动），这儿不重复判。
+    （下面 `door_note()` 里那段一个字没动），这儿不重复判。
     """
     w = str(meta.get("when") or "").strip()
     if not w:
         return "等触发", "far", ""
 
-    mag = _量级天数(w)
+    mag = _magnitude_days(w)
     if mag is not None:
         held = (now.date() - created.date()).days if created else 0
         ratio = (held / mag) if mag else 0.0
-        return "有量级", _量级多大声(ratio), ""
+        return "有量级", _magnitude_loudness(ratio), ""
 
     m = re.match(r"(\d{4}-\d{2}-\d{2})", w)
     if m:
@@ -121,9 +121,9 @@ def _三类钟(meta: dict, created, now: datetime) -> tuple[str, str, str]:
             return "旧数据待复核", "far", "没定期限 —— 存的那天顺手填成了 when，它不会自己催你"
         # 到这里说明这条 want 已经过期还没了结（没过期的会被 reminders 分支截走，
         # 不会进 heavy 池）。过期锚点换成"过期了多少天"，曲线复用现成的
-        # `_压得多大声`——最小改动，她觉得"迟到"该有独立曲线再拆（统筹 8-18 裁决）。
+        # `_held_loudness`——最小改动，她觉得"迟到"该有独立曲线再拆（统筹 8-18 裁决）。
         overdue = max(0, (now.date() - when_date.date()).days)
-        return "有期限", _压得多大声(overdue), ""
+        return "有期限", _held_loudness(overdue), ""
 
     return "旧数据待复核", "far", "没定期限 —— when 的格式认不出来，它不会自己催你"
 
@@ -136,17 +136,17 @@ def _f_weight(x) -> float:
         return 0.5
 
 
-def _提醒多大声(days: int) -> str:
+def _reminder_loudness(days: int) -> str:
     """⏰ 越近越大声（她 8-03 的原话）。**门槛只有这一处**，两张皮都读它。"""
     return "now" if days == 0 else "soon" if days <= 3 else "near" if days <= 14 else "far"
 
 
-def _压得多大声(held: int) -> str:
+def _held_loudness(held: int) -> str:
     """🫀 越挂越大声（催的是「到底做不做」，不是「快到日子了」）。"""
     return "now" if held >= 60 else "soon" if held >= 30 else "near" if held >= 7 else "far"
 
 
-def 事件池(all_buckets: list) -> list[dict]:
+def event_pool(all_buckets: list) -> list[dict]:
     """「忽然想起」的池子：可见的、EVENT 房间里的、**没被盖过**的事件。
 
     🔴 三道闸，缺一道都会静默出错：
@@ -176,7 +176,7 @@ def 事件池(all_buckets: list) -> list[dict]:
     return pool
 
 
-def 门口那张纸(all_buckets: list, now: datetime) -> dict:
+def door_note(all_buckets: list, now: datetime) -> dict:
     """名字 + 准则 + ⏰提醒 + 🫀压在心头 + 时期清单 —— **一次扫库，一套判据。**
 
     返回 {"facts": [...], "rules": [...], "reminders": [...], "heavy": [...],
@@ -226,7 +226,7 @@ def 门口那张纸(all_buckets: list, now: datetime) -> dict:
                 if 0 <= days <= _REMIND_DAYS and (days > 0 or _status == "want"):
                     reminders.append({"id": bid, "meta": meta, "content": content,
                                       "days": days, "when": m.group(1),
-                                      "status": _status, "loud": _提醒多大声(days)})
+                                      "status": _status, "loud": _reminder_loudness(days)})
                     _reminded = True
             except ValueError:
                 pass
@@ -246,7 +246,7 @@ def 门口那张纸(all_buckets: list, now: datetime) -> dict:
             _wt = meta.get("weight")
             _held = (now.date() - _c.date()).days if _c else 0
             # 施工 6 · A 件：三类钟只换"多大声"怎么算，held/weight 的口径一个字没动。
-            _clock, _loud, _note = _三类钟(meta, _c, now)
+            _clock, _loud, _note = _want_clock(meta, _c, now)
             _asked = str(meta.get("last_asked") or "")
             heavy.append({"id": bid, "meta": meta, "content": content,
                           "weight": 0.5 if _wt in (None, "") else _f_weight(_wt),
@@ -288,7 +288,7 @@ def 门口那张纸(all_buckets: list, now: datetime) -> dict:
             "heavy_question_id": heavy_question_id}
 
 
-def 她改过(all_buckets: list) -> list[dict]:
+def edited_by_her(all_buckets: list) -> list[dict]:
     """「她改过事实」的通知池（二改 §8）：带 `她改的` 标签、且**没被我 fold 掉**的event。
 
     这就是通知机制的全部：标签本身既是"她改过"的标记，也是"还没被我看过"

@@ -31,7 +31,7 @@ tools/muse/ — 发呆：找出来 · 摆到我面前 · 然后闭嘴（muse 二
 📌 一段时间可以有三条主线，也可以一条都没有 —— **散着的就让它散着。**
 🔴 **breath 里一个字都不加**（开工单 3.2）：发呆时摆给我 ✅ / breath 里不摆 ❌。
 
-对外暴露：dispatch(cluster, not_same) → str · 排版() · 第一步() · _第二步()
+对外暴露：dispatch(cluster, not_same) → str · layout() · step_one() · _step_two()
 （后三个是**纯函数**：干跑脚本靠它们离线渲染样张，渲染跟线上一模一样，不另写一套。）
 ========================================
 """
@@ -44,22 +44,22 @@ from core import _when as _w
 线 = "─" * 40
 
 
-def _日(dt) -> str:
+def _date_label(dt) -> str:
     if dt is None:
         return "没有日子"
     return dt.strftime("%m-%d") if dt.year == _w.now().year else dt.strftime("%Y-%m-%d")
 
 
-def _短(bid: str) -> str:
+def _short_id(bid: str) -> str:
     """第一步只给前 6 位——**给的是指路，不是记忆**（12 位留给第二步）。"""
     return f"{str(bid)[:6]}…"
 
 
-def _认知证据(t: "M.团") -> str:
+def _mind_evidence(t: "M.Cluster") -> str:
     """一团的证据行：架坐标 · from 链 · 语义补。三样各自说各自的，不许含混。"""
     块 = [f"架 v{t.架v:.2f} a{t.架a:.2f}"]
     if t.from核心:
-        共 = ("共祖 " + "、".join(_短(x) for x in t.共祖[:2])) if t.共祖 else "同一条链"
+        共 = ("共祖 " + "、".join(_short_id(x) for x in t.共祖[:2])) if t.共祖 else "同一条链"
         块.append(f"from 链 {len(t.from核心)} 条（{共}）")
     if t.语义补:
         块.append(f"语义补 {len(t.语义补)} 条（最低 {t.最低相似:.2f}）")
@@ -68,18 +68,18 @@ def _认知证据(t: "M.团") -> str:
     return " · ".join(块)
 
 
-def _认知一行(n: int, t: "M.团") -> str:
-    return f"  [{n}] {len(t)} 条 · {_认知证据(t)}"
+def _mind_line(n: int, t: "M.Cluster") -> str:
+    return f"  [{n}] {len(t)} 条 · {_mind_evidence(t)}"
 
 
-async def _两侧() -> tuple[list, int, int, dict, dict]:
+async def _both_sides() -> tuple[list, int, int, dict, dict]:
     """两侧共用一遍全库扫（池子分家，但料是同一车——全库扫不便宜）。
 
-    🔴 施工 5 · H 件：这一趟现在**过视图缓存**（`M.两侧一趟()`）——
+    🔴 施工 5 · H 件：这一趟现在**过视图缓存**（`M.both_sides()`）——
     第一步摆团、第二步 `cluster=N` 看全条，要的是同一份结果（[N] 的编号口径
     必须一致），没缓存就是把全库扫两遍。失效跟着桶的写盘走，**宁可失效勤一点**。
     """
-    return await M.两侧一趟()
+    return await M.both_sides()
 
 
 async def dispatch(cluster: int = 0, not_same=None) -> str:
@@ -106,14 +106,14 @@ async def dispatch(cluster: int = 0, not_same=None) -> str:
         key, cnt = M.record_rejection(buckets_dir, ids)
         # 拒绝计数写的是 `_state/` 里的 json，**不动桶** → 视图缓存的钥匙不会变。
         # 不手动清这一下，我说完「这几条不是一回事」，下一屏还会把它摆出来（H 件）。
-        M.视图清空()
+        M.clear_view_cache()
         return (f"记下了：这 {len(ids)} 条**不是一回事**（第 {cnt} 次）。\n"
                 f"{'、'.join(sorted(set(ids)))}\n"
                 f"这一组不再提。**组变了**（多一条、少一条）会重新出现——"
                 f"那时候它确实是新的一组。")
 
-    团们, 散着, 默认坐标, 指们, stats = await _两侧()
-    团们, 摆出的指, 多余团, 全部 = 排版(团们, 指们, stats, cfg)
+    团们, 散着, 默认坐标, 指们, stats = await _both_sides()
+    团们, 摆出的指, 多余团, 全部 = layout(团们, 指们, stats, cfg)
 
     # ---------- 入口②：那一批的全条逐字 ----------
     if cluster:
@@ -124,12 +124,12 @@ async def dispatch(cluster: int = 0, not_same=None) -> str:
                         "（认知：v/a 分架成团；事件：词爆发 / 成分漂移 / 空白记账，"
                         "都得先有痕迹。）")
             return f"没有第 {n} 个。现在只有 [1]~[{len(全部)}]。先调 muse() 看一眼。"
-        return _第二步(n, 全部[n - 1])
+        return _step_two(n, 全部[n - 1])
 
-    return 第一步(团们, 散着, 默认坐标, 多余团, 摆出的指, int(stats["event"]["主线"]))
+    return step_one(团们, 散着, 默认坐标, 多余团, 摆出的指, int(stats["event"]["主线"]))
 
 
-def 排版(团们, 指们, stats, cfg) -> tuple[list, list, int, list]:
+def layout(团们, 指们, stats, cfg) -> tuple[list, list, int, list]:
     """截断 + 编号口径。**第一步和第二步共用这一份**——两处不一样，[N] 就会指错人。"""
     团们 = list(团们)[:int(cfg["max_clusters"])]
     多余团 = max(0, int(stats["mind"]["团"]) - len(团们))
@@ -140,14 +140,14 @@ def 排版(团们, 指们, stats, cfg) -> tuple[list, list, int, list]:
     return 团们, 摆出的指, 多余团, 全部
 
 
-def 第一步(团们, 散着: int, 默认坐标: int, 多余团: int, 摆出的指, 主线: int) -> str:
+def step_one(团们, 散着: int, 默认坐标: int, 多余团: int, 摆出的指, 主线: int) -> str:
     """先给团/指，不给记忆。**纯函数**——干跑脚本拿它离线渲染样张，跟线上一模一样。"""
     out = ["▣发呆 · 先给团，不给记忆　（指点必须带痕迹：坐标是我打的、链是我连的、"
            "词是我存的时候写的；向量只当海选）"]
     out.append("")
     out.append("碎着的认知（MIND · 没被盖过 · v/a 分架 → from 链 → 语义补）")
     if 团们:
-        out += [_认知一行(i + 1, t) for i, t in enumerate(团们)]
+        out += [_mind_line(i + 1, t) for i, t in enumerate(团们)]
     else:
         out.append("  （一个团都没有）")
     out.append(f"  另有 {散着} 条散着，没成团")
@@ -180,14 +180,14 @@ def 第一步(团们, 散着: int, 默认坐标: int, 多余团: int, 摆出的�
     return "\n".join(out)
 
 
-def _第二步(n: int, x) -> str:
-    if isinstance(x, M.团):
+def _step_two(n: int, x) -> str:
+    if isinstance(x, M.Cluster):
         rooms: dict[str, int] = {}
         for it in x.items:
             rooms[it.room] = rooms.get(it.room, 0) + 1
         head = (f"▣[{n}] {len(x)} 条 · "
                 + "、".join(f"{r} {c}" for r, c in sorted(rooms.items())))
-        证据 = "证据：" + _认知证据(x)
+        证据 = "证据：" + _mind_evidence(x)
         if x.共祖:
             证据 += "\n　　共祖全 id：" + "、".join(x.共祖)
         块 = []
@@ -200,19 +200,19 @@ def _第二步(n: int, x) -> str:
         return f"{head}\n{证据}\n{线}\n" + f"\n\n{线}\n".join(块) + f"\n{线}\n{出路}"
 
     # ---- 事件侧的一指 ----
-    跨 = f"{_日(x.起)}~{_日(x.止)}" if x.起 and x.止 and x.起 != x.止 else _日(x.起)
+    跨 = f"{_date_label(x.起)}~{_date_label(x.止)}" if x.起 and x.止 and x.起 != x.止 else _date_label(x.起)
     head = f"▣[{n}] {x.名} · {跨}"
     块 = []
     上一个 = None
     for it in x.items:
         if x.边界 is not None and 上一个 is not None and it.ts is not None \
                 and 上一个 < x.边界 <= it.ts:
-            块.append(f"{'┈' * 14} {_日(x.边界)} 这条线 {'┈' * 14}")
+            块.append(f"{'┈' * 14} {_date_label(x.边界)} 这条线 {'┈' * 14}")
         # 「已经有名字」= 日期落在某条活着的时期的范围里（现场算的，不是字段）；
         # 「已经被盖着」= 真 cover（事件改错换版那一条）。两件事，分开说。
         标 = ("  ← 已经被盖着" if it.covered
               else ("  ← 已经有名字（落在一条时期的范围里）" if it.named else ""))
-        块.append(f"· {it.id}  {_日(it.ts)}  {it.room}{标}\n{it.text}")
+        块.append(f"· {it.id}  {_date_label(it.ts)}  {it.room}{标}\n{it.text}")
         上一个 = it.ts
     出路 = f"{x.出路}\n  不是一回事 → muse(not_same={x.ids})"
     return (f"{head}\n证据：{x.证据}\n{线}\n" + f"\n\n{线}\n".join(块)

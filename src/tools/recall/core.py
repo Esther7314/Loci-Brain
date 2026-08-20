@@ -59,11 +59,11 @@ _SYS_TAG_PREFIXES = ("__", "aspect:", "疑似同件:", "相似认知:")
 # 机器腔标签一律**滤掉别上脸**（施工 5 · B 件，她 8-17 凌晨在 muse 首屏逮的教训）：
 # 前缀表只挡得住已经出现过的那几种，`xx:yy` 这个**形状**才是判据。
 # 「脸」只配人话场景词——`aspect:patterns` 这类结构化标签是旧 om 退役时留下的渣。
-# 判据跟 tools/_muse.py 的 `是场景词()` 同一条，别两处各写一套。
+# 判据跟 tools/_muse.py 的 `is_scene_word()` 同一条，别两处各写一套。
 _机器腔标签 = re.compile(r"^[^:：]{1,12}[:：]")
 
 
-def 是人话标签(tag: str) -> bool:
+def is_human_tag(tag: str) -> bool:
     """这个标签配不配上脸。系统前缀 + `xx:yy` 机器腔都不配。"""
     t = str(tag)
     return bool(t) and not t.startswith(_SYS_TAG_PREFIXES) and not _机器腔标签.match(t)
@@ -117,7 +117,7 @@ _房间主句 = {
 _副句门 = 0.15
 
 
-def 房间人话(rooms: Counter, n: int) -> str:
+def rooms_in_words(rooms: Counter, n: int) -> str:
     """房间比例 → 一句人话。**只认四间**（老名字先 normalize 过）。
 
     比例是**结果**不是配额（5.2）：这句话说的就是「最近我在干什么」，
@@ -145,7 +145,7 @@ def 房间人话(rooms: Counter, n: int) -> str:
     return 句
 
 
-def 情绪人话(v, a) -> str:
+def mood_in_words(v, a) -> str:
     """V/A → 「心里还行，不算绷着」。两个刻度各说一句，中间一个逗号。"""
     if v is None:
         return ""
@@ -172,14 +172,14 @@ def 情绪人话(v, a) -> str:
     return f"{v话}，{a话}"
 
 
-def 标签人话(tags: list, k: int = 2, 带数: bool = False, 框: bool = True) -> str:
+def tags_in_words(tags: list, k: int = 2, 带数: bool = False, 框: bool = True) -> str:
     """标签 → 「围着青岛、交接单转」。**标签原词一个字不改**，框子才是模板。
 
     `带数=True`（她 8-05 点破的：`床 3` 和 `床 30` 是两种日子，没有数量那两行
     长得一模一样）。`框=False` 给**行头已经说了人话**的地方用（卡上那行
     `围着什么   代码 3 · 交接单 3`）——同一句话说两遍反而更难读。
     """
-    items = [(t, n) for t, n in (tags or []) if 是人话标签(t)][:max(1, k)]
+    items = [(t, n) for t, n in (tags or []) if is_human_tag(t)][:max(1, k)]
     if not items:
         return ""
     词 = [f"{t} {n}" if 带数 else str(t) for t, n in items]
@@ -188,7 +188,7 @@ def 标签人话(tags: list, k: int = 2, 带数: bool = False, 框: bool = True)
     return "围着" + "、".join(词) + "转"
 
 
-def 身份牌(meta: dict) -> str:
+def kind_badge(meta: dict) -> str:
     """逐条那一行前面的牌子（她 8-17 傍晚拍的终稿）：**mind 戴 🧠、事件不戴牌。**
 
     🔴 **房间码撤掉**：`EVENT/SELF` 这种码是给机器看的，一行里出现三次
@@ -476,7 +476,7 @@ def _cell_stats(entries: list[dict]) -> dict:
             rooms[r] += 1
         for t in (meta.get("tags") or []):
             t = str(t)
-            if 是人话标签(t):     # 机器腔的一律不上脸（B 件）
+            if is_human_tag(t):     # 机器腔的一律不上脸（B 件）
                 tags[t] += 1
         for s in _SEED_RE.findall(e["content"]):
             if s in _SEED_NAMES:
@@ -530,8 +530,8 @@ def _cell_stats(entries: list[dict]) -> dict:
         "rooms": rooms.most_common(2),
         # 人话那两句（B 件）：**从整个 Counter 算**，不是从 most_common(2) ——
         # 「多半是我自己在做事」问的是这一格的全貌，只看前两名会算错分母。
-        "房间话": 房间人话(rooms, len(entries)),
-        "情绪话": 情绪人话(v平, a平),
+        "房间话": rooms_in_words(rooms, len(entries)),
+        "情绪话": mood_in_words(v平, a平),
         # 6 而不是 4（2026-08-05 夜她点破的）：**标签不是「这条记忆的属性」，
         # 是「一堆记忆的分布」** —— 单条的 tag 信息量极低（正文本来就在那儿），
         # 它的价值全在塌缩那一刻。所以塌得越狠，越需要多给几个、并且带上数量。
@@ -586,7 +586,7 @@ def _split_cells(entries: list[dict], max_cells: int = _CELL_MAX) -> tuple[str, 
 def _fmt_header(label: str, st: dict) -> str:
     """一格一行（slices=N 的概览路）。**B 件：机器读数换人话，标签原词直用。**"""
     bits = [f"{label} · {st['n']}条"]
-    for x in (st["房间话"], 标签人话(st["tags"], 2), st["情绪话"]):
+    for x in (st["房间话"], tags_in_words(st["tags"], 2), st["情绪话"]):
         if x:
             bits.append(x)
     seeds = "".join(f"[[{s}]]" for s in st["seeds"])
@@ -600,7 +600,7 @@ def _fmt_highlights(st: dict) -> str:
     原来三个挤一行、各截 26 字，看完只知道有这么件事、不知道是什么事。
     截断是我的疏漏不是设计：塌缩塌的是**条数**，不该塌**每条讲了什么**。
     """
-    return "\n".join(f"   {mark}{身份牌(e['meta'])}{_label_of(e)}"
+    return "\n".join(f"   {mark}{kind_badge(e['meta'])}{_label_of(e)}"
                      f"({_short_id(e['id'])}{_score_tag(e)})"
                      for mark, e in st["highlights"])
 
@@ -703,7 +703,7 @@ def _far_line(label: str, st: dict, fixed_room: bool = False,
         bits.append(st["房间话"])
     tags = _pick_tags_n(st, drop)
     if tags:
-        bits.append(标签人话(tags, 2))
+        bits.append(tags_in_words(tags, 2))
     if st["情绪话"]:
         bits.append(st["情绪话"])
     line = " ▏".join(bits)
@@ -711,7 +711,7 @@ def _far_line(label: str, st: dict, fixed_room: bool = False,
         mark, e = st["highlights"][0]
         # 22 → 40：这一行确实要塞统计+标签+情绪+一个代表，不能完全不截；
         # 但 22 字等于没给内容（8-06 傍晚一起放宽的）
-        line += (f" {mark}{身份牌(e['meta'])}{_label_of(e)[:40]}"
+        line += (f" {mark}{kind_badge(e['meta'])}{_label_of(e)[:40]}"
                  f"({_short_id(e['id'])}{_score_tag(e)})")
     return line
 
@@ -723,13 +723,13 @@ def _fmt_far_line(label: str, st: dict) -> str:
     B 件顺手把它的机器读数也换成人话，别让死代码把旧词汇表带回来。
     """
     bits = [f"{label} · {st['n']}条"]
-    for x in (st["房间话"], 标签人话(st["tags"], 2), st["情绪话"]):
+    for x in (st["房间话"], tags_in_words(st["tags"], 2), st["情绪话"]):
         if x:
             bits.append(x)
     line = " ▏".join(bits)
     if st["highlights"]:
         mark, e = st["highlights"][0]
-        line += (f" {mark}{身份牌(e['meta'])}{_label_of(e)[:20]}"
+        line += (f" {mark}{kind_badge(e['meta'])}{_label_of(e)[:20]}"
                  f"({_short_id(e['id'])}{_score_tag(e)})")
     return line
 
@@ -744,7 +744,7 @@ def _fmt_card(label: str, st: dict) -> str:
     lines.append("在做什么   " + (st["房间话"] or "-"))
     # 标签这一行**带数量**（她 8-05：`床 3` 和 `床 30` 是两种日子）；
     # 行头已经说了「围着什么」，值里就不再套一遍「围着…转」
-    lines.append("围着什么   " + (标签人话(st["tags"], 6, 带数=True, 框=False) or "-"))
+    lines.append("围着什么   " + (tags_in_words(st["tags"], 6, 带数=True, 框=False) or "-"))
     lines.append("心里       " + (st["情绪话"] or "-")
                  + ("  " + " ".join(f"[[{s}]]" for s in st["seeds"]) if st["seeds"] else ""))
     if st["highlights"]:
@@ -755,7 +755,7 @@ def _fmt_card(label: str, st: dict) -> str:
             # 「中期」那一块（走 slices=1），原来截在 46 字，三条里两条断在半截
             # （「…她验收提五刀全对，并」）。
             # 📌 判据：**塌缩塌的是条数，不该塌「每条讲了什么」**。摘要本来就只有 60 字上下。
-            lines.append(f"{prefix}{mark} {身份牌(e['meta'])}{_label_of(e)} "
+            lines.append(f"{prefix}{mark} {kind_badge(e['meta'])}{_label_of(e)} "
                          f"({_short_id(e['id'])}{_score_tag(e)})")
             first = False
     return "\n".join(lines)
@@ -766,7 +766,7 @@ def _fmt_list(entries: list[dict]) -> str:
     lines = []
     for e in entries:
         # 同上：逐条列就是给内容的地方，不截
-        lines.append(f"{_short_id(e['id'])}{_score_tag(e)}  {身份牌(e['meta'])}{_label_of(e)}  "
+        lines.append(f"{_short_id(e['id'])}{_score_tag(e)}  {kind_badge(e['meta'])}{_label_of(e)}  "
                      f"{e['ts'].strftime('%m-%d')}")
     return "\n".join(lines)
 
@@ -864,7 +864,7 @@ def _pick_reps(far: list[dict], k: int = _BROWSE_REP_MAX) -> list[tuple[str, dic
 def _rep_line(mark: str, e: dict) -> str:
     # 60 而不是 30：她 8-05 夜说「recall 返回的摘要不是完整的」——代表条目是那段时间
     # 唯一给出内容的地方，截一半等于没给。日期留着当把手（钻进去用），不是分类。
-    return (f"  {mark}{身份牌(e['meta'])}{_label_of(e)[:60]}({_short_id(e['id'])}) "
+    return (f"  {mark}{kind_badge(e['meta'])}{_label_of(e)[:60]}({_short_id(e['id'])}) "
             f"{e['ts'].strftime('%m-%d')}")
 
 
@@ -991,7 +991,7 @@ async def _render_browse(entries, gates, room, tag) -> str:
         # 词和数字本来就是原样给的，框子只在不带数的地方帮忙。
         tags = _pick_tags_n(st, drop)
         if tags:
-            bits.append(标签人话(tags, 2, 带数=True, 框=False))
+            bits.append(tags_in_words(tags, 2, 带数=True, 框=False))
         if st["情绪话"]:
             bits.append(st["情绪话"])
         seeds = "".join(f"[[{x}]]" for x in st["seeds"])
@@ -1043,8 +1043,8 @@ async def _render_browse(entries, gates, room, tag) -> str:
         # 高频词在别处是噪音（每格都是「主人·AI·爱」），但在这一行**它就是答案**。
         # 她自己说过「按频率永远抓不准」：带上数量之后，频率不再是抓手，是内容。
         drop_lite = room_implied_tags(room) | ({tag.strip()} if tag.strip() else set())
-        dist = 标签人话([(t, n) for t, n in st["tags"] if t not in drop_lite],
-                        5, 带数=True, 框=False)
+        dist = tags_in_words([(t, n) for t, n in st["tags"] if t not in drop_lite],
+                             5, 带数=True, 框=False)
         if dist:
             bits.append(dist)
         if st["情绪话"]:
@@ -1080,7 +1080,7 @@ async def _render_browse(entries, gates, room, tag) -> str:
     return chr(10).join(lines)
 
 
-def _topk行(账: dict | None) -> str:
+def _topk_line(账: dict | None) -> str:
     """top-k 砍掉了几条 —— **挡了什么看得见**（D 件收紧 top-k 的配套）。
 
     她 8-15 的判据：query 词多 = 向量平均 = 找不准。所以这一行不光报数，
@@ -1137,14 +1137,14 @@ def _render_search(entries, gates, floor: float = None, 账: dict | None = None)
         # 搜索路的摘要**不截**（她 8-05 夜指出来的：截了就判断不出这条是不是要找的，
         # 而搜索的整个意义就是判断）。浏览路继续截——那儿要的是印象不是内容。
         # 🧠 = 认知；不戴牌的就是发生的事（房间码撤掉，D 件终稿）。
-        lines.append(f"{_eff_score(e, floor):5.1f}  {身份牌(e['meta'])}{_label_of(e)}"
+        lines.append(f"{_eff_score(e, floor):5.1f}  {kind_badge(e['meta'])}{_label_of(e)}"
                      f"  ({_short_id(e['id'])})  {e['ts'].strftime('%m-%d')}")
     if below:
         earliest = min(below, key=lambda x: x["ts"])
         lines.append(f"── 另有 {len(below)} 条在线下（最高 {top_below:.1f}，"
                      f"最早 {earliest['ts'].strftime('%m-%d')}：「{_label_of(earliest)[:40]}」）——"
                      "多半只是沾边，没列")
-    lines.append(_topk行(账))
+    lines.append(_topk_line(账))
     lines.append("（看原文：拿 id 搜；换个说法再搜：用她的原话，别造词）")
     return chr(10).join(x for x in lines if x)
 
@@ -1176,7 +1176,7 @@ def _render_scene_clusters(entries, gates, floor: float = None, 账: dict | None
     def _vis_tags(e) -> set[str]:
         # 簇的抓手也只认人话场景词：机器腔标签（`aspect:patterns` 那类）
         # 会把毫不相干的记忆硬串成一个「画面」（8-17 凌晨的教训）
-        return {str(t) for t in (e["meta"].get("tags") or []) if 是人话标签(t)}
+        return {str(t) for t in (e["meta"].get("tags") or []) if is_human_tag(t)}
 
     # 贪心成簇：按分数从高到低认主画面，把跟它共享场景词的收作从属画面
     ranked = sorted(hit, key=lambda e: _eff_score(e, floor), reverse=True)
@@ -1204,10 +1204,10 @@ def _render_scene_clusters(entries, gates, floor: float = None, 账: dict | None
         shared = set.intersection(*(_vis_tags(e) for e in c)) if len(c) > 1 else set()
         label = ("·".join(sorted(shared)[:2]) + " ") if shared else ""
         lines.append(f"■ {rep['ts'].strftime('%m-%d')} {label}"
-                     f"{_eff_score(rep, floor):5.1f}  {身份牌(rep['meta'])}{_label_of(rep)}"
+                     f"{_eff_score(rep, floor):5.1f}  {kind_badge(rep['meta'])}{_label_of(rep)}"
                      f"  ({_short_id(rep['id'])})")
         for e in kids[:3]:
-            lines.append(f"   └ {e['ts'].strftime('%m-%d')}  {身份牌(e['meta'])}"
+            lines.append(f"   └ {e['ts'].strftime('%m-%d')}  {kind_badge(e['meta'])}"
                          f"{_label_of(e)[:56]}  ({_short_id(e['id'])})")
         if len(kids) > 3:
             lines.append(f"   └ …还有 {len(kids) - 3} 条同画面的")
@@ -1218,13 +1218,13 @@ def _render_scene_clusters(entries, gates, floor: float = None, 账: dict | None
         earliest = min(below, key=lambda x: x["ts"])
         lines.append(f"── 另有 {len(below)} 条在线下（最高 {top_below:.1f}，"
                      f"最早 {earliest['ts'].strftime('%m-%d')}：「{_label_of(earliest)[:40]}」）")
-    lines.append(_topk行(账))
+    lines.append(_topk_line(账))
     lines.append("（要平铺的时间轴：去掉 view；看原文：拿 id 搜）")
     return chr(10).join(x for x in lines if x)
 
 
-async def recall_两张皮(when: str, room: str, tag: str, query: str,
-                       floor=None, view: str = "", max_cells: int = 0) -> dict:
+async def recall_text_and_data(when: str, room: str, tag: str, query: str,
+                               floor=None, view: str = "", max_cells: int = 0) -> dict:
     """一次采集，两张皮都给。**面板专用**。
 
     🔴 2026-08-19：面板那个口原来是 `recall_data()` + `recall_core()` 各调一次，
@@ -1469,7 +1469,7 @@ async def recall_core(when: str, room: str, tag: str, query: str,
         for e in sorted(es, key=_hm, reverse=True):
             if _F.is_covered(e["meta"]):
                 continue
-            lines.append(f"{_hm(e).strftime('%H:%M')}  {身份牌(e['meta'])}{_label_of(e)}  "
+            lines.append(f"{_hm(e).strftime('%H:%M')}  {kind_badge(e['meta'])}{_label_of(e)}  "
                          f"({_short_id(e['id'])})")
         lines.append("（看原文：拿 id 搜；要昨天/上周那种概览就换 when）")
         return chr(10).join(lines)

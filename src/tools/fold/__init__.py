@@ -171,7 +171,7 @@ async def dispatch(text: str = "", room: str = "", v=-1, a=-1,
     #       （regrow 就是 fold 的 n=1 特例），撤掉的只是 fold 这个入口。
     supersedes = ""
 
-    new_id, 报告 = await F.落一条gist(
+    new_id, 报告 = await F.save_gist(
         text, room, v, a, cover, when=when, from_ids=from_ids,
         supersedes=supersedes, test_data=bool(test_data))
 
@@ -191,7 +191,7 @@ async def dispatch(text: str = "", room: str = "", v=-1, a=-1,
     if n:
         head += "：" + "、".join(报告["cover"][:8]) + ("…" if n > 8 else "")
     head += "）"
-    tail = [F.报告成话(报告)]
+    tail = [F.format_report(报告)]
     if supersedes:
         tail.append("（= 换版：旧版留档不浮现，id 直查仍能看）")
     else:

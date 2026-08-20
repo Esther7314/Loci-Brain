@@ -21,7 +21,7 @@ breath() 无参路径的新实现，取代 surface.py 的「pinned+加权采样�
 
 对外暴露：surface_awaken() → str
 
-⚠️ 脱壳 C（2026-08-17）：`门口那张纸()` / `事件池()` 这两个合同源函数搬去了
+⚠️ 脱壳 C（2026-08-17）：`door_note()` / `event_pool()` 这两个合同源函数搬去了
 `core/profile.py`——判据不属于 breath 这一个工具，`web/loci.py` 的档案页
 也要读同一份。这个文件现在只管「拿到合同源算出来的结果，拼成 breath() 的
 那一屏文字」，判据本身一个字没跟着改，只是从这儿 import 而不是本地定义。
@@ -34,7 +34,7 @@ import re
 from .. import _runtime as rt
 from core import _when as _w          # 「她的今天」（本地时区）
 from ..recall.core import recall_core, _label_of, _short_id, _ts_of
-from core.profile import 门口那张纸, 事件池, 她改过, _PROFILE_TAG
+from core.profile import door_note, event_pool, edited_by_her, _PROFILE_TAG
 
 # 门口那张纸放得下几行准则。
 # 📌 2026-08-19 傍晚这里临时提到过 12，是一张**欠条**：那天把「准则得住在 MIND 房间」
@@ -85,7 +85,7 @@ async def surface_awaken() -> str:
     now = _w.now()      # 本地时区：容器是 UTC，她凌晨的「今天」在容器眼里是昨天（codex #4）
     parts: list[str] = []
 
-    纸 = 门口那张纸(all_buckets, now)          # ← 判据全在合同源里（E 件）
+    纸 = door_note(all_buckets, now)          # ← 判据全在合同源里（E 件）
     profile_pages = 纸["facts"]
     pinned_mind = 纸["rules"]
     reminders = 纸["reminders"]
@@ -137,7 +137,7 @@ async def surface_awaken() -> str:
     # 在 pin 配了闸之后**自动消失** —— 缺点根本钉不上去，因为它不是祈使句。
     # 📌 通用判据：一条规矩需要一句人肉警告去防误用，说明那个盒子装错了东西。
 
-    # ---- 6 提醒：越近越大声（门槛在合同源的 _提醒多大声()，这儿只挑词）----
+    # ---- 6 提醒：越近越大声（门槛在合同源的 _reminder_loudness()，这儿只挑词）----
     if reminders:
         parts.append("\n═══ 提醒 ═══")
         _口气 = {"now": "⏰ 就是今天！{head}", "soon": "⏰ 马上（还有 {days} 天）：{head}",
@@ -174,7 +174,7 @@ async def surface_awaken() -> str:
 
     # ---- 她改过（二改 §8）：她改了哪条 event，我还没看/没 fold 的 ----
     # 通知机制就是这个池子本身——标签既是标记也是通知，见 core/profile.py。
-    edited = 她改过(all_buckets)
+    edited = edited_by_her(all_buckets)
     if edited:
         parts.append("\n═══ 她改过 ═══")
         for e in edited[:3]:
@@ -201,11 +201,11 @@ async def surface_awaken() -> str:
     # ⚠️ 别再把它加回来。要加之前先读这段。
 
     # ---- 5 随机：忽然想起一件事 ----
-    # 三道闸全在合同源 `事件池()` 里（E 件）：房名新旧都认 · 工具件不算 · 被盖的不进。
+    # 三道闸全在合同源 `event_pool()` 里（E 件）：房名新旧都认 · 工具件不算 · 被盖的不进。
     # 档案页那边 import 同一个函数 —— 页面上「忽然想起」的和我睁眼想起的
     # 必须是同一批东西，不然就是两个脑子了（而这种错静默得可怕：
     # 两边都有东西显示，只是不是同一个）。
-    ev_pool = 事件池(all_buckets)
+    ev_pool = event_pool(all_buckets)
     if ev_pool:
         parts.append("\n═══ 忽然想起 ═══")
         for e in random.sample(ev_pool, min(2, len(ev_pool))):

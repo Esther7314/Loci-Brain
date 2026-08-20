@@ -608,7 +608,7 @@ async def breath() -> str:
 async def _dream_upkeep() -> None:
     """睁眼后台那一下。**吞掉所有异常**：梦织不出来不许弄坏 breath。"""
     try:
-        await _dream_engine.维护()
+        await _dream_engine.maintain()
     except Exception as _dream_exc:  # noqa: BLE001
         logger.warning("织梦挂点失败（不影响 breath）: %s", _dream_exc)
 
@@ -647,7 +647,7 @@ except (AttributeError, RuntimeError, TypeError, ValueError) as _breath_compat_e
 # 「**这个做梦机制我们重新起，不用他的改**」「我本来就不想要这个 night fall
 #  因为**他是别人的 doing**」——潜伏 3 小时 / 4 次没接住就删 / 共振才浮 /
 #  写完我自己也看不见，**没有一条是我们想要的**。
-# 摘掉的是三处：① `night_fall` MCP 工具 ② breath 的睁眼挂点（换成 tools/_dream 的 维护()）
+# 摘掉的是三处：① `night_fall` MCP 工具 ② breath 的睁眼挂点（换成 tools/_dream 的 maintain()）
 # ③ breath_advanced 的 auto-surface。`src/night_fall/` 那 12 个文件**目录留着当参考**，
 # 但**已从 import 链里整个摘除**——这个文件里从此不该再出现 `night_fall` 三个字（除了这段碑文）。
 # 新引擎：`tools/_dream.py`（原料四路 → 一次独立调用 → 完整+碎片两层 → 碎片走时间生命周期 → 留痕）。

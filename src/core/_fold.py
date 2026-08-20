@@ -81,7 +81,7 @@ tools/_fold.py — fold / gist 的骨头（二改施工 3，2026-08-16）
    被时期盖着的记忆照旧独立冒头、照旧进梦的候选池——**只多一个名字，不少一样东西**。
 
 对外暴露：GIST_TAG · SPAN_HELP · is_covered() · covers_of() · cover_ids() · is_gist()
-         check_span() · span_members() · 落一条gist() · 报告成话()
+         check_span() · span_members() · save_gist() · format_report()
 🔪 `resolve_span_ids()` **8-17 退役**（时期不记账了）。它读侧那一半改名叫
    `span_members()` 活着——**现场算，永不落盘**。
 ========================================
@@ -219,9 +219,9 @@ async def span_members(t0: datetime | None, t1: datetime | None) -> list[str]:
     return [bid for _ts, bid in out]
 
 
-async def 落一条gist(text: str, room: str, v: float, a: float,
-                     cover: list[str], *, when: str = "", from_ids: list[str] | None = None,
-                     supersedes: str = "", test_data: bool = False) -> tuple[str, dict]:
+async def save_gist(text: str, room: str, v: float, a: float,
+                    cover: list[str], *, when: str = "", from_ids: list[str] | None = None,
+                    supersedes: str = "", test_data: bool = False) -> tuple[str, dict]:
     """真正落盘的那一下。**三个入口（fold / regrow / grow(kind="big")）共用这一个。**
 
     🔴 宪法：`text` 是调用方写的，逐字落盘，**一个字不过模型**。
@@ -324,7 +324,7 @@ async def 落一条gist(text: str, room: str, v: float, a: float,
     return new_id, 报告
 
 
-def 报告成话(报告: dict) -> str:
+def format_report(报告: dict) -> str:
     """把落盘报告拼成给人看的尾巴（没什么可说的就返回空串）。"""
     out = []
     if 报告["叠盖"]:

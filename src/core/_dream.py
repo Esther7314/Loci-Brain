@@ -78,7 +78,7 @@ tools/_dream.py — 织梦引擎（2026-08-17 从零造，night_fall 整个退�
             她 3-4 小时没发消息（=真夜间）期间，戳口（`/api/loci/poke`）
             能把整版递给窗里的我；她一直不回来，完整版就一直在——
             **完整层不按时间衰减**，唯一的死法是降级信号：
-            `POST /api/loci/dream/wake` → `唤醒()`（她回来发的第二条消息触发，
+            `POST /api/loci/dream/wake` → `degrade_on_wake()`（她回来发的第二条消息触发，
             桥那边的事，见 gateway `src/loci-bridge/戳戳送达.js`）。
     降级后  完整版从盘上删掉，碎片层从**降级那一刻**起算（不是从织的那一刻）：
             ~30 分钟 / 15 轮   还能拿到**碎片**
@@ -116,9 +116,9 @@ config.yaml 的 `dream:` 段是唯一真相，代码里这份是兜底。
 DREAM_PROMPT · DREAM_DEFAULTS · dream_config()
 weave()（织一个，返回含完整版，且**从此落盘**，见 2026-08-18 修宪）
 current_dream()（取当前层，算一次回想）
-唤醒()（🔴 施工7d 新增：降级信号——把还活着的「完整」层降为碎片层，幂等）
-维护()（睁眼挂点：扫一遍过期的 + 过线就织，两件事都不出声）
-备料() · 压力() · 解析梦() · 层of() · 读盘() · 梦目录() · 一句()
+degrade_on_wake()（🔴 施工7d 新增：降级信号——把还活着的「完整」层降为碎片层，幂等）
+maintain()（睁眼挂点：扫一遍过期的 + 过线就织，两件事都不出声）
+gather_ingredients() · pressure() · parse_dream() · layer_of() · load_dreams() · dreams_dir() · first_sentence()
 ========================================
 """
 
@@ -215,7 +215,7 @@ DREAM_DEFAULTS: dict = {
     #   ⚠️ 别把它当成「调对了就不用管」的数：**她的库每天都有 a≈0.6 的新事**，
     #     这条线实际管的是「多清淡的日子才安静」。
     "dull_line": 0.35,       # 平淡线：一条的分量低于它，**一分都不算**
-    "pressure_line": 0.65,   # 压力线：**最重的那一条**过了才织（不是相加，见 压力()）
+    "pressure_line": 0.65,   # 压力线：**最重的那一条**过了才织（不是相加，见 pressure()）
     # 刚梦过的多久之内少选（2026-08-20）。**只影响选哪一条，不影响要不要做梦。**
     "dream_cooldown_days": 7,
     "per_day": 1,            # 一天最多织几个（一夜一梦）
@@ -264,7 +264,7 @@ def _f(x, d: float) -> float:
 # 原料四路
 # ============================================================
 @dataclass
-class 料条:
+class Ingredient:
     """一条原料在引擎眼里的样子。**正文是原文**，不是摘要。"""
     id: str
     正文: str
@@ -276,13 +276,13 @@ class 料条:
     梦过几天前: int | None = None   # 上次梦到它是几天前；None = 没梦到过
 
 
-def 衰减(权重: float, 天数: int, c: dict) -> float:
+def time_decay(权重: float, 天数: int, c: dict) -> float:
     """`权重 ÷ (1 + 天数/7)` —— **真实的梦主要是日间残留**（B 组第 2 条要点）。"""
     半衰 = max(1.0, float(c["half_life_days"]))
     return float(权重) / (1.0 + max(0, int(天数)) / 半衰)
 
 
-def 刚梦过打折(梦过几天前: int | None, c: dict) -> float:
+def cooldown_factor(梦过几天前: int | None, c: dict) -> float:
     """刚梦过的**少选一点**，但绝不是不选。返回一个 0.15~1.0 的系数。
 
     🔴 2026-08-20 她拍的，推翻了原来那个「织完把 want 的 weight 清零」：
@@ -312,14 +312,14 @@ def 刚梦过打折(梦过几天前: int | None, c: dict) -> float:
 #    **这正是「按 arousal 加权」的意思**，不是漏。改判据得她点头，不是我顺手。
 
 
-def _天数(it: "M.Item", now: datetime) -> int:
+def _age_days(it: "M.Item", now: datetime) -> int:
     钟 = it.ts or it.created
     if 钟 is None:
         return 999
     return max(0, (now - 钟).days)
 
 
-def _梦过几天前(meta: dict, now: datetime) -> int | None:
+def _days_since_dreamt(meta: dict, now: datetime) -> int | None:
     """上次梦到这条是几天前。没梦到过 → None。读不懂也当没梦到过（不猜）。"""
     raw = str(meta.get("last_dreamt") or "").strip()
     if not raw:
@@ -328,7 +328,7 @@ def _梦过几天前(meta: dict, now: datetime) -> int | None:
     return max(0, (now - t).days) if t else None
 
 
-def want池(recs: list[tuple[dict, str]], now: datetime) -> list[料条]:
+def want_pool(recs: list[tuple[dict, str]], now: datetime) -> list[Ingredient]:
     """压在心头的：**还没了结的 want**，权重取 `weight`。
 
     口径跟 `breath/awaken.py` 的「压在心头」同源（status=="want" 且没了结、
@@ -337,66 +337,66 @@ def want池(recs: list[tuple[dict, str]], now: datetime) -> list[料条]:
     所以这儿全都算。
     """
     from utils import is_closed
-    出: list[料条] = []
+    出: list[Ingredient] = []
     for meta, text in recs:
         if str(meta.get("status") or "") != "want":
             continue
         if is_closed(meta) or meta.get("dont_surface") or meta.get("superseded_by"):
             continue
-        if M._工具件(meta) or str(meta.get("type") or "") in ("letter", "archived"):
+        if M._is_utility_record(meta) or str(meta.get("type") or "") in ("letter", "archived"):
             continue
         it = M.item_of(meta, text)
         if it is None or not it.text.strip():
             continue
-        出.append(料条(id=it.id, 正文=it.text, v=it.v, a=it.a,
-                       权重=_f(meta.get("weight"), 0.5), 天数=_天数(it, now),
-                       路="压在心头", 梦过几天前=_梦过几天前(meta, now)))
+        出.append(Ingredient(id=it.id, 正文=it.text, v=it.v, a=it.a,
+                            权重=_f(meta.get("weight"), 0.5), 天数=_age_days(it, now),
+                            路="压在心头", 梦过几天前=_days_since_dreamt(meta, now)))
     return 出
 
 
-def 想不明白池(recs, digested: set[str], c: dict, now: datetime) -> list[料条]:
+def unclear_pool(recs, digested: set[str], c: dict, now: datetime) -> list[Ingredient]:
     """想不明白的：**有情绪、且没有任何认知指向它**的 event。
 
     🔴 池子直接用 `_muse.pool_of(..., "dream", ...)` —— 选料统一走引擎，别留两套。
     """
-    出: list[料条] = []
+    出: list[Ingredient] = []
     for it in M.pool_of(recs, "dream", M.muse_config(rt.config), now, digested):
-        出.append(料条(id=it.id, 正文=it.text, v=it.v, a=it.a,
-                       权重=it.a, 天数=_天数(it, now), 路="想不明白"))
+        出.append(Ingredient(id=it.id, 正文=it.text, v=it.v, a=it.a,
+                            权重=it.a, 天数=_age_days(it, now), 路="想不明白"))
     return 出
 
 
-def 几个词(recs, c: dict) -> list[str]:
+def few_words(recs, c: dict) -> list[str]:
     """从所有桶的 `tags` 里随机抽 —— **不限定是不是地点**。
 
     她 8-06 亲自把 tags 从「讲什么主题」改成「里面有什么」，所以这些词是
-    **我们存的时候写下的、字面一定在原文里的**东西；而 `_muse.是场景词()` 那道闸
+    **我们存的时候写下的、字面一定在原文里的**东西；而 `_muse.is_scene_word()` 那道闸
     把机器腔标签（`aspect:patterns` 这类）滤掉——机器自己打的标签不是我们的痕迹。
     """
     频 = Counter()
     for meta, _t in recs:
         频.update(str(t) for t in (meta.get("tags") or []))
     池 = [w for w, _n in 频.most_common(int(c["word_pool_top"]))
-          if M.是场景词(w) and 1 < len(w) <= 6]
+          if M.is_scene_word(w) and 1 < len(w) <= 6]
     n = min(int(c["word_n"]), len(池))
     return random.sample(池, n) if n > 0 else []
 
 
-def 加权抽(池: list[料条], n: int, c: dict) -> list[料条]:
+def weighted_sample(池: list[Ingredient], n: int, c: dict) -> list[Ingredient]:
     """按「权重 × 新鲜度」**加权随机**，不放回。
 
     🔴 加权随机 ≠ 排序：重的更容易上，**但不保证**（纯排序会让最重的那件天天做梦）。
     """
     池 = list(池)
-    出: list[料条] = []
+    出: list[Ingredient] = []
     for _ in range(min(int(n), len(池))):
-        w = [max(0.01, 衰减(x.权重, x.天数, c) * 刚梦过打折(x.梦过几天前, c)) for x in 池]
+        w = [max(0.01, time_decay(x.权重, x.天数, c) * cooldown_factor(x.梦过几天前, c)) for x in 池]
         i = random.choices(range(len(池)), weights=w)[0]
         出.append(池.pop(i))
     return 出
 
 
-def 压力(池: list[料条], c: dict) -> tuple[float, float, list[tuple[str, float]]]:
+def pressure(池: list[Ingredient], c: dict) -> tuple[float, float, list[tuple[str, float]]]:
     """积压攒到多少了。返回 (压力, 攒着的总量, [(id, 过线的分量)] 按分量降序)。
 
     🔴 **压力 = 最重的那一条的分量，不是相加。** 她的原话就是判据：
@@ -417,7 +417,7 @@ def 压力(池: list[料条], c: dict) -> tuple[float, float, list[tuple[str, fl
     线 = float(c["dull_line"])
     过线: list[tuple[str, float]] = []
     for x in 池:
-        d = 衰减(x.权重, x.天数, c)
+        d = time_decay(x.权重, x.天数, c)
         if d >= 线:
             过线.append((x.id, d))
     过线.sort(key=lambda t: -t[1])
@@ -425,20 +425,20 @@ def 压力(池: list[料条], c: dict) -> tuple[float, float, list[tuple[str, fl
     return 最重, sum(d for _i, d in 过线), 过线
 
 
-async def 备料(c: dict | None = None) -> dict:
+async def gather_ingredients(c: dict | None = None) -> dict:
     """装一次料：两个池子 + 抽中的四路 + 压力。**不调 LLM、不写任何东西。**"""
     c = c or _c()
     now = _w.now()
     recs, digested = await M.load_records()
-    压 = want池(recs, now)
-    糊 = 想不明白池(recs, digested, c, now)
-    压值, 攒着, 过线 = 压力(压 + 糊, c)
-    抽中压 = 加权抽(压, int(c["want_n"]), c)
-    抽中糊 = 加权抽(糊, int(c["unclear_n"]), c)
+    压 = want_pool(recs, now)
+    糊 = unclear_pool(recs, digested, c, now)
+    压值, 攒着, 过线 = pressure(压 + 糊, c)
+    抽中压 = weighted_sample(压, int(c["want_n"]), c)
+    抽中糊 = weighted_sample(糊, int(c["unclear_n"]), c)
     return {
         "压在心头": 抽中压,
         "想不明白": 抽中糊,
-        "几个词": 几个词(recs, c),
+        "几个词": few_words(recs, c),
         "压力": 压值,
         "攒着": 攒着,
         "过线的": 过线,
@@ -446,7 +446,7 @@ async def 备料(c: dict | None = None) -> dict:
     }
 
 
-def 喂给模型(料: dict, c: dict) -> str:
+def build_user_message(料: dict, c: dict) -> str:
     """料 → user 消息。**喂原文（截断 ~800 字），每条自带 v/a 底色，不给全局底色。**"""
     n = int(c["excerpt_chars"])
     return json.dumps({
@@ -461,7 +461,7 @@ def 喂给模型(料: dict, c: dict) -> str:
 # ============================================================
 # 织：一次独立的模型调用
 # ============================================================
-def _修裸换行(s: str) -> str:
+def _escape_bare_newlines(s: str) -> str:
     """把字符串字面量**里面**的裸换行/制表符转义掉。
 
     ⚠️ 这不是洁癖：模型返回的 JSON 里常有裸换行，`json.loads` 当场炸
@@ -500,12 +500,12 @@ def _修裸换行(s: str) -> str:
     return "".join(出)
 
 
-def 解析梦(raw: str) -> dict:
+def parse_dream(raw: str) -> dict:
     """模型返回 → {完整, 碎片, v, a}。**缺的数当场炸，不写兜底。**"""
     from utils import clean_llm_json
     s = clean_llm_json(raw or "")
     数据 = None
-    for 修 in (lambda x: x, _修裸换行):
+    for 修 in (lambda x: x, _escape_bare_newlines):
         try:
             数据 = json.loads(修(s))
             break
@@ -526,7 +526,7 @@ def 解析梦(raw: str) -> dict:
             "v": max(0.0, min(1.0, v)), "a": max(0.0, min(1.0, a))}
 
 
-async def 调模型(料: dict, c: dict) -> dict:
+async def call_model(料: dict, c: dict) -> dict:
     """🔴 **全系统除回填之外唯一的 LLM 调用点。**
 
     走 dehydrator 那把（config.yaml 的 `dehydration` 段是唯一真相，`.env` 是空的），
@@ -544,11 +544,11 @@ async def 调模型(料: dict, c: dict) -> dict:
     #    三次都不成形才算「今晚织不出来」，照旧大声失败。
     最后一错: Exception | None = None
     for _ in range(3):
-        raw = await chat(DREAM_PROMPT, 喂给模型(料, c),
+        raw = await chat(DREAM_PROMPT, build_user_message(料, c),
                          max_tokens=int(c["max_tokens"]),
                          temperature=float(c["temperature"]))
         try:
-            return 解析梦(raw)
+            return parse_dream(raw)
         except RuntimeError as e:
             最后一错 = e
             rt.logger.warning("[dream] 这一织没成形，重织: %s", e)
@@ -558,18 +558,18 @@ async def 调模型(料: dict, c: dict) -> dict:
 # ============================================================
 # 盘：碎片 + 完整版都落盘（2026-08-18 修宪，完整版从此不再是「只活在返回值里」）
 # ============================================================
-def 梦目录(buckets_dir: str | None = None) -> str:
+def dreams_dir(buckets_dir: str | None = None) -> str:
     bd = buckets_dir or str((rt.config or {}).get("buckets_dir") or ".")
     return os.path.join(bd, "night_fall", "dreams")
 
 
-def _状态路径(buckets_dir: str | None = None) -> str:
+def _state_path(buckets_dir: str | None = None) -> str:
     bd = buckets_dir or str((rt.config or {}).get("buckets_dir") or ".")
     return os.path.join(bd, "_state", STATE_FILE)
 
 
-def 读状态() -> dict:
-    p = _状态路径()
+def load_state() -> dict:
+    p = _state_path()
     if not os.path.exists(p):
         return {}
     try:
@@ -579,8 +579,8 @@ def 读状态() -> dict:
         return {}
 
 
-def 写状态(d: dict) -> None:
-    p = _状态路径()
+def save_state(d: dict) -> None:
+    p = _state_path()
     os.makedirs(os.path.dirname(p), exist_ok=True)
     tmp = p + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -588,10 +588,10 @@ def 写状态(d: dict) -> None:
     os.replace(tmp, p)
 
 
-def 读盘(buckets_dir: str | None = None) -> list[dict]:
+def load_dreams(buckets_dir: str | None = None) -> list[dict]:
     """盘上现有的梦，新的在前。**只认我们自己写的那些**——night_fall 留下的
     `dream_*.md` 一个都不读、不删（它退役了，但那是历史，不是垃圾）。"""
-    d = 梦目录(buckets_dir)
+    d = dreams_dir(buckets_dir)
     出: list[dict] = []
     try:
         名单 = sorted(os.listdir(d))
@@ -613,8 +613,8 @@ def 读盘(buckets_dir: str | None = None) -> list[dict]:
     return 出
 
 
-def 落盘(rec: dict, buckets_dir: str | None = None) -> str:
-    d = 梦目录(buckets_dir)
+def save_record(rec: dict, buckets_dir: str | None = None) -> str:
+    d = dreams_dir(buckets_dir)
     os.makedirs(d, exist_ok=True)
     p = os.path.join(d, f"{FILE_PREFIX}{rec['id']}.json")
     tmp = p + ".tmp"
@@ -625,7 +625,7 @@ def 落盘(rec: dict, buckets_dir: str | None = None) -> str:
     return p
 
 
-def 一句(碎片: str) -> str:
+def first_sentence(碎片: str) -> str:
     """只剩一句 —— 从碎片里取第一句。**机械切，不过模型**（那是残留，不是新写的）。"""
     s = str(碎片 or "").strip()
     m = re.split(r"(?<=[。！？…\n])", s, maxsplit=1)
@@ -636,13 +636,13 @@ def 一句(碎片: str) -> str:
 层序 = ("完整", "碎片", "一句", "没了")  # 只许往后走，不许往回走（完整→碎片是唤醒()干的，不是层of()自己算出来的）
 
 
-def 层of(rec: dict, now: datetime, c: dict) -> str:
+def layer_of(rec: dict, now: datetime, c: dict) -> str:
     """当前在哪一层：`完整` / `碎片` / `一句` / `没了`。**时间和轮次谁先到算谁**——
     除了「完整」，它不吃这条规则（见下）。
 
     🔴 施工7d 修宪（2026-08-18）：**完整层不按时间衰减**——rec 里还留着「完整」
        这个字段，就一直是「完整」层，压根不进下面的时间/轮次判断。它唯一的
-       死法是 `唤醒()`（降级信号）把这个字段摘掉、把起算点重置到降级那一刻——
+       死法是 `degrade_on_wake()`（降级信号）把这个字段摘掉、把起算点重置到降级那一刻——
        所以这道判断必须**短路在最前面**，不能让它跟三层判据混在一起比较。
 
     🔴 **只降不升**（三层判据这半，8-17 定的，修宪没动这条）：回想会把起算点
@@ -670,7 +670,7 @@ def 层of(rec: dict, now: datetime, c: dict) -> str:
 # ============================================================
 # 唤醒：🔴 施工7d 新增（2026-08-18）——完整层唯一的死法
 # ============================================================
-def 唤醒() -> list[str]:
+def degrade_on_wake() -> list[str]:
     """降级信号：她回来发的第二条消息触发（桥的活，见 gateway
     `src/loci-bridge/戳戳送达.js`），把还活着的「完整」层降为碎片层。
 
@@ -679,7 +679,7 @@ def 唤醒() -> list[str]:
     gateway 的状态文件），重复调用这个函数完全无害。
 
     降级只做两件事：
-    ① 完整版从盘上删掉——直接把 `完整` 这个字段摘掉（`层of()` 一看这个字段
+    ① 完整版从盘上删掉——直接把 `完整` 这个字段摘掉（`layer_of()` 一看这个字段
        没了，就不会再判成「完整」层）；
     ② 起算点重置到**这一刻**——碎片 30 分钟 / 一句 60 分钟的老生命周期从
        降级这一刻起算，不是从织的那一刻算（那样等于她还没醒，梦已经先烂掉
@@ -687,12 +687,12 @@ def 唤醒() -> list[str]:
        顺带清掉回想次数和「到过的最低层」——降级是一次全新的生命周期，不该
        背着完整版活着时攒的回想记录。
 
-    这不是 `weave()`/`扫一遍()` 那类会调 `grow` 的动作——降级本身不留痕，
-    真正的「没了、留痕」还是走 `扫一遍()` 的老路，只是它现在从降级那一刻算起。
+    这不是 `weave()`/`sweep_expired()` 那类会调 `grow` 的动作——降级本身不留痕，
+    真正的「没了、留痕」还是走 `sweep_expired()` 的老路，只是它现在从降级那一刻算起。
     """
     now = _w.now()
     降级了: list[str] = []
-    for rec in 读盘():
+    for rec in load_dreams():
         if not str(rec.get("完整") or "").strip():
             continue
         rec.pop("完整", None)
@@ -700,7 +700,7 @@ def 唤醒() -> list[str]:
         rec["降级于"] = now.isoformat(timespec="seconds")
         rec["回想次数"] = 0
         rec["到过的最低层"] = "碎片"
-        落盘(rec)
+        save_record(rec)
         降级了.append(str(rec.get("id") or ""))
     return 降级了
 
@@ -708,7 +708,7 @@ def 唤醒() -> list[str]:
 # ============================================================
 # 留痕：文件没了，但「有过这么个梦」这件事留着
 # ============================================================
-async def 留痕(rec: dict) -> str:
+async def leave_a_trace(rec: dict) -> str:
     """删文件的时候顺手 `grow` 一条 event。
 
     > **文件没了，但「有过这么个梦」这件事留着。**
@@ -729,7 +729,7 @@ async def 留痕(rec: dict) -> str:
     return str(out or "")
 
 
-async def 扫一遍(c: dict | None = None) -> dict:
+async def sweep_expired(c: dict | None = None) -> dict:
     """到点的梦：删文件 + 留痕。**你不理它，它自己就没了。**
 
     ⚠️ 这是**懒扫**：睁眼挂点、取梦接口各碰一次就够（Loci 里没有 cron，
@@ -738,8 +738,8 @@ async def 扫一遍(c: dict | None = None) -> dict:
     c = c or _c()
     now = _w.now()
     删了, 痕 = [], []
-    for rec in 读盘():
-        if 层of(rec, now, c) != "没了":
+    for rec in load_dreams():
+        if layer_of(rec, now, c) != "没了":
             continue
         p = rec.get("_路径") or ""
         try:
@@ -750,7 +750,7 @@ async def 扫一遍(c: dict | None = None) -> dict:
             continue
         删了.append(str(rec.get("id") or ""))
         try:
-            痕.append(await 留痕(rec))
+            痕.append(await leave_a_trace(rec))
         except Exception as e:                      # noqa: BLE001 - 留痕失败不该炸掉扫描
             rt.logger.warning("梦的留痕没写成（文件已删）: %s", e)
     return {"删了": 删了, "留痕": 痕}
@@ -772,10 +772,10 @@ async def weave(force: bool = False, cfg: dict | None = None,
 
     ⚰️ 2026-08-20 之前这儿会把被梦到的 want 的 `weight` **清零**，理由是
        「它不再压着我了」。她推翻了：**「我只是希望做个梦而已，不代表做梦
-       真的要放下什么」**。详见 `刚梦过打折()` 上面那块碑。
+       真的要放下什么」**。详见 `cooldown_factor()` 上面那块碑。
     """
     c = cfg or _c()
-    料 = 料 if 料 is not None else await 备料(c)     # 挂点已经装好料了就别再扫一遍全库
+    料 = 料 if 料 is not None else await gather_ingredients(c)     # 挂点已经装好料了就别再扫一遍全库
     if not force and 料["压力"] < float(c["pressure_line"]):
         rt.logger.info("[dream] 攒不到线，一夜无梦（压力 %.2f < %.2f）",
                        料["压力"], float(c["pressure_line"]))
@@ -784,7 +784,7 @@ async def weave(force: bool = False, cfg: dict | None = None,
         rt.logger.info("[dream] 两个池子都空的，没料可织")
         return None
 
-    梦 = await 调模型(料, c)
+    梦 = await call_model(料, c)
     now = _w.now()
     噩 = 梦["v"] < float(c["nightmare_v"]) and 梦["a"] > float(c["nightmare_a"])
     rec = {
@@ -795,7 +795,7 @@ async def weave(force: bool = False, cfg: dict | None = None,
         # ⏳ 轮次层归桥：Loci 数不出「一轮」，这儿只把字段和判层规则备好
         "轮次": 0,
         "碎片": 梦["碎片"],
-        # 🔴 2026-08-18 修宪：完整版**落盘**了（`完整` 这个字段就是它，`层of()`
+        # 🔴 2026-08-18 修宪：完整版**落盘**了（`完整` 这个字段就是它，`layer_of()`
         #    只要看到这个字段有内容就判「完整」层，不吃时间衰减）。
         #    `完整字数` 留着不删——smoke 老断言认它，删了是无意义的破坏性改动。
         "完整": 梦["完整"],
@@ -809,7 +809,7 @@ async def weave(force: bool = False, cfg: dict | None = None,
         },
         "压力": round(float(料["压力"]), 3),
     }
-    落盘(rec)
+    save_record(rec)
 
     # 记一笔「上次梦到」—— **只为了别老做同一个梦**，不动 weight。
     记下了 = []
@@ -834,11 +834,11 @@ async def weave(force: bool = False, cfg: dict | None = None,
 
     # 「一夜一梦」记账：跨天自己归零（用她的今天，不是容器的 UTC 今天）
     今天 = now.strftime("%Y-%m-%d")
-    st = 读状态()
+    st = load_state()
     st["今天几个"] = int(_f(st.get("今天几个"), 0)) + 1 if str(st.get("最近一织") or "") == 今天 else 1
     st["最近一织"] = 今天
     st["最近一织时刻"] = now.isoformat(timespec="seconds")
-    写状态(st)
+    save_state(st)
 
     出 = dict(rec)
     出.pop("_路径", None)
@@ -853,22 +853,22 @@ async def current_dream(recall: bool = True, cfg: dict | None = None) -> dict | 
     ⚠️ 2026-08-18 修宪：完整版现在会落盘、能活到降级信号，所以「层」这儿也可能
     是 `完整`（不再是「醒来只拿得到碎片」——那是 8-17 的旧口径，完整版从来不
     落盘时才成立）。**够不够拿到完整版看她跟这条梦的时间线**：真夜间那段没人
-    发消息，唤醒()没被调过，这儿照样吐得出完整正文；她回来发第二条消息，
+    发消息，degrade_on_wake()没被调过，这儿照样吐得出完整正文；她回来发第二条消息，
     桥调一次 `/api/loci/dream/wake`，完整版才真的降成碎片——从那之后再取，
     这儿就跟旧口径一样只有碎片、再之后只剩一句、再之后真的没了。
     `recall=True`（默认）＝**这一次算一次「回想」**：起算点往后推一点，
     **但每次推得越来越少**（`recall_delay × 0.5^n`）——**回想能延缓，不能阻止**
     （这条只对碎片/一句层有意义：完整层不吃时间衰减，起算点在那儿推不推都
-    不影响它是不是「完整」，唤醒()会在降级那一刻把起算点整个重置掉）。
+    不影响它是不是「完整」，degrade_on_wake()会在降级那一刻把起算点整个重置掉）。
     """
     c = cfg or _c()
-    await 扫一遍(c)
-    活着 = 读盘()
+    await sweep_expired(c)
+    活着 = load_dreams()
     if not 活着:
         return None
     rec = 活着[0]
     now = _w.now()
-    层 = 层of(rec, now, c)
+    层 = layer_of(rec, now, c)
     if 层 == "没了":                                  # 刚被扫走的边界情形
         return None
     if 层 == "完整":
@@ -876,7 +876,7 @@ async def current_dream(recall: bool = True, cfg: dict | None = None) -> dict | 
     elif 层 == "碎片":
         内容 = rec["碎片"]
     else:
-        内容 = 一句(rec["碎片"])
+        内容 = first_sentence(rec["碎片"])
 
     if recall:
         n = int(_f(rec.get("回想次数"), 0))
@@ -885,7 +885,7 @@ async def current_dream(recall: bool = True, cfg: dict | None = None) -> dict | 
         rec["起算点"] = (起 + timedelta(minutes=推)).isoformat(timespec="seconds")
         rec["回想次数"] = n + 1
         rec["到过的最低层"] = 层                 # 推起算点不许把它拉回上一层
-        落盘(rec)
+        save_record(rec)
 
     return {
         "id": rec.get("id"),
@@ -900,7 +900,7 @@ async def current_dream(recall: bool = True, cfg: dict | None = None) -> dict | 
     }
 
 
-async def 维护(cfg: dict | None = None) -> dict:
+async def maintain(cfg: dict | None = None) -> dict:
     """睁眼挂点：**两件事，都不出声。**
 
     ① 扫一遍到点的梦（删文件 + 留痕）
@@ -912,35 +912,35 @@ async def 维护(cfg: dict | None = None) -> dict:
     c = cfg or _c()
     出: dict = {"扫": {}, "织": None, "压力": None}
     try:
-        出["扫"] = await 扫一遍(c)
+        出["扫"] = await sweep_expired(c)
     except Exception as e:                          # noqa: BLE001
         rt.logger.warning("[dream] 扫一遍失败: %s", e)
     今天 = _w.now().strftime("%Y-%m-%d")
-    st = 读状态()
+    st = load_state()
     if str(st.get("最近一织") or "") == 今天 and int(_f(st.get("今天几个"), 0)) >= int(c["per_day"]):
-        _记一眼(st, None, c, 封顶=True)
+        _note_check(st, None, c, 封顶=True)
         return 出
     try:
-        料 = await 备料(c)
+        料 = await gather_ingredients(c)
         出["压力"] = 料["压力"]
         # 🔴 **把「看过了，没过线」记下来**：不记的话「一夜无梦」和「挂点静默炸了」
         #    在盘上长得一模一样——第一版就撞了这个（import 撞名，挂点压根没跑，
         #    而「不过线不织」的断言照样是绿的）。**绿灯骗人就是这么来的。**
         #    顺带白赚一样：`上次压力` 天天记，她拍压力线时有真数据可看（🔟 一个都不预先拍）。
-        _记一眼(读状态(), 料, c)
+        _note_check(load_state(), 料, c)
         出["织"] = await weave(cfg=c, 料=料)
     except Exception as e:                          # noqa: BLE001 - 织不出来不该弄坏 breath
         rt.logger.warning("[dream] 织梦失败: %s", e)
     return 出
 
 
-def _记一眼(st: dict, 料: dict | None, c: dict, 封顶: bool = False) -> None:
+def _note_check(st: dict, 料: dict | None, c: dict, 封顶: bool = False) -> None:
     """挂点每次看一眼都记一笔（时刻 + 当时的压力）。**这不是梦，是体温计。**"""
     st = dict(st or {})
     st["最近一看"] = _w.now().isoformat(timespec="seconds")
     if 封顶:
         st["最近一看结论"] = "今天织过了（per_day 封顶）"
-        写状态(st)
+        save_state(st)
         return
     if 料 is not None:
         st["上次压力"] = round(float(料["压力"]), 3)      # = 最重的那一条
@@ -949,4 +949,4 @@ def _记一眼(st: dict, 料: dict | None, c: dict, 封顶: bool = False) -> Non
         st["压力线"] = float(c["pressure_line"])
         st["最近一看结论"] = ("过线，织" if 料["压力"] >= float(c["pressure_line"])
                               else "攒不到线，一夜无梦")
-    写状态(st)
+    save_state(st)

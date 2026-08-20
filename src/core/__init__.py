@@ -20,7 +20,7 @@ core/ —— 存取 / 遗忘 / fold / muse / dream 引擎层（脱壳 C，2026-0
   只是因为 MCP 工具最先用到它们，但判据本身不属于任何一个工具
   （8-08 房间改名两边各写一遍判据、8-17 又抓到 weight=0 falsy 兜底一边修好
   一边没修，都是"该同源的东西分了家"吃的亏）。
-- `profile.py`：施工 5 的合同源（门口那张纸() / 事件池()），原来住在
+- `profile.py`：施工 5 的合同源（door_note() / event_pool()），原来住在
   `tools/breath/awaken.py`——判据不属于 breath 这一个工具，`web/loci.py`
   的档案页和 `tools/breath/awaken.py` 的睁眼都要读同一份判据，所以搬到这儿，
   两边各自 import，不再各写一份。

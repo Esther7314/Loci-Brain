@@ -38,14 +38,14 @@ tools/_muse.py — 阈值引擎（muse 二改，2026-08-17 中午她定稿）
 
 | 指法 | 痕迹是什么 | 指的是 |
 |---|---|---|
-| **词爆发** `词爆发()` | `tags`（我们存时写下的词） | 一段：「青岛」8-09~8-12 出现 12 次，窗外只有 2 次 |
-| **成分漂移** `成分漂移()` | 现成向量的质心（**只当尺子，不当理由**） | 一条**边界**：7-04 前后记忆的样子变了 |
-| **空白记账** `空白记账()` | **时期的范围**（我亲手画的圈） | 一段没被任何时期盖住的日子 |
+| **词爆发** `word_burst()` | `tags`（我们存时写下的词） | 一段：「青岛」8-09~8-12 出现 12 次，窗外只有 2 次 |
+| **成分漂移** `composition_drift()` | 现成向量的质心（**只当尺子，不当理由**） | 一条**边界**：7-04 前后记忆的样子变了 |
+| **空白记账** `blank_ledger()` | **时期的范围**（我亲手画的圈） | 一段没被任何时期盖住的日子 |
 
 🔴 **「有名字了吗」的判据 = range 覆盖**（8-17 14:30 终稿，替掉 `covered_by`）：
    一条 event 的**日期落在任何一条活着的时期的范围里** = 有名字。
    时期从此不写 `covered_by`（纯命名层，只落名字 + 范围），所以拿字段问是问不出来的——
-   **现场算**（`时期们()` + `盖上名字()`）。白赚的两样：补记落进老范围**自动就有名字了**
+   **现场算**（`era_spans()` + `mark_named()`）。白赚的两样：补记落进老范围**自动就有名字了**
    （不用回去补名单）、时期改边界（regrow 换 when）**下一次发呆立刻跟着变**。
 
 🔴 **空白记账在库里一条主线都没有的时候整个闭嘴。** 她的原话场景：
@@ -54,12 +54,12 @@ tools/_muse.py — 阈值引擎（muse 二改，2026-08-17 中午她定稿）
 
 **认知侧 = 发呆 = 证据制三层，按痕迹硬度排**（`kind="muse"`）
 
-  ① **v/a 邻域分架** `分架()` —— 我亲手打的坐标。半径 `va_radius`，
+  ① **v/a 邻域分架** `make_shelves()` —— 我亲手打的坐标。半径 `va_radius`，
      一架 = 一个半径 r 的球（**不是单链接**：单链接会顺着密度把整个坐标面串成一片，
      那就不是「这一格」了）。
      🔴 **精确等于 `(0.5, 0.3)` 的不进架** —— 那是老默认值不是感觉。115 条老 mind
      等主人亲手重打，**重打完成前这道闸一直在**（重打时避开这个点即可）。
-  ② **架内 from 链** `架内成团()` —— 我亲手连的链，**最硬的证据**，单独标出来
+  ② **架内 from 链** `cluster_shelf()` —— 我亲手连的链，**最硬的证据**，单独标出来
      （「其中 3 条长自同一晚」）。
   ③ **架内语义** —— 海选兜底，补进来的单独标出来 + 报最低相似度。
 
@@ -89,9 +89,9 @@ tools/_muse.py — 阈值引擎（muse 二改，2026-08-17 中午她定稿）
 ------------------------------------------------------------
 MUSE_DEFAULTS · POOL_SPECS · muse_config()
 Item · 架 · 团 · 指法 · item_of() · in_pool() · pool_of() · read_vectors()
-分架() · 架内成团() · 发呆()                              ← 认知侧
-词爆发() · 成分漂移() · 空白记账() · 主线条数()            ← 事件侧
-时期们() · 有名字() · 盖上名字()                          ← 「有名字了吗」的现场算
+make_shelves() · cluster_shelf() · daydream()                              ← 认知侧
+word_burst() · composition_drift() · blank_ledger() · era_count()            ← 事件侧
+era_spans() · is_named() · mark_named()                          ← 「有名字了吗」的现场算
 rejection_key() · load_rejected() · is_rejected() · record_rejection()
 load_records()（异步）· propose_mind() · propose_gist()
 （梦那一路只用 `pool_of(recs, "dream", ...)` 选料，织梦在 `tools/_dream.py`——
@@ -195,13 +195,13 @@ class Item:
     text: str
     from_ids: list[str] = field(default_factory=list)   # 我亲手连的链
     covered: bool = False        # 已经被某条 gist **点名**盖着（快照那半：认知合并 / 事件改错换版）
-    # 🔴 **有名字了吗**：日期落在某条活着的时期的范围里（8-17 终稿的判据，`盖上名字()` 现场打）。
+    # 🔴 **有名字了吗**：日期落在某条活着的时期的范围里（8-17 终稿的判据，`mark_named()` 现场打）。
     #    跟 `covered` 分开两个字段，因为它们是两件事：一个是「被压住了」，一个是「被叫过了」。
     named: bool = False
 
 
 @dataclass
-class 架:
+class Shelf:
     """v/a 邻域里的一格。**架心是坐标，不是标签**——它是我打出来的那个位置。"""
     v: float
     a: float
@@ -212,7 +212,7 @@ class 架:
 
 
 @dataclass
-class 团:
+class Cluster:
     """发呆摆出来的一团。三样证据各自留着，摆的时候一样都不许省。"""
     ids: list[str]
     items: list[Item]
@@ -228,7 +228,7 @@ class 团:
 
 
 @dataclass
-class 指法:
+class Finger:
     """事件侧摆出来的一指。`证据` 那一行里的每个字都得是我们自己留下的痕迹。"""
     名: str
     ids: list[str]
@@ -257,7 +257,7 @@ def _f(x, d: float) -> float:
 _机器腔 = re.compile(r"^[^:：]{1,12}[:：]")
 
 
-def 是场景词(tag: str) -> bool:
+def is_scene_word(tag: str) -> bool:
     t = str(tag or "").strip()
     return bool(t) and not t.startswith("__") and not _机器腔.match(t)
 
@@ -287,7 +287,7 @@ def item_of(meta: dict, text: str) -> Item | None:
     )
 
 
-def _工具件(meta: dict) -> bool:
+def _is_utility_record(meta: dict) -> bool:
     """gist / 大 event / 门口那张纸——它们是工具件，不是能被提议归纳的记忆。"""
     tags = [str(t) for t in (meta.get("tags") or [])]
     return GIST_TAG in tags or BIGEVENT_TAG in tags or "__档案事实__" in tags
@@ -299,7 +299,7 @@ def in_pool(meta: dict, item: Item, kind: str, cfg: dict, now: datetime,
     spec = POOL_SPECS[kind]
 
     # --- 谁都不进的 ---
-    if _工具件(meta):
+    if _is_utility_record(meta):
         return False
     if str(meta.get("type") or "") in ("letter", "archived"):
         return False
@@ -415,7 +415,7 @@ def _cos(u: list[float], v: list[float]) -> float:
 # ============================================================
 # 认知侧 ① —— v/a 邻域分架（我亲手打的坐标）
 # ============================================================
-def 分架(items: list[Item], cfg: dict) -> tuple[list[架], int]:
+def make_shelves(items: list[Item], cfg: dict) -> tuple[list[Shelf], int]:
     """v/a 平面上按半径 r 分架。返回 (架列表, 老默认坐标被挡下几条)。
 
     **一架 = 一个半径 r 的球**，不是单链接。单链接会顺着密度把整个坐标面串成一片
@@ -449,7 +449,7 @@ def 分架(items: list[Item], cfg: dict) -> tuple[list[架], int]:
                 邻居[j].add(i)
 
     剩 = set(range(n))
-    out: list[架] = []
+    out: list[Shelf] = []
     while 剩:
         # sorted(剩) 而不是 max(剩)：集合的迭代顺序不该决定架心。
         # 活 已按 (v, a, id) 排过，下标升序 = 定序；max 取第一个最大值 → **两次调用同一批架**。
@@ -458,7 +458,7 @@ def 分架(items: list[Item], cfg: dict) -> tuple[list[架], int]:
         剩 -= ({心} | 邻居[心])
         vs = [m.v for m in 成员]
         as_ = [m.a for m in 成员]
-        out.append(架(v=sum(vs) / len(vs), a=sum(as_) / len(as_), items=成员))
+        out.append(Shelf(v=sum(vs) / len(vs), a=sum(as_) / len(as_), items=成员))
     out.sort(key=lambda s: (-len(s.items), s.v, s.a))
     return out, 默认坐标
 
@@ -466,7 +466,7 @@ def 分架(items: list[Item], cfg: dict) -> tuple[list[架], int]:
 # ============================================================
 # 认知侧 ②③ —— 架内 from 链（最硬）→ 架内语义（海选兜底）
 # ============================================================
-def _from边(sh: 架) -> dict[str, set[str]]:
+def _from_edges(sh: Shelf) -> dict[str, set[str]]:
     """架内两条之间的 from 关系：共享同一个来源，或者一条就是另一条的来源。"""
     边: dict[str, set[str]] = {it.id: set() for it in sh.items}
     for i, a in enumerate(sh.items):
@@ -479,7 +479,7 @@ def _from边(sh: 架) -> dict[str, set[str]]:
     return 边
 
 
-def 架内成团(sh: 架, vectors: dict[str, list[float]], cfg: dict) -> list[团]:
+def cluster_shelf(sh: Shelf, vectors: dict[str, list[float]], cfg: dict) -> list[Cluster]:
     """一架 → 几团。**先 from 链，后语义补**，两样分别记在证据里。"""
     线 = float(cfg["sim_line"])
     最少 = int(cfg["min_cluster"])
@@ -487,7 +487,7 @@ def 架内成团(sh: 架, vectors: dict[str, list[float]], cfg: dict) -> list[�
     normed = {bid: _normalize(vectors.get(bid)) for bid in by_id}
 
     # --- ② from 链：并查集 ---
-    边 = _from边(sh)
+    边 = _from_edges(sh)
     parent = {bid: bid for bid in by_id}
 
     def find(x):
@@ -509,16 +509,16 @@ def 架内成团(sh: 架, vectors: dict[str, list[float]], cfg: dict) -> list[�
     核心.sort(key=lambda g: (-len(g), g[0]))
     落单 = sorted(bid for v in 组.values() if len(v) < 2 for bid in v)
 
-    团们: list[团] = []
+    团们: list[Cluster] = []
 
-    def _造(ids核, ids补, 最低):
+    def _make_cluster(ids核, ids补, 最低):
         成员 = [by_id[b] for b in ids核 + ids补]
         共 = set(by_id[ids核[0]].from_ids) if ids核 else set()
         for b in ids核[1:]:
             共 &= set(by_id[b].from_ids)
-        return 团(ids=[m.id for m in 成员], items=成员, 架v=sh.v, 架a=sh.a,
-                  from核心=list(ids核), 共祖=sorted(共), 语义补=list(ids补),
-                  最低相似=最低)
+        return Cluster(ids=[m.id for m in 成员], items=成员, 架v=sh.v, 架a=sh.a,
+                       from核心=list(ids核), 共祖=sorted(共), 语义补=list(ids补),
+                       最低相似=最低)
 
     # --- ③ 架内语义：落单的挂到最贴的那个 from 团上（海选兜底，单独标出来）---
     已用: set[str] = set()
@@ -545,7 +545,7 @@ def 架内成团(sh: 架, vectors: dict[str, list[float]], cfg: dict) -> list[�
             已用.add(bid)
 
     for k, g in enumerate(核心):
-        团们.append(_造(g, sorted(补给[k]), 最低[k]))
+        团们.append(_make_cluster(g, sorted(补给[k]), 最低[k]))
 
     # --- 一条 from 边都没有的架：整架走语义单链接（纯海选，证据行会说清楚）---
     剩 = [b for b in 落单 if b not in 已用 and normed.get(b) is not None]
@@ -576,9 +576,9 @@ def 架内成团(sh: 架, vectors: dict[str, list[float]], cfg: dict) -> list[�
                 continue
             g = sorted(g)
             成员 = [by_id[b] for b in g]
-            团们.append(团(ids=g, items=成员, 架v=sh.v, 架a=sh.a,
-                          from核心=[], 共祖=[], 语义补=g,
-                          最低相似=min(低[b] for b in g)))
+            团们.append(Cluster(ids=g, items=成员, 架v=sh.v, 架a=sh.a,
+                              from核心=[], 共祖=[], 语义补=g,
+                              最低相似=min(低[b] for b in g)))
 
     out = [t for t in 团们 if len(t) >= 最少]
     for t in out:
@@ -587,18 +587,18 @@ def 架内成团(sh: 架, vectors: dict[str, list[float]], cfg: dict) -> list[�
     return out
 
 
-def 发呆(items: list[Item], vectors: dict[str, list[float]], cfg: dict
-         ) -> tuple[list[团], int, int]:
+def daydream(items: list[Item], vectors: dict[str, list[float]], cfg: dict
+             ) -> tuple[list[Cluster], int, int]:
     """认知侧一整趟：分架 → 架内成团。返回 (团列表, 散着几条, 老默认坐标几条)。
 
     排序：**有 from 证据的排前面**（痕迹硬），然后大的在前——
     「这几条长自同一晚」比「这几条向量像」重得多，摆的顺序就该照着说。
     """
-    架们, 默认坐标 = 分架(items, cfg)
-    团们: list[团] = []
+    架们, 默认坐标 = make_shelves(items, cfg)
+    团们: list[Cluster] = []
     成团了: set[str] = set()
     for sh in 架们:
-        for t in 架内成团(sh, vectors, cfg):
+        for t in cluster_shelf(sh, vectors, cfg):
             团们.append(t)
             成团了.update(t.ids)
     散着 = len(items) - 默认坐标 - len(成团了)
@@ -609,15 +609,15 @@ def 发呆(items: list[Item], vectors: dict[str, list[float]], cfg: dict
 # ============================================================
 # 事件侧 —— 三种指法，全带证据
 # ============================================================
-def _日(dt: datetime | None) -> str:
+def _short_date(dt: datetime | None) -> str:
     return dt.strftime("%m-%d") if dt else "?"
 
 
-def _日全(dt: datetime | None) -> str:
+def _full_date(dt: datetime | None) -> str:
     return dt.strftime("%Y-%m-%d") if dt else ""
 
 
-def 词爆发(items: list[Item], cfg: dict, now: datetime) -> list[指法]:
+def word_burst(items: list[Item], cfg: dict, now: datetime) -> list[Finger]:
     """**某个场景词在一段连续日子里密集出现、窗外稀疏** → 提议那一段。
 
     痕迹是 `tags`：**我们存的时候写下的词**（保证「字面一定在原文里」），
@@ -635,11 +635,11 @@ def 词爆发(items: list[Item], cfg: dict, now: datetime) -> list[指法]:
         if it.ts is None:
             continue
         for t in set(it.tags):
-            if 是场景词(t):
+            if is_scene_word(t):
                 按词.setdefault(t, []).append(it)
 
     有日子 = sorted([i for i in items if i.ts], key=lambda x: x.ts)
-    out: list[指法] = []
+    out: list[Finger] = []
     for tag, occ in 按词.items():
         occ.sort(key=lambda x: x.ts)
         总 = len(occ)
@@ -665,27 +665,27 @@ def 词爆发(items: list[Item], cfg: dict, now: datetime) -> list[指法]:
         if (now - 止) <= 停了:
             continue                     # 还在发生的事，我说不出它是什么
         段内 = [it for it in 有日子 if 起 <= it.ts <= 止]
-        # 「没名字」= 日期不落在任何一条活着的时期的范围里（`盖上名字()` 现场打的）
+        # 「没名字」= 日期不落在任何一条活着的时期的范围里（`mark_named()` 现场打的）
         没名字 = [it for it in 段内 if not it.named]
         if not 没名字:
             continue                     # 段上已经一条没名字的都没有了，指它干什么
-        out.append(指法(
+        out.append(Finger(
             名="词爆发",
             ids=[it.id for it in 没名字], items=没名字, 起=起, 止=止,
-            证据=(f"「{tag}」{_日(起)}~{_日(止)} 出现 {窗内} 次"
+            证据=(f"「{tag}」{_short_date(起)}~{_short_date(止)} 出现 {窗内} 次"
                   f"（全库共 {总} 次，窗外 {窗外} 次）· 段上 {len(没名字)} 条没名字"),
-            出路=f'fold(when="{_日全(起)}..{_日全(止)}", text=我写的那句)',
+            出路=f'fold(when="{_full_date(起)}..{_full_date(止)}", text=我写的那句)',
             分=float(窗内)))
     out.sort(key=lambda x: (-x.分, x.起 or now, x.证据))
     return out
 
 
-def _窗号(dt: datetime, W: int) -> int:
+def _window_index(dt: datetime, W: int) -> int:
     """固定日历网格的窗号（不随数据动，报告和线上算出来永远是同一格）。"""
     return ((date(dt.year, dt.month, dt.day) - date(1970, 1, 1)).days) // W
 
 
-def _窗起(k: int, W: int) -> datetime:
+def _window_start(k: int, W: int) -> datetime:
     """窗的起点。**必须走 `_when.parse_date`**——本地那一天的零点、带时区。
     裸 `datetime(...)` 是 naive，跟 `now()` 一减当场炸（时区那一刀 codex #4 点过名）。
     """
@@ -693,8 +693,8 @@ def _窗起(k: int, W: int) -> datetime:
     return _w.parse_date(d.isoformat())
 
 
-def 成分漂移(items: list[Item], vectors: dict[str, list[float]], cfg: dict,
-             now: datetime) -> list[指法]:
+def composition_drift(items: list[Item], vectors: dict[str, list[float]], cfg: dict,
+                      now: datetime) -> list[Finger]:
     """**相邻时间窗的向量质心跳了一大步** → 提议一条**边界**（只提边界，不画段）。
 
     她的话：「**7-04 前后不一样了**」。向量在这儿只当**尺子**——
@@ -710,9 +710,9 @@ def 成分漂移(items: list[Item], vectors: dict[str, list[float]], cfg: dict,
     for it in items:
         if it.ts is None or _normalize(vectors.get(it.id)) is None:
             continue
-        格.setdefault(_窗号(it.ts, W), []).append(it)
+        格.setdefault(_window_index(it.ts, W), []).append(it)
 
-    def 质心(k: int) -> list[float] | None:
+    def centroid(k: int) -> list[float] | None:
         vs = [_normalize(vectors[i.id]) for i in 格[k]]
         vs = [v for v in vs if v]
         if not vs:
@@ -724,27 +724,27 @@ def 成分漂移(items: list[Item], vectors: dict[str, list[float]], cfg: dict,
                 s[d] += v[d]
         return _normalize(s)
 
-    out: list[指法] = []
+    out: list[Finger] = []
     for k in sorted(格):
         if k + 1 not in 格:
             continue                       # 隔着空窗不比
         if len(格[k]) < 最少 or len(格[k + 1]) < 最少:
             continue
-        c0, c1 = 质心(k), 质心(k + 1)
+        c0, c1 = centroid(k), centroid(k + 1)
         if not c0 or not c1:
             continue
         漂移 = 1.0 - _cos(c0, c1)
         if 漂移 <= 线:
             continue
-        边界 = _窗起(k + 1, W)
+        边界 = _window_start(k + 1, W)
         if (now - 边界) <= 停了:
             continue
         前, 后 = sorted(格[k], key=lambda x: x.ts), sorted(格[k + 1], key=lambda x: x.ts)
-        out.append(指法(
+        out.append(Finger(
             名="成分漂移",
             ids=[i.id for i in 前 + 后], items=前 + 后, 边界=边界,
             起=前[0].ts, 止=后[-1].ts,
-            证据=(f"{_日(边界)} 前后记忆的样子变了（漂移 {漂移:.2f}，线 {线}）· "
+            证据=(f"{_short_date(边界)} 前后记忆的样子变了（漂移 {漂移:.2f}，线 {线}）· "
                   f"前 {W} 天 {len(前)} 条 / 后 {W} 天 {len(后)} 条"),
             出路=('边界摆在这儿，段自己划：fold(when="起..止", text=我写的那句)'),
             分=漂移))
@@ -752,7 +752,7 @@ def 成分漂移(items: list[Item], vectors: dict[str, list[float]], cfg: dict,
     return out
 
 
-def 时期们(recs: list[tuple[dict, str]]) -> list[tuple[datetime, datetime | None]]:
+def era_spans(recs: list[tuple[dict, str]]) -> list[tuple[datetime, datetime | None]]:
     """库里**还算数的时期**的范围 `[起, 止)`（`止=None` = 还在进行中）。
 
     判据跟 `_bigevent.covering()` **同一个函数**（`_usable`）：没换过版、没被更上层
@@ -771,7 +771,7 @@ def 时期们(recs: list[tuple[dict, str]]) -> list[tuple[datetime, datetime | N
     return out
 
 
-def 有名字(it: Item, 范围: list[tuple[datetime, datetime | None]]) -> bool:
+def is_named(it: Item, 范围: list[tuple[datetime, datetime | None]]) -> bool:
     """这一条**有名字了吗** —— 日期落在任何一条活着的时期的范围里就算有（现场算）。
 
     `it.covered` 也算：那是真 cover（事件改错换版那一条），它已经不冒头了，
@@ -787,29 +787,29 @@ def 有名字(it: Item, 范围: list[tuple[datetime, datetime | None]]) -> bool:
     return False
 
 
-def 盖上名字(items: list[Item], 范围: list[tuple[datetime, datetime | None]]) -> int:
+def mark_named(items: list[Item], 范围: list[tuple[datetime, datetime | None]]) -> int:
     """给池子里每一条打上 `named`，返回**还没名字**的条数。三种指法共用这一份口径。"""
     没有 = 0
     for it in items:
-        it.named = 有名字(it, 范围)
+        it.named = is_named(it, 范围)
         if not it.named:
             没有 += 1
     return 没有
 
 
-def 主线条数(recs: list[tuple[dict, str]]) -> int:
+def era_count(recs: list[tuple[dict, str]]) -> int:
     """库里有几条还算数的时期（空白记账的地图闸拿它当判据）。"""
-    return len(时期们(recs))
+    return len(era_spans(recs))
 
 
-def 空白记账(items: list[Item], 主线: int, cfg: dict, now: datetime) -> list[指法]:
+def blank_ledger(items: list[Item], 主线: int, cfg: dict, now: datetime) -> list[Finger]:
     """**一段连续的日子，一条都没被时期盖住** → 拍我一下。
 
     🔴 **库里一条主线都没有的时候，这一指整个闭嘴。** 她的原话场景：
        「他完全可以说今年都没有」——**不许发生**。没有地图的时候「哪儿没盖」
        是个假问题：那不是空白，那是还没开始画。
        （地图第一版是我和她手写的——**先讲述，后指点**。）
-    ⚠️ 「没名字」8-17 起是 **range 覆盖**（时期的范围，`盖上名字()` 现场打在 `named` 上），
+    ⚠️ 「没名字」8-17 起是 **range 覆盖**（时期的范围，`mark_named()` 现场打在 `named` 上），
        不再问 `covered_by`——时期不记账了。补记落进老范围自动就有名字，不会再被记一次空白。
     """
     if int(主线) < 1:
@@ -819,28 +819,28 @@ def 空白记账(items: list[Item], 主线: int, cfg: dict, now: datetime) -> li
     停了 = timedelta(days=float(cfg["stopped_days"]))
 
     没名字 = sorted([i for i in items if not i.named and i.ts], key=lambda x: x.ts)
-    out: list[指法] = []
+    out: list[Finger] = []
     段: list[Item] = []
 
-    def 收(段):
+    def close_segment(段):
         if len(段) < 最少:
             return
         起, 止 = 段[0].ts, 段[-1].ts
         if (now - 止) <= 停了:
             return
-        out.append(指法(
+        out.append(Finger(
             名="空白记账",
             ids=[i.id for i in 段], items=list(段), 起=起, 止=止,
-            证据=f"{_日(起)}~{_日(止)} 有 {len(段)} 条没落在任何一条时期的范围里",
-            出路=f'fold(when="{_日全(起)}..{_日全(止)}", text=我写的那句)',
+            证据=f"{_short_date(起)}~{_short_date(止)} 有 {len(段)} 条没落在任何一条时期的范围里",
+            出路=f'fold(when="{_full_date(起)}..{_full_date(止)}", text=我写的那句)',
             分=float(len(段))))
 
     for it in 没名字:
         if 段 and (it.ts - 段[-1].ts) > 断:
-            收(段)
+            close_segment(段)
             段 = []
         段.append(it)
-    收(段)
+    close_segment(段)
     out.sort(key=lambda x: (-x.分, x.起 or now))
     return out
 
@@ -937,7 +937,7 @@ def _db_path() -> str:
     return os.path.join(str((rt.config or {}).get("buckets_dir") or ""), "embeddings.db")
 
 
-def _没被拒过(候选: list, cfg: dict) -> tuple[list, int]:
+def _drop_rejected(候选: list, cfg: dict) -> tuple[list, int]:
     from tools import _runtime as rt
     rejected = load_rejected(str((rt.config or {}).get("buckets_dir") or ""))
     limit = int(cfg["reject_limit"])
@@ -951,7 +951,7 @@ def _没被拒过(候选: list, cfg: dict) -> tuple[list, int]:
 
 
 async def propose_mind(cfg: dict | None = None, 料=None
-                       ) -> tuple[list[团], int, int, dict]:
+                       ) -> tuple[list[Cluster], int, int, dict]:
     """认知侧一整趟。返回 (团列表, 散着几条, 老默认坐标几条, 统计)。**不写任何东西。**"""
     from tools import _runtime as rt
     c = muse_config(cfg if cfg is not None else rt.config)
@@ -959,16 +959,16 @@ async def propose_mind(cfg: dict | None = None, 料=None
     recs, digested = 料 if 料 is not None else await load_records()
     items = pool_of(recs, "muse", c, now, digested)
     vectors = read_vectors(_db_path(), [i.id for i in items])
-    团们, 散着, 默认坐标 = 发呆(items, vectors, c)
+    团们, 散着, 默认坐标 = daydream(items, vectors, c)
     # 被拒过的组不算进「散着」——它们没散，只是**我说过不是一回事**，别再提。
-    团们, 拒过 = _没被拒过(团们, c)
+    团们, 拒过 = _drop_rejected(团们, c)
     stats = {"池子": len(items), "有向量": len(vectors), "团": len(团们),
              "散着": 散着, "老默认坐标": 默认坐标, "被拒过的组": 拒过}
     return 团们, 散着, 默认坐标, stats
 
 
 async def propose_gist(cfg: dict | None = None, 料=None
-                       ) -> tuple[dict[str, list[指法]], dict]:
+                       ) -> tuple[dict[str, list[Finger]], dict]:
     """事件侧一整趟：三种指法各走一遍。返回 ({指法名: [指法]}, 统计)。"""
     from tools import _runtime as rt
     c = muse_config(cfg if cfg is not None else rt.config)
@@ -977,18 +977,18 @@ async def propose_gist(cfg: dict | None = None, 料=None
     items = pool_of(recs, "gist", c, now, digested)
     vectors = read_vectors(_db_path(), [i.id for i in items])
     # 🔴 「有名字了吗」**现场算**：时期只落名字 + 范围，字段里问不出来（8-17 终稿）。
-    范围 = 时期们(recs)
+    范围 = era_spans(recs)
     主线 = len(范围)
-    没名字 = 盖上名字(items, 范围)
+    没名字 = mark_named(items, 范围)
 
-    出: dict[str, list[指法]] = {
-        "词爆发": 词爆发(items, c, now),
-        "成分漂移": 成分漂移(items, vectors, c, now),
-        "空白记账": 空白记账(items, 主线, c, now),
+    出: dict[str, list[Finger]] = {
+        "词爆发": word_burst(items, c, now),
+        "成分漂移": composition_drift(items, vectors, c, now),
+        "空白记账": blank_ledger(items, 主线, c, now),
     }
     拒过 = 0
     for k in 出:
-        出[k], n = _没被拒过(出[k], c)
+        出[k], n = _drop_rejected(出[k], c)
         拒过 += n
     stats = {"池子": len(items), "有向量": len(vectors), "主线": 主线,
              "没名字": 没名字, "被拒过的组": 拒过}
@@ -1011,11 +1011,11 @@ async def propose_gist(cfg: dict | None = None, 料=None
 #    ⚠️ 反过来说：**它宁可多失效**（recall 一次 id 直查就 touch 一下）——
 #    那正是想要的方向。缓存只保「这一屏和下一屏是同一屏」，不保跨对话。
 # ⚠️ `not_same`（拒绝计数）写的是 `_state/` 里的 json，**不动桶**，钥匙不会变
-#    → `record_rejection()` 之后必须**手动清一次**（`视图清空()`）。
+#    → `record_rejection()` 之后必须**手动清一次**（`clear_view_cache()`）。
 _视图缓存: dict = {"钥匙": None, "值": None}
 
 
-def 视图钥匙() -> tuple | None:
+def view_cache_key() -> tuple | None:
     """这一屏该不该重算。拿不到 generation 就返回 None = **不敢缓存**。"""
     from tools import _runtime as rt
     gen = getattr(rt.bucket_mgr, "_active_cache_generation", None)
@@ -1026,19 +1026,19 @@ def 视图钥匙() -> tuple | None:
     return (int(gen), tuple(sorted((k, str(v)) for k, v in c.items())))
 
 
-def 视图清空() -> None:
+def clear_view_cache() -> None:
     _视图缓存["钥匙"] = None
     _视图缓存["值"] = None
 
 
-async def 两侧一趟(强制: bool = False) -> tuple[list, int, int, dict, dict]:
+async def both_sides(强制: bool = False) -> tuple[list, int, int, dict, dict]:
     """认知侧 + 事件侧一整趟，**带视图缓存**。返回 (团们, 散着, 默认坐标, 指们, 统计)。
 
     两个调用方共用这一份：`tools/muse/__init__.py`（工具面的两步走）和
     `web/loci.py::build_muse_pending`（「该发呆了吗」只要数量和年龄）。
     **绝不各算各的**——页面说「攒了 3 团」而我 muse() 看到 4 团，那就是两个脑子。
     """
-    钥 = 视图钥匙()
+    钥 = view_cache_key()
     if not 强制 and 钥 is not None and _视图缓存["钥匙"] == 钥:
         return _视图缓存["值"]
     料 = await load_records()

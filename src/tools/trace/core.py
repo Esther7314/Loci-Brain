@@ -67,7 +67,7 @@ _DATE_RE = __import__("re").compile(r"^\d{4}-\d{2}-\d{2}$")
 _DUR_RE = __import__("re").compile(r"^\d+[dwmy]$")
 
 
-def _真有这一天(*日子: str) -> str | None:
+def _check_real_dates(*日子: str) -> str | None:
     """形状对不代表日历上有这一天。`2026-09-31` / `2026-13-45` 长得完全合法。
 
     🔴 2026-08-19：写口只查形状，收下之后**写进库**，而读路（`parse_span`）
@@ -94,16 +94,16 @@ def _check_when(when: str, meta: dict) -> str | None:
         if not m:
             return ('时期的 when 要写成起止："2026-07-31..2026-08-05"，'
                     '进行中就把止留空："2026-07-31.."。')
-        return _真有这一天(m.group(1), m.group(2) or "")
+        return _check_real_dates(m.group(1), m.group(2) or "")
     if str(meta.get("status") or "") == "want" or meta.get("tense") == "want":
         if not (_DATE_RE.match(when) or _DUR_RE.match(when)):
             return ('想发生的事，when 要么是个日子（"2026-09-01"），'
                     '要么是段时长（"3w" / "10d" / "2m" / "1y"）。')
-        return _真有这一天(when) if _DATE_RE.match(when) else None
+        return _check_real_dates(when) if _DATE_RE.match(when) else None
     if not _DATE_RE.match(when):
         return ('普通记忆的 when 是**它发生的那一天**："2026-07-06"。\n'
                 '（"3w" 这种时长只对想发生的事有意义；起止范围只对时期有意义。）')
-    return _真有这一天(when)
+    return _check_real_dates(when)
 
 
 async def _append_folds(gist_id: str, meta: dict, add: list) -> tuple[str | None, list]:

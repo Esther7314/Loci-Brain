@@ -85,7 +85,7 @@ async def dispatch(
                                weight=weight, test_data=test_data)
     if kind == "big":
         # ⚰️ 2026-08-18：`kind="big"` 从工具面撤了（她拍的）。
-        #    它底下调的就是 fold 的骨头（`_F.落一条gist`），是个**纯别名**——
+        #    它底下调的就是 fold 的骨头（`_F.save_gist`），是个**纯别名**——
         #    立一个「时期」有两个入口，而两个入口迟早说两套话。
         #    撤完只剩 fold(when="起..止") 一条路。grow_big 的实现留着，没人调而已。
         return ('立一个「时期」（给一段日子起个名字）用 fold：\n'

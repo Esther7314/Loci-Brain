@@ -685,7 +685,7 @@ async def build_graph() -> dict:
     # 2026-08-17：数的从 night_fall 的 `.md` 换成新引擎的梦文件（同一个目录，沿用）。
     try:
         from core import _dream as _D
-        meteors = len(_D.读盘())
+        meteors = len(_D.load_dreams())
     except Exception:                       # noqa: BLE001 - 星空不该因为数不到梦就崩
         meteors = 0
 
@@ -711,7 +711,7 @@ def _collect_events(all_buckets: list) -> list[dict]:
 
     🔴 施工 5 · E 件（2026-08-17）：这个函数以前是 `tools/breath/awaken.py` 那段
     池子逻辑的**平行实现**（抄同一行字不叫同源）。现在它只做一件事：
-    调 `tools.breath.awaken.事件池()`，再把 dict 换成前端要的形状。
+    调 `tools.breath.awaken.event_pool()`，再把 dict 换成前端要的形状。
     ⚠️ 方向写死：**web → tools**，反过来不行（MCP 面不许依赖面板）。
     ⚠️ 平行实现的代价是踩过的：8-08 房间改名，两边各写一遍
        `.find("/EVENT/") > 0`，**两边一起静默变空**；8-17 又抓到一笔——
@@ -719,9 +719,9 @@ def _collect_events(all_buckets: list) -> list[dict]:
     """
     from tools.recall.core import _room_cn, _label_of, _short_id
     from core._rooms import normalize_room
-    from core.profile import 事件池
+    from core.profile import event_pool
     pool: list[dict] = []
-    for e in 事件池(all_buckets):
+    for e in event_pool(all_buckets):
         meta, content, bid = e["meta"], e["content"], e["id"]
         room = normalize_room(meta.get("room"))
         pool.append({
@@ -760,7 +760,7 @@ async def build_profile() -> dict:
     **平行实现**（文件里原话：「改一边必须改另一边」——而 8-17 就抓到没改的那一边：
     `weight` 的 `or 0.5` falsy 兜底在 awaken 修好了，这儿还带着，
     于是**被梦到清零的 want 在页面上照旧压着**）。
-    现在规则只有一处：`tools.breath.awaken.门口那张纸()`，这儿只把 dict 变成 JSON。
+    现在规则只有一处：`tools.breath.awaken.door_note()`，这儿只把 dict 变成 JSON。
 
     ⚠️ 2026-08-16 砍掉了「我/她反复出现的」：它是 activation_count 排的，而
     **被提得多的不等于最真的**；开屏读一份「她是什么样的人」的档案然后照着档案
@@ -769,10 +769,10 @@ async def build_profile() -> dict:
     """
     from tools.recall.core import _room_cn, _label_of, _short_id
     from core._rooms import normalize_room
-    from core.profile import 门口那张纸, 她改过
+    from core.profile import door_note, edited_by_her
     all_buckets = await sh.bucket_mgr.list_all(include_archive=False)
     now = _w.now()          # 本地时区（codex #4）
-    纸 = 门口那张纸(all_buckets, now)
+    纸 = door_note(all_buckets, now)
     heavy_q_id = 纸["heavy_question_id"]      # 施工 6 · B 件：只问最久那条
 
     def _label(x) -> str:
@@ -791,7 +791,7 @@ async def build_profile() -> dict:
     # **不截断**——睁眼那屏只给 2 条（一屏有限），这儿是她自己翻的页面，
     # 挂着几条就该看见几条。排序（重的在前、一样重的挂得久的在前）在合同源里。
     # 施工 6 · A/B/C 件：clock/clock_note 是三类钟判出来的类别 + 旧数据备注
-    # （§6，读侧判断，见 core/profile._三类钟）；is_question 标出"只问最久那条"
+    # （§6，读侧判断，见 core/profile._want_clock）；is_question 标出"只问最久那条"
     # （§6.1）；last_asked/closed_by 直接透传 meta，前端拿去拼"从来没问过她"
     # 那半句、以及结案按钮要不要显示（只对 status=="want" 的条目显示）。
     heavy = [{"id": h["id"], "short": _short_id(h["id"]), "held": h["held"],
@@ -806,7 +806,7 @@ async def build_profile() -> dict:
     edited = [{"id": e["id"], "short": _short_id(e["id"]),
                "label": _label(e), "content": e["content"].strip(),
                "corrects": (_read_from_ids(e["meta"]) or [""])[0]}
-              for e in 她改过(all_buckets)]
+              for e in edited_by_her(all_buckets)]
     rules = []
     for r in 纸["rules"]:
         room = normalize_room(r["meta"].get("room"))
@@ -879,7 +879,7 @@ async def build_muse_pending() -> dict:
     #    `load_records + propose_mind + propose_gist` 又扫一遍全库，
     #    而且那是第三份平行实现：页面说「攒了 3 团」、我 muse() 看到 4 团，
     #    就是两个脑子。缓存的钥匙是桶的写盘代数，宁可失效勤一点。
-    团们, _散着, _默认坐标, 指们, _stats = await M.两侧一趟()
+    团们, _散着, _默认坐标, 指们, _stats = await M.both_sides()
 
     now = W.now()
     ages: list[int] = []
@@ -918,15 +918,15 @@ async def build_poke(query: str = "", when: str = "", room: str = "",
     `core._dream.current_dream()`**——那口是给她本人「取梦」用的，调一次算一次
     「回想」，会推起算点、会落盘（8-17 定的：回想能延缓，不能阻止）。这个口只是
     宿主拿来问「有没有货」的，问一次就顺手帮她回想一次是偷感情——**这儿只读盘、
-    只做`层of()`那道纯计算，不调用任何会写状态的函数**。梦的生命周期（碎片 30
+    只做`layer_of()`那道纯计算，不调用任何会写状态的函数**。梦的生命周期（碎片 30
     分钟→只剩一句 1 小时→删文件留痕）该怎么样还怎么样，删和留痕归别的挂点管
-    （breath 维护() / 老的 `/api/dream/current`），这个口绝不代劳、绝不拖长它的命。
+    （breath maintain() / 老的 `/api/dream/current`），这个口绝不代劳、绝不拖长它的命。
 
     🔴 2026-08-18 修宪：`层` 现在可能是 `完整`——她 3-4 小时没发消息（=真夜间）
     期间，完整版落盘存活，这个口原样递整版正文（`rec["完整"]`，不截不改，跟
     碎片层「梦是交付，给全文」同一条纪律）。完整层不吃时间衰减，只有她回来
-    发第二条消息、桥调一次 `POST /api/loci/dream/wake`（`core._dream.唤醒()`）
-    才会把它降成碎片层——这个口本身依旧**纯读**，不调 `唤醒()`，降级永远是
+    发第二条消息、桥调一次 `POST /api/loci/dream/wake`（`core._dream.degrade_on_wake()`）
+    才会把它降成碎片层——这个口本身依旧**纯读**，不调 `degrade_on_wake()`，降级永远是
     桥主动喊出来的，这儿绝不代劳。
 
     `muse_pending`：发呆团数，直接复用 `build_muse_pending()`（一趟带缓存，
@@ -947,18 +947,18 @@ async def build_poke(query: str = "", when: str = "", room: str = "",
     try:
         c = _D._c()
         now = _D._w.now()
-        for rec in _D.读盘():
-            层 = _D.层of(rec, now, c)
+        for rec in _D.load_dreams():
+            层 = _D.layer_of(rec, now, c)
             if 层 == "没了":
                 continue          # 到点该消失的不装死——但这条闸只是纯计算，不删文件
             # 🔴 2026-08-18 修宪：完整层给整版正文，原样不截（跟碎片层同一条纪律：
-            #    梦是交付，给全文）。降级后（完整字段被 唤醒() 摘掉）才落回碎片/一句。
+            #    梦是交付，给全文）。降级后（完整字段被 degrade_on_wake() 摘掉）才落回碎片/一句。
             if 层 == "完整":
                 内容 = rec.get("完整") or ""
             elif 层 == "碎片":
                 内容 = rec["碎片"]
             else:
-                内容 = _D.一句(rec["碎片"])
+                内容 = _D.first_sentence(rec["碎片"])
             dreams.append({
                 "id": rec.get("id"), "层": 层, "内容": 内容,
                 "v": rec.get("v"), "a": rec.get("a"),
@@ -1394,7 +1394,7 @@ async def build_health() -> dict:
     def sec_dreams():
         # 同样：原来 except OSError: pass，目录没了就整项消失
         from core import _dream as _D
-        n = len(_D.读盘())
+        n = len(_D.load_dreams())
         add("盘上的梦", "ok",
             f"{n} 个还在（时间到了自己会没）" if n else "空的（攒不到线就一夜无梦，正常）")
     guard("盘上的梦", sec_dreams, "确认 buckets/night_fall/dreams 目录在")
@@ -1494,9 +1494,9 @@ def register(mcp) -> None:
             # 🔴 2026-08-19：原来这儿是 recall_data() + recall_core() 各调一次，
             #    而两个函数各自都会走一遍 _collect —— **同一次搜索算了两遍**。
             #    实测带 query：工具面 3 秒、这个口 8.6 秒，差的就是那一遍。
-            #    recall_两张皮() 只采一次，两张皮共用。
-            from tools.recall.core import recall_两张皮
-            data = await recall_两张皮(**gates, floor=floor, max_cells=slices)
+            #    recall_text_and_data() 只采一次，两张皮共用。
+            from tools.recall.core import recall_text_and_data
+            data = await recall_text_and_data(**gates, floor=floor, max_cells=slices)
             if not data.get("ok"):
                 return JSONResponse(data, status_code=400)
             return JSONResponse(data)
@@ -1767,7 +1767,7 @@ def register(mcp) -> None:
         流程一字照办（8.2）：她的修改不直接变成真相——落地是**一条新 event**，
         带 `她改的` 标签 + `from=[旧id]`，旧桶不碰。是不是接受这条修正，
         由我自己 fold 决定（fold 的手永远在我这儿）；通知就是这条新桶本身
-        （`core.profile.她改过()` 扫 `她改的` 标签 + 没被 fold 的，见那边注释）。
+        （`core.profile.edited_by_her()` 扫 `她改的` 标签 + 没被 fold 的，见那边注释）。
 
         🔴 mind 不给这个入口——不是靠前端不画按钮挡，这儿也硬校验一遍
         （8.2：mind 是我的判断，她可以不同意，但得由我自己改）。
@@ -2198,7 +2198,7 @@ def register(mcp) -> None:
         from starlette.responses import JSONResponse
         try:
             from core import _dream as _D
-            降级了 = _D.唤醒()
+            降级了 = _D.degrade_on_wake()
         except Exception as e:
             logger.warning(f"[loci] dream/wake 失败: {e}")
             return JSONResponse({"error": str(e)}, status_code=500)

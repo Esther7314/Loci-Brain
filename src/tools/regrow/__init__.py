@@ -130,14 +130,14 @@ async def dispatch(bucket_id: str = "", text: str = "", v=-1, a=-1, from_=None) 
         #    所以底下是同一段代码，上面这个入口只是把老签名和老话保住。
         # 时期换版（8-17 14:30 终稿后）**只换 text/v/a/when**：时期是纯命名层，
         # 没有名单要继承、没有范围要重新解析——`cover` 里只有旧版那一条（版本链）。
-        # ⚠️ `落一条gist` 见到 when 会把 cover 清空，所以版本链靠 `supersedes=` 那条路写，
+        # ⚠️ `save_gist` 见到 when 会把 cover 清空，所以版本链靠 `supersedes=` 那条路写，
         #    不靠 cover（下面 报告["cover"] 对时期必然是空的，别拿它报数）。
         cover = [bucket_id]
         if is_big and new_when:
             _t0, _t1, span_err = _F.check_span(new_when)
             if span_err:
                 return span_err
-        new_id, 报告 = await _F.落一条gist(
+        new_id, 报告 = await _F.save_gist(
             text, room, v, a, cover, when=new_when if is_big else "",
             from_ids=sources, supersedes=bucket_id, test_data=is_test)
 
@@ -159,7 +159,7 @@ async def dispatch(bucket_id: str = "", text: str = "", v=-1, a=-1, from_=None) 
         out += f"\n⚠️ 来源链满：这几个没挂上 {', '.join(dropped)}（继承链优先）"
     if 报告["链没写全"]:
         out += "\n⚠️ 版本链没写全（supersedes/superseded_by 有一半失败）——把这条报给AI查"
-    tail = _F.报告成话(报告)
+    tail = _F.format_report(报告)
     if tail:
         out += "\n" + tail
     return out

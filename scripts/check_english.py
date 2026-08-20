@@ -82,9 +82,9 @@ SELF = os.path.join("scripts", "check_english.py")
 
 # ═══ BASELINE — lower these as batches land; when all are 0 this becomes a plain gate ═══
 BASELINE = {
-    "identifiers": 153,
-    "filenames": 8,
-    "she": 551,
+    "identifiers": 2,
+    "filenames": 1,
+    "she": 543,
 }
 
 
