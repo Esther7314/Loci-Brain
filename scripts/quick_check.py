@@ -38,11 +38,13 @@ Runs:  · pyflakes (blocks undefined names — it pointed out those two NameErro
          filenames or mentions of her. Red only when a count goes up, which is what lets
          it sit here during the translation instead of only after it.
 
-Doesn't run: **anything that needs a container, needs a model, or touches her real memories.**
+Doesn't run: **anything that needs a container, needs a model, or touches a real memory
+       library.**
        🔴 That is its definition, not a shortcoming. The moment it starts bringing up
           containers it turns back into the one nobody runs.
-       That layer lives at `loci-brain-live/scripts/_拷贝容器一条龙.py`; run it before handing
-       work over.
+       That deeper layer is a separate suite: it brings up a throwaway container against a
+       COPY of the library and talks to a real model, and takes about 25 minutes. Run it
+       before shipping, not after every edit.
 
 📌 Hard target: **the whole thing finishes within 30 seconds.** Go over and something should be
    cut, not tolerated — a blood pressure cuff that slows down first becomes "I'll measure it in

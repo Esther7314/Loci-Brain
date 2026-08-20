@@ -1,37 +1,42 @@
 # ============================================================
-# 别名表 —— 主体（subjects）归一用。**手工维护，不给模型写。**
+# Alias table — used to normalise subjects. Maintained by hand, never by a model.
 # ============================================================
 #
-# 🔴 用法：把这份复制到你的**数据卷**里，改名成 aliases.yaml：
+# 🔴 To use it: copy this into your DATA VOLUME and rename it to aliases.yaml:
 #        cp config/aliases.example.yaml buckets/aliases.yaml
-#    它放在数据卷而不是代码里，是故意的 —— 表里是**活人的名字**，
-#    那属于你的数据，不该跟着镜像一起被发布出去。
-#    也可以用 LOCI_ALIAS_TABLE 指到别处。
+#    It lives in the data volume rather than in the code on purpose — the table holds
+#    the names of real people, which is your data, and it must not ship inside an image.
+#    LOCI_ALIAS_TABLE can point it somewhere else.
 #
-# 为什么它是**闸不是约定**：
-#   不做归一的话，「老张」和「张三」会分裂成两个主体，检索当场断掉。
-#   一个靠「大家都记得写同一个词」维持的规则，等于没有规则。
+# Why this is a gate and not a convention:
+#   Without normalisation, "Mike" and "Michael" become two different subjects and
+#   retrieval breaks on the spot. A rule that depends on everyone remembering to write
+#   the same word every time is not a rule.
 #
-# 怎么用：打标模型从正文里抽出主体 → 逐个过这张表 → 命中别名就换成左边的规范名。
-#   规范名（key）= 落进 frontmatter 的 subjects 里的那个词
-#   别名（value）= 正文里可能出现的各种写法（大小写不敏感）
+# How it works: the tagging model pulls subjects out of the text → each one is run
+# through this table → anything matching an alias is replaced by the canonical name.
+#   canonical name (key)  the word that lands in `subjects` in the frontmatter
+#   aliases (values)      the ways it might actually appear in the text (case-insensitive)
 #
-# ⚠️ 只写**人**。地点不在这儿（地点走 tags）。
-# ⚠️ 规范名一旦定下就别改：改了等于把已经落盘的 subjects 全变成孤儿，
-#    而这张表没有迁移脚本。要改先想清楚谁来改盘。
-# ⚠️ 代词（她/他/我…）永远不进这张表 —— 指代不是名字。系统另有一道闸挡它们。
+# ⚠️ People only. Places do not belong here — those go through tags.
+# ⚠️ Once a canonical name is set, do not change it. Changing it orphans every `subjects`
+#    entry already written to disk, and this table has no migration script. Decide who is
+#    going to rewrite the stored data before you touch it.
+# ⚠️ Pronouns never go in this table. A pronoun is not a name, and there is a separate
+#    gate that keeps them out.
 #
-# 📌 规范名用**你平时怎么称呼他**，不用身份证上的写法 ——
-#    subjects 是给检索用的，不是户口本。
+# 📌 Use whatever you actually call someone, not what is on their passport — `subjects`
+#    exists to be searched, not to be official.
 #
-# 表读不到 / 写坏了，行为是「不归一」，不是「不落盘」：
-# 抽到的主体照样存，只是这次没并成一个人。丢归一比丢主体轻。
+# If the table is missing or malformed, the behaviour is "no normalisation", NOT "nothing
+# is saved": the subjects that were extracted are still stored, they are just not merged
+# into one person this time. Losing the merge is much cheaper than losing the subject.
 
-# ——— 照着这个形状写 ———
-# 张三:
-#   - 老张
-#   - 三儿
+# ——— write it in this shape ———
+# Michael Chen:
+#   - Mike
+#   - MC
 #
-# 李四:
-#   - 小李
-#   - "44"
+# Sarah:
+#   - Sarah J
+#   - "SJ"

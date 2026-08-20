@@ -56,16 +56,17 @@ What counts as an offence, and what deliberately does not
                   `默认地址`, `强档关键词` — because those are not internal at all: they
                   are names a stranger types after `require(...)`.
     filenames     same reasoning, one level up.
-    personal      "她" and "她说/她定的". A stranger does not know who she is, so it is
-                  noise to them — and it is her, in a public repo.
+    personal      references to the one person this system was built for. A stranger
+                  does not know who that is, so to them it is noise — and it is a real
+                  person, in a public repository.
     comment lines counted, never enforced. A comment can be perfectly good Chinese
                   while being wrong for this repo, and no regex can tell the difference
                   between one being translated and one being deleted.
 
-`frontend/loci.html` is a special case with a rule of its own: it is the panel she
-uses every day, so its interface copy stays in Chinese. Only its comments and the
-mentions of her are in scope. Its Chinese line count is therefore reported as
-context and never enforced.
+`frontend/loci.html` is a special case with a rule of its own: it is a panel that gets
+used every day in Chinese, so its interface copy stays in Chinese. Only its comments
+and its personal references are in scope. Its Chinese line count is therefore reported
+as context and never enforced.
 
 `docs/`, `README`, `CHANGELOG` are prose for people to read, not code. Out of scope
 entirely — that was decided separately, and this file does not get a vote.
