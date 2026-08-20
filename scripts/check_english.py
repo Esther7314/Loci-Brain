@@ -33,8 +33,28 @@ this stops being a ratchet and becomes an ordinary gate — with no code change 
 ═══════════════════════════════════════════════════════════════════
 What counts as an offence, and what deliberately does not
 ═══════════════════════════════════════════════════════════════════
-    identifiers   a def/function/class/const whose NAME contains Chinese. Always wrong
-                  in shipped code: it is the thing a stranger has to type.
+    identifiers   a def/function/class whose NAME contains Chinese. Always wrong in
+                  shipped code: it is the thing a stranger has to type.
+    names         every OTHER Chinese name a binding introduces — parameters, local
+                  variables, module constants, import aliases, `except ... as`.
+
+                  🔴 This counter was added on 2026-08-20, after the first rename batch,
+                  because both halves of that batch independently reported the same
+                  hole: with only `identifiers` counted, this file was about to print
+                  `identifiers: 0` over a codebase that still had 412 Chinese names in
+                  it, and "0" reads as "the code is in English."
+
+                  A tool whose green light means less than the reader thinks is the
+                  same failure as a monitor that lies. The rule this file exists to
+                  enforce — that finishing is proved by a command, not by memory — only
+                  holds if the command measures the whole thing. It measures Python
+                  exactly (via `ast`, so strings, comments and dict keys cannot be
+                  mistaken for names) and JavaScript approximately (declaration forms
+                  only; JS has no parser here).
+
+                  The most valuable ones it catches are the exported constants —
+                  `默认地址`, `强档关键词` — because those are not internal at all: they
+                  are names a stranger types after `require(...)`.
     filenames     same reasoning, one level up.
     personal      "她" and "她说/她定的". A stranger does not know who she is, so it is
                   noise to them — and it is her, in a public repo.
@@ -51,11 +71,10 @@ context and never enforced.
 entirely — that was decided separately, and this file does not get a vote.
 """
 import argparse
+import ast
 import os
 import re
 import sys
-
-sys.stdout = __import__("io").TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -83,9 +102,84 @@ SELF = os.path.join("scripts", "check_english.py")
 # ═══ BASELINE — lower these as batches land; when all are 0 this becomes a plain gate ═══
 BASELINE = {
     "identifiers": 2,
+    "names": 412,
     "filenames": 1,
     "she": 543,
 }
+
+
+JS_DECL = re.compile(r"\b(?:const|let|var|function|class)\s+([\w一-鿿$]+)")
+JS_DECL_KINDS = re.compile(r"\b(function|class)\s+([\w一-鿿$]+)")
+
+
+class _Bindings(ast.NodeVisitor):
+    """Every name a Python file BINDS, split into declarations and everything else.
+
+    Using `ast` rather than a regex is the whole point: a parser cannot mistake a string,
+    a comment or a dict key for a name. That distinction is load-bearing here — the repo
+    keeps its on-disk field names and its user-facing prompts in Chinese on purpose, and
+    a counter that flagged those would be reporting work that must never be done.
+    """
+
+    def __init__(self):
+        self.decl: set[str] = set()
+        self.other: set[str] = set()
+
+    @staticmethod
+    def _chinese(name) -> bool:
+        return bool(name) and bool(CJK.search(str(name)))
+
+    def visit_FunctionDef(self, node):
+        if self._chinese(node.name):
+            self.decl.add(node.name)
+        a = node.args
+        for arg in (list(a.posonlyargs) + list(a.args) + list(a.kwonlyargs)
+                    + ([a.vararg] if a.vararg else []) + ([a.kwarg] if a.kwarg else [])):
+            if self._chinese(arg.arg):
+                self.other.add(arg.arg)
+        self.generic_visit(node)
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+
+    def visit_ClassDef(self, node):
+        if self._chinese(node.name):
+            self.decl.add(node.name)
+        self.generic_visit(node)
+
+    def visit_Name(self, node):
+        if isinstance(node.ctx, ast.Store) and self._chinese(node.id):
+            self.other.add(node.id)
+
+    def visit_alias(self, node):
+        name = node.asname or node.name
+        if self._chinese(name):
+            self.other.add(name)
+
+    def visit_ExceptHandler(self, node):
+        if self._chinese(node.name):
+            self.other.add(node.name)
+        self.generic_visit(node)
+
+
+def _python_names(text: str) -> tuple[set[str], set[str]]:
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return set(), set()
+    v = _Bindings()
+    v.visit(tree)
+    return v.decl, v.other
+
+
+def _js_names(text: str) -> tuple[set[str], set[str]]:
+    """Approximate: declaration forms only. JS has no parser available here.
+
+    Parameters and destructured bindings are therefore NOT counted — the number is a
+    floor, not a total, and the report says so rather than implying otherwise.
+    """
+    decl = {m.group(2) for m in JS_DECL_KINDS.finditer(text) if CJK.search(m.group(2))}
+    everything = {m.group(1) for m in JS_DECL.finditer(text) if CJK.search(m.group(1))}
+    return decl, everything - decl
 
 
 def _walk(rel_root: str):
@@ -103,7 +197,7 @@ def _rel(path: str) -> str:
 
 
 def scan() -> dict:
-    identifiers, filenames, she, comment_lines = [], [], [], 0
+    identifiers, names, filenames, she, comment_lines = [], [], [], [], 0
     she_files = set()
 
     targets = list(SCOPE) + ["frontend"]
@@ -127,13 +221,19 @@ def scan() -> dict:
 
             exempt_copy = os.path.relpath(path, ROOT) in COPY_EXEMPT
 
-            for i, line in enumerate(text.splitlines(), 1):
+            for line in text.splitlines():
                 if CJK.search(line) and not exempt_copy:
                     comment_lines += 1
-                if root in SCOPE:
-                    m = DEF.match(line) or JS_CONST_FN.match(line)
-                    if m and CJK.search(m.group(1)):
-                        identifiers.append(f"{rel}:{i}  {m.group(1)}")
+
+            if root in SCOPE:
+                if name.endswith(".py"):
+                    decl, other = _python_names(text)
+                elif name.endswith((".js", ".mjs", ".ts")):
+                    decl, other = _js_names(text)
+                else:
+                    decl, other = set(), set()
+                identifiers += [f"{rel}  {n}" for n in sorted(decl)]
+                names += [f"{rel}  {n}" for n in sorted(other)]
 
             n = text.count(SHE)
             if n:
@@ -142,6 +242,7 @@ def scan() -> dict:
 
     return {
         "identifiers": identifiers,
+        "names": names,
         "filenames": filenames,
         "she": she,
         "she_total": sum(n for _, n, _ in she),
@@ -151,6 +252,13 @@ def scan() -> dict:
 
 
 def main() -> int:
+    # ⚠️ Reconfiguring stdout belongs HERE, not at import time. It used to sit at module
+    #    level, which meant merely importing this file replaced (and closed) whatever
+    #    stdout the importer had — pytest's captured stream included, so the moment this
+    #    file grew tests of its own, the whole session died before a single one ran.
+    #    A module that is also a script may only do script things inside main().
+    sys.stdout = __import__("io").TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--list", action="store_true", help="print every remaining offender")
     ap.add_argument("--baseline", action="store_true", help="print a BASELINE block to paste back")
@@ -159,13 +267,14 @@ def main() -> int:
     r = scan()
     counts = {
         "identifiers": len(r["identifiers"]),
+        "names": len(r["names"]),
         "filenames": len(r["filenames"]),
         "she": r["she_total"],
     }
 
     if args.baseline:
         print("BASELINE = {")
-        for k in ("identifiers", "filenames", "she"):
+        for k in ("identifiers", "names", "filenames", "she"):
             print(f'    "{k}": {counts[k]},')
         print("}")
         return 0
@@ -173,6 +282,7 @@ def main() -> int:
     print("═══ English check ═══")
     labels = {
         "identifiers": "Chinese identifiers (def/function/class)",
+        "names": "Chinese names (params/vars/constants)",
         "filenames": "Chinese filenames",
         "she": "mentions of 她",
     }
@@ -195,6 +305,10 @@ def main() -> int:
         if r["identifiers"]:
             print("\n--- identifiers ---")
             for x in r["identifiers"]:
+                print("   ", x)
+        if r["names"]:
+            print("\n--- names (params / variables / exported constants) ---")
+            for x in r["names"]:
                 print("   ", x)
         if r["filenames"]:
             print("\n--- filenames ---")
