@@ -34,6 +34,9 @@ Runs:  · pyflakes (blocks undefined names — it pointed out those two NameErro
          no network, and never a real memory.
        · gateway tests (gateway/tests/, fake upstream + fake Loci, not one real connection
          leaves the building)
+       · the English ratchet — shipped code may not GAIN Chinese identifiers, Chinese
+         filenames or mentions of her. Red only when a count goes up, which is what lets
+         it sit here during the translation instead of only after it.
 
 Doesn't run: **anything that needs a container, needs a model, or touches her real memories.**
        🔴 That is its definition, not a shortcoming. The moment it starts bringing up
@@ -93,6 +96,15 @@ def main():
     #        **it looks like the tests failed, when in fact they never ran.**
     results["gateway"] = run_step("(3) gateway tests (fake upstream + fake Loci)",
                                   ["node", "--test", "gateway/tests/*.test.js"],
+                                  lambda rc, out: rc != 0)
+
+    # (4) the English ratchet.
+    #     ⚠️ It is a RATCHET, not a gate, and that is the only reason it can be here today:
+    #        a check that is red on day one gets skipped by day two. It goes red only when a
+    #        count goes UP — i.e. when Chinese was put back into code that ships. The running
+    #        numbers, and what is deliberately not counted, are in scripts/check_english.py.
+    results["english"] = run_step("(4) English ratchet (shipped code only)",
+                                  [sys.executable, "scripts/check_english.py"],
                                   lambda rc, out: rc != 0)
 
     elapsed = time.time() - total_t0
