@@ -1,5 +1,5 @@
 // ============================================================
-// gateway/戳戳送达.js —— 从她自己的网关里整段抽出来的（2026-08-19）
+// gateway/poke_delivery.js —— 从她自己的网关里整段抽出来的（2026-08-19）
 //
 // 原件：lento-home/src/loci-bridge/戳戳送达.js。那个文件从第一天就是照着
 // 「将来要跟 Loci 一起发出去」写的 —— 头一条边界就是**零 import 宿主项目**，
@@ -9,7 +9,7 @@
 //   ② 注入标记：[Lento poke] → [Loci poke]
 //
 // 它是**一个模块，不是一个服务**。同目录下的 server.js 是给它配的最小外壳
-// （一个 OpenAI 兼容的反向代理，请求路过时调一次这儿的 `贴一次`）。
+// （一个 OpenAI 兼容的反向代理，请求路过时调一次这儿的 `attach_once`）。
 // 你要是已经有自己的网关，别用那个外壳，直接 require 这个文件就行。
 // ============================================================
 //
@@ -44,7 +44,7 @@
 //    现在**只有闲时闸**。参数还留着（跟 A/C 接口对齐、日志诊断用），但传
 //    `newWindow=true` 不能绕开闲时闸，不够闲照样一个字不注入。
 //
-// 跟 自动贴.js 同一个模块家族、同一条边界（她 8-17 深夜定死的）。
+// 跟 auto_attach.js 同一个模块家族、同一条边界（她 8-17 深夜定死的）。
 // ⚰️ 底下几处提到的 `近期记忆视图.js` **2026-08-19 整个撤了**（同目录已无此文件）——
 //    留着这些引用是因为它们说的是边界怎么定的，不是在指路：
 //   零 import lento-home（这个文件将来整段跟 Loci 一起开源，不能夹带 Home 的东西）·
@@ -67,7 +67,7 @@ const path = require("path");
 // 现在落在**这个网关自己目录**下的 data/（也可以用 LOCI_GATEWAY_DATA 指到别处）。
 const 数据根 = process.env.LOCI_GATEWAY_DATA || path.join(__dirname, "data");
 
-// 跟 自动贴.js / 近期记忆视图.js 用同一个环境变量名（她的 MCP 地址）；
+// 跟 auto_attach.js / 近期记忆视图.js 用同一个环境变量名（她的 MCP 地址）；
 // Loci 的普通 REST 口挂在同一个进程、同一个端口，只是路径不是 /mcp——
 // 从这同一个地址派生 REST 根，不另开一个环境变量（一处配置，两边都对）。
 const 默认地址 = process.env.LOCI_MCP || "http://127.0.0.1:18002/mcp";
@@ -77,18 +77,18 @@ const 默认日志档 = path.join(数据根, "logs", "memory-actions.jsonl");
 // 这儿的默认值只是这个模块自己被单独调用/测试时的兜底。
 const 默认闲时阈值分钟 = 210;
 
-// 诊断/测试认这个字面量 —— 跟 自动贴.js 的 [Loci memory context] 是姐妹标记。
+// 诊断/测试认这个字面量 —— 跟 auto_attach.js 的 [Loci memory context] 是姐妹标记。
 const MARKER = "[Loci poke]";
 
-function 读JSON(文件, 缺省 = {}) {
+function read_json(文件, 缺省 = {}) {
   try { return fs.existsSync(文件) ? JSON.parse(fs.readFileSync(文件, "utf8")) : 缺省; }
   catch { return 缺省; }
 }
-function 写JSON(文件, 值) {
+function write_json(文件, 值) {
   fs.mkdirSync(path.dirname(文件), { recursive: true });
   fs.writeFileSync(文件, `${JSON.stringify(值, null, 2)}\n`);
 }
-function 记一行(文件, 值) {
+function log_line(文件, 值) {
   fs.mkdirSync(path.dirname(文件), { recursive: true });
   fs.appendFileSync(文件, `${JSON.stringify(值)}\n`);
 }
@@ -108,20 +108,20 @@ function httpBase(mcpUrl) {
 // ⚠️ 走请求头，**不走地址栏** —— 地址栏会被日志 / Referer / 浏览器历史带出去。
 // ⚠️ 没配 `LOCI_HOOK_TOKEN` 也照常跑：Loci 那头只有**门锁着**的时候才要钥匙。
 //    （所以不设密码的人一切照旧，什么都不用改。）
-function 请求头() {
+function request_headers() {
   const h = { Accept: "application/json" };
   const k = String(process.env.LOCI_HOOK_TOKEN || "").trim();
   if (k) h["x-loci-hook-token"] = k;
   return h;
 }
 
-async function 问戳口(地址, { 超时毫秒 = 8000 } = {}) {
+async function fetch_poke(地址, { 超时毫秒 = 8000 } = {}) {
   const url = `${httpBase(地址)}/api/loci/poke`;
   const 控 = new AbortController();
   const 闹钟 = setTimeout(() => 控.abort(), 超时毫秒);
   let 回;
   try {
-    回 = await fetch(url, { method: "GET", headers: 请求头(), signal: 控.signal });
+    回 = await fetch(url, { method: "GET", headers: request_headers(), signal: 控.signal });
   } catch (错) {
     clearTimeout(闹钟);
     if (错?.name === "AbortError") throw new Error(`问 Loci 戳口超时（${url}）`);
@@ -135,8 +135,8 @@ async function 问戳口(地址, { 超时毫秒 = 8000 } = {}) {
 }
 
 /** 施工7d：降级信号——她回来发的第二条消息触发，POST 一次，幂等（Loci 那边
- *  没有活着的完整层就静默 200）。跟 问戳口 一样是纯 REST，不走 MCP 握手。 */
-async function 调唤醒口(地址, { 超时毫秒 = 8000 } = {}) {
+ *  没有活着的完整层就静默 200）。跟 fetch_poke 一样是纯 REST，不走 MCP 握手。 */
+async function call_wake(地址, { 超时毫秒 = 8000 } = {}) {
   const url = `${httpBase(地址)}/api/loci/dream/wake`;
   const 控 = new AbortController();
   const 闹钟 = setTimeout(() => 控.abort(), 超时毫秒);
@@ -144,7 +144,7 @@ async function 调唤醒口(地址, { 超时毫秒 = 8000 } = {}) {
   try {
     回 = await fetch(url, {
       method: "POST",
-      headers: { ...请求头(), "Content-Type": "application/json" },
+      headers: { ...request_headers(), "Content-Type": "application/json" },
       body: "{}",
       signal: 控.signal,
     });
@@ -158,11 +158,11 @@ async function 调唤醒口(地址, { 超时毫秒 = 8000 } = {}) {
   return true;
 }
 
-/** 建贴文：梦在前（交付，给全文——不管这段正文此刻是完整版还是已经降级的碎片/
+/** build_patch_text：梦在前（交付，给全文——不管这段正文此刻是完整版还是已经降级的碎片/
  *  一句，Loci 吐什么就贴什么，这个模块不关心「层」，只关心 Loci 给没给内容）、
  *  发呆一句在后（提醒，绝不带团的内容）。哪样都没有就不该走到这儿——调用方在
  *  没货时压根不建这段。 */
-function 建贴文(poke) {
+function build_patch_text(poke) {
   const 段 = [MARKER];
   if (poke.dream) {
     段.push("〔梦〕昨夜织了一个梦：", String(poke.dream.内容 || "").trim());
@@ -174,7 +174,7 @@ function 建贴文(poke) {
   return 段.join("\n");
 }
 
-function 插到最新user之前(messages, patch) {
+function insert_before_latest_user(messages, patch) {
   let 插入点 = messages.length;
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     if (messages[i]?.role === "user") { 插入点 = i; break; }
@@ -198,7 +198,7 @@ function 插到最新user之前(messages, patch) {
  *                          `POKE_IDLE_MINUTES` 传进来（server.js D 段），
  *                          这儿的默认值只在模块被单独调用时兜底。
  */
-async function 贴一次({
+async function attach_once({
   messages,
   requestId,
   now = new Date(),
@@ -214,7 +214,7 @@ async function 贴一次({
     hasDream: false, musePending: 0, error: null,
     idle: false, idleMinutes: null, wakeCalled: false, wakeError: null,
   };
-  const 状态 = 读JSON(statePath, {});
+  const 状态 = read_json(statePath, {});
 
   // ---- 降级触发：跟这条请求够不够闲无关，只看"上一次是否已经武装" ----
   // 武装 = 上一条请求判过"够闲"（=那条消息是她回来的第一句），这条消息就是
@@ -224,8 +224,8 @@ async function 贴一次({
   if (wakePending) {
     结果.wakeCalled = true;
     try {
-      await 调唤醒口(地址, { 超时毫秒 });
-      记一行(logPath, {
+      await call_wake(地址, { 超时毫秒 });
+      log_line(logPath, {
         time: now.toISOString(), request_id: requestId, actor: "gateway/poke",
         action: "dream_wake", status: "ok",
       });
@@ -233,7 +233,7 @@ async function 贴一次({
     } catch (错) {
       结果.wakeError = String(错?.message || 错);
       结果.wakeCalled = false;
-      记一行(logPath, {
+      log_line(logPath, {
         time: now.toISOString(), request_id: requestId, actor: "gateway/poke",
         action: "dream_wake", status: "error", error: 结果.wakeError,
       });
@@ -253,7 +253,7 @@ async function 贴一次({
 
   if (!够闲) {
     // 🔴 不够闲：一个字不注入，连 Loci 都不问（省调用）——聊天中绝不插嘴。
-    写JSON(statePath, { ...状态, lastUserMessageTime: now.toISOString(), wakePending });
+    write_json(statePath, { ...状态, lastUserMessageTime: now.toISOString(), wakePending });
     return 结果;
   }
 
@@ -261,17 +261,17 @@ async function 贴一次({
   结果.calledLoci = true;
   let poke = null;
   try {
-    const 数据 = await 问戳口(地址, { 超时毫秒 });
+    const 数据 = await fetch_poke(地址, { 超时毫秒 });
     const 梦们 = Array.isArray(数据.dreams) ? 数据.dreams : [];
     poke = { dream: 梦们.length ? 梦们[0] : null, musePending: Number(数据.muse_pending) || 0 };
-    记一行(logPath, {
+    log_line(logPath, {
       time: now.toISOString(), request_id: requestId, actor: "gateway/poke",
       action: "poke_fetch", status: "ok", idle_minutes: 结果.idleMinutes,
       has_dream: Boolean(poke.dream), muse_pending: poke.musePending,
     });
   } catch (错) {
     结果.error = String(错?.message || 错);
-    记一行(logPath, {
+    log_line(logPath, {
       time: now.toISOString(), request_id: requestId, actor: "gateway/poke",
       action: "poke_fetch", status: "error", error: 结果.error,
       fallback_to_stale_cache: Boolean(状态.poke),
@@ -286,14 +286,14 @@ async function 贴一次({
   // 就不重新武装，等真正下一次独立的空档再说。）
   if (!结果.wakeCalled) wakePending = true;
 
-  写JSON(statePath, {
+  write_json(statePath, {
     poke, fetchedAt: now.toISOString(),
     lastUserMessageTime: now.toISOString(), wakePending,
   });
 
   if (poke && (poke.dream || poke.musePending > 0)) {
-    const patch = { role: "system", content: 建贴文(poke) };
-    插到最新user之前(Array.isArray(messages) ? messages : [], patch);
+    const patch = { role: "system", content: build_patch_text(poke) };
+    insert_before_latest_user(Array.isArray(messages) ? messages : [], patch);
     结果.patchInjected = true;
     结果.hasDream = Boolean(poke.dream);
     结果.musePending = poke.musePending;
@@ -307,7 +307,7 @@ module.exports = {
   默认状态档,
   默认日志档,
   默认闲时阈值分钟,
-  贴一次,
+  attach_once,
 
 // ── 英文别名（2026-08-19 她提的：「你就不怕别人不好改吗」）─────────────────────
 // 🔴 **只是别名，指的是同一个函数**。文件内部照旧中文——`算相关记忆提醒` 一眼知道
@@ -315,10 +315,10 @@ module.exports = {
 //    给自己制造 bug。但**对外这几个名字是别人要亲手敲的**，一个不认识汉字的人
 //    连自己粘的是哪个都不知道。名字是给读的人用的，谁读就照顾谁。
   // paste({ messages, requestId, 地址, 闲时阈值分钟 }) —— 就地改 messages
-  paste: 贴一次,
+  paste: attach_once,
   MARKER_LINE: MARKER,
   DEFAULT_ADDRESS: 默认地址,
   DEFAULT_IDLE_MINUTES: 默认闲时阈值分钟,
 
-  _internal: { httpBase, 问戳口, 调唤醒口, 建贴文, 插到最新user之前 },
+  _internal: { httpBase, fetch_poke, call_wake, build_patch_text, insert_before_latest_user },
 };

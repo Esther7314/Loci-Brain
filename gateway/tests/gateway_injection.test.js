@@ -1,5 +1,5 @@
 // ============================================================
-// gateway/tests/网关注入.test.js —— 这个网关的第一套测试
+// gateway/tests/gateway_injection.test.js —— 这个网关的第一套测试
 //
 // 🔴 **这一套要守的是什么**
 // 这个网关上出过一个 bug：超时写死 5 秒，而一次 recall 要 5~7 秒 ——
@@ -36,10 +36,10 @@ const fs = require("node:fs");
 const net = require("node:net");
 const path = require("node:path");
 
-const 围栏 = require("./网络围栏.js");     // 本进程也上围栏：测试自己也不许敲错门
-const { 起假上游 } = require("./假上游.js");
-const { 起假loci } = require("./假loci.js");
-const { 起网关 } = require("./起网关.js");
+const 围栏 = require("./network_fence.js");     // 本进程也上围栏：测试自己也不许敲错门
+const { start_fake_upstream } = require("./fake_upstream.js");
+const { start_fake_loci } = require("./fake_loci.js");
+const { start_gateway } = require("./start_gateway.js");
 
 // ——— 现场（临时目录，跑完删掉；留下现场=1 就留着）———
 const 数据根 = path.join(__dirname, ".跑测试留下的东西");
@@ -59,7 +59,7 @@ let 假上游, 假loci, 网关;
 let 网关端口;
 
 // ——— 挑端口：挑之前先真的 listen 一下，确认没被占用 ———
-function 端口空着吗(端口) {
+function is_port_free(端口) {
   return new Promise((好) => {
     const 探 = net.createServer();
     探.once("error", () => 好(false));
@@ -68,11 +68,11 @@ function 端口空着吗(端口) {
     探.listen(端口);
   });
 }
-async function 挑几个空端口(个数, 起 = 19100, 止 = 19899) {
+async function pick_free_ports(个数, 起 = 19100, 止 = 19899) {
   const 挑到 = [];
   for (let p = 起; p <= 止 && 挑到.length < 个数; p += 1) {
     if (碰不得的端口.includes(p)) continue;
-    if (await 端口空着吗(p)) 挑到.push(p);
+    if (await is_port_free(p)) 挑到.push(p);
   }
   if (挑到.length < 个数) throw new Error(`19xxx 段里没挑够 ${个数} 个空端口`);
   return 挑到;
@@ -81,7 +81,7 @@ async function 挑几个空端口(个数, 起 = 19100, 止 = 19899) {
 // ——— 小工具 ———
 
 /** 往网关发一句话，返回上游那份原始 messages（用来逐字比对「改没改」） */
-async function 发一句(话, 请求号) {
+async function send_line(话, 请求号) {
   const 消息 = [
     { role: "system", content: "你是小慢。" },
     { role: "user", content: 话 },
@@ -104,7 +104,7 @@ async function 发一句(话, 请求号) {
 }
 
 /** 从 memory-actions.jsonl 里挑出这一次请求的那条「相关记忆提醒」记录 */
-function 查提醒日志(请求号) {
+function find_notice_log(请求号) {
   if (!fs.existsSync(日志档)) return null;
   const 要找的 = encodeURIComponent(请求号);   // 跟发出去时同一个转义
   const 行们 = fs.readFileSync(日志档, "utf8").split(/\r?\n/).filter(Boolean);
@@ -116,19 +116,19 @@ function 查提醒日志(请求号) {
 }
 
 /** 网关控制台那一行末尾的「说了什么」（把毫秒抹掉，只留它对这次请求的判词） */
-function 控制台判词(增量) {
+function console_verdict(增量) {
   const m = /→\s*\d{3}\s+\d+ms\s+(.*)$/m.exec(增量.trim());
   return m ? m[1].trim() : null;
 }
 
 /** 贴回去那一行里的数字：事件 N 条 · 认知 M 条 */
-function 拆提醒行(正文) {
+function parse_notice_line(正文) {
   const m = /^〔记忆提醒〕和这句有关：事件 (\d+) 条 · 认知 (\d+) 条$/.exec(String(正文).trim());
   return m ? { 事件: Number(m[1]), 认知: Number(m[2]) } : null;
 }
 
 /** 围栏账本（本进程的 + 网关子进程落在文件里的那份）合起来 */
-function 全部出门记录() {
+function all_outbound_records() {
   const 子 = fs.existsSync(子进程账本)
     ? fs.readFileSync(子进程账本, "utf8").split(/\r?\n/).filter(Boolean).map((行) => JSON.parse(行))
     : [];
@@ -140,15 +140,15 @@ before(async () => {
   fs.mkdirSync(path.join(数据根, "logs"), { recursive: true });
   fs.mkdirSync(path.join(数据根, "state"), { recursive: true });
 
-  const [上游端口, loci端口, 网关口] = await 挑几个空端口(3);
+  const [上游端口, loci端口, 网关口] = await pick_free_ports(3);
   网关端口 = 网关口;
   for (const p of [上游端口, loci端口, 网关端口]) {
     assert.ok(p >= 19100 && p <= 19899, `端口 ${p} 跑出 19xxx 段了`);
     assert.ok(!碰不得的端口.includes(p), `端口 ${p} 是真东西在用的`);
   }
 
-  假上游 = await 起假上游({ 端口: 上游端口 });
-  假loci = await 起假loci({ 端口: loci端口 });
+  假上游 = await start_fake_upstream({ 端口: 上游端口 });
+  假loci = await start_fake_loci({ 端口: loci端口 });
 
   // 🔴 预置戳戳送达的状态文件：假装她「刚刚才说过话」。
   //    这一单不测戳戳送达，但它跟被测路径在**同一个请求**里。没有这个文件的话
@@ -160,7 +160,7 @@ before(async () => {
     JSON.stringify({ lastUserMessageTime: new Date().toISOString(), wakePending: false }, null, 2),
   );
 
-  网关 = await 起网关({
+  网关 = await start_gateway({
     端口: 网关端口,
     上游地址: 假上游.地址,
     loci地址: 假loci.地址,
@@ -170,7 +170,7 @@ before(async () => {
     账本路径: 子进程账本,
   });
 
-  围栏.允许(网关端口);                     // 测试进程只准敲网关这一个门
+  围栏.allow(网关端口);                     // 测试进程只准敲网关这一个门
 });
 
 after(async () => {
@@ -190,7 +190,7 @@ test("正向信号：带强档词的一句话过去，上游收到的 messages �
   假上游.清账(); 假loci.清账();
 
   const 话 = "上次你说的那个超时的事，后来怎么样了？";
-  const { 状态, 原样 } = await 发一句(话, "测试-正向");
+  const { 状态, 原样 } = await send_line(话, "测试-正向");
 
   assert.strictEqual(状态, 200, "网关得把上游的回应原样带回来");
 
@@ -218,7 +218,7 @@ test("正向信号：带强档词的一句话过去，上游收到的 messages �
   assert.strictEqual(调用们[0].参数.query, 话, "拿去查的应该就是她这句话原文");
 
   // ⑤ 日志这一头也对得上（出事的时候只有这儿看得见真相，所以它必须准）
-  const 记录 = 查提醒日志("测试-正向");
+  const 记录 = find_notice_log("测试-正向");
   assert.ok(记录, "日志里得有这一次请求的记录");
   assert.strictEqual(记录.triggered, true);
   assert.strictEqual(记录.trigger_kind, "strong");
@@ -230,10 +230,10 @@ test("命中数：贴的不是空壳 —— 条数 ≥ 1，而且跟假 Loci 给
   假loci.设模式("正常");
   假上游.清账(); 假loci.清账();
 
-  await 发一句("还记得吗，那天夜里我们把弱档关掉了", "测试-命中数");
+  await send_line("还记得吗，那天夜里我们把弱档关掉了", "测试-命中数");
 
   const 尾巴 = 假上游.最后一笔().体.messages.at(-1);
-  const 数 = 拆提醒行(尾巴.content);
+  const 数 = parse_notice_line(尾巴.content);
   assert.ok(数, `提醒行的格式不对：${尾巴.content}`);
 
   // 「注入发生了」不等于「注入有内容」—— 贴一行「事件 0 条 · 认知 0 条」也算贴了。
@@ -245,7 +245,7 @@ test("命中数：贴的不是空壳 —— 条数 ≥ 1，而且跟假 Loci 给
   assert.strictEqual(数.事件, 假loci.应该的事件数, "事件条数应该等于过线的非 🧠 行数");
   assert.strictEqual(数.认知, 假loci.应该的认知数, "认知条数应该等于过线的 🧠 行数");
 
-  const 记录 = 查提醒日志("测试-命中数");
+  const 记录 = find_notice_log("测试-命中数");
   assert.deepStrictEqual(记录.matched_ids, 假loci.应该过线的id,
     "日志里记下的命中 id 必须正好是过线的那几条 —— 这是「贴的东西来自这份检索结果」的证据链");
   assert.ok(!记录.matched_ids.includes(假loci.挡在线下的id),
@@ -257,7 +257,7 @@ test("只报数量不报正文：贴回去的那行里，一个字的记忆正�
   假loci.设模式("正常");
   假上游.清账(); 假loci.清账();
 
-  const { 原样 } = await 发一句("以前我们是怎么处理这种情况的", "测试-不报正文");
+  const { 原样 } = await send_line("以前我们是怎么处理这种情况的", "测试-不报正文");
 
   // 先确认**真的贴了** —— 不然这条测试会「因为压根没注入」而白白变绿，
   // 那正是这一单最要防的那种假绿。
@@ -286,7 +286,7 @@ test("不触发：一句什么都不沾的话过去 —— 一次都不查记忆
   假loci.设模式("正常");
   假上游.清账(); 假loci.清账();
 
-  const { 状态, 原样 } = await 发一句("嗯", "测试-不触发");
+  const { 状态, 原样 } = await send_line("嗯", "测试-不触发");
   assert.strictEqual(状态, 200);
 
   // ① 假 Loci **一个请求都没收到**（不是「没收到 recall」，是整个门都没被敲过：
@@ -300,7 +300,7 @@ test("不触发：一句什么都不沾的话过去 —— 一次都不查记忆
   assert.deepStrictEqual(上游体.messages, 原样, "没触发就不该往 messages 里加任何东西");
 
   // ③ 日志上说得清「为什么没查」—— 不是「查了但空手而归」
-  const 记录 = 查提醒日志("测试-不触发");
+  const 记录 = find_notice_log("测试-不触发");
   assert.strictEqual(记录.triggered, false);
   assert.strictEqual(记录.trigger_kind, "none");
   assert.strictEqual(记录.recall_called, false);
@@ -315,7 +315,7 @@ test("Loci 回 500：网关照常转发，而且日志上看得出来它失败�
   假loci.设模式("五百");
   假上游.清账(); 假loci.清账();
 
-  const { 状态, 体, 原样 } = await 发一句("上次那个 500 的事", "测试-五百");
+  const { 状态, 体, 原样 } = await send_line("上次那个 500 的事", "测试-五百");
 
   // ① 她的对话不许被弄死：照常转发、照常拿到回应
   assert.strictEqual(状态, 200, "Loci 挂了也不许把用户的对话弄死");
@@ -325,7 +325,7 @@ test("Loci 回 500：网关照常转发，而且日志上看得出来它失败�
 
   // ② 但这件事**得能看出来** —— 日志里有一条带 error 的记录，
   //    而且能分清「触发了、去查了、失败了」和「压根没触发」。
-  const 记录 = 查提醒日志("测试-五百");
+  const 记录 = find_notice_log("测试-五百");
   assert.strictEqual(记录.triggered, true, "触发过");
   assert.strictEqual(记录.recall_called, true, "去查过");
   assert.strictEqual(记录.injected, false, "没贴成");
@@ -340,12 +340,12 @@ test("Loci 连不上（连接被掐断）：一样照常转发，一样在日志
   假loci.设模式("断连");
   假上游.清账(); 假loci.清账();
 
-  const { 状态, 原样 } = await 发一句("之前那份开工单还在吗", "测试-断连");
+  const { 状态, 原样 } = await send_line("之前那份开工单还在吗", "测试-断连");
 
   assert.strictEqual(状态, 200);
   assert.deepStrictEqual(假上游.最后一笔().体.messages, 原样);
 
-  const 记录 = 查提醒日志("测试-断连");
+  const 记录 = find_notice_log("测试-断连");
   assert.strictEqual(记录.triggered, true);
   assert.strictEqual(记录.injected, false);
   assert.ok(记录.error && 记录.error.includes("连不上 Loci"),
@@ -360,8 +360,8 @@ test("超时：假 Loci 比网关的超时还慢 → 转发照常，而且这件
   // 先拿一句「压根没触发」的做对照组，等会儿要跟超时那次比控制台说了什么
   假loci.设模式("正常");
   假上游.清账(); 假loci.清账(); 网关.输出增量();
-  await 发一句("好的", "测试-超时对照");
-  const 对照判词 = 控制台判词(await 网关.等增量());
+  await send_line("好的", "测试-超时对照");
+  const 对照判词 = console_verdict(await 网关.等增量());
 
   // 现在让假 Loci 慢过网关的超时 —— 这就是那个 bug 的现场：
   // 超时 5 秒、recall 要 5~7 秒，于是它每次都 abort，命中数恒为 0。
@@ -369,9 +369,9 @@ test("超时：假 Loci 比网关的超时还慢 → 转发照常，而且这件
   假上游.清账(); 假loci.清账();
 
   const 起 = Date.now();
-  const { 状态, 体, 原样 } = await 发一句("上次那件事你还记得吗", "测试-超时");
+  const { 状态, 体, 原样 } = await send_line("上次那件事你还记得吗", "测试-超时");
   const 花了 = Date.now() - 起;
-  const 超时判词 = 控制台判词(await 网关.等增量());
+  const 超时判词 = console_verdict(await 网关.等增量());
 
   // ① 她的对话不许被卡死，也不许被弄死
   assert.strictEqual(状态, 200, "Loci 慢不许把用户的对话弄死");
@@ -388,7 +388,7 @@ test("超时：假 Loci 比网关的超时还慢 → 转发照常，而且这件
   // ③ **这件事说得出口** —— 日志里有一条明确的失败记录，
   //    分得清「触发了、去查了、超时了」跟「压根没触发」。
   //    那个 bug 能活好几天，就是因为当时没人有地方看这一行。
-  const 记录 = 查提醒日志("测试-超时");
+  const 记录 = find_notice_log("测试-超时");
   assert.ok(记录, "超时也必须留下记录");
   assert.strictEqual(记录.triggered, true, "触发过");
   assert.strictEqual(记录.recall_called, true, "去查过");
@@ -411,7 +411,7 @@ test("超时：假 Loci 比网关的超时还慢 → 转发照常，而且这件
 // ============================================================
 
 test("坑｜Loci 换个排版：一条都数不出来，而且日志上跟「本来就没相关记忆」一模一样", { timeout: 15000 }, async () => {
-  // 自动贴.js 的 解析分数行 读的是 Loci **给人看的渲染文本**（不是结构化 API），
+  // auto_attach.js 的 parse_score_line 读的是 Loci **给人看的渲染文本**（不是结构化 API），
   // 正则写死了「分数 + 两个空格 + …… + (圆括号里的 id)」。
   // Loci 那边哪天把日期挪到前面、id 换成方括号 —— 内容一个字没少，网关一条也认不出来。
   //
@@ -423,7 +423,7 @@ test("坑｜Loci 换个排版：一条都数不出来，而且日志上跟「本
   假loci.设模式("换排版");
   假上游.清账(); 假loci.清账();
 
-  const { 状态, 原样 } = await 发一句("上次那个排版的事", "测试-换排版");
+  const { 状态, 原样 } = await send_line("上次那个排版的事", "测试-换排版");
   assert.strictEqual(状态, 200);
 
   // 真的去查了、也真的拿到了内容（假 Loci 这次是成功返回的）
@@ -431,7 +431,7 @@ test("坑｜Loci 换个排版：一条都数不出来，而且日志上跟「本
   // 但一条都没数出来，什么都没贴
   assert.deepStrictEqual(假上游.最后一笔().体.messages, 原样);
 
-  const 记录 = 查提醒日志("测试-换排版");
+  const 记录 = find_notice_log("测试-换排版");
   assert.strictEqual(记录.triggered, true);
   assert.strictEqual(记录.recall_called, true);
   assert.strictEqual(记录.event_count, 0);
@@ -485,7 +485,7 @@ test("🔴 上游 gzip 的时候，回应会被截断（gateway/server.js 第 13
 // ============================================================
 
 test("对账：整套跑下来，出门的连接一条都没漏到假环境之外", { timeout: 15000 }, () => {
-  const 记录们 = 全部出门记录();
+  const 记录们 = all_outbound_records();
   assert.ok(记录们.length > 0, "账本是空的，说明围栏根本没挂上 —— 那前面的「没漏」全是空话");
 
   const 允许的 = new Set([假上游.端口, 假loci.端口, 网关端口]);
@@ -544,9 +544,9 @@ test("对账：整套跑下来，出门的连接一条都没漏到假环境之�
 // 已经在主日志里留下了一堆成功记录 —— 拿它做底，「坏了」这种结论永远出不来
 // （这本身就是漏报，见「漏报」那条）。要判它说得准不准，底必须是干净的。
 let 起过几个网关 = 0;
-async function 起一个干净网关(标签, { 建数据根 = true } = {}) {
+async function start_clean_gateway(标签, { 建数据根 = true } = {}) {
   起过几个网关 += 1;
-  const [端口] = await 挑几个空端口(1, 19300 + 起过几个网关 * 4);
+  const [端口] = await pick_free_ports(1, 19300 + 起过几个网关 * 4);
   const 根 = path.join(__dirname, `.跑测试留下的东西-${标签}`);
   fs.rmSync(根, { recursive: true, force: true });
   if (建数据根) {
@@ -556,8 +556,8 @@ async function 起一个干净网关(标签, { 建数据根 = true } = {}) {
     fs.writeFileSync(path.join(根, "state", "poke-window.json"),
       JSON.stringify({ lastUserMessageTime: new Date().toISOString(), wakePending: false }));
   }
-  围栏.允许(端口);                      // 测试进程要敲它
-  const 它 = await 起网关({
+  围栏.allow(端口);                      // 测试进程要敲它
+  const 它 = await start_gateway({
     端口,
     上游地址: 假上游.地址,
     loci地址: 假loci.地址,
@@ -578,8 +578,8 @@ async function 起一个干净网关(标签, { 建数据根 = true } = {}) {
   };
 }
 
-/** 往指定网关发一句话（前面十条用的 发一句 打的是主网关，那条不动） */
-async function 发一句到(某网关, 话, 请求号) {
+/** 往指定网关发一句话（前面十条用的 send_line 打的是主网关，那条不动） */
+async function send_line_to(某网关, 话, 请求号) {
   const 回 = await fetch(`${某网关.地址}/v1/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Request-Id": encodeURIComponent(请求号) },
@@ -590,29 +590,29 @@ async function 发一句到(某网关, 话, 请求号) {
 }
 
 /** 用**最普通的方式**敲健康口 —— 客户端怎么敲，这儿就怎么敲，不搞特殊姿势 */
-async function 打健康口(某网关, 路径 = "/health") {
+async function hit_health(某网关, 路径 = "/health") {
   const 回 = await fetch(`${某网关.地址}${路径}`, { method: "GET" });
   const 原文 = await 回.text();
   let 体 = null; try { 体 = JSON.parse(原文); } catch { /* 不是 JSON 就算了 */ }
   return { 状态: 回.status, 体, 原文 };
 }
 /** 拿到的是不是健康口自己的回答（不是被转发给上游之后上游的那份） */
-function 是健康口的回答(体) { return Boolean(体) && typeof 体.结论 === "string"; }
+function is_health_answer(体) { return Boolean(体) && typeof 体.结论 === "string"; }
 
 /**
  * 读一次健康口，顺带**断言这门是通的**。
  * 🔴 这儿是硬断言不是 skip：门通不通本身就是要守的东西 ——
  *    哪天路由又被改成敲不响，这一节该**红**，不该悄悄地跳过去。
  */
-async function 读健康(某网关) {
-  const { 状态, 体, 原文 } = await 打健康口(某网关);
-  assert.ok(是健康口的回答(体),
+async function read_health(某网关) {
+  const { 状态, 体, 原文 } = await hit_health(某网关);
+  assert.ok(is_health_answer(体),
     `GET /health 应该拿到健康口自己的 JSON（带「结论」那份）。实际状态 ${状态}，拿到：${原文.slice(0, 160)}`);
   return 体;
 }
 
-/** 按 算健康() 自己那套口径把日志里的「相关记忆提醒」挑出来（它读的就是这些） */
-function 读提醒记录(某日志档) {
+/** 按 build_health() 自己那套口径把日志里的「相关记忆提醒」挑出来（它读的就是这些） */
+function read_notice_records(某日志档) {
   if (!fs.existsSync(某日志档)) return [];
   return fs.readFileSync(某日志档, "utf8").split(/\r?\n/).filter(Boolean)
     .map((行) => { try { return JSON.parse(行); } catch { return null; } })
@@ -635,18 +635,18 @@ test("健康口｜/health 通，而且老路径 /健康 不许漏给上游", { t
   //
   // 两种写法都要试：客户端敲 `/健康` 时 fetch 会转义成 `/%E5%81%A5%E5%BA%B7`，
   // 而有人可能直接照着旧文档粘那串转义后的路径 —— 两条都是"老路径"。
-  const 摊 = await 起一个干净网关("路由");
+  const 摊 = await start_clean_gateway("路由");
   try {
     // ① 新路径通
     假上游.清账(); 假loci.清账();
-    const 健康 = await 读健康(摊.网关);
+    const 健康 = await read_health(摊.网关);
     assert.ok(typeof 健康.日志档 === "string", "健康口该报出它读的是哪份日志");
     assert.deepStrictEqual(假上游.收到, [], "/health 是本地只读口，一个字都不该转发出去");
 
     // ② 老路径不许漏
     for (const 老路径 of ["/健康", "/%E5%81%A5%E5%BA%B7"]) {
       假上游.清账(); 假loci.清账();
-      const { 状态, 原文 } = await 打健康口(摊.网关, 老路径);
+      const { 状态, 原文 } = await hit_health(摊.网关, 老路径);
       const 漏出去的 = 假上游.收到.map((条) => `${条.方法} ${条.路径}`);
       assert.deepStrictEqual(漏出去的, [],
         `老路径 ${老路径} 被当成普通流量转发给上游了：${JSON.stringify(漏出去的)}\n`
@@ -657,18 +657,18 @@ test("健康口｜/health 通，而且老路径 /健康 不许漏给上游", { t
 });
 
 test("健康口｜正常在工作的时候，它说「在工作」", { timeout: 20000 }, async () => {
-  const 摊 = await 起一个干净网关("在工作");
+  const 摊 = await start_clean_gateway("在工作");
   try {
     假loci.设模式("正常"); 假上游.清账(); 假loci.清账();
-    for (let i = 0; i < 3; i += 1) await 发一句到(摊.网关, 强档句[i], `健康-在工作-${i}`);
+    for (let i = 0; i < 3; i += 1) await send_line_to(摊.网关, 强档句[i], `健康-在工作-${i}`);
 
-    // —— 不用进门就能验的：算健康() 读的那份原料，得先是对的 ——
-    const 料 = 读提醒记录(摊.日志档);
+    // —— 不用进门就能验的：build_health() 读的那份原料，得先是对的 ——
+    const 料 = read_notice_records(摊.日志档);
     assert.strictEqual(料.length, 3);
     assert.strictEqual(料.filter((r) => r.triggered).length, 3, "三句都带强档词，该三次都触发");
     assert.strictEqual(料.filter((r) => r.injected).length, 3, "假 Loci 正常返回，该三次都贴上");
 
-    const 健康 = await 读健康(摊.网关);
+    const 健康 = await read_health(摊.网关);
 
     assert.strictEqual(健康.结论, "在工作");
     assert.ok(健康.真的贴上 >= 1, `真的贴上应该 ≥ 1，实际 ${健康.真的贴上}`);
@@ -680,19 +680,19 @@ test("健康口｜正常在工作的时候，它说「在工作」", { timeout: 
 });
 
 test("健康口｜那个 bug 的形状（触发了但一次都没贴上）必须被认出来", { timeout: 20000 }, async () => {
-  const 摊 = await 起一个干净网关("bug形状");
+  const 摊 = await start_clean_gateway("bug形状");
   try {
     // 假 Loci 一直 500 —— 网关照常转发、聊天照常，界面上什么都看不出来。
     // 这正是那个「超时 5 秒、从上线起一次没工作过」的形状。
     假loci.设模式("五百"); 假上游.清账(); 假loci.清账();
-    for (let i = 0; i < 3; i += 1) await 发一句到(摊.网关, 强档句[i], `健康-坏了-${i}`);
+    for (let i = 0; i < 3; i += 1) await send_line_to(摊.网关, 强档句[i], `健康-坏了-${i}`);
 
-    const 料 = 读提醒记录(摊.日志档);
+    const 料 = read_notice_records(摊.日志档);
     assert.strictEqual(料.filter((r) => r.triggered).length, 3, "三次都该触发");
     assert.strictEqual(料.filter((r) => r.injected).length, 0, "三次都该没贴上");
     assert.strictEqual(料.filter((r) => r.error).length, 3, "三次都该留下 error");
 
-    const 健康 = await 读健康(摊.网关);
+    const 健康 = await read_health(摊.网关);
 
     assert.ok(/🔴/.test(健康.结论),
       `坏成这样必须报红，实际结论是：${健康.结论}`);
@@ -703,17 +703,17 @@ test("健康口｜那个 bug 的形状（触发了但一次都没贴上）必须
 });
 
 test("健康口｜一次都没触发 ≠ 坏了：不许报红", { timeout: 20000 }, async () => {
-  const 摊 = await 起一个干净网关("没触发");
+  const 摊 = await start_clean_gateway("没触发");
   try {
     假loci.设模式("正常"); 假上游.清账(); 假loci.清账();
-    for (let i = 0; i < 3; i += 1) await 发一句到(摊.网关, 不沾边的句[i], `健康-没触发-${i}`);
+    for (let i = 0; i < 3; i += 1) await send_line_to(摊.网关, 不沾边的句[i], `健康-没触发-${i}`);
 
-    const 料 = 读提醒记录(摊.日志档);
+    const 料 = read_notice_records(摊.日志档);
     assert.strictEqual(料.length, 3);
     assert.strictEqual(料.filter((r) => r.triggered).length, 0, "都是应声话，一次都不该触发");
     assert.strictEqual(假loci.收到.length, 0, "没触发就不该去敲 Loci");
 
-    const 健康 = await 读健康(摊.网关);
+    const 健康 = await read_health(摊.网关);
 
     // 🔴 这条最要紧：**误报比不报更坏**。没人说到相关的事是日常，不是故障。
     assert.ok(!/🔴/.test(健康.结论), `没触发不该报红，实际：${健康.结论}`);
@@ -724,26 +724,26 @@ test("健康口｜一次都没触发 ≠ 坏了：不许报红", { timeout: 2000
 });
 
 test("健康口｜它是只读的：不写日志、不出门", { timeout: 20000 }, async () => {
-  const 摊 = await 起一个干净网关("只读");
+  const 摊 = await start_clean_gateway("只读");
   try {
     假loci.设模式("正常"); 假上游.清账(); 假loci.清账();
-    await 发一句到(摊.网关, 强档句[0], "健康-只读-垫底");
+    await send_line_to(摊.网关, 强档句[0], "健康-只读-垫底");
 
-    const 健康 = await 读健康(摊.网关);
+    const 健康 = await read_health(摊.网关);
 
-    const 量日志 = () => fs.statSync(摊.日志档).size;
-    const 量账本 = () => (fs.existsSync(子进程账本)
+    const log_size = () => fs.statSync(摊.日志档).size;
+    const ledger_size = () => (fs.existsSync(子进程账本)
       ? fs.readFileSync(子进程账本, "utf8").split(/\r?\n/).filter(Boolean).length : 0);
-    const 日志前 = 量日志(), 账本前 = 量账本();
+    const 日志前 = log_size(), 账本前 = ledger_size();
     假上游.清账(); 假loci.清账();
 
     for (let i = 0; i < 3; i += 1) {
-      const { 体 } = await 打健康口(摊.网关);
-      assert.ok(是健康口的回答(体), "连打三次都该稳定回同一个口");
+      const { 体 } = await hit_health(摊.网关);
+      assert.ok(is_health_answer(体), "连打三次都该稳定回同一个口");
     }
 
-    assert.strictEqual(量日志(), 日志前, "健康口只读：日志档一个字节都不该多");
-    assert.strictEqual(量账本(), 账本前, "健康口一次都不该出门（网关侧围栏账本没长）");
+    assert.strictEqual(log_size(), 日志前, "健康口只读：日志档一个字节都不该多");
+    assert.strictEqual(ledger_size(), 账本前, "健康口一次都不该出门（网关侧围栏账本没长）");
     assert.strictEqual(假上游.收到.length, 0, "不该把健康检查转发给上游");
     assert.strictEqual(假loci.收到.length, 0, "不该为了答健康去问 Loci");
   } finally { await 摊.收(); }
@@ -751,13 +751,13 @@ test("健康口｜它是只读的：不写日志、不出门", { timeout: 20000 
 
 test("健康口｜日志档还不存在的时候：200 + 说清「还没有任何一次记录」，不是 500", { timeout: 20000 }, async () => {
   // LOCI_GATEWAY_DATA 指到一个压根不存在的目录 —— 刚装完、或者路径配歪了，就是这样。
-  const 摊 = await 起一个干净网关("无日志", { 建数据根: false });
+  const 摊 = await start_clean_gateway("无日志", { 建数据根: false });
   try {
     假上游.清账(); 假loci.清账();
-    const { 状态, 体 } = await 打健康口(摊.网关);
+    const { 状态, 体 } = await hit_health(摊.网关);
     assert.strictEqual(状态, 200, "日志不在不是错误，不该 500");
 
-    const 健康 = 是健康口的回答(体) ? 体 : await 读健康(摊.网关);
+    const 健康 = is_health_answer(体) ? 体 : await read_health(摊.网关);
 
     assert.ok(健康.结论.includes("还没有任何一次记录"), `实际结论：${健康.结论}`);
     assert.strictEqual(健康.最近这些轮, 0);
@@ -767,10 +767,10 @@ test("健康口｜日志档还不存在的时候：200 + 说清「还没有任�
 
 // ——— 它自己会不会撒谎 ———
 // 下面两条不测「口通不通」，测的是**判据本身**。它们今天就跑得起来（验的是
-// 算健康() 读的那份原料），因为原料里已经能看出结论会是什么。
+// build_health() 读的那份原料），因为原料里已经能看出结论会是什么。
 
 test("撒谎·漏报｜陈年的成功会盖住今天的全面失效", { timeout: 25000 }, async () => {
-  // 🔴 算健康() 判「在工作」的条件是：**窗口里有过任意一条 injected**。
+  // 🔴 build_health() 判「在工作」的条件是：**窗口里有过任意一条 injected**。
   //    窗口是「日志最后 200 行」，不是「最近多久」—— 所以昨天成功过的记录
   //    会一直待在窗口里，把今天的全面失效盖住，结论照说「在工作」。
   //    这是这四种取值里**最危险的一种**：它恰好在真出事的时候说没事，
@@ -779,15 +779,15 @@ test("撒谎·漏报｜陈年的成功会盖住今天的全面失效", { timeout
   //      · 只看最近 K 次触发（比如 10 次）里有没有成功过；
   //      · 或者看「距最近一次成功之后，又失败了多少次」——超过 3 次就报红。
   //    需要的数据都已经在手上了（贴过.time 已经算出来了）。
-  const 摊 = await 起一个干净网关("漏报");
+  const 摊 = await start_clean_gateway("漏报");
   try {
     假上游.清账(); 假loci.清账();
     假loci.设模式("正常");
-    for (let i = 0; i < 2; i += 1) await 发一句到(摊.网关, 强档句[i], `健康-漏报-好-${i}`);
+    for (let i = 0; i < 2; i += 1) await send_line_to(摊.网关, 强档句[i], `健康-漏报-好-${i}`);
     假loci.设模式("五百");                       // 从这一刻起它彻底不工作了
-    for (let i = 0; i < 4; i += 1) await 发一句到(摊.网关, 强档句[i], `健康-漏报-坏-${i}`);
+    for (let i = 0; i < 4; i += 1) await send_line_to(摊.网关, 强档句[i], `健康-漏报-坏-${i}`);
 
-    const 料 = 读提醒记录(摊.日志档);
+    const 料 = read_notice_records(摊.日志档);
     assert.strictEqual(料.length, 6);
     // 现在这一刻：最近连着 4 轮全崩
     const 最近四条 = 料.slice(-4);
@@ -797,7 +797,7 @@ test("撒谎·漏报｜陈年的成功会盖住今天的全面失效", { timeout
     assert.strictEqual(料.filter((r) => r.injected).length, 2,
       "窗口里还留着早先那两条成功记录 —— 漏报就是它们造成的");
 
-    const 健康 = await 读健康(摊.网关);
+    const 健康 = await read_health(摊.网关);
     // 门修好之后这条会**红**，红的是判据不是测试：它这时候必须报红。
     assert.ok(/🔴/.test(健康.结论),
       `最近四轮全崩，健康口却说「${健康.结论}」—— 陈年的成功把今天的失效盖住了`);
@@ -807,7 +807,7 @@ test("撒谎·漏报｜陈年的成功会盖住今天的全面失效", { timeout
 test("撒谎·误报｜库里本来就没有相关的东西，会被说成「它在安静地什么都不做」", { timeout: 25000 }, async () => {
   // 假 Loci 查得好好的，就是**一条相关的都没有**（新装的人第一天、或者话题确实
   // 没聊过，都是这样）。日志里留下的是：触发了、查了、0 条、没贴上、**没有 error**。
-  // 而 算健康() 只看「贴上了没有」，于是喊 🔴「它在安静地什么都不做」——
+  // 而 build_health() 只看「贴上了没有」，于是喊 🔴「它在安静地什么都不做」——
   // 可它明明工作得好好的。**开源出去第一天就会有人看见这个红。**
   //
   // 📌 手上其实有分得开的料：`出过错`。判据该分两句话说 ——
@@ -817,13 +817,13 @@ test("撒谎·误报｜库里本来就没有相关的东西，会被说成「它
   //    ⚠️ 但要说清：**「库里没有」和「解析瞎了」这两件事，日志里长得一模一样**
   //       （都是 triggered + recall_called + 0 条 + 没有 error）。
   //       谁也分不开，所以这句话只能说「一条都没过线」，不能替人下结论。
-  const 摊 = await 起一个干净网关("误报");
+  const 摊 = await start_clean_gateway("误报");
   try {
     假上游.清账(); 假loci.清账();
     假loci.设模式("空库");
-    for (let i = 0; i < 3; i += 1) await 发一句到(摊.网关, 强档句[i], `健康-误报-${i}`);
+    for (let i = 0; i < 3; i += 1) await send_line_to(摊.网关, 强档句[i], `健康-误报-${i}`);
 
-    const 料 = 读提醒记录(摊.日志档);
+    const 料 = read_notice_records(摊.日志档);
     assert.strictEqual(料.length, 3);
     assert.ok(料.every((r) => r.triggered && r.recall_called), "三次都真的去查了");
     assert.ok(料.every((r) => !r.injected), "查到 0 条，所以一次都没贴");
@@ -831,14 +831,14 @@ test("撒谎·误报｜库里本来就没有相关的东西，会被说成「它
       "🔴 关键：一个 error 都没有 —— 这不是坏，这是「确实没有相关的记忆」");
 
     // 门修好之后，这儿就是那句误报会出现的地方（现在只把料钉住，不替人定结论）
-    const 健康 = await 读健康(摊.网关);
+    const 健康 = await read_health(摊.网关);
     assert.strictEqual(健康.出过错, 0, "出过错必须是 0 —— 这是分辨「没命中」和「坏了」的唯一线索");
   } finally { await 摊.收(); }
 });
 
 test("对账·第八节：健康这一节新起的网关，也一条都没漏出去", { timeout: 15000 }, () => {
   // 已有那条对账排在这一节前面，管不到这几个新端口 —— 这儿自己补一次。
-  const 记录们 = 全部出门记录();
+  const 记录们 = all_outbound_records();
   const 越界的 = 记录们.filter((条) => Number(条.端口) < 19100 || Number(条.端口) > 19899);
   assert.deepStrictEqual(越界的, [], `有连接打到 19xxx 之外去了：${JSON.stringify(越界的)}`);
   const 被拦的 = 记录们.filter((条) => 条.放行 === false);

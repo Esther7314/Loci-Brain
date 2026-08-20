@@ -5,15 +5,15 @@
 // 转发之前拍两下 Loci，把该让 AI 知道的东西加进这一轮的消息里。
 //
 // 两下，位置不一样，别搞混：
-//   · 戳戳送达（戳戳送达.js）   梦 / 发呆，贴在稳定前缀区
-//   · 相关记忆提醒（自动贴.js） **贴真尾巴** —— 最新 user 之后、整个 messages 的最末
+//   · 戳戳送达（poke_delivery.js）   梦 / 发呆，贴在稳定前缀区
+//   · 相关记忆提醒（auto_attach.js） **贴真尾巴** —— 最新 user 之后、整个 messages 的最末
 //
 // 🔴 提醒为什么要最后贴：位置得「离模型开口最近」。
-//    所以 算相关记忆提醒() 自己不碰 messages，只把 patch 算出来还给你，
-//    等别的都插完、请求体组好了，最后一步才 贴到真尾巴()。顺序反了位置就错了。
+//    所以 build_relevance_notice() 自己不碰 messages，只把 patch 算出来还给你，
+//    等别的都插完、请求体组好了，最后一步才 attach_at_true_tail()。顺序反了位置就错了。
 //
-// ⛔ **这个外壳不替 AI 调 breath()。** 自动贴.js 里还有一个「开窗第一轮把 breath
-//    整段贴进 system」的函数（`贴一次`），它是她自己那套网关的做法，这儿**故意不接**：
+// ⛔ **这个外壳不替 AI 调 breath()。** auto_attach.js 里还有一个「开窗第一轮把 breath
+//    整段贴进 system」的函数（`attach_once`），它是她自己那套网关的做法，这儿**故意不接**：
 //    「开口之前先 breath()」是 **AI 自己该伸的那只手**，写在系统提示里
 //    （docs/系统提示-中文.md）。网关替它贴进去，它就不再是"自己想起来要睁眼"，
 //    而是"被人喂了一份摘要"——那是两种完全不同的东西。
@@ -38,11 +38,11 @@
 const http = require("http");
 const path = require("path");
 const { Readable } = require("stream");
-const 自动贴 = require("./自动贴.js");
-const 戳戳 = require("./戳戳送达.js");
+const 自动贴 = require("./auto_attach.js");
+const 戳戳 = require("./poke_delivery.js");
 
 const 端口 = Number(process.env.PORT || 3100);
-const 上游 = (process.env.LOCI_UPSTREAM || "").replace(/\/+$/, "");
+const upstream = (process.env.LOCI_UPSTREAM || "").replace(/\/+$/, "");
 const LOCI = process.env.LOCI_MCP || 戳戳.默认地址;
 const 闲时阈值分钟 = Number(process.env.POKE_IDLE_MINUTES || 戳戳.默认闲时阈值分钟);
 const 最低分 = Number(process.env.RELEVANCE_MIN_SCORE || 自动贴.默认最低分);
@@ -56,13 +56,13 @@ const 数据根 = process.env.LOCI_GATEWAY_DATA || path.join(__dirname, "data");
 //    文档里不提、代码里还活着，就是留着一条没入口的路。
 const 日志档 = path.join(数据根, "logs", "memory-actions.jsonl");
 
-if (!上游) {
+if (!upstream) {
   console.error("没配 LOCI_UPSTREAM —— 我不知道该把请求转给谁。");
   console.error("例：LOCI_UPSTREAM=https://api.deepseek.com/v1 node gateway/server.js");
   process.exit(1);
 }
 
-function 读body(req) {
+function read_body(req) {
   return new Promise((好, 坏) => {
     const 块 = [];
     req.on("data", (c) => 块.push(c));
@@ -71,7 +71,7 @@ function 读body(req) {
   });
 }
 
-function 是聊天(req, 体) {
+function is_chat(req, 体) {
   return req.method === "POST"
     && /\/chat\/completions$/.test(req.url.split("?")[0])
     && 体 && Array.isArray(体.messages);
@@ -92,7 +92,7 @@ function 是聊天(req, 体) {
 const 窗口条数 = 200;         // 看最近多少条**相关记忆检查**（不是多少行日志）
 const 最多读字节 = 4 * 1024 * 1024;
 
-function 读最近几条(n = 窗口条数) {
+function read_recent_records(n = 窗口条数) {
   const fs = require("fs");
   try {
     if (!fs.existsSync(日志档)) return null;   // null = 文件不在（跟「文件在但没记录」分开）
@@ -120,15 +120,15 @@ function 读最近几条(n = 窗口条数) {
   } catch { return []; }
 }
 
-function 算健康() {
+function build_health() {
   // 🔴 **一种形状，不管有没有日志。** 第一版在「文件不在」那支提前 return 了一个短对象，
   //    少了那几个计数字段 —— 读的人得应付两种形状，而这口子存在的意义就是「一眼看明白」。
   //    区分照样保留（日志档存在: false + 结论里说清楚），但字段一个不少。
-  const 读到的 = 读最近几条();
+  const 读到的 = read_recent_records();
   const 日志档存在 = 读到的 !== null;
   const 条 = 读到的 || [];
-  const 多久 = (t) => (t ? Math.round((Date.now() - new Date(t).getTime()) / 1000) : null);
-  const 数字或原样 = (v) => (v === undefined || v === null || v === "" ? "（没设，用默认）"
+  const seconds_ago = (t) => (t ? Math.round((Date.now() - new Date(t).getTime()) / 1000) : null);
+  const number_or_raw = (v) => (v === undefined || v === null || v === "" ? "（没设，用默认）"
                             : (Number.isFinite(Number(v)) ? Number(v) : `⚠️ 这不是个数：${JSON.stringify(v)}`));
 
   const 触发过 = 条.filter((r) => r.triggered);
@@ -188,12 +188,12 @@ function 算健康() {
     真的贴上: 贴上了.length,
     出过错: 错了.length,
     最近一次真的贴上之后又崩了: 成功之后崩了,
-    最近一次真的贴上: 最近贴上 ? { 几秒前: 多久(最近贴上.time), 命中: (最近贴上.event_count || 0) + (最近贴上.mind_count || 0) } : null,
-    最近一次出错: 最近出错 ? { 几秒前: 多久(最近出错.time), 是什么: String(最近出错.error).slice(0, 200) } : null,
-    // ⚠️ 不抄 自动贴.js 里那个默认值（12000）—— 抄一份就多一处会漂的常量。
+    最近一次真的贴上: 最近贴上 ? { 几秒前: seconds_ago(最近贴上.time), 命中: (最近贴上.event_count || 0) + (最近贴上.mind_count || 0) } : null,
+    最近一次出错: 最近出错 ? { 几秒前: seconds_ago(最近出错.time), 是什么: String(最近出错.error).slice(0, 200) } : null,
+    // ⚠️ 不抄 auto_attach.js 里那个默认值（12000）—— 抄一份就多一处会漂的常量。
     //    「没设」本身就是要看见的信息。打错字也照实说，这口子存在的意义就是逮配歪了的东西。
-    超时设的是: 数字或原样(process.env.RELEVANCE_TIMEOUT_MS),
-    相关度最低分: 数字或原样(最低分),
+    超时设的是: number_or_raw(process.env.RELEVANCE_TIMEOUT_MS),
+    相关度最低分: number_or_raw(最低分),
     日志档,
     日志档存在,
   };
@@ -213,7 +213,7 @@ const 服务 = http.createServer(async (req, res) => {
   if (req.method === "GET" && req.url.split("?")[0] === "/health") {
     req.resume();   // GET 没身子，但别把没读走的字节留在 keep-alive 连接上顶歪下一个请求
     let 身 = "{}";
-    try { 身 = JSON.stringify(算健康(), null, 2); }
+    try { 身 = JSON.stringify(build_health(), null, 2); }
     catch (错) { 身 = JSON.stringify({ 结论: "健康口自己算不出来了", 错: String(错?.message || 错) }); }
     const buf = Buffer.from(身, "utf8");
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Content-Length": buf.length });
@@ -221,12 +221,12 @@ const 服务 = http.createServer(async (req, res) => {
     return;
   }
 
-  const 原始 = await 读body(req).catch(() => Buffer.alloc(0));
+  const 原始 = await read_body(req).catch(() => Buffer.alloc(0));
   let 体 = null;
   try { 体 = 原始.length ? JSON.parse(原始.toString("utf8")) : null; } catch { 体 = null; }
 
   const 说 = [];
-  if (是聊天(req, 体)) {
+  if (is_chat(req, 体)) {
     const 公共 = {
       messages: 体.messages,
       requestId: String(req.headers["x-request-id"] || 起),
@@ -236,7 +236,7 @@ const 服务 = http.createServer(async (req, res) => {
 
     // ---- D：戳戳送达。梦 / 发呆，贴在跟 A 同一处前缀。 ----
     try {
-      const d = await 戳戳.贴一次({
+      const d = await 戳戳.attach_once({
         ...公共,
         statePath: path.join(数据根, "state", "poke-window.json"),
         闲时阈值分钟,
@@ -248,9 +248,9 @@ const 服务 = http.createServer(async (req, res) => {
     // ---- B：相关记忆提醒。**最后一步，贴真尾巴** ----
     // 触发才跑（强档=关键词命中，弱档=本地判据）。没触发一次 recall 都不调。
     try {
-      const b = await 自动贴.算相关记忆提醒({ ...公共, 最低分 });
+      const b = await 自动贴.build_relevance_notice({ ...公共, 最低分 });
       if (b && b.patch) {
-        自动贴.贴到真尾巴(体.messages, b.patch);
+        自动贴.attach_at_true_tail(体.messages, b.patch);
         说.push("提醒(贴了真尾巴)");
       } else 说.push("提醒无");
     } catch (错) { 说.push("提醒炸:" + (错?.message || 错)); }
@@ -283,7 +283,7 @@ const 服务 = http.createServer(async (req, res) => {
   const 头 = { ...req.headers };
   delete 头.host; delete 头["content-length"]; delete 头["accept-encoding"];
 
-  const 目标 = 上游.replace(/\/v1$/, "") + req.url;
+  const 目标 = upstream.replace(/\/v1$/, "") + req.url;
   let 回;
   try {
     回 = await fetch(目标, {
@@ -321,7 +321,7 @@ const 服务 = http.createServer(async (req, res) => {
 
 服务.listen(端口, () => {
   console.log(`[gateway] 起来了 http://127.0.0.1:${端口}`);
-  console.log(`[gateway] 上游        ${上游}`);
+  console.log(`[gateway] 上游        ${upstream}`);
   console.log(`[gateway] Loci        ${戳戳._internal.httpBase(LOCI)}`);
   console.log(`[gateway] 相关度最低分 ${最低分}  ·  闲时阈值 ${闲时阈值分钟} 分钟`);
   // 🔴 2026-08-20 补：这一行以前**偏偏没印**，而那个「超时 5 秒 → 从上线起一次没工作过」

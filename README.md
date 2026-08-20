@@ -98,7 +98,7 @@ MCP 地址 `http://127.0.0.1:18002/mcp`，面板 `http://127.0.0.1:18002/loci`�
 **装网关**（🔴 不是可选的：没有它，梦 / 发呆 / 相关记忆提醒三样都递不到）
 
 ```bash
-# 已经有自己的网关：拷 gateway/戳戳送达.js 过去，转发前调一句 贴一次()
+# 已经有自己的网关：拷 gateway/poke_delivery.js 过去，转发前调一句 attach_once()
 # 没有：直接用我们这个外壳
 LOCI_UPSTREAM=https://api.deepseek.com/v1 node gateway/server.js
 # 然后把客户端的 base_url 指到 http://127.0.0.1:3100/v1

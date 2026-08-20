@@ -1,5 +1,5 @@
 // ============================================================
-// gateway/tests/起网关.js —— 把 gateway/server.js 当**黑盒**起在一个子进程里
+// gateway/tests/start_gateway.js —— 把 gateway/server.js 当**黑盒**起在一个子进程里
 //
 // 为什么起子进程、不 require 进来测：
 //   server.js 的一堆配置（端口、上游、Loci 地址、数据落点）是在**模块加载那一刻**
@@ -23,7 +23,7 @@ const path = require("node:path");
 // 「这个 bug 修好之后，那几条测试会不会过」，不用去动仓库里的文件：
 //   LOCI_GATEWAY_ENTRY=/某处/server.js  node --test "gateway/tests/*.test.js"
 const 网关入口 = process.env.LOCI_GATEWAY_ENTRY || path.join(__dirname, "..", "server.js");
-const 围栏文件 = path.join(__dirname, "网络围栏.js");
+const 围栏文件 = path.join(__dirname, "network_fence.js");
 
 /**
  * @param 端口          网关自己听哪儿（外面挑好的 19xxx）
@@ -34,7 +34,7 @@ const 围栏文件 = path.join(__dirname, "网络围栏.js");
  * @param 白名单端口    围栏放行的端口（只该有假上游 + 假 Loci）
  * @param 账本路径      围栏账本落哪儿
  */
-async function 起网关({ 端口, 上游地址, loci地址, 数据根, 相关超时毫秒, 白名单端口, 账本路径 }) {
+async function start_gateway({ 端口, 上游地址, loci地址, 数据根, 相关超时毫秒, 白名单端口, 账本路径 }) {
   const 环境 = { ...process.env };
   // 🔴 先把所有可能影响判断的都清干净，再显式给 —— 别让机器上的 env 说了算
   for (const 键 of Object.keys(环境)) {
@@ -69,12 +69,12 @@ async function 起网关({ 端口, 上游地址, loci地址, 数据根, 相关�
   // 而且端口万一被占，这儿能立刻炸出来（而不是后面一堆莫名其妙的连不上）
   await new Promise((好, 坏) => {
     const 闹钟 = setTimeout(() => 坏(new Error(`网关 10 秒没起来。它说：\n${输出}`)), 10000);
-    const 看 = () => {
+    const check_ready = () => {
       if (输出.includes("起来了")) { clearTimeout(闹钟); 好(); }
     };
-    子.stdout.on("data", 看);
+    子.stdout.on("data", check_ready);
     子.on("exit", (码) => { clearTimeout(闹钟); 坏(new Error(`网关起来就退了（exit ${码}）。它说：\n${输出}`)); });
-    看();
+    check_ready();
   });
 
   let 读到哪了 = 输出.length;
@@ -111,4 +111,4 @@ async function 起网关({ 端口, 上游地址, loci地址, 数据根, 相关�
   };
 }
 
-module.exports = { 起网关 };
+module.exports = { start_gateway };

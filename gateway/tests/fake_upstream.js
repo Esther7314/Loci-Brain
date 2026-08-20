@@ -1,5 +1,5 @@
 // ============================================================
-// gateway/tests/假上游.js —— 冒充「真正的模型」的那一头
+// gateway/tests/fake_upstream.js —— 冒充「真正的模型」的那一头
 //
 // 为什么要它：**网关有没有真的改过消息，只有上游看得见。**
 // 网关改的是它自己进程里那个 messages 数组，客户端这边看不到；
@@ -16,7 +16,7 @@ const zlib = require("node:zlib");
 /**
  * @param 端口  外面挑好、确认过没被占用的高位端口（19xxx）
  */
-async function 起假上游({ 端口 }) {
+async function start_fake_upstream({ 端口 }) {
   const 收到 = [];
   // 压缩：真上游（DeepSeek / OpenAI / GLM）只要请求头里有 accept-encoding 就会 gzip。
   // 默认关着，只有专门测转发的那条会打开。
@@ -86,4 +86,4 @@ async function 起假上游({ 端口 }) {
   };
 }
 
-module.exports = { 起假上游 };
+module.exports = { start_fake_upstream };

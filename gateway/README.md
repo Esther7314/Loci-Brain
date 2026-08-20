@@ -26,9 +26,9 @@ API key 原样转发，不存不看。
 
 | | 干什么 | 没有网关行不行 |
 |---|---|---|
-| **发呆**<br>`戳戳送达.js` | 攒了几团没整理的认知 → 递一句「该发呆了」 | **行。** `muse()` 是 MCP 工具，AI 自己伸手就能调，网关只是替它记得 |
-| **做梦**<br>`戳戳送达.js` | 昨夜织的那个梦，递全文 | **不行。** 梦要能**拿走**（30 分钟降级、60 分钟删掉），而 hook 注入只增不减 —— 一个掉不下去的梦第二天还躺在上下文里，那就不是梦了 |
-| **强弱提醒**<br>`自动贴.js` | 「〔记忆提醒〕和这句有关：事件 3 条 · 认知 1 条」 | **行。** 每轮跑一次 `recall`、把一行塞进去，hook 能做。网关的好处是插得进**真尾巴** |
+| **发呆**<br>`poke_delivery.js` | 攒了几团没整理的认知 → 递一句「该发呆了」 | **行。** `muse()` 是 MCP 工具，AI 自己伸手就能调，网关只是替它记得 |
+| **做梦**<br>`poke_delivery.js` | 昨夜织的那个梦，递全文 | **不行。** 梦要能**拿走**（30 分钟降级、60 分钟删掉），而 hook 注入只增不减 —— 一个掉不下去的梦第二天还躺在上下文里，那就不是梦了 |
+| **强弱提醒**<br>`auto_attach.js` | 「〔记忆提醒〕和这句有关：事件 3 条 · 认知 1 条」 | **行。** 每轮跑一次 `recall`、把一行塞进去，hook 能做。网关的好处是插得进**真尾巴** |
 
 ### 可选的一样
 
@@ -42,14 +42,14 @@ API key 原样转发，不存不看。
 
 ### ① 你已经有自己的网关 → 只拿两个模块
 
-`戳戳送达.js` 和 `自动贴.js`，都**零依赖**（只用 `fs` / `path` / 全局 `fetch`）、
+`poke_delivery.js` 和 `auto_attach.js`，都**零依赖**（只用 `fs` / `path` / 全局 `fetch`）、
 **零 import 这个项目**。拷走，在转发逻辑里加两句：
 
 ```js
-const 桥 = require("./戳戳送达.js");
+const 桥 = require("./poke_delivery.js");
 
 // 转发之前调一次。它会**就地**改 messages（插一条 system），也可能什么都不做。
-await 桥.贴一次({
+await 桥.attach_once({
   messages: body.messages,              // 会被就地修改
   requestId: "随便什么能对上日志的字符串",
   地址: "http://127.0.0.1:18002/mcp",    // Loci 在哪（/mcp 结尾，它自己会转成 REST 根）
@@ -58,25 +58,29 @@ await 桥.贴一次({
 ```
 
 ```js
-const 自动贴 = require("./自动贴.js");
+const 自动贴 = require("./auto_attach.js");
 
 // 强弱提醒：**最后一步**。它自己不碰 messages，只把 patch 算出来还给你——
 // 位置要离模型开口最近，得等请求体都组完了再推进去。
-const 提醒 = await 自动贴.算相关记忆提醒({ messages: body.messages, requestId, 地址, 最低分: 50 });
-if (提醒 && 提醒.patch) 自动贴.贴到真尾巴(body.messages, 提醒.patch);
+const 提醒 = await 自动贴.build_relevance_notice({ messages: body.messages, requestId, 地址, 最低分: 50 });
+if (提醒 && 提醒.patch) 自动贴.attach_at_true_tail(body.messages, 提醒.patch);
 ```
 
 **两处都会抛异常 —— 你要接住，然后照常转发。** 宁可这次没插上，也不能让人的对话卡住。
 
-📌 **函数名有英文别名**，指的是同一个函数，挑顺手的写：
+📌 **老的英文别名还在，指的是同一个函数**，早先照着写的不用改：
 
 ```js
-桥.paste({ ... })                       // = 贴一次
-自动贴.computeReminder({ ... })          // = 算相关记忆提醒
-自动贴.appendToTail(messages, patch)     // = 贴到真尾巴
+桥.paste({ ... })                       // = attach_once
+自动贴.computeReminder({ ... })          // = build_relevance_notice
+自动贴.appendToTail(messages, patch)     // = attach_at_true_tail
 ```
 
-文件内部是中文，改内部之前先读一遍注释——那些注释写着每个判断是怎么来的。
+> 这几个别名是 2026-08-19 加的，那时候函数名还是中文，加它的理由是
+> 「对外这几个名字是别人要亲手敲的，一个不认识汉字的人连自己粘的是哪个都不知道」。
+> 现在正式名字本身就是英文了，**别名只作为向后兼容留着**，新写的代码直接用正式名。
+
+改内部之前先读一遍注释——那些注释写着每个判断是怎么来的（注释还是中文，正在一批一批翻）。
 
 **两个位置不一样，是故意的：**
 

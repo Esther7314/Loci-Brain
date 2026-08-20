@@ -1,5 +1,5 @@
 // ============================================================
-// gateway/tests/假loci.js —— 冒充记忆系统的那一头
+// gateway/tests/fake_loci.js —— 冒充记忆系统的那一头
 //
 // 🔴 **必须是假的。** 真的 Loci 在 18002（她的记忆库），跑测试绝不许碰它：
 //    一来 recall 一次要几秒、结果还跟着库变，断言没法写死；
@@ -7,8 +7,8 @@
 //    这个假货返回一份**写死的、可预测的**检索结果，断言就照着这份对。
 //
 // 它冒充两个面（真 Loci 这两个口挂在同一个端口上，网关也是照这个假设来的）：
-//   · `POST /mcp`            MCP streamable-http，自动贴.js 的 recall 走这儿
-//   · `GET  /api/loci/poke`  普通 REST，戳戳送达.js 走这儿（这一单不测它，
+//   · `POST /mcp`            MCP streamable-http，auto_attach.js 的 recall 走这儿
+//   · `GET  /api/loci/poke`  普通 REST，poke_delivery.js 走这儿（这一单不测它，
 //                            但它跟被测路径同一个请求里，所以也得记账 ——
 //                            「谁都没漏出去」这句话要能拿账本证明）
 //
@@ -23,7 +23,7 @@
 
 const http = require("node:http");
 
-// ——— 写死的检索结果：抄 Loci recall 的渲染排版（自动贴.js 解析分数行 认这个格式）———
+// ——— 写死的检索结果：抄 Loci recall 的渲染排版（auto_attach.js parse_score_line 认这个格式）———
 // `{score:5.1f}  [🧠]{摘要}  ({短id})  {MM-DD}`，分数是 0~100 的尺度。
 // 故意放一条 12.7 分的在里面：**它必须被分数线挡掉**，不然「过线才算」就是假的。
 const 渲染文本 = [
@@ -40,7 +40,7 @@ const 渲染文本 = [
 const 应该过线的id = ["aa11bb22", "cc33dd44", "ee55ff66"];
 
 // **同样的内容，换一种排版** —— 日期挪到前面、id 从圆括号换成方括号。
-// Loci 那边哪天改一下 recall 的渲染就是这个样子。自动贴.js 的 解析分数行 是照着
+// Loci 那边哪天改一下 recall 的渲染就是这个样子。auto_attach.js 的 parse_score_line 是照着
 // 旧排版写死的正则，换了就一条都认不出来 —— 用来把那个「静默失明」照出来。
 const 换了排版的渲染文本 = [
   "找到 4 条：",
@@ -60,7 +60,7 @@ const 空库渲染文本 = "找到 0 条。";
 // 真正的记忆正文 —— **一个字都不许出现在贴回去的那行里**（「只报数量不报正文」）
 const 记忆正文样本 = ["上次她把网关的超时从 5 秒提到 12 秒。", "她要的不是我少犯错，是我别装。"];
 
-async function 起假loci({ 端口 }) {
+async function start_fake_loci({ 端口 }) {
   const 收到 = [];        // 每一个 HTTP 请求都记一笔（每条测试开头清账）
   const 工具调用 = [];    // 只记 tools/call：{ 工具, 参数 }
   // 全程账：**清账清不掉**。用来在最后对总账 ——「整套跑下来某条路一次都没出声」
@@ -70,7 +70,7 @@ async function 起假loci({ 端口 }) {
   let 慢多久毫秒 = 3000;
   const 定时器们 = new Set();
 
-  function 送SSE(res, 对象, 会话) {
+  function send_sse(res, 对象, 会话) {
     const 头 = { "Content-Type": "text/event-stream; charset=utf-8" };
     if (会话) 头["Mcp-Session-Id"] = 会话;
     res.writeHead(200, 头);
@@ -96,7 +96,7 @@ async function 起假loci({ 端口 }) {
       if (req.method === "POST" && 路径 === "/mcp") {
         const rpc = 体?.method;
         if (rpc === "initialize") {
-          return 送SSE(res, {
+          return send_sse(res, {
             jsonrpc: "2.0", id: 体.id,
             result: { protocolVersion: "2024-11-05", capabilities: {}, serverInfo: { name: "假loci", version: "0" } },
           // 🔴 会话 id 必须从头里给，不给的话客户端握手会自己判失败。
@@ -125,13 +125,13 @@ async function 起假loci({ 端口 }) {
             // 所以整段包起来 —— 假货自己不许把测试进程搞崩。
             const 闹钟 = setTimeout(() => {
               定时器们.delete(闹钟);
-              try { 送SSE(res, 回); } catch { /* 对面早走了，正常 */ }
+              try { send_sse(res, 回); } catch { /* 对面早走了，正常 */ }
             }, 慢多久毫秒);
             if (闹钟.unref) 闹钟.unref();   // 别让它拖着进程不退出
             定时器们.add(闹钟);
             return;
           }
-          return 送SSE(res, 回);
+          return send_sse(res, 回);
         }
         res.writeHead(400); return res.end();
       }
@@ -177,4 +177,4 @@ async function 起假loci({ 端口 }) {
   };
 }
 
-module.exports = { 起假loci, 渲染文本, 应该过线的id, 应该的事件数, 应该的认知数 };
+module.exports = { start_fake_loci, 渲染文本, 应该过线的id, 应该的事件数, 应该的认知数 };

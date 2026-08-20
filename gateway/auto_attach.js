@@ -1,7 +1,7 @@
 // ============================================================
-// gateway/自动贴.js —— 从她自己的网关里整段抽出来的（2026-08-19）
+// gateway/auto_attach.js —— 从她自己的网关里整段抽出来的（2026-08-19）
 //
-// 原件：lento-home/src/loci-bridge/自动贴.js。跟 戳戳送达.js 同一个模块家族、
+// 原件：lento-home/src/loci-bridge/自动贴.js。跟 poke_delivery.js 同一个模块家族、
 // 同一条边界（**零 import 宿主项目**，只用 fs/path/全局 fetch），头上就写着
 // 「这个文件将来要整段跟 Loci 一起开源出去」。抽出来**一行逻辑没改**，
 // 只动了路径落点这一处。
@@ -12,8 +12,8 @@
 //                    **只报有几条，不报正文**（贴真尾巴 —— 位置跟 A 不一样）
 //
 // 🔴 B 为什么必须贴真尾巴：她要的位置是「最新 user 之后、整个 messages 的最末」——
-//    离模型开口最近。所以 算相关记忆提醒() **自己不碰 messages**，
-//    它只把 patch 算出来还给你，你在组完请求体之后用 贴到真尾巴() 推进去。
+//    离模型开口最近。所以 build_relevance_notice() **自己不碰 messages**，
+//    它只把 patch 算出来还给你，你在组完请求体之后用 attach_at_true_tail() 推进去。
 // ============================================================
 //
 // 这一层的设计判据（我们自己的开工单第 4 节，那份单子不在这个仓库里）。
@@ -38,7 +38,7 @@
 //     是从她的会话存档重放的，不含 gateway 这一层加过的补丁）。
 //   B · 相关记忆提醒（4.1/4.2/4.3，施工7b 2026-08-18 从观察模式升级成真提醒）——
 //     **触发才跑**：强档=关键词命中（沿用现有词表），弱档=本地判据（不是真分词
-//     / 向量，见下面 弱档触发 的注释）过滤掉应声词/问候语之后还剩点实质内容；
+//     / 向量，见下面 weak_triggered 的注释）过滤掉应声词/问候语之后还剩点实质内容；
 //     两档都没中的轮次，这一轮**一次 recall 都不调**。触发了才拿她这句话当
 //     query 问 Loci 的 recall，渲染分数（0~100，跟 Loci `RELEVANCE_FLOOR=35`
 //     同一把尺）≥ `RELEVANCE_MIN_SCORE`（env，默认 50）的才计数；event/mind
@@ -48,13 +48,13 @@
 //     不累积（gateway 每请求重建 messages，天然不会把上一轮的提醒行带过来）。
 //     🔴 施工7b 她追加一刀改了插入点：**贴在整个 messages 的真尾巴**（最新
 //     user 之后），不是 A/C 那种「插到最新 user 之前」——离模型开口最近、
-//     命中率最高。但**这个模块自己不做插入**：算相关记忆提醒 只把算好的
+//     命中率最高。但**这个模块自己不做插入**：build_relevance_notice 只把算好的
 //     patch 放进返回值（记录.patch），真正 push 到 outgoingBody.messages
 //     真尾巴的动作在 server.js 里、组完 outgoingBody 之后做——原因是 server.js
 //     内部那条 messages 送上游前要过三关校验/重建（tail 重建 / 硬 400 校验 /
 //     `moveSystemPatchesBeforeLatestUser`），全都假定「最新 user 之后只能是
 //     合法 tool 续接」，直接插进去要么被吞要么整个请求 400。详见
-//     算相关记忆提醒 函数文档注释里的 ①②③。
+//     build_relevance_notice 函数文档注释里的 ①②③。
 //
 // 失败（Loci 没起/超时）两件事都不挡聊天：该失败的那一半安安静静地什么都不做，
 // 调用方（gateway）该转发的话照转发。
@@ -63,7 +63,7 @@
 const fs = require("fs");
 const path = require("path");
 
-// 2026-08-19 抽出来时只改了这一处路径（跟 戳戳送达.js 同一个改法）。
+// 2026-08-19 抽出来时只改了这一处路径（跟 poke_delivery.js 同一个改法）。
 const 数据根 = process.env.LOCI_GATEWAY_DATA || path.join(__dirname, "data");
 
 // LOCI_MCP：跟 server/loci信.js 用的是同一个环境变量名，验收注入假 Loci 走它。
@@ -89,7 +89,7 @@ const 中文强档词 = [
   "我记得", "记得吗", "还记得", "上次", "之前", "以前", "那时候", "那天", "那次", "记不记得",
 ];
 
-function 读强档词() {
+function read_strong_words() {
   const 从env = String(process.env.RELEVANCE_STRONG_WORDS || "").trim();
   if (从env) {
     const 表 = 从env.split(",").map(w => w.trim()).filter(Boolean);
@@ -105,38 +105,38 @@ function 读强档词() {
   return 中文强档词;
 }
 
-const 强档关键词 = 读强档词();
+const 强档关键词 = read_strong_words();
 
 // 分数线：跟 Loci recall 渲染的 0~100 尺度直接比，不做 0~1 换算了（施工7 那版
 // 换算成 0~1 纯粹是历史包袱）。env `RELEVANCE_MIN_SCORE` 覆盖——她原话「这个
 // 分数好改」，所以必须是一处 env 就能调，不许散在别处。
 const 默认最低分 = 50;
 
-function 读JSON(文件, 缺省 = {}) {
+function read_json(文件, 缺省 = {}) {
   try { return fs.existsSync(文件) ? JSON.parse(fs.readFileSync(文件, "utf8")) : 缺省; }
   catch { return 缺省; }
 }
-function 写JSON(文件, 值) {
+function write_json(文件, 值) {
   fs.mkdirSync(path.dirname(文件), { recursive: true });
   fs.writeFileSync(文件, `${JSON.stringify(值, null, 2)}\n`);
 }
-function 记一行(文件, 值) {
+function log_line(文件, 值) {
   fs.mkdirSync(path.dirname(文件), { recursive: true });
   fs.appendFileSync(文件, `${JSON.stringify(值)}\n`);
 }
 
 // ——— MCP streamable-http 最小客户端（跟 server/loci信.js 同一套手势，独立一份）———
 
-function 造客户端({ 地址 = 默认地址, 超时毫秒 = 10000 } = {}) {
+function make_client({ 地址 = 默认地址, 超时毫秒 = 10000 } = {}) {
   let 会话 = null;
 
-  function 头(带会话) {
+  function build_headers(带会话) {
     const h = { "Content-Type": "application/json", "Accept": "application/json, text/event-stream" };
     if (带会话 && 会话) h["Mcp-Session-Id"] = 会话;
     return h;
   }
 
-  function 挑一条(缓) {
+  function pick_frame(缓) {
     for (const 行 of 缓.split(/\r?\n/)) {
       if (!行.startsWith("data:")) continue;
       const 文 = 行.slice(5).trim();
@@ -146,12 +146,12 @@ function 造客户端({ 地址 = 默认地址, 超时毫秒 = 10000 } = {}) {
     return null;
   }
 
-  async function 喊一声(体, { 带会话 = true } = {}) {
+  async function rpc_once(体, { 带会话 = true } = {}) {
     const 控 = new AbortController();
     const 闹钟 = setTimeout(() => 控.abort(), 超时毫秒);
     let 回;
     try {
-      回 = await fetch(地址, { method: "POST", headers: 头(带会话), body: JSON.stringify(体), signal: 控.signal });
+      回 = await fetch(地址, { method: "POST", headers: build_headers(带会话), body: JSON.stringify(体), signal: 控.signal });
     } catch (错) {
       clearTimeout(闹钟);
       throw new Error(`连不上 Loci（${地址}）：${错?.message || 错}`);
@@ -167,7 +167,7 @@ function 造客户端({ 地址 = 默认地址, 超时毫秒 = 10000 } = {}) {
         const { done, value } = await 读.read();
         if (done) break;
         缓 += Buffer.from(value).toString("utf8");
-        const 一条 = 挑一条(缓);
+        const 一条 = pick_frame(缓);
         if (一条) return 一条;
       }
     } finally {
@@ -178,39 +178,39 @@ function 造客户端({ 地址 = 默认地址, 超时毫秒 = 10000 } = {}) {
   }
 
   let 握手中 = null;
-  function 握一次() {
-    if (!握手中) 握手中 = 握手().finally(() => { 握手中 = null; });
+  function handshake_once() {
+    if (!握手中) 握手中 = handshake().finally(() => { 握手中 = null; });
     return 握手中;
   }
-  async function 握手() {
+  async function handshake() {
     会话 = null;
-    await 喊一声({
+    await rpc_once({
       jsonrpc: "2.0", id: 1, method: "initialize",
       params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "lento-gateway", version: "1" } },
     }, { 带会话: false });
     if (!会话) throw new Error("Loci 没给 session id");
-    await 喊一声({ jsonrpc: "2.0", method: "notifications/initialized" });
+    await rpc_once({ jsonrpc: "2.0", method: "notifications/initialized" });
   }
 
-  async function 调(工具, 参数 = {}) {
-    if (!会话) await 握一次();
-    const 发 = () => 喊一声({ jsonrpc: "2.0", id: Date.now() % 100000, method: "tools/call", params: { name: 工具, arguments: 参数 } });
-    let 回 = await 发().catch(错 => ({ __炸了: 错 }));
+  async function call_tool(工具, 参数 = {}) {
+    if (!会话) await handshake_once();
+    const send = () => rpc_once({ jsonrpc: "2.0", id: Date.now() % 100000, method: "tools/call", params: { name: 工具, arguments: 参数 } });
+    let 回 = await send().catch(错 => ({ __炸了: 错 }));
     if (回?.__炸了 || 回?.error) {
-      await 握一次();
-      回 = await 发().catch(错 => ({ __炸了: 错 }));
+      await handshake_once();
+      回 = await send().catch(错 => ({ __炸了: 错 }));
     }
     if (回?.__炸了) throw 回.__炸了;
     if (回?.error) throw new Error(回.error.message || JSON.stringify(回.error));
     return (回?.result?.content || []).map(块 => 块.text || "").join("\n");
   }
 
-  return { 调 };
+  return { call_tool };
 }
 
 // ——— A · 自动贴 ———
 
-function 插到最新user之前(messages, patch) {
+function insert_before_latest_user(messages, patch) {
   let 插入点 = messages.length;
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     if (messages[i]?.role === "user") { 插入点 = i; break; }
@@ -223,7 +223,7 @@ function 插到最新user之前(messages, patch) {
   messages.splice(插到, 0, patch);
 }
 
-function 建贴文(breathText, generatedAt) {
+function build_patch_text(breathText, generatedAt) {
   return [
     MARKER,
     `本轮 breath 于 ${generatedAt}（gateway 主动 HTTP 调，非工具调用）生成，一样不挑不裁。`,
@@ -244,7 +244,7 @@ function 建贴文(breathText, generatedAt) {
  * @param logPath     跟旧缓存共用同一个 memory-actions.jsonl，不新开一份
  * @param 地址/超时毫秒 只给验收用来指到假 Loci；平时用默认值
  */
-async function 贴一次({
+async function attach_once({
   messages,
   requestId,
   now = new Date(),
@@ -258,31 +258,31 @@ async function 贴一次({
   // pruneCompletedStartupBreathToolChains）读的老字段名，语义搬过来对齐：
   // cacheHit=这轮没重新调 Loci、贴的是缓存里的旧文本；cacheWritten=这轮真调了且成功。
   const 结果 = { patchInjected: false, calledLoci: false, cacheHit: false, cacheWritten: false, windowId: null, breathChars: 0, error: null };
-  const 缓存 = 读JSON(statePath, {});
+  const 缓存 = read_json(statePath, {});
   let breathText = 缓存.breathText || "";
   let windowId = 缓存.windowId || null;
 
   if (newWindow || !breathText) {
     结果.calledLoci = true;
     try {
-      const 客户端 = 造客户端({ 地址, 超时毫秒 });
-      const 文 = await 客户端.调("breath", {});
+      const 客户端 = make_client({ 地址, 超时毫秒 });
+      const 文 = await 客户端.call_tool("breath", {});
       windowId = `window-${now.toISOString()}`;
       breathText = String(文 || "");
-      写JSON(statePath, { windowId, breathText, fetchedAt: now.toISOString() });
-      记一行(logPath, { time: now.toISOString(), request_id: requestId, actor: "gateway/auto_paste", action: "breath_fetch", status: "ok", window_id: windowId, result_chars: breathText.length });
+      write_json(statePath, { windowId, breathText, fetchedAt: now.toISOString() });
+      log_line(logPath, { time: now.toISOString(), request_id: requestId, actor: "gateway/auto_paste", action: "breath_fetch", status: "ok", window_id: windowId, result_chars: breathText.length });
       结果.cacheWritten = true;
     } catch (错) {
       结果.error = String(错?.message || 错);
-      记一行(logPath, { time: now.toISOString(), request_id: requestId, actor: "gateway/auto_paste", action: "breath_fetch", status: "error", error: 结果.error, fallback_to_stale_cache: Boolean(breathText) });
+      log_line(logPath, { time: now.toISOString(), request_id: requestId, actor: "gateway/auto_paste", action: "breath_fetch", status: "error", error: 结果.error, fallback_to_stale_cache: Boolean(breathText) });
       // 🔴 失败不挡聊天：有旧缓存就照旧贴旧的（总比什么都没有强），没有就这轮不贴，
       //    绝不能因为 Loci 没起/超时就把她的这句话拦下来。
     }
   }
 
   if (breathText) {
-    const patch = { role: "system", content: 建贴文(breathText, 缓存.fetchedAt || now.toISOString()) };
-    插到最新user之前(Array.isArray(messages) ? messages : [], patch);
+    const patch = { role: "system", content: build_patch_text(breathText, 缓存.fetchedAt || now.toISOString()) };
+    insert_before_latest_user(Array.isArray(messages) ? messages : [], patch);
     结果.patchInjected = true;
     结果.breathChars = breathText.length;
     // 这轮没重新调 Loci、纯粹重贴缓存里的旧文本 —— 语义上就是「命中缓存」。
@@ -305,7 +305,7 @@ function latestUserText(messages) {
   return "";
 }
 
-function 强档命中(文本) {
+function strong_hits(文本) {
   // 小写比对：英文词表不能因为句首大写（"Remember when…"）就整条漏掉。
   // 中文没有大小写，toLowerCase 对它是恒等变换，所以这一行对我们零影响。
   const 低 = String(文本).toLowerCase();
@@ -327,7 +327,7 @@ const 弱档停用句 = new Set([
   "没事", "没什么", "无事", "没有", "算了",
 ]);
 
-function 弱档触发(文本) {
+function weak_triggered(文本) {
   const 净 = String(文本 || "").trim();
   if (!净) return false;
   // 去掉尾部的标点噪声（"在吗？" 也该算应声话），再对完整句做停用表匹配。
@@ -335,9 +335,9 @@ function 弱档触发(文本) {
   if (弱档停用句.has(去尾标点)) return false;
   // 有效字数：中文按字数、英文/数字按连续字母数字串的长度算——太短的不构成主体
   // （单字应声、两三个字的口头禅），三个字起才当「这句话像是在说点什么」。
-  const 汉字数 = (去尾标点.match(/[一-鿿]/g) || []).length;
-  const 词串长 = (去尾标点.match(/[A-Za-z]{2,}|[0-9]+/g) || []).reduce((n, w) => n + w.length, 0);
-  return 汉字数 + 词串长 >= 3;
+  const han_char_count = (去尾标点.match(/[一-鿿]/g) || []).length;
+  const word_char_count = (去尾标点.match(/[A-Za-z]{2,}|[0-9]+/g) || []).reduce((n, w) => n + w.length, 0);
+  return han_char_count + word_char_count >= 3;
 }
 
 /**
@@ -354,7 +354,7 @@ function 弱档触发(文本) {
  * **这条耦合是这份实现的已知坑**：Loci 改了这行的排版，这儿就抓不到分数/牌了，
  * 抓不到就当没有命中处理（不炸，只是这轮少提醒一句），交活报告里点名过。
  */
-function 解析分数行(文本) {
+function parse_score_line(文本) {
   const 条目 = [];
   for (const 行 of String(文本 || "").split(/\r?\n/)) {
     const m = /^\s*([0-9]+(?:\.[0-9]+)?)\s{2,}.*?\(([0-9a-zA-Z]{4,})\)/.exec(行);
@@ -369,29 +369,29 @@ function 解析分数行(文本) {
 // 正文以「〔记忆提醒〕」开头是**字面约定**：src/gateway/messages.js 的
 // `moveSystemPatchesBeforeLatestUser` 认这个前缀，给它开了豁免（见那边的
 // isReminderPinnedAfterLatestUser）——这个豁免目前是防御性的：现在的实现里
-// 提醒行压根不经过那条内部 messages 流水线（见下面 算相关记忆提醒 的文档），
+// 提醒行压根不经过那条内部 messages 流水线（见下面 build_relevance_notice 的文档），
 // 所以这个函数眼下碰不到它；万一以后有代码改道把它塞回那条内部流水线，这个
 // 豁免能接住，不会悄悄被搬回 user 之前。改这句开头前缀要跟那边一起改。
-function 建提醒行(event数, mind数) {
+function build_notice_line(event数, mind数) {
   return `〔记忆提醒〕和这句有关：事件 ${event数} 条 · 认知 ${mind数} 条`;
 }
 
 // 贴在整个 messages 的**真尾巴**（最新 user 之后）——她 2026-08-18 追加的一刀：
 // 离模型开口最近、命中率最高，类似 hook 往 user prompt 后面追加上下文的姿势。
-// 🔴 **这个函数不在这个模块里调**：算相关记忆提醒 只算、只把 patch 放进返回值
+// 🔴 **这个函数不在这个模块里调**：build_relevance_notice 只算、只把 patch 放进返回值
 // 的 记录.patch，真正 push 的动作交给 server.js，在它自己拼完 outgoingBody
-// （真正发给上游那份）之后再做。原因写在 算相关记忆提醒 的文档注释里——
+// （真正发给上游那份）之后再做。原因写在 build_relevance_notice 的文档注释里——
 // server.js 内部那条「messages」在送去上游之前要过三关校验/重建，全都假定
 // 「最新 user 之后只能是合法的 tool 续接」，塞一条 system 进去要么被吞、要么
 // 直接 400。真正安全的位置是**校验通过、组好 outgoingBody 之后**，不是内部
 // 那条 messages 流水线的任何一站。留这个 helper 在这儿是给 server.js（还有测试）
 // 复用同一个"push 到真尾巴"手势，不是自己在用。
-function 贴到真尾巴(messages, patch) {
+function attach_at_true_tail(messages, patch) {
   if (Array.isArray(messages)) messages.push(patch);
 }
 
 /**
- * B：**触发才跑**。强档=关键词命中，弱档=本地判据（见 弱档触发 注释）过滤掉
+ * B：**触发才跑**。强档=关键词命中，弱档=本地判据（见 weak_triggered 注释）过滤掉
  * 应声话之后还有实质内容——两档都没中，这一轮一次 recall 都不调，日志记一行
  * 「没触发」，函数直接返回。
  *
@@ -412,7 +412,7 @@ function 贴到真尾巴(messages, patch) {
  *   ③ `moveSystemPatchesBeforeLatestUser` 会把它搬回 user 之前（这条她点名
  *      要查，messages.js 已经给「〔记忆提醒〕」开头的消息开了豁免）。
  * 光豁免③不够——①②不豁免的话，提醒行要么消失要么整个请求打不通。真正干净
- * 的做法是压根不让它进那条内部 messages：算相关记忆提醒 只把 patch 算出来，
+ * 的做法是压根不让它进那条内部 messages：build_relevance_notice 只把 patch 算出来，
  * server.js 在 ①②③ 全部跑完、组好 `outgoingBody`（就是真正发给 DeepSeek/GLM
  * 的那份 wire payload）之后，直接 push 到 `outgoingBody.messages` 的真尾巴——
  * 那份不再被这三道内部校验碰第二次，天然安全。
@@ -423,7 +423,7 @@ function 贴到真尾巴(messages, patch) {
  * 失败（Loci 没起/超时/解析不出分数行）不挡聊天：catch 住、日志记一行、这轮
  * 不注入，函数正常返回。
  */
-async function 算相关记忆提醒({
+async function build_relevance_notice({
   messages,
   requestId,
   now = new Date(),
@@ -439,14 +439,14 @@ async function 算相关记忆提醒({
   最低分 = Number(process.env.RELEVANCE_MIN_SCORE || 默认最低分),
 } = {}) {
   const 她的话 = latestUserText(messages).trim();
-  const 强命中 = 她的话 ? 强档命中(她的话) : [];
+  const 强命中 = 她的话 ? strong_hits(她的话) : [];
   // 🔴 2026-08-19 弱档改成**默认关**（env RELEVANCE_WEAK=1 打开）。
   //    不是因为它不准，是因为它太宽：判据是「过滤掉应声词之后但凡有三个字
   //    以上的实质内容就放行」——日常说话几乎每句都过。而一次 recall 要 5~7 秒，
   //    等于**每一轮都卡六秒**。强档（「上次 / 还记得 / 之前」这类词）触发得少，
   //    该等的时候才等。想全都要的人自己开。
   const 开弱档 = String(process.env.RELEVANCE_WEAK || "").trim() === "1";
-  const 弱命中 = 开弱档 && Boolean(她的话) && 强命中.length === 0 && 弱档触发(她的话);
+  const 弱命中 = 开弱档 && Boolean(她的话) && 强命中.length === 0 && weak_triggered(她的话);
   const 触发 = 强命中.length > 0 || 弱命中;
 
   const 记录 = {
@@ -466,15 +466,15 @@ async function 算相关记忆提醒({
 
   if (!她的话 || !触发) {
     记录.skipped = !她的话 ? "no_user_text" : "not_triggered";
-    记一行(logPath, 记录);
+    log_line(logPath, 记录);
     return 记录;
   }
 
   记录.recall_called = true; // 触发了就算发起过调用，成不成功是另一件事（error 字段管）
   try {
-    const 客户端 = 造客户端({ 地址, 超时毫秒 });
-    const 文 = await 客户端.调("recall", { query: 她的话.slice(0, 120) });
-    const 过线的 = 解析分数行(文).filter(条 => 条.score100 >= 最低分);
+    const 客户端 = make_client({ 地址, 超时毫秒 });
+    const 文 = await 客户端.call_tool("recall", { query: 她的话.slice(0, 120) });
+    const 过线的 = parse_score_line(文).filter(条 => 条.score100 >= 最低分);
     const mind条目 = 过线的.filter(条 => 条.isMind);
     const event条目 = 过线的.filter(条 => !条.isMind);
     记录.event_count = event条目.length;
@@ -485,14 +485,14 @@ async function 算相关记忆提醒({
     if (过线的.length > 0) {
       // 🔴 只算，不碰 messages——真正 push 的动作交给 server.js，在 outgoingBody
       // 组完之后做。理由见本函数上方文档注释的 ①②③。
-      记录.patch = { role: "system", content: 建提醒行(event条目.length, mind条目.length) };
+      记录.patch = { role: "system", content: build_notice_line(event条目.length, mind条目.length) };
       记录.injected = true;
     }
   } catch (错) {
     记录.error = String(错?.message || 错);
   }
 
-  记一行(logPath, 记录);
+  log_line(logPath, 记录);
   return 记录;
 }
 
@@ -503,11 +503,11 @@ module.exports = {
   默认日志档,
   强档关键词,
   默认最低分,
-  贴一次,
-  算相关记忆提醒,
-  // 贴到真尾巴：server.js 组完 outgoingBody 之后，真正 push 记录.patch 用的是
+  attach_once,
+  build_relevance_notice,
+  // attach_at_true_tail：server.js 组完 outgoingBody 之后，真正 push 记录.patch 用的是
   // 这个（不是 _internal——它是生产代码要用的手势，不只是测试）。
-  贴到真尾巴,
+  attach_at_true_tail,
 
 // ── 英文别名（2026-08-19 她提的：「你就不怕别人不好改吗」）─────────────────────
 // 🔴 **只是别名，指的是同一个函数**。文件内部照旧中文——`算相关记忆提醒` 一眼知道
@@ -515,14 +515,14 @@ module.exports = {
 //    给自己制造 bug。但**对外这几个名字是别人要亲手敲的**，一个不认识汉字的人
 //    连自己粘的是哪个都不知道。名字是给读的人用的，谁读就照顾谁。
   // computeReminder({ messages, requestId, 地址, 最低分 }) → { patch, ... }
-  computeReminder: 算相关记忆提醒,
+  computeReminder: build_relevance_notice,
   // appendToTail(messages, patch) —— 组完请求体之后的最后一步
-  appendToTail: 贴到真尾巴,
-  paste: 贴一次,
+  appendToTail: attach_at_true_tail,
+  paste: attach_once,
   MARKER_LINE: MARKER,
   DEFAULT_ADDRESS: 默认地址,
   DEFAULT_MIN_SCORE: 默认最低分,
   STRONG_WORDS: 强档关键词,
 
-  _internal: { 造客户端, latestUserText, 强档命中, 弱档触发, 解析分数行, 建贴文, 建提醒行 },
+  _internal: { make_client, latestUserText, strong_hits, weak_triggered, parse_score_line, build_patch_text, build_notice_line },
 };
