@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-搬家-补房间.py — 从旧版（Ombre-Brain 那一代）搬过来之后，给没有房间的记忆补一间。
+backfill_rooms.py — 从旧版（Ombre-Brain 那一代）搬过来之后，给没有房间的记忆补一间。
 
 ========================================
 先说清楚这个脚本**不做**什么
@@ -24,9 +24,9 @@
     分得更细是后面拿 regrow 一条条改的事，不该由一个脚本替人决定。
 
 用法：
-    python scripts/搬家-补房间.py --buckets /path/to/buckets              # 干跑
-    python scripts/搬家-补房间.py --buckets /path/to/buckets --apply      # 真写
-    python scripts/搬家-补房间.py --buckets ... --room MIND/VIEWS --apply
+    python scripts/backfill_rooms.py --buckets /path/to/buckets              # 干跑
+    python scripts/backfill_rooms.py --buckets /path/to/buckets --apply      # 真写
+    python scripts/backfill_rooms.py --buckets ... --room MIND/VIEWS --apply
 ========================================
 """
 import argparse
@@ -52,7 +52,7 @@ SCAN = ("dynamic", "permanent", "feel", "plans", "archive")
 _ROOM_LINE = re.compile(r"^room:\s*(.*)$", re.M)
 
 
-def 扫(buckets: str):
+def scan_buckets(buckets: str):
     for sub in SCAN:
         d = os.path.join(buckets, sub)
         if not os.path.isdir(d):
@@ -63,7 +63,7 @@ def 扫(buckets: str):
                     yield os.path.join(root, fn)
 
 
-def 补一条(path: str, room: str, apply: bool) -> str:
+def fill_one(path: str, room: str, apply: bool) -> str:
     """返回这条的处理结果：have / legacy / fill / skip。"""
     with open(path, "r", encoding="utf-8", errors="replace") as f:
         text = f.read()
@@ -106,8 +106,8 @@ def main():
         sys.exit(1)
 
     c = Counter()
-    for p in 扫(a.buckets):
-        c[补一条(p, a.room, a.apply)] += 1
+    for p in scan_buckets(a.buckets):
+        c[fill_one(p, a.room, a.apply)] += 1
 
     print("=" * 46)
     print("干跑（一个字节都没写）" if not a.apply else "已经写进去了")

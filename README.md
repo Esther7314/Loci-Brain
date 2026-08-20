@@ -151,10 +151,10 @@ LOCI_UPSTREAM=https://api.deepseek.com/v1 node gateway/server.js
 cp -r <你的 ombre-brain>/buckets/* ./buckets/
 
 # 2. 先干跑，看看有多少条要动（一个字节都不写）
-docker compose exec loci-brain python scripts/搬家-补房间.py --buckets /app/buckets
+docker compose exec loci-brain python scripts/backfill_rooms.py --buckets /app/buckets
 
 # 3. 确认没问题了再真写
-docker compose exec loci-brain python scripts/搬家-补房间.py --buckets /app/buckets --apply
+docker compose exec loci-brain python scripts/backfill_rooms.py --buckets /app/buckets --apply
 ```
 
 **为什么这一步是脚本，不是面板上一个按钮：**

@@ -101,9 +101,13 @@ SELF = os.path.join("scripts", "check_english.py")
 
 # ═══ BASELINE — lower these as batches land; when all are 0 this becomes a plain gate ═══
 BASELINE = {
-    "identifiers": 2,
+    # 2026-08-20: the first batch (identifiers + filenames) is finished. These two are
+    # now plain gates — anything above zero means Chinese was put back.
+    "identifiers": 0,
+    "filenames": 0,
+    # Still going. `names` is the second half the first version of this file could not
+    # see; `she` is the personal-information pass, which rides along with the comments.
     "names": 412,
-    "filenames": 1,
     "she": 543,
 }
 
