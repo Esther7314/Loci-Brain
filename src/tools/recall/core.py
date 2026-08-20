@@ -434,7 +434,7 @@ def _visible(meta: dict) -> bool:
     return True
 
 
-async def _collect(when, room, tag, query) -> tuple[list[dict], str, dict]:
+async def _collect(when, room, tag, query, all_buckets=None) -> tuple[list[dict], str, dict]:
     """Filter down to what is being looked at this time. Returns
     `(entries, error, ledger)`.
 
@@ -475,7 +475,16 @@ async def _collect(when, room, tag, query) -> tuple[list[dict], str, dict]:
                     literals.add(hid)
                 pool.append(full)
     else:
-        pool = await rt.bucket_mgr.list_all(include_archive=False)
+        # 🔴 Browsing needs the whole library, and the caller hands it in rather than this
+        #    function reaching for it. Same reasoning as `covering()`: a call that fetches
+        #    the library for itself is invisible to whoever called it, so several of them
+        #    in one request each look reasonable and together scan the library N times.
+        #    That is exactly what was happening here — a single browse fetched it once in
+        #    this function and again in `_render_browse`, and neither could see the other.
+        #    With it passed in, a caller that fetches twice is looking at both lines.
+        if all_buckets is None:
+            all_buckets = await rt.bucket_mgr.list_all(include_archive=False)
+        pool = all_buckets
 
     out = []
     browsing = not query.strip()
@@ -1139,7 +1148,7 @@ async def _gist_lines(entries: list[dict], skip: set[str] | None = None) -> list
     return out
 
 
-async def _render_browse(entries, gates, room, tag) -> str:
+async def _render_browse(entries, gates, room, tag, all_buckets=None) -> str:
     """Browsing: I am looking, and cannot recall what is there. **The far end is
     cut hard** — the last three days stay as they were, everything older collapses
     into one stretch labelled "some time ago".
@@ -1163,11 +1172,14 @@ async def _render_browse(entries, gates, room, tag) -> str:
     #    ⚠️ Periods need **the whole library**, not the entries this call filtered
     #       down to — whether a period covers this cell has nothing to do with
     #       whether the period itself passed the filters.
-    try:
-        span_buckets = await rt.bucket_mgr.list_all(include_archive=False)
-    except Exception as e:
-        rt.logger.warning(f"时期那半的库没捞到，这次浏览不盖时期: {e}")
-        span_buckets = []
+    if all_buckets is not None:
+        span_buckets = all_buckets
+    else:
+        try:
+            span_buckets = await rt.bucket_mgr.list_all(include_archive=False)
+        except Exception as e:
+            rt.logger.warning(f"时期那半的库没捞到，这次浏览不盖时期: {e}")
+            span_buckets = []
     dn = today - timedelta(days=_BROWSE_NEAR_DAYS - 1)   # 今天 / 昨天 / 前天
     tomorrow = today + timedelta(days=1)
 
@@ -1722,8 +1734,21 @@ async def recall_core(when: str, room: str, tag: str, query: str,
         return ("recall 至少给一个门：when（时间）/ room（房间）/ tag（标签）/ query（扔词搜）。"
                 "例：recall(when=\"上周\") · recall(room=\"MIND\") · recall(when=\"本月\", tag=\"Home\")")
 
+    # 🔴 ONE fetch of the library for this whole call, and only on the path that needs it.
+    #    Browsing needs it twice — once to filter down to what is being looked at, and
+    #    once more for the periods, which have to be checked against the WHOLE library
+    #    rather than the filtered result. Both used to fetch it themselves, so a single
+    #    browse scanned everything twice and neither half could see the other doing it.
+    #    A query does not need it at all: search returns its own hits.
+    all_buckets = None
+    if not query.strip():
+        try:
+            all_buckets = await rt.bucket_mgr.list_all(include_archive=False)
+        except Exception as e:
+            rt.logger.warning(f"浏览要的全库没捞到: {e}")
+
     entries, err, ledger = collected if collected is not None else await _collect(
-        when, room, tag, query)
+        when, room, tag, query, all_buckets)
     if err:
         return err
     if not entries:
@@ -1789,7 +1814,7 @@ async def recall_core(when: str, room: str, tag: str, query: str,
         # already history.
         if when.strip() == "今天":
             return await _render_today(entries, gates)
-        return await _render_browse(entries, gates, room, tag)
+        return await _render_browse(entries, gates, room, tag, all_buckets)
 
     gname, slices = _split_cells(entries, max_cells)
 
