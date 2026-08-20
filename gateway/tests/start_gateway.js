@@ -80,7 +80,10 @@ async function start_gateway({ 端口: port, 上游地址: upstream_url, loci地
   await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`网关 10 秒没起来。它说：\n${output}`)), 10000);
     const check_ready = () => {
-      if (output.includes("起来了")) { clearTimeout(timer); resolve(); }
+      // Matches the banner's first line in server.js. These two are coupled: change the
+      // banner without changing this and every gateway test waits until it times out,
+      // which reads as "the gateway is broken" rather than "the string moved".
+      if (output.includes("[gateway] up on")) { clearTimeout(timer); resolve(); }
     };
     child.stdout.on("data", check_ready);
     child.on("exit", (code) => { clearTimeout(timer); reject(new Error(`网关起来就退了（exit ${code}）。它说：\n${output}`)); });

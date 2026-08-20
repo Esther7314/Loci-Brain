@@ -72,7 +72,7 @@ const data_root = process.env.LOCI_GATEWAY_DATA || path.join(__dirname, "data");
 const log_path = path.join(data_root, "logs", "memory-actions.jsonl");
 
 if (!upstream) {
-  console.error("没配 LOCI_UPSTREAM —— 我不知道该把请求转给谁。");
+  console.error("LOCI_UPSTREAM is not set — there is nothing to forward requests to.");
   console.error("例：LOCI_UPSTREAM=https://api.deepseek.com/v1 node gateway/server.js");
   process.exit(1);
 }
@@ -372,16 +372,16 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(port, () => {
-  console.log(`[gateway] 起来了 http://127.0.0.1:${port}`);
-  console.log(`[gateway] 上游        ${upstream}`);
-  console.log(`[gateway] Loci        ${poke._internal.httpBase(LOCI)}`);
-  console.log(`[gateway] 相关度最低分 ${min_score}  ·  闲时阈值 ${idle_threshold_minutes} 分钟`);
+  console.log(`[gateway] up on http://127.0.0.1:${port}`);
+  console.log(`[gateway] upstream       ${upstream}`);
+  console.log(`[gateway] Loci           ${poke._internal.httpBase(LOCI)}`);
+  console.log(`[gateway] score floor    ${min_score}   ·   idle threshold ${idle_threshold_minutes} min`);
   // 🔴 This line **is the one that used not to be printed**, and the "5 second timeout
   //    → never worked once since it shipped" bug would have been **visible on day one**
   //    had it been on the first screen at startup.
   //    📌 The rule: any number that lets someone spot a misconfiguration at a glance
   //    belongs on the first screen at startup.
-  console.log(`[gateway] Loci 超时      ${process.env.RELEVANCE_TIMEOUT_MS || "（没设，用默认）"}`);
-  console.log(`[gateway] 它在不在工作    GET http://127.0.0.1:${port}/health`);
-  console.log(`[gateway] 把客户端的 base_url 指到 http://127.0.0.1:${port}/v1`);
+  console.log(`[gateway] Loci timeout   ${process.env.RELEVANCE_TIMEOUT_MS || "(unset — using the default)"}`);
+  console.log(`[gateway] is it working  GET http://127.0.0.1:${port}/health`);
+  console.log(`[gateway] point your client base_url at http://127.0.0.1:${port}/v1`);
 });
