@@ -629,11 +629,12 @@ async def breath() -> str:
                    than machine readings.
     · Out of the blue   one or two entries at random, with no relevance filter.
 
-    Every word on this screen is either something written down at the time or fixed text
-    from a template. None of it goes through a model. The rules are printed exactly as
-    they were written, in full: a rule is already the short version of itself, and putting
-    a summary of it in front of you every morning means reading someone else's paraphrase
-    of your own words.
+    Waking up calls no model. Everything on the screen was written earlier: the rules
+    word for word as you wrote them, and the rest assembled from templates and from the
+    one-line summary stored alongside each entry — those summaries were written by a
+    model when the entry went in, not now. The rules are printed in full: a rule is
+    already the short version of itself, and putting a summary of it in front of you
+    every morning means reading someone else's paraphrase of your own words.
 
     The summaries are hooks. When one looks relevant, go and get the original with recall.
 
