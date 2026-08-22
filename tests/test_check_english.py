@@ -180,7 +180,7 @@ def test_the_baseline_is_not_below_reality():
     # Criterion: the ratchet's whole value is that the number in the file is the number in
     # the repo. A baseline that drifted UPWARD would silently loosen the ratchet, and one
     # that drifted downward would go red for no reason. Both agents in the first batch
-    # flagged this as the thing to watch when two people edit it at once.
+    # flagged this as the thing to watch when two people edit it at onCE.
     r = CE.scan()
     now = {
         "identifiers": len(r["identifiers"]),
@@ -201,6 +201,94 @@ def test_the_checker_does_not_count_itself():
     # ⚠️ And the ratchet caught this very file for the same reason: the sentence above
     #    originally quoted the character it searches for, which pushed the count up by
     #    one. Writing the rule down is not exempt from the rule.
-    assert CE.SELF.replace("\\", "/").endswith("scripts/check_english.py")
+    #
+    # 🔴 Third time, 2026-08-22 — and the third time is what changed the fix. Tests for
+    #    the stamp table put six of the searched-for character into assertion messages,
+    #    the checker counted them, and the command line and the test suite disagreed
+    #    about the same number. Twice it was patched by rewording the sentence; that
+    #    only works until someone writes a test, because a test **has** to contain what
+    #    it tests. So the exemption now covers the detector AND its tests, and this
+    #    assertion checks both are in there.
+    _self = {s.replace("\\", "/") for s in CE.SELF}
+    assert any(s.endswith("scripts/check_english.py") for s in _self)
+    assert any(s.endswith("tests/test_check_english.py") for s in _self), (
+        "the detector's tests must be exempt too — they cannot avoid quoting what they check"
+    )
     r = CE.scan()
     assert not any("check_english" in row for row in r["names"] + r["identifiers"])
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# The stamps on the eight 她 that stay (DELIBERATE_SHE)
+#
+# WHY THESE EXIST
+#     Getting to "0 mentions of 她" was not done by translating the last eight — it was
+#     done by exempting them. That makes the exemption table part of the ruler, and an
+#     exemption that keeps applying after its line changed is exactly the overcounting
+#     failure's twin: the number reads 0 while nobody is looking at anything.
+#
+#     Both failure modes below were hit for real while writing the table on 2026-08-22:
+#     the keys were built with os.path.join, came out backslashed on Windows, matched no
+#     file at all — and **nothing said so**. The count simply stayed at 8 with an empty
+#     stale list. A table that can silently apply to zero files is worse than no table.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def test_a_stamp_exempts_its_own_line_only():
+    rel = next(iter(CE.DELIBERATE_SHE))
+    needle = CE.DELIBERATE_SHE[rel][0][0]
+    exempt, stale = CE._stamped_she(rel, needle + "\n她 somewhere else\n")
+    assert stale == []
+    assert exempt == needle.count("她"), "only the stamped line is exempt"
+
+
+def test_a_stamp_whose_line_changed_goes_stale_instead_of_staying_silent():
+    rel = next(iter(CE.DELIBERATE_SHE))
+    exempt, stale = CE._stamped_she(rel, "她 但是那一行已经被改掉了\n")
+    assert exempt == 0, "a stamp that no longer matches must not exempt anything"
+    assert len(stale) == len(CE.DELIBERATE_SHE[rel])
+    assert "not found" in stale[0]
+
+
+def test_a_stamp_that_matches_twice_is_stale_too():
+    # Two matches means the substring stopped identifying which occurrence was blessed.
+    # Exempting "one of them" would be a guess, so it refuses and says so.
+    rel = next(iter(CE.DELIBERATE_SHE))
+    needle = CE.DELIBERATE_SHE[rel][0][0]
+    exempt, stale = CE._stamped_she(rel, needle + "\n" + needle + "\n")
+    assert exempt == 0
+    assert "found 2x" in stale[0]
+
+
+def test_a_stamped_file_the_scan_never_saw_is_reported():
+    """The one that actually happened: a path typo makes the whole table a no-op."""
+    CE._STAMPED_FILES_SEEN.clear()
+    assert set(CE._unused_stamp_files()) == set(CE.DELIBERATE_SHE)
+    for rel in CE.DELIBERATE_SHE:
+        CE._stamped_she(rel, "")
+    assert CE._unused_stamp_files() == [], "visiting every stamped file clears the warning"
+
+
+def test_the_stamp_keys_are_the_paths_the_scan_actually_produces():
+    """Backslash keys match nothing on Windows and the table dies quietly."""
+    for rel in CE.DELIBERATE_SHE:
+        assert "\\" not in rel, f"{rel!r} must use forward slashes, like _rel() emits"
+        assert (Path(CE.ROOT) / rel).is_file(), f"{rel} is stamped but does not exist"
+
+
+def test_every_stamp_still_matches_the_real_file():
+    """The live check: run the table against the actual sources, right now."""
+    stale = []
+    for rel in CE.DELIBERATE_SHE:
+        text = (Path(CE.ROOT) / rel).read_text(encoding="utf-8")
+        stale += CE._stamped_she(rel, text)[1]
+    assert stale == [], "a stamp drifted off its line — re-read it before re-stamping"
+
+
+def test_the_stamped_total_matches_what_the_ratchet_zeroed_out():
+    # If this ever disagrees with BASELINE["she"] == 0, the finish line moved without
+    # anyone deciding to move it.
+    r = CE.scan()
+    assert CE.BASELINE["she"] == 0
+    assert r["she_total"] == 0
+    assert r["stamped_she"] == 8, "eight stamped 她 — the owner ruled on exactly these"
+    assert r["stale_stamps"] == []

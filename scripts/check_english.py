@@ -85,6 +85,74 @@ JS_CONST_FN = re.compile(r"^\s*(?:const|let|var)\s+([^\s=]+)\s*=\s*(?:async\s*)?
 SHE = "她"
 SHE_SAID = re.compile(r"她(说|的原话|定的|拍的|要求|提的)")
 
+# ── The eight 她 that stay, each one stamped ─────────────────────────────────
+# Not a mute button. Every entry is an exact substring of the line it exempts, so
+# **editing that line invalidates its stamp**: the count comes back, the run says which
+# stamp went stale, and a person looks at whether the change should still be exempt.
+# A stamp that survives its own line being rewritten would be worse than no stamp.
+#
+# Two kinds, and they are exempt for different reasons:
+#   ① a stop-word list — 她 is *data* here, and deleting the word breaks behaviour:
+#      pronouns would start being stored as legitimate subjects ("她今天很开心" would
+#      file 她 away as a person's name).
+#   ② live LLM prompt text — rewriting the wording *is* changing model behaviour, and
+#      these prompts carry version numbers, so a reword invalidates every cached tag.
+# Neither is a leftover from the translation, and neither is find-and-replaceable.
+DELIBERATE_SHE = {
+    "src/tools/_subjects.py": [
+        ("我 你 他 她 它 咱 咱们 我们 你们 他们 她们 它们 自己 大家 别人 人家 对方 谁",
+         "① the pronoun gate: this list is what stops 她/她们 being filed as subjects"),
+    ],
+    "src/core/dehydrator.py": [
+        ('_PRONOUN_TAGS = frozenset({"她", "他", "我", "你"})',
+         "① same gate, tag side: these are the pronouns kept out of tags"),
+        ("（原文里的「你/她/他」都指",
+         "② prompt: tells the model which pronouns refer to the human"),
+        ("示例一：『我也在她这里看到了自己没见过的碎片』",
+         "② prompt: a worked example; changing the example changes what it teaches"),
+        ("你是一个日记整理专家。她/他会发送一段包含今天各种事情的文本",
+         "② prompt: DIGEST_PROMPT opening line"),
+        ("（我/你/他/她/它/我们/自己/对方等）——代词是指代不是名字",
+         "② prompt: the do-not-extract-pronouns rule"),
+        ("：我/你/他/她/它/我们/自己/对方等），",
+         "② prompt: the same rule in the second extraction prompt"),
+    ],
+}
+
+
+# 🔴 Keys are the forward-slash paths `_rel()` produces, and that is not a detail:
+#    written with os.path.join they came out backslashed on Windows, matched nothing,
+#    and the whole table **silently did nothing** — the count stayed at 8 and no stamp
+#    was ever reported stale, because the loop never ran. A table that can quietly
+#    apply to zero files is worse than no table, so `_unused_stamp_files()` below makes
+#    that state impossible to reach without a complaint.
+_STAMPED_FILES_SEEN: set[str] = set()
+
+
+def _unused_stamp_files() -> list[str]:
+    """Stamped files the scan never visited — a path typo, a move, or a deletion."""
+    return sorted(set(DELIBERATE_SHE) - _STAMPED_FILES_SEEN)
+
+
+def _stamped_she(rel: str, text: str) -> tuple[int, list[str]]:
+    """How many 她 on this file's stamped lines — and which stamps no longer match.
+
+    A stamp is required to appear **exactly once**. Zero means the line moved on without
+    the stamp; more than once means the substring stopped being specific enough to say
+    which occurrence was blessed. Both are reported rather than guessed at.
+    """
+    if rel not in DELIBERATE_SHE:
+        return 0, []
+    _STAMPED_FILES_SEEN.add(rel)
+    exempt, stale = 0, []
+    for needle, why in DELIBERATE_SHE[rel]:
+        hits = text.count(needle)
+        if hits == 1:
+            exempt += needle.count(SHE)
+        else:
+            stale.append(f"{rel}: stamp {'not found' if hits == 0 else f'found {hits}x'} — {needle[:40]}…  ({why})")
+    return exempt, stale
+
 SKIP_DIRS = {"__pycache__", "node_modules", ".git", ".venv", "venv"}
 CODE_EXT = (".py", ".js", ".mjs", ".ts", ".yaml", ".yml", ".sh")
 
@@ -94,11 +162,18 @@ SCOPE = ["src", "gateway", "scripts", "tests", "config"]
 # Counted for context, never enforced: interface copy stays in Chinese here.
 COPY_EXEMPT = {os.path.join("frontend", "loci.html")}
 
-# This file is not scanned. It has to contain the very strings it searches for, so
-# scanning itself makes the count go up by however thoroughly the check is written —
-# and the first run of it did exactly that, reporting ten mentions that were its own
-# pattern definitions. A detector that counts itself measures the detector.
-SELF = os.path.join("scripts", "check_english.py")
+# Neither this file **nor its tests** is scanned. Both have to contain the very strings
+# they search for, so scanning them makes the count go up by however thoroughly the check
+# is written — the first run of this file did exactly that, reporting ten mentions that
+# were its own pattern definitions. A detector that counts itself measures the detector.
+# 🔴 The test file was added to this set on 2026-08-22, and it was the same bug a second
+#    time: writing tests for the stamp table put six 她 into assertion messages, and the
+#    checker duly counted them and reported 6 where the command line reported 0. The
+#    exemption has to cover the whole detector, and a detector's tests are part of it.
+SELF = {
+    os.path.join("scripts", "check_english.py"),
+    os.path.join("tests", "test_check_english.py"),
+}
 
 # ═══ BASELINE — lower these as batches land; when all are 0 this becomes a plain gate ═══
 BASELINE = {
@@ -109,15 +184,15 @@ BASELINE = {
     "identifiers": 0,
     "filenames": 0,
     "names": 0,
-    # 🔴 Down to the two categories that must NOT be cleared by a translation pass:
-    #   · the pronoun stop-list in tools/_subjects.py — it is a GATE. Remove the entries
-    #     and pronouns start being stored as legitimate subjects, which is the exact thing
-    #     it exists to prevent.
-    #   · six inside live LLM prompts in core/dehydrator.py — rewording a prompt changes
-    #     model behaviour, and those prompts carry a version stamp, so an edit invalidates
-    #     every cached result derived from them.
-    # Both need a decision from the owner, not a find-and-replace.
-    "she": 8,
+    # 🔴 2026-08-22: 0, and the last eight did **not** go away — they were stamped.
+    #   The owner ruled that neither kind may be translated: the pronoun stop-list in
+    #   tools/_subjects.py is a GATE (delete the words and pronouns start being stored as
+    #   real subjects), and the six in core/dehydrator.py sit inside live LLM prompts,
+    #   where rewording *is* changing behaviour and invalidates every cached tag.
+    #   So they are exempted one line at a time in DELIBERATE_SHE, each with a reason,
+    #   and **editing any of those lines brings its count straight back**.
+    #   📌 0 here therefore means "nothing unaccounted for", not "no 她 in the repo".
+    "she": 0,
 }
 
 
@@ -256,13 +331,15 @@ def _rel(path: str) -> str:
 def scan() -> dict:
     identifiers, names, filenames, she, comment_lines = [], [], [], [], 0
     she_files = set()
+    stale_stamps = []
+    stamped_total = 0
 
     targets = list(SCOPE) + ["frontend"]
     for root in targets:
         for path in _walk(root):
             rel = _rel(path)
             name = os.path.basename(path)
-            if os.path.relpath(path, ROOT) == SELF:
+            if os.path.relpath(path, ROOT) in SELF:
                 continue
 
             # Filenames are checked everywhere in scope, including non-code files.
@@ -292,7 +369,10 @@ def scan() -> dict:
                 identifiers += [f"{rel}  {n}" for n in sorted(decl)]
                 names += [f"{rel}  {n}" for n in sorted(other)]
 
-            n = text.count(SHE)
+            exempt, stale = _stamped_she(rel, text)
+            stale_stamps += stale
+            stamped_total += exempt
+            n = text.count(SHE) - exempt
             if n:
                 she.append((rel, n, len(SHE_SAID.findall(text))))
                 she_files.add(rel)
@@ -304,6 +384,8 @@ def scan() -> dict:
         "she": she,
         "she_total": sum(n for _, n, _ in she),
         "she_said_total": sum(s for _, _, s in she),
+        "stamped_she": stamped_total,
+        "stale_stamps": stale_stamps + [f"{f}: stamped file never scanned — moved, renamed, or the path is wrong" for f in _unused_stamp_files()],
         "comment_lines": comment_lines,
     }
 
@@ -359,6 +441,12 @@ def main() -> int:
     print("  ⚠️ `names` is EXACT for Python (parsed) and a FLOOR for JavaScript — there is "
           "no JS parser here, so params, catch bindings and destructuring go uncounted.")
     print(f"  · {'of the 她 above, 「她说/她定的」':44s} {r['she_said_total']:5d}")
+    if r["stamped_she"]:
+        print(f"  · {'她 exempted by a stamp (see DELIBERATE_SHE)':44s} {r['stamped_she']:5d}")
+    # 🔴 Loud, and above the verdict: a stale stamp means an exemption stopped applying,
+    #    so the number printed above is no longer the whole story.
+    for line in r["stale_stamps"]:
+        print(f"  🔴 STALE STAMP  {line}")
 
     if args.list:
         if r["identifiers"]:
