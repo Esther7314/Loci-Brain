@@ -373,7 +373,13 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(port, () => {
-  console.log(`[gateway] up on http://127.0.0.1:${port}`);
+  // 🔴 Report what was **actually bound**, not what was asked for. `PORT=0` is a legal
+  //    setting — it means "you pick" — and until this line read the real port back, the
+  //    banner answered with a literal 0 while the server sat on some other number. The
+  //    first line of the banner is how everything downstream finds this process (the
+  //    tests parse it), so a banner that lies is not cosmetic.
+  const bound = server.address().port;
+  console.log(`[gateway] up on http://127.0.0.1:${bound}`);
   console.log(`[gateway] upstream       ${upstream}`);
   console.log(`[gateway] Loci           ${poke._internal.httpBase(LOCI)}`);
   console.log(`[gateway] score floor    ${min_score}   ·   idle threshold ${idle_threshold_minutes} min`);
@@ -383,6 +389,6 @@ server.listen(port, () => {
   //    📌 The rule: any number that lets someone spot a misconfiguration at a glance
   //    belongs on the first screen at startup.
   console.log(`[gateway] Loci timeout   ${process.env.RELEVANCE_TIMEOUT_MS || "(unset — using the default)"}`);
-  console.log(`[gateway] is it working  GET http://127.0.0.1:${port}/health`);
-  console.log(`[gateway] point your client base_url at http://127.0.0.1:${port}/v1`);
+  console.log(`[gateway] is it working  GET http://127.0.0.1:${bound}/health`);
+  console.log(`[gateway] point your client base_url at http://127.0.0.1:${bound}/v1`);
 });

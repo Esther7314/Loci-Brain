@@ -64,12 +64,19 @@ async function start_fake_upstream({ 端口: port }) {
   await new Promise((resolve, reject) => {
     server.once("error", reject);
     // listen on 127.0.0.1 only: no opening left for the local network
-    server.listen(port, "127.0.0.1", resolve);
+  // 🔴 **Port 0 means "whoever is asking, you pick".** Passing a number here used to mean
+  //    the caller had guessed one — asked whether it was free, then bound it a moment
+  //    later — and two test runs at once could be told the same number was free. The
+  //    loser died in `before()` and took all 19 tests down with it, which reads as
+  //    "the gateway is broken" rather than "two runs collided".
+  //    The port that actually got bound is read back below; nobody guesses any more.
+    server.listen(port ?? 0, "127.0.0.1", resolve);
   });
 
+  const bound = server.address().port;
   return {
-    端口: port,
-    地址: `http://127.0.0.1:${port}/v1`,
+    端口: bound,
+    地址: `http://127.0.0.1:${bound}/v1`,
     收到: received,
     清账() { received.length = 0; },
     最后一笔() { return received[received.length - 1]; },

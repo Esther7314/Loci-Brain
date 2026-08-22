@@ -85,50 +85,22 @@ const fake_loci_slow_ms = 3000;
 // 🔴 These ports belong to the real things. Not one of them may be touched in a test.
 const FORBIDDEN_PORTS = [3000, 3010, 3100, 18002, 18003];
 
+// Every port this run actually bound — the fakes, the main gateway, and each clean
+// gateway. The end-of-run reconciliation checks outbound traffic against this instead of
+// against a numeric range: "somewhere in 19xxx" was only ever a stand-in for "one of
+// ours", and it stopped meaning that once the OS started handing out the numbers.
+// Checking the real set is also strictly stronger — it would now catch a connection to
+// some other process that happened to be sitting in the same range.
+const OUR_PORTS = new Set();
+
 let fake_upstream, fake_loci, gateway;
 let gateway_port;
 
-// ——— Picking ports: really listen on one first, to confirm it is not taken ———
-function is_port_free(port) {
-  return new Promise((resolve) => {
-    const probe = net.createServer();
-    probe.once("error", () => resolve(false));
-    // no host = the same way the gateway itself listens (every interface), which probes strictest
-    probe.once("listening", () => probe.close(() => resolve(true)));
-    probe.listen(port);
-  });
-}
-// ⚠️ **TOCTOU, mitigated rather than fixed.** `is_port_free` answers about the instant
-// it asked and the bind happens later, so two runs starting at the same number both get
-// told 19100 is free — one binds, the other dies in `before()` and takes all 19 tests
-// with it.
-//
-// Two overlapping runs, measured on 2026-08-22 (once the fixture directories stopped
-// deleting each other):
-//     shared start point   4 rounds → 3 of them had one side fail all 19
-//     pid-derived lane     3 rounds → one side failed 1 assertion, once
-// So the lane stays. It was briefly reverted on the theory that a shared scan would
-// queue politely behind whoever bound first; the numbers above say it does not.
-//
-// 📌 The lane has to be **wider than one run's own spread** — a single run reaches from
-//    19100 to about 19340, because the clean-gateway helper walks 19300 + n*4. A 10-wide
-//    lane looked right and still collided: run A's tail sat on run B's head.
-// 📌 It does not make N runs safe, only two or three; pids 8 apart share a lane. The real
-//    fix is to stop guessing — bind port 0 and read back what the OS assigned. That
-//    reaches into all three fake servers plus the spawned gateway, so it is on the
-//    ledger rather than done in passing.
-const _PORT_LANE = (process.pid % 8) * 60;
-
-async function pick_free_ports(count, from = 19100, to = 19999) {
-  const picked = [];
-  for (let p = from + _PORT_LANE; p <= to && picked.length < count; p += 1) {
-    if (FORBIDDEN_PORTS.includes(p)) continue;
-    if (await is_port_free(p)) picked.push(p);
-  }
-  if (picked.length < count) throw new Error(`19xxx 段里没挑够 ${count} 个空端口`);
-  return picked;
-}
-
+// ——— Ports are never chosen here any more — everything binds 0 and reports back what the OS
+// gave it. What used to live at this spot was `is_port_free` + `pick_free_ports`: ask
+// whether a number was free, bind it a moment later, and lose the race to whoever asked
+// at the same time. Two runs at once cost all 19 tests, and a pid-derived lane only
+// lowered the odds. See start_fake_upstream / start_fake_loci / start_gateway.
 // ——— Small helpers ———
 
 /** Send one sentence to the gateway and return the original messages, for a character-by-character "was it changed" comparison */
@@ -192,15 +164,15 @@ before(async () => {
   fs.mkdirSync(path.join(data_root, "logs"), { recursive: true });
   fs.mkdirSync(path.join(data_root, "state"), { recursive: true });
 
-  const [upstream_port, loci_port, gw_port] = await pick_free_ports(3);
-  gateway_port = gw_port;
-  for (const p of [upstream_port, loci_port, gateway_port]) {
-    assert.ok(p >= 19100 && p <= 19899, `端口 ${p} 跑出 19xxx 段了`);
-    assert.ok(!FORBIDDEN_PORTS.includes(p), `端口 ${p} 是真东西在用的`);
-  }
-
-  fake_upstream = await start_fake_upstream({ 端口: upstream_port });
-  fake_loci = await start_fake_loci({ 端口: loci_port });
+  // 🔴 **Nobody picks a port any more — 0 means "OS, you pick".** This used to guess:
+  //    ask whether 19100 was free, bind it a moment later, and hope nothing slipped into
+  //    the gap. Two runs at once were told the same number was free; the loser died in
+  //    here and took all 19 tests with it, which reads as "the gateway is broken".
+  //    Each server now reports the port it really bound, and the order below is what
+  //    makes it work: the fakes come up first, so their real ports are known by the time
+  //    the gateway needs them for its fence allowlist.
+  fake_upstream = await start_fake_upstream({ 端口: 0 });
+  fake_loci = await start_fake_loci({ 端口: 0 });
 
   // 🔴 Preset poke delivery's state file: pretend somebody spoke **just now**.
   //    This suite does not test poke delivery, but it rides in the **same request** as
@@ -216,14 +188,24 @@ before(async () => {
   );
 
   gateway = await start_gateway({
-    端口: gateway_port,
+    端口: 0,
     上游地址: fake_upstream.地址,
     loci地址: fake_loci.地址,
     数据根: data_root,
     相关超时毫秒: relevance_timeout_ms,
-    白名单端口: [upstream_port, loci_port],      // the gateway may only go out to these two places
+    白名单端口: [fake_upstream.端口, fake_loci.端口],   // the gateway may only go out to these two places
     账本路径: child_ledger_path,
   });
+  gateway_port = gateway.端口;
+  for (const p of [fake_upstream.端口, fake_loci.端口, gateway_port]) OUR_PORTS.add(p);
+
+  // Kept as an assertion rather than a filter: the OS hands out ephemeral ports, and
+  // if one ever lands on something real (3000, 18002…) the fence would quietly let the
+  // suite knock on a live service. Cheap to check, expensive to miss.
+  for (const p of [fake_upstream.端口, fake_loci.端口, gateway_port]) {
+    assert.ok(Number.isInteger(p) && p > 0, `端口没报回来：${p}`);
+    assert.ok(!FORBIDDEN_PORTS.includes(p), `端口 ${p} 是真东西在用的`);
+  }
 
   fence.allow(gateway_port);                     // the test process may only knock on the gateway's door
 });
@@ -637,7 +619,7 @@ test("对账：整套跑下来，出门的连接一条都没漏到假环境之�
 let clean_gateway_count = 0;
 async function start_clean_gateway(label, { make_data_root = true } = {}) {
   clean_gateway_count += 1;
-  const [port] = await pick_free_ports(1, 19300 + clean_gateway_count * 4);
+  const port = 0;   // the OS picks; the real one comes back on gw.端口
   const root = path.join(__dirname, `.跑测试留下的东西-${label}-${process.pid}`);
   fs.rmSync(root, { recursive: true, force: true });
   if (make_data_root) {
@@ -647,7 +629,6 @@ async function start_clean_gateway(label, { make_data_root = true } = {}) {
     fs.writeFileSync(path.join(root, "state", "poke-window.json"),
       JSON.stringify({ lastUserMessageTime: new Date().toISOString(), wakePending: false }));
   }
-  fence.allow(port);                      // the test process needs to knock on it
   const gw = await start_gateway({
     端口: port,
     上游地址: fake_upstream.地址,
@@ -657,9 +638,14 @@ async function start_clean_gateway(label, { make_data_root = true } = {}) {
     白名单端口: [fake_upstream.端口, fake_loci.端口],
     账本路径: child_ledger_path,               // shares the main ledger, reconciled together at the end
   });
+  // ⚠️ **After**, not before: with the OS picking, there is no port to allow until the
+  //    gateway has actually bound one. Allowing `port` up here let a literal 0 into the
+  //    allowlist and the fence then blocked the test from knocking on its own gateway.
+  fence.allow(gw.端口);                    // the test process needs to knock on it
+  OUR_PORTS.add(gw.端口);
   return {
     网关: gw,
-    端口: port,
+    端口: gw.端口,
     数据根: root,
     日志档: path.join(root, "logs", "memory-actions.jsonl"),
     async 收() {
@@ -946,8 +932,10 @@ test("撒谎·误报｜库里本来就没有相关的东西，会被说成「它
 test("对账·第八节：健康这一节新起的网关，也一条都没漏出去", { timeout: 15000 }, () => {
   // The existing reconciliation comes before this section and cannot see these new ports — so do one here.
   const records = all_outbound_records();
-  const out_of_range = records.filter((rec) => Number(rec.端口) < 19100 || Number(rec.端口) > 19899);
-  assert.deepStrictEqual(out_of_range, [], `有连接打到 19xxx 之外去了：${JSON.stringify(out_of_range)}`);
+  const strangers = records.filter((rec) => !OUR_PORTS.has(Number(rec.端口)));
+  assert.deepStrictEqual(strangers, [], `有连接打到我们没起过的端口上：${JSON.stringify(strangers)}`
+    + `
+本次起过的：${[...OUR_PORTS].sort((a, b) => a - b).join(", ")}`);
   const blocked = records.filter((rec) => rec.放行 === false);
   assert.deepStrictEqual(blocked, [], `围栏拦下了这些：${JSON.stringify(blocked)}`);
   for (const real_port of FORBIDDEN_PORTS) {

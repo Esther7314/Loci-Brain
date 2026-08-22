@@ -169,12 +169,19 @@ async function start_fake_loci({ 端口: port }) {
 
   await new Promise((resolve, reject) => {
     server.once("error", reject);
-    server.listen(port, "127.0.0.1", resolve);   // loopback only
+  // 🔴 **Port 0 means "whoever is asking, you pick".** Passing a number here used to mean
+  //    the caller had guessed one — asked whether it was free, then bound it a moment
+  //    later — and two test runs at once could be told the same number was free. The
+  //    loser died in `before()` and took all 19 tests down with it, which reads as
+  //    "the gateway is broken" rather than "two runs collided".
+  //    The port that actually got bound is read back below; nobody guesses any more.
+    server.listen(port ?? 0, "127.0.0.1", resolve);   // loopback only
   });
 
+  const bound = server.address().port;
   return {
-    端口: port,
-    地址: `http://127.0.0.1:${port}/mcp`,
+    端口: bound,
+    地址: `http://127.0.0.1:${bound}/mcp`,
     收到: received,
     工具调用: tool_calls,
     全程收到: all_received,

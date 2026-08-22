@@ -77,13 +77,24 @@ async function start_gateway({ 端口: port, 上游地址: upstream_url, loci地
   // Wait until it has really listened before going on — sleeping for a guessed duration
   // is a dishonest way to do this, and if the port turns out to be taken, this blows up
   // right here instead of as a pile of baffling connection failures further down.
+  let bound_port = port;
   await new Promise((resolve, reject) => {
+    // filled in from the banner below; falls back to what we asked for
     const timer = setTimeout(() => reject(new Error(`网关 10 秒没起来。它说：\n${output}`)), 10000);
     const check_ready = () => {
       // Matches the banner's first line in server.js. These two are coupled: change the
       // banner without changing this and every gateway test waits until it times out,
       // which reads as "the gateway is broken" rather than "the string moved".
-      if (output.includes("[gateway] up on")) { clearTimeout(timer); resolve(); }
+      // The banner carries the port it really bound — the only way to learn it when we
+      // asked for 0. Same coupling as before (change the banner, change this), one step
+      // deeper: we now read a number out of it instead of just spotting the line.
+      const marker = "[gateway] up on http://127.0.0.1:";
+      const at = output.indexOf(marker);
+      if (at >= 0) {
+        bound_port = parseInt(output.slice(at + marker.length), 10);
+        clearTimeout(timer);
+        resolve();
+      }
     };
     child.stdout.on("data", check_ready);
     child.on("exit", (code) => { clearTimeout(timer); reject(new Error(`网关起来就退了（exit ${code}）。它说：\n${output}`)); });
@@ -94,8 +105,8 @@ async function start_gateway({ 端口: port, 上游地址: upstream_url, loci地
 
   return {
     pid: child.pid,
-    端口: port,
-    地址: `http://127.0.0.1:${port}`,
+    端口: bound_port,
+    地址: `http://127.0.0.1:${bound_port}`,
     全部输出() { return output; },
     /** Whatever the gateway has said since the last call — used to see what one request left on the console */
     输出增量() { const fresh = output.slice(read_offset); read_offset = output.length; return fresh; },
