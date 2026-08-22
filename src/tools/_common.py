@@ -279,10 +279,21 @@ def limits_cfg() -> dict:
 def _configured_limit(name: str, default: int) -> int:
     raw = limits_cfg().get(name, default)
     try:
-        value = int(raw)
+        number = float(raw)
     except (TypeError, ValueError, OverflowError):
         return default
-    return value if value >= 0 else default
+    if number < 0:
+        return default
+    # 🔴 0 is a real setting here: it means "no ceiling". Which makes truncation
+    #    dangerous in exactly one place — `int(0.5)` is 0, so a decimal typed where an
+    #    integer was meant does not shrink the gate, it **removes** it, silently.
+    #    Anything in (0, 1) is therefore treated as a mistake rather than as "off".
+    if 0 < number < 1:
+        return default
+    try:
+        return int(number)
+    except (ValueError, OverflowError):
+        return default
 
 
 def max_bucket_bytes() -> int:
@@ -379,7 +390,14 @@ def check_grow_items_payload(items: list) -> str | None:
         if isinstance(item, str):
             value = item
         elif isinstance(item, dict):
-            value = item.get("content", "")
+            # 🔴 `text` is the field that actually arrives — `rooms_path` reads
+            #    `item["text"]`. Reading only `content` measured every dict item as
+            #    0 bytes, so this ceiling never once fired on a real grow call, and it
+            #    failed **open and silently**: no error, the batch just went in.
+            #    `content` is not an alternative spelling either; it is the parameter
+            #    that was withdrawn (see the tombstone comment in grow/__init__.py).
+            #    It stays here only so anyone still calling the old way keeps working.
+            value = item.get("text", item.get("content", ""))
         else:
             continue
         try:
