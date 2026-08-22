@@ -64,7 +64,14 @@ const { start_fake_loci } = require("./fake_loci.js");
 const { start_gateway } = require("./start_gateway.js");
 
 // ——— The scene: a temp directory, deleted when the run ends; 留下现场=1 keeps it ———
-const data_root = path.join(__dirname, ".跑测试留下的东西");
+// 🔴 **The pid is not decoration.** `before()` wipes this directory on the way in, so
+//    two overlapping runs delete each other's state — the idle gate then reads a store
+//    that was never seeded, opens, and two extra requests go out. That was reproduced
+//    on 2026-08-22 by running the suite twice at once: both processes failed on
+//    「对账·第八节」 with exactly `GET /api/loci/poke` + `POST /api/loci/dream/wake`
+//    surplus. It had been seen once in the wild before that and written off as
+//    unreproducible.
+const data_root = path.join(__dirname, `.跑测试留下的东西-${process.pid}`);
 const log_path = path.join(data_root, "logs", "memory-actions.jsonl");
 const child_ledger_path = path.join(data_root, "网关围栏账本.jsonl");
 
@@ -91,9 +98,30 @@ function is_port_free(port) {
     probe.listen(port);
   });
 }
-async function pick_free_ports(count, from = 19100, to = 19899) {
+// ⚠️ **TOCTOU, mitigated rather than fixed.** `is_port_free` answers about the instant
+// it asked and the bind happens later, so two runs starting at the same number both get
+// told 19100 is free — one binds, the other dies in `before()` and takes all 19 tests
+// with it.
+//
+// Two overlapping runs, measured on 2026-08-22 (once the fixture directories stopped
+// deleting each other):
+//     shared start point   4 rounds → 3 of them had one side fail all 19
+//     pid-derived lane     3 rounds → one side failed 1 assertion, once
+// So the lane stays. It was briefly reverted on the theory that a shared scan would
+// queue politely behind whoever bound first; the numbers above say it does not.
+//
+// 📌 The lane has to be **wider than one run's own spread** — a single run reaches from
+//    19100 to about 19340, because the clean-gateway helper walks 19300 + n*4. A 10-wide
+//    lane looked right and still collided: run A's tail sat on run B's head.
+// 📌 It does not make N runs safe, only two or three; pids 8 apart share a lane. The real
+//    fix is to stop guessing — bind port 0 and read back what the OS assigned. That
+//    reaches into all three fake servers plus the spawned gateway, so it is on the
+//    ledger rather than done in passing.
+const _PORT_LANE = (process.pid % 8) * 60;
+
+async function pick_free_ports(count, from = 19100, to = 19999) {
   const picked = [];
-  for (let p = from; p <= to && picked.length < count; p += 1) {
+  for (let p = from + _PORT_LANE; p <= to && picked.length < count; p += 1) {
     if (FORBIDDEN_PORTS.includes(p)) continue;
     if (await is_port_free(p)) picked.push(p);
   }
@@ -205,7 +233,8 @@ after(async () => {
   if (gateway) await gateway.停();
   if (fake_upstream) await fake_upstream.关();
   if (fake_loci) await fake_loci.关();
-  if (!process.env.留下现场) fs.rmSync(data_root, { recursive: true, force: true });
+  if (process.env.留下现场) console.log(`[留下现场] ${data_root}`);
+  else fs.rmSync(data_root, { recursive: true, force: true });
 });
 
 // ============================================================
@@ -609,7 +638,7 @@ let clean_gateway_count = 0;
 async function start_clean_gateway(label, { make_data_root = true } = {}) {
   clean_gateway_count += 1;
   const [port] = await pick_free_ports(1, 19300 + clean_gateway_count * 4);
-  const root = path.join(__dirname, `.跑测试留下的东西-${label}`);
+  const root = path.join(__dirname, `.跑测试留下的东西-${label}-${process.pid}`);
   fs.rmSync(root, { recursive: true, force: true });
   if (make_data_root) {
     fs.mkdirSync(path.join(root, "logs"), { recursive: true });

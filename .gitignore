@@ -18,4 +18,4 @@ gateway/data/
 # The gateway tests' scratch directory. It has a Chinese name and Chinese files
 # inside it, so leaving it untracked is not enough — the English ratchet used to
 # count it and go red over something that never ships.
-gateway/tests/.跑测试留下的东西/
+gateway/tests/.跑测试留下的东西*/
