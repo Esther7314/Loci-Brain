@@ -67,6 +67,7 @@ from core.decay_engine import DecayEngine
 from core.embedding_engine import EmbeddingEngine
 from locibrain.storage.embedding_outbox import EmbeddingOutbox
 from core.import_memory import ImportEngine
+from core.strict_args import harden as _harden_tool
 from core.migrate_engine import MigrateEngine
 from utils import get_version, load_config, setup_logging
 
@@ -1450,13 +1451,10 @@ try:
     _trace_public_tool = mcp._tool_manager.get_tool("trace")
     if _trace_public_tool is None:
         raise RuntimeError("registered trace tool is missing")
-    _trace_arg_model = _trace_public_tool.fn_metadata.arg_model
-    _trace_arg_model.model_config["extra"] = "forbid"
-    _trace_arg_model.model_rebuild(force=True)
-    # FastMCP caches the public input schema when the tool is registered.
-    # Keep that cache in sync so clients can discover that unknown arguments
-    # are rejected instead of learning only after a failed invocation.
-    _trace_public_tool.parameters = _trace_arg_model.model_json_schema()
+    # All three steps (forbid · rebuild · re-publish the cached schema) live in
+    # core/strict_args.harden — see that module for what happens when a caller copies
+    # only the first two, which is what the sweep below used to do.
+    _harden_tool(_trace_public_tool)
 except (AttributeError, RuntimeError, TypeError, ValueError) as _trace_schema_exc:
     logger.warning(
         "trace strict-argument adapter unavailable: %s",
@@ -1612,10 +1610,11 @@ try:
             _t = _surface._tool_manager.get_tool(_tool_name)
             if _t is None:
                 continue
-            _m = _t.fn_metadata.arg_model
-            if _m.model_config.get("extra") != "forbid":
-                _m.model_config["extra"] = "forbid"
-                _m.model_rebuild(force=True)
+            # ⚠️ This used to inline the flip and **drop the re-publish step** that the
+            #    trace block above had, so eight tools rejected unknown arguments while
+            #    still advertising that they accepted them. Go through harden(); it is
+            #    the only thing that keeps the two halves from drifting apart again.
+            if _harden_tool(_t):
                 logger.info("strict-argument adapter installed for %s", _tool_name)
 except (AttributeError, RuntimeError, TypeError, ValueError) as _strict_all_exc:
     logger.warning("strict-argument sweep unavailable: %s", _strict_all_exc)
