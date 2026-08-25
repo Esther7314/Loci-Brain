@@ -257,18 +257,7 @@ from utils import (
 )
 from ._rooms import is_mind_room
 from locibrain.storage.media_store import MediaStore
-from locibrain.retrieval.bucket_scoring import (
-    calc_topic_score,
-    calc_emotion_score,
-    calc_time_score,
-    calc_touch_score,
-)
 from locibrain.eventsourcing.ledger_mirror import LedgerMirror
-from locibrain.eventsourcing.ledger_replay import LedgerReplayValidator
-from locibrain.projection.projection_mirror import TraceCatalogProjection
-from locibrain.projection.projection_sqlite import TraceSQLiteProjection
-from locibrain.projection.projection_vector import TraceVectorProjectionManifest
-from locibrain.policy.formal_invariants import FormalInvariantChecker
 
 try:
     # ⚠️ A mine caught during acceptance: after the move into core, the old top-level path
@@ -424,8 +413,9 @@ _SUNK_SEARCH_DISCOUNT = 0.6
 # can be told apart any more.
 
 # The pure functions for the topic/emotion/time/touch scoring dimensions, and their weight
-# constants, moved to locibrain.retrieval.bucket_scoring (both search() and the _calc_*_score
-# wrappers import them from there).
+# constants, live in locibrain.retrieval.bucket_scoring. Nothing here imports them any
+# more: search() scores on semantic+bm25 only, and the _calc_*_score wrapper methods were
+# deleted as dead code on 2026-08-25 (they had no remaining callers, in tests or elsewhere).
 
 
 def _clamp01(value, default: float) -> float:
@@ -588,66 +578,6 @@ class BucketManager:
             )
         except Exception as exc:
             logger.warning(f"ledger mirror record failed for {event_type}:{bucket_id}: {exc}")
-
-    def ledger_integrity_report(self) -> dict:
-        """Return a read-only integrity report for the Phase 1 ledger mirror."""
-        report = self.ledger_mirror.verify_integrity()
-        events = list(self.ledger_mirror.iter_events())
-        projection = TraceCatalogProjection()
-        projection.rebuild(events)
-        report["trace_catalog_projection"] = projection.to_report(
-            source_latest_seq=int(report.get("latest_seq", 0) or 0)
-        )
-        sqlite_projection_path = os.path.join(
-            self.base_dir, "_ledger", "projections", "trace_catalog.sqlite3"
-        )
-        try:
-            sqlite_projection = TraceSQLiteProjection(sqlite_projection_path)
-            sqlite_projection.rebuild(events)
-            report["sqlite_projection"] = sqlite_projection.to_report(
-                source_latest_seq=int(report.get("latest_seq", 0) or 0)
-            )
-        except Exception as exc:
-            report["sqlite_projection"] = {
-                "projection_name": "trace_catalog_sqlite",
-                "projection_role": "shadow",
-                "canonical": False,
-                "path": sqlite_projection_path,
-                "ok": False,
-                "error_type": type(exc).__name__,
-                "error_message": str(exc)[:240],
-            }
-        vector_projection_path = getattr(
-            self.embedding_engine,
-            "db_path",
-            os.path.join(self.base_dir, "embeddings.db"),
-        )
-        try:
-            vector_projection = TraceVectorProjectionManifest(vector_projection_path)
-            report["vector_projection"] = vector_projection.rebuild(events)
-        except Exception as exc:
-            report["vector_projection"] = {
-                "projection_name": "trace_vector_manifest",
-                "projection_role": "shadow",
-                "canonical": False,
-                "path": str(vector_projection_path),
-                "ok": False,
-                "error_type": type(exc).__name__,
-                "error_message": str(exc)[:240],
-            }
-        try:
-            report["formal_invariants"] = FormalInvariantChecker.default().evaluate_ledger(events).to_dict()
-        except Exception as exc:
-            report["formal_invariants"] = {
-                "projection_name": "formal_invariants",
-                "projection_role": "shadow",
-                "canonical": False,
-                "ok": False,
-                "error_type": type(exc).__name__,
-                "error_message": str(exc)[:240],
-            }
-        report["replay"] = LedgerReplayValidator.default().validate(events)
-        return report
 
     def footprint_snapshot(self) -> FootprintSnapshot:
         """Read the legacy Ledger-compatible store and build a one-shot footprint snapshot
@@ -3024,27 +2954,6 @@ class BucketManager:
         # recall layer, since the line arrives with each request and is out of reach here.
         scored.sort(key=lambda x: (x["score"], bool(x.get("literal_hit"))), reverse=True)
         return scored[:limit]
-
-    # ---------------------------------------------------------
-    # The pure-function implementations of the four scoring dimensions moved to
-    # locibrain.retrieval.bucket_scoring; the same-named wrapper methods stay here because
-    # tests and older callers have always written bucket_mgr._calc_xxx_score(...) as an
-    # instance method. The wrappers keep that interface unchanged while letting the
-    # implementations be unit-tested and reused on their own.
-    # ---------------------------------------------------------
-    def _calc_topic_score(self, query: str, bucket: dict) -> float:
-        return calc_topic_score(query, bucket, content_weight=self.content_weight)
-
-    def _calc_emotion_score(
-        self, q_valence: Optional[float], q_arousal: Optional[float], meta: dict
-    ) -> float:
-        return calc_emotion_score(q_valence, q_arousal, meta)
-
-    def _calc_time_score(self, meta: dict) -> float:
-        return calc_time_score(meta)
-
-    def _calc_touch_score(self, meta: dict) -> float:
-        return calc_touch_score(meta)
 
     # ---------------------------------------------------------
     # anchor system — coordinate-system buckets, hard cap of 24

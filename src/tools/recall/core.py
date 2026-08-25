@@ -878,27 +878,6 @@ def _far_line(label: str, st: dict, fixed_room: bool = False,
     return line
 
 
-def _fmt_far_line(label: str, st: dict) -> str:
-    """One sentence per distant stretch (the gradient: nearby is clear entry by
-    entry, distance collapses into a single impression).
-
-    ⚠️ Nothing calls this any more (the far end of the browse path was changed to
-    treat the whole stretch as one block) — it is kept as the shape of that tier,
-    and its machine readouts were converted to plain language along with
-    everything else, so that dead code cannot drag the old vocabulary back in.
-    """
-    bits = [f"{label} · {st['n']}条"]
-    for x in (st["房间话"], tags_in_words(st["tags"], 2), st["情绪话"]):
-        if x:
-            bits.append(x)
-    line = " ▏".join(bits)
-    if st["highlights"]:
-        mark, e = st["highlights"][0]
-        line += (f" {mark}{kind_badge(e['meta'])}{_label_of(e)[:20]}"
-                 f"({_short_id(e['id'])}{_score_tag(e)})")
-    return line
-
-
 def _fmt_card(label: str, st: dict) -> str:
     """One card (the 1-3 cell tier, and also breath's middle-term block).
     **All three lines speak plain language.**
@@ -927,16 +906,6 @@ def _fmt_card(label: str, st: dict) -> str:
             lines.append(f"{prefix}{mark} {kind_badge(e['meta'])}{_label_of(e)} "
                          f"({_short_id(e['id'])}{_score_tag(e)})")
             first = False
-    return "\n".join(lines)
-
-
-def _fmt_list(entries: list[dict]) -> str:
-    """The per-entry list (tier C). **No room code; a mind wears 🧠.**"""
-    lines = []
-    for e in entries:
-        # As above: a per-entry list is the place that gives content, so no cutting
-        lines.append(f"{_short_id(e['id'])}{_score_tag(e)}  {kind_badge(e['meta'])}{_label_of(e)}  "
-                     f"{e['ts'].strftime('%m-%d')}")
     return "\n".join(lines)
 
 

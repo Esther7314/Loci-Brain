@@ -41,7 +41,6 @@ import heapq
 import hashlib
 import json
 import logging
-import math
 import os
 import sqlite3
 from collections import OrderedDict
@@ -177,11 +176,6 @@ class BaseEmbeddingEngine(abc.ABC):
     async def generate_async(self, text: str) -> list[float]:
         """Compute one vector asynchronously (the production path). On failure return an
         empty list, never raise."""
-
-    def warmup(self) -> None:
-        """Optional for subclasses: load the model into memory ahead of time, so the first
-        call does not pay the latency."""
-        return None
 
 
 # ============================================================
@@ -845,16 +839,6 @@ class EmbeddingEngine:
         finally:
             conn.close()
 
-    def get_content_hash(self, bucket_id: str) -> str:
-        conn = sqlite3.connect(self.db_path)
-        try:
-            row = conn.execute(
-                "SELECT content_hash FROM embeddings WHERE bucket_id = ?", (bucket_id,)
-            ).fetchone()
-            return str(row[0] or "") if row else ""
-        finally:
-            conn.close()
-
     async def get_embedding(self, bucket_id: str) -> list[float] | None:
         conn = sqlite3.connect(self.db_path)
         try:
@@ -1000,17 +984,6 @@ class EmbeddingEngine:
         """The newer interface per spec: a list of bucket ids only."""
         pairs = await self.search_similar(query, top_k=top_k)
         return [bid for bid, _ in pairs]
-
-    @staticmethod
-    def _cosine_similarity(a: list[float], b: list[float]) -> float:
-        if len(a) != len(b) or not a:
-            return 0.0
-        dot = sum(x * y for x, y in zip(a, b))
-        norm_a = math.sqrt(sum(x * x for x in a))
-        norm_b = math.sqrt(sum(x * x for x in b))
-        if norm_a == 0 or norm_b == 0:
-            return 0.0
-        return dot / (norm_a * norm_b)
 
     @staticmethod
     def _cosine_similarity_batch(

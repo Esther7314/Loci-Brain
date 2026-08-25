@@ -551,17 +551,6 @@ def _load_mcp_tokens() -> None:
         logger.warning(f"[oauth] failed to load mcp tokens: {e}")
 
 
-def _save_mcp_tokens() -> None:
-    """Persist the current grant registry or raise; never report false success."""
-    with sh._credential_state_guard():
-        with _oauth_grant_state_lock:
-            _persist_mcp_token_state(
-                _mcp_tokens,
-                _mcp_token_resources,
-                _mcp_refresh_tokens,
-            )
-
-
 def _persist_mcp_token_state(
     access_tokens: dict[str, float],
     token_resources: dict[str, str],
@@ -703,10 +692,6 @@ def _commit_refresh_token_rotation(
             return access_token, replacement_refresh
 
 
-def _oauth_grant_generation_snapshot() -> int:
-    return sh._credential_generation_snapshot()
-
-
 def _store_authorization_code(
     code: str,
     code_data: dict,
@@ -791,30 +776,6 @@ def _is_valid_static_mcp_token(token: str, resource: str = "") -> bool:
     if not configured:
         return False
     return _hmac.compare_digest(token, configured)
-
-
-def _issue_mcp_access_token(resource: str = "") -> str:
-    _cleanup_oauth_state()
-    with sh._credential_state_guard():
-        with _oauth_grant_state_lock:
-            token = secrets.token_urlsafe(32)
-            _mcp_tokens[token] = _time_mod.time() + _MCP_TOKEN_TTL
-            if resource:
-                _mcp_token_resources[token] = resource
-            return token
-
-
-def _issue_mcp_refresh_token(client_id: str, resource: str = "") -> str:
-    _cleanup_oauth_state()
-    with sh._credential_state_guard():
-        with _oauth_grant_state_lock:
-            refresh_token = secrets.token_urlsafe(32)
-            _mcp_refresh_tokens[refresh_token] = {
-                "expires": _time_mod.time() + _MCP_REFRESH_TOKEN_TTL,
-                "client_id": client_id,
-                "resource": resource,
-            }
-            return refresh_token
 
 
 def _token_response(access_token: str, *, refresh_token: str | None = None) -> dict:

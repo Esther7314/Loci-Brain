@@ -301,20 +301,8 @@ class LegacyRuntime:
     def evaluate_update_manifest(self, manifest, content_by_path):
         return evaluate_update_manifest(manifest, content_by_path)
 
-    def classify_static_surface(self, path: str):
-        return self.static_surface_policy.classify(path)
-
     def debug_decisions(self, *, limit: int = 20, module: str = "", operation: str = "") -> dict[str, object]:
         return DecisionDebugService(self.fabric).list_records(limit=limit, module=module, operation=operation)
-
-    def debug_decision(self, identifier: str) -> dict[str, object]:
-        return DecisionDebugService(self.fabric).get_record(identifier)
-
-    def replay_decision(self, identifier: str) -> dict[str, object]:
-        return DecisionDebugService(self.fabric).replay(identifier)
-
-    def debug_decision_health(self) -> dict[str, object]:
-        return DecisionDebugService(self.fabric).health()
 
     def debug_command_boundary_health(self, *, limit: int = 50) -> dict[str, object]:
         return build_runtime_command_boundary_health(self.fabric.replay_events(), limit=limit)
@@ -353,21 +341,6 @@ class LegacyRuntime:
             tool,
             scope=ToolScope(actor_name=actor_name, source=source, permissions=permissions),
         )
-
-    def route_neural_tool(
-        self,
-        tool: str,
-        *,
-        actor_name: str = "legacy-runtime",
-        source: str = "mcp",
-        permissions: tuple[str, ...] = (),
-    ) -> dict[str, object]:
-        return self.neural_route(
-            tool,
-            actor_name=actor_name,
-            source=source,
-            permissions=permissions,
-        ).to_dict()
 
     def tool_output_receipt(
         self,
