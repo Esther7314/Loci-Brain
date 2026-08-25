@@ -722,6 +722,18 @@ def _atomic_write_private_json(path: str, data: object) -> None:
 
 
 def _read_auth_data_locked(*, strict: bool = False) -> dict:
+    """Read the dashboard auth file. **Two states must never collapse into one**:
+
+      1. **No password was ever set** — the file does not exist -> `{}`.
+      2. **The storage is broken** — unreadable (permissions, a directory in its
+         place), not JSON, truncated, or JSON that is not an object.
+
+    `strict=True` raises `AuthPersistenceError` for the second state; `strict=False`
+    flattens it into `{}`, which reads exactly like the first one.
+    **Anyone deciding "is this locked / may this request in" must pass strict=True.**
+    Flattening those two together is what once let a corrupt auth file open the panel:
+    "the file is broken" was answered as "no password has been set yet".
+    """
     try:
         auth_file = _get_auth_file()
         if os.path.exists(auth_file):
@@ -740,12 +752,29 @@ def _read_auth_data_locked(*, strict: bool = False) -> dict:
 
 
 def _load_auth_data() -> dict:
+    """The lenient read: broken storage reads as empty.
+
+    **Only for things that are not a security decision** (what the recovery question
+    says, what to draw on a status screen). Anything answering "locked or not / let
+    them in or not" goes through `_load_password_hash` below instead.
+    """
     with _auth_mutation_lock:
         return _read_auth_data_locked()
 
 
 def _load_password_hash() -> str | None:
-    return _load_auth_data().get("password_hash")
+    """The stored password hash. **`None` means one thing only: no password was ever
+    set** (no file, or the field cleanly absent) — the state in which the panel is
+    deliberately not locked.
+
+    Broken storage raises `AuthPersistenceError` instead of returning `None`. It used
+    to return `None` too, so `gate_needed()` read "the file is corrupt" as "fresh
+    install, nothing to protect" and opened the door. Every caller must now decide
+    what a broken store means for it — and, except when merely displaying something,
+    that answer is "locked".
+    """
+    with _auth_mutation_lock:
+        return _read_auth_data_locked(strict=True).get("password_hash")
 
 
 # --- Key derivation for passwords and security-question answers ---
@@ -1031,10 +1060,26 @@ def _verify_security_answer(answer: str) -> bool:
 
 
 def _is_setup_needed() -> bool:
-    """True if no password is configured (env var or file)."""
+    """True if no password is configured (env var or file).
+
+    **Broken storage is not a fresh install** -> False. Answering True there would
+    hand `/api/loci/auth/set-password` and `/oauth/authorize` a first-run path:
+    overwrite the password without showing the old one. So a store that cannot be
+    read counts as "a password exists", and whoever wants in has to prove it (which,
+    with the hash unreadable, nobody can — that is the fail-closed half).
+    """
     if os.environ.get("LOCI_DASHBOARD_PASSWORD", ""):
         return False
-    return _load_password_hash() is None
+    try:
+        return _load_password_hash() is None
+    except AuthPersistenceError as e:
+        logger.error(
+            "[auth] dashboard auth 存储损坏（%s）：不当成首次安装，口令一律按「已设置」处理。"
+            "修好 %s 或者删掉它再重设一次口令。",
+            e,
+            _get_auth_file(),
+        )
+        return False
 
 
 def _verify_any_password(password: str) -> bool:

@@ -2105,12 +2105,20 @@ def register(mcp) -> None:
         to this panel screen.
         """
         from starlette.responses import JSONResponse
+        try:
+            has_file_password = sh._load_password_hash() is not None
+        except sh.AuthPersistenceError as e:
+            # An unreadable auth file is **not** "no password here". This route is public
+            # and the gate overlay reads it; reporting "nothing set" would tell the owner
+            # (and anyone else) that the panel is free to initialize.
+            logger.error(f"[loci] auth 存储损坏，读不出口令 hash：{e}")
+            has_file_password = True
         return JSONResponse({
             "setup_needed": sh._is_setup_needed(),
             # True = the password still comes from an environment variable, so it cannot be
             # changed here and the security question is unavailable
             "env_locked": bool(os.environ.get("LOCI_DASHBOARD_PASSWORD", "")),
-            "has_file_password": sh._load_password_hash() is not None,
+            "has_file_password": has_file_password,
             "question": str(sh._load_auth_data().get("security_question") or ""),
         }, headers={"Cache-Control": "no-store"})
 

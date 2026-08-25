@@ -38,6 +38,7 @@ Public surface: register(mcp) · has_session(request) · gate_needed() · PUBLIC
 import hashlib
 import hmac
 import logging
+import secrets
 import time
 
 from starlette.requests import Request
@@ -92,12 +93,50 @@ HOOK_HEADER = "x-loci-hook-token"
 _PUBLIC_PREFIXES = ("/loci/vendor/",)   # the page's static assets
 
 
+# **The auth file being unreadable is not the same as "no password was set".**
+#    `_load_password_hash()` used to answer both with None, and every judgment below read
+#    that None as rule 1 ("no key exists, so do not lock"). A corrupt or unreadable
+#    `.dashboard_auth.json` therefore **unlocked the panel** — the one moment a lock matters
+#    most is the moment its own storage is broken. It now raises instead, and everything
+#    here leans the way `hook_ok` already leans: **broken means locked**, and the log says
+#    how to fix it. Rule 1 is untouched: it applies to a store that reads fine and simply
+#    holds no password.
+_STORAGE_BROKEN_HINT = ("面板的口令存储读不出来（buckets 目录下的 .dashboard_auth.json 坏了、"
+                        "被截断了、或者没权限读）。门按「锁着」处理，登录和会话一律拒。"
+                        "修好那个文件，或者删掉它再从面板「账号」里重设一次口令。")
+_STORAGE_BROKEN_LOG_EVERY = 60.0        # seconds; gate_needed() runs on every request
+_storage_broken_logged_at = 0.0
+
+
+def _log_storage_broken(exc: BaseException) -> None:
+    """Say it loudly, but not once per request — a flood of identical lines is how the
+    one line that explains the outage gets lost."""
+    global _storage_broken_logged_at
+    now = time.time()
+    if now - _storage_broken_logged_at >= _STORAGE_BROKEN_LOG_EVERY:
+        _storage_broken_logged_at = now
+        logger.error("[panel_auth] auth 存储损坏：%s。%s", exc, _STORAGE_BROKEN_HINT)
+
+
+def storage_broken() -> bool:
+    """Whether the auth store is currently unreadable (as opposed to empty)."""
+    try:
+        sh._load_password_hash()
+        return False
+    except Exception as e:               # noqa: BLE001
+        _log_storage_broken(e)
+        return True
+
+
 def gate_needed() -> bool:
     """Whether the gate should be locked right now.
 
     It locks only when both conditions hold: the switch is on **and** a password has been
     set. The second condition is a hard safety line — locking while no password exists
     shuts everyone out, the owner included.
+
+    **Unless the store cannot be read at all**, in which case "has a password been set"
+    has no answer, and an unanswered security question resolves to the locked side.
     """
     raw = sh.config.get("panel_auth", True)
     on = str(raw).strip().lower() not in ("0", "false", "no", "off", "none", "")
@@ -105,18 +144,32 @@ def gate_needed() -> bool:
         return False
     try:
         return sh._load_password_hash() is not None
-    except Exception:                    # noqa: BLE001
-        return False
+    except Exception as e:               # noqa: BLE001
+        _log_storage_broken(e)
+        return True                      # fail-closed; see the block above
+
+
+# One random key per process, used whenever no password hash is available to derive from.
+# It is never the empty string: `sha256("loci-panel-v1:")` is a constant anybody can
+# compute, so an empty-string fallback hands out a valid signing key for free.
+_UNAVAILABLE_KEY_SEED = secrets.token_bytes(32)
 
 
 def _key() -> bytes:
     """The cookie-signing key: derived from the password hash, never stored separately.
-    Change the password -> the key changes -> every old session dies."""
-    h = ""
+    Change the password -> the key changes -> every old session dies.
+
+    With no hash to derive from (none set, or the store unreadable) the fallback is a
+    **random per-process key**: nothing can be signed that verifies, no existing cookie
+    verifies, and a restart invalidates whatever was minted under it.
+    """
     try:
-        h = sh._load_password_hash() or ""
-    except Exception:                    # noqa: BLE001
-        h = ""
+        h = sh._load_password_hash()
+    except Exception as e:               # noqa: BLE001
+        _log_storage_broken(e)
+        h = None
+    if not h:
+        return hashlib.sha256(b"loci-panel-v1-unavailable:" + _UNAVAILABLE_KEY_SEED).digest()
     return hashlib.sha256(("loci-panel-v1:" + h).encode("utf-8")).digest()
 
 
@@ -225,6 +278,11 @@ def register(mcp) -> None:
             logger.warning(f"[panel_auth] 校验出错: {e}")
         if not ok:
             sh._record_login_failure(request)
+            # A password that cannot be read verifies against nothing, so this is already
+            # a refusal — but "密码不对" would send the owner off to retype a password that
+            # was never going to work. Say what actually broke.
+            if storage_broken():
+                return JSONResponse({"error": _STORAGE_BROKEN_HINT}, status_code=503)
             return JSONResponse({"error": "密码不对"}, status_code=401)
         sh._record_login_success(request)
         return _set_cookie(JSONResponse({"ok": True}), _make_cookie(), _TTL)
@@ -263,6 +321,8 @@ def register(mcp) -> None:
             logger.warning(f"[panel_auth] 安全问题校验出错: {e}")
         if not proof:
             sh._record_login_failure(request)
+            if storage_broken():
+                return JSONResponse({"error": _STORAGE_BROKEN_HINT}, status_code=503)
             return JSONResponse({"error": "答案不对"}, status_code=401)
         # `proof` carries the auth generation as of the moment the answer was verified;
         # passing it in makes this a compare-and-swap. If anyone changed the password in
