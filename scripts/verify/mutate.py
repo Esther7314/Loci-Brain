@@ -1,6 +1,18 @@
-"""Mutation check: break the source on purpose, confirm the right test goes red, revert."""
+"""Mutation check: break the source on purpose, confirm the right test goes red, revert.
+
+    python scripts/verify/mutate.py [--root <repo>]
+
+The repository root is derived from this file's own location (scripts/verify/mutate.py →
+two levels up), so the tool runs from any working directory and on any checkout. It used
+to be one hardcoded absolute path, which meant that on anybody else's machine — or in a
+worktree, or a second clone — it either crashed or, worse, quietly mutated and tested a
+*different* checkout than the one being worked on and reported a verdict about it.
+`--root` is for the deliberate case: pointing it at another checkout on purpose.
+"""
 import io, subprocess, sys, os
-ROOT = 'D:/lento/loci-brain'
+from pathlib import Path
+
+ROOT = str(Path(__file__).resolve().parents[2])
 
 def run(mutations, testfile):
     """mutations: list of (path, old, new). Returns pytest summary line."""
@@ -51,6 +63,9 @@ if __name__ == '__main__':
   # you actually came for is the one that does not make it out. (strdiff.py already
   # had this; the other three did not, which is why it went unnoticed.)
   sys.stdout.reconfigure(encoding="utf-8")
+  if '--root' in sys.argv:
+      ROOT = str(Path(sys.argv[sys.argv.index('--root') + 1]).resolve())
+  print(f'root: {ROOT}')
   for name, muts, tf in CASES:
       code, tail = run(muts, tf)
       verdict = 'RED  ✔ 断言抓住了' if code != 0 else 'GREEN ✘ 假绿！没有断言守这条'
