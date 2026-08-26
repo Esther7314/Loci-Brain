@@ -24,6 +24,7 @@ WHAT THIS DOES NOT DO
     end-to-end suite's job.
 """
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pytest
 import yaml
@@ -31,6 +32,7 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 COMPOSE = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
 ENV_EXAMPLE = (ROOT / ".env.example").read_text(encoding="utf-8")
+DEFAULT_CONFIG = yaml.safe_load((ROOT / "config.default.yaml").read_text(encoding="utf-8"))
 
 SERVICES = COMPOSE.get("services", {})
 
@@ -105,3 +107,42 @@ def test_the_env_example_still_carries_the_required_keys(key):
     # Criterion: these are what "required" means for a first install. If one is dropped,
     # the failure is again a stack that starts and does not work.
     assert key in ENV_EXAMPLE
+
+
+# ── The shipped default configuration ──────────────────────────────────────────
+# Same shape of failure as everything above: a file handed to a new user that promises
+# one thing while the README and the env example promise the opposite. The default
+# pointed embedding at a Google endpoint, so anybody who did not also copy .env.example
+# got a stack that quietly billed a network round-trip on every single recall.
+
+def _default_embedding_host() -> str:
+    base_url = str(DEFAULT_CONFIG.get("embedding", {}).get("base_url", ""))
+    return urlparse(base_url).hostname or ""
+
+
+def test_the_default_embedding_does_not_point_at_a_cloud_host():
+    # Criterion: THE assertion. Not "is it exactly ollama" — that would go red on a
+    # perfectly good rename — but "does the shipped default send every recall off this
+    # machine". A loopback / compose-network hostname is local; anything with a public
+    # suffix is not, and neither is anything reached over TLS.
+    host = _default_embedding_host()
+    assert host, "config.default.yaml no longer sets embedding.base_url"
+    assert "." not in host, (
+        f"the shipped default sends every embedding request to {host!r}. README says "
+        "本地 is strongly recommended and .env.example configures a local endpoint; a "
+        "default that disagrees means anybody who skips the env file pays per recall.")
+    assert not str(DEFAULT_CONFIG["embedding"]["base_url"]).startswith("https://"), (
+        "an https default embedding endpoint is by definition not on this machine")
+
+
+def test_the_default_embedding_model_is_the_one_the_env_example_configures():
+    # Criterion: pointing at the local endpoint with a model name that endpoint has never
+    # heard of fails on the first write — the same invisible failure as the missing pull.
+    configured = [line.split("=", 1)[1].strip()
+                  for line in ENV_EXAMPLE.splitlines()
+                  if line.startswith("LOCI_EMBED_MODEL=")]
+    assert configured, ".env.example no longer sets LOCI_EMBED_MODEL"
+    assert DEFAULT_CONFIG["embedding"]["model"] == configured[0], (
+        f"config.default.yaml defaults to {DEFAULT_CONFIG['embedding']['model']!r} while "
+        f".env.example configures {configured[0]!r} — the two files handed to a new user "
+        "disagree about what gets vectorised with")

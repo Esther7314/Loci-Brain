@@ -123,8 +123,10 @@ decay:
     arousal_boost: 0.8            # Arousal boost coefficient / 唤醒度加成系数
 
 # --- Embedding / 向量化配置 ---
-# 使用 OpenAI 兼容的云端 API（如 Gemini）进行向量化。
-# 需要在环境变量中设置 LOCI_EMBED_API_KEY。
+# 🔴 默认走**本地** ollama + bge-m3（跟 .env.example、README 一致）。
+# 向量化是每次检索都要跑的热路径：指到云端 = 每次回忆都花钱、都走网络、都可能超时。
+# 端点仍然是 OpenAI 兼容协议，ollama 的 /v1 就是；LOCI_EMBED_API_KEY 随便填一串即可。
+# 环境变量 LOCI_EMBED_BASE_URL / LOCI_EMBED_MODEL 会覆盖这里的值。
 embedding:
   enabled: true                   # Enable embedding / 启用向量化
   background_indexing: true       # Write Markdown first; index asynchronously / 先落盘，后台生成向量
@@ -133,11 +135,18 @@ embedding:
   circuit_failure_threshold: 3    # Consecutive failures before global pause / 连续失败几次后熔断
   circuit_base_seconds: 30        # First global cooldown / 首次熔断冷却
   circuit_max_seconds: 600        # Maximum global cooldown / 最长熔断冷却
-  backend: "api"                  # 只支持 api（OpenAI 兼容端点）
-  model: "gemini-embedding-001"   # 云端模型名（如 gemini-embedding-001）
-  base_url: "https://generativelanguage.googleapis.com/v1beta/openai/"
+  backend: "api"                  # 只支持 api（OpenAI 兼容端点）；ollama 的 /v1 也算
+  model: "bge-m3"                 # 本地 ollama 模型名
+  base_url: "http://ollama:11434/v1"
   timeout_seconds: 120             # Embedding request timeout seconds / 向量化请求超时秒数
   # api_key: ""                   # Use LOCI_EMBED_API_KEY / 使用 LOCI_EMBED_API_KEY
+  #
+  # 备选：云端向量（Gemini 等 OpenAI 兼容端点）。
+  # 什么时候用：这台机器跑不动本地模型（没显存 / 内存太小），或者要跟别处已有的
+  # 云端向量库对齐维度。代价是每次检索一次网络请求 + 一次计费，且外网一断检索就哑。
+  # 换的时候两行一起换（模型和端点必须配套），并把 LOCI_EMBED_API_KEY 换成真钥匙：
+  #   model: "gemini-embedding-001"
+  #   base_url: "https://generativelanguage.googleapis.com/v1beta/openai/"
 
 # --- Scoring weights / 检索权重参数 ---
 # total = topic(×4) + emotion(×2) + time(×1.5) + importance(×1)
