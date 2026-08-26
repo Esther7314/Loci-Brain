@@ -19,7 +19,7 @@ Key behaviours:
   of that is compound interest, and being brought up often is not the same as being
   truest.
 - The never-sink test looks at `room`, not `type`: pinned / rules / letter / seed /
-  profile facts / anything in the MIND branch.
+  profile facts / periods (`__大event__`) / anything in the MIND branch.
 - Sinking is reversible: trace(restore=True); a bucket that gets touched returns to
   alive on the next cycle.
 - ensure_started() starts the background loop idempotently, and can be monkeypatched to
@@ -50,6 +50,7 @@ import logging
 from datetime import datetime
 
 from utils import parse_iso_datetime, is_closed
+from ._bigevent import BIGEVENT_TAG
 from ._rooms import is_mind_room
 
 logger = logging.getLogger("loci_brain.decay")
@@ -333,9 +334,19 @@ class DecayEngine:
         `type` produced was this: among entries that were all equally MIND, the 190 held
         as i/feel never sank while the 61 held as dynamic did. Testing `room` says it in
         one line instead.
-        pinned · rules · letter · seed · profile facts · anything in a /MIND/ room.
+        pinned · rules · letter · seed · profile facts · periods · anything in a /MIND/
+        room.
         (Every permanent bucket is pinned or protected anyway, so the first test already
         covers them.)
+
+        🔴 Periods (`__大event__`) were missing from this list until 2026-08-26, and the
+        omission is worth keeping in view because of its shape: a period is the name a
+        person gives to a stretch of days, i.e. about as deliberate a gesture as this
+        store has — and it was ageing like an ordinary event and sinking. Nothing threw.
+        The symptom was a name that stopped laying itself over a recalled stretch of
+        time, months later, in a browse nobody was auditing.
+        (Gists born in the MIND rooms were already covered by is_mind_room; a period
+        lives in the EVENT branch, which is why it fell through.)
         """
         if meta.get("pinned") or meta.get("protected"):
             return True
@@ -349,7 +360,8 @@ class DecayEngine:
         if is_mind_room(meta.get("room")):
             return True
         tags = meta.get("tags") or []
-        if isinstance(tags, list) and any(str(t) == "__档案事实__" for t in tags):
+        if isinstance(tags, list) and any(
+                str(t) in ("__档案事实__", BIGEVENT_TAG) for t in tags):
             return True
         return False
 
