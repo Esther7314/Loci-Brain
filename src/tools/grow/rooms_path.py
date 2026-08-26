@@ -46,7 +46,7 @@ import uuid
 
 from core import _fold as _F       # a big event = fold's way of circling time
 from .. import _runtime as rt
-from core._bigevent import SPAN_RE
+from core._bigevent import SPAN_RE, first_line as _F_first_line
 from .._common import check_content_size
 from core._rooms import check_room, is_mind_room
 from .._subjects import normalize_subjects
@@ -92,13 +92,55 @@ def _placeholder_meta() -> dict:
             "valence": 0.5, "arousal": 0.3}
 
 
-async def _make_summary(text: str) -> str:
+# The stamp. One value, one meaning: **this field was not written by the model,
+# it was cut out of the caller's own body text.**
+#
+# 🔴 It exists for a reader, not for a human eye. Her words on 2026-08-20:
+#    「可以兜底 但是能不能做个记号 比如说谁没打标是兜底的 然后不是正好也要做一个
+#    一键打标的按钮嘛」 — the second half is the criterion, not an aside. A fallback
+#    is by construction invisible: the field stops being empty, so every "this one is
+#    unfinished" check stops matching it and **nothing ever comes back to finish the
+#    job**. The stamp is what a re-tagging pass can still find them by.
+#
+# It is written ONLY when a fallback actually fired, and it is cleared the moment the
+# model does supply the real thing — so "the field is present" means exactly "this is
+# still standing in for an answer that never came", with no third state to interpret.
+_SOURCE_FALLBACK = "fallback"
+
+# How much of the opening line a fallback name may use. Not a new number: it is the
+# one `_make_summary`'s own degraded path already uses for "the opening of the body".
+_FALLBACK_NAME_MAX = 60
+
+
+def _fallback_name(text: str) -> str:
+    """A stand-in title cut from the body's first line.
+
+    The same move `_make_summary` degrades to, and for the same reason: it quotes what
+    the caller wrote instead of inventing a line. A bucket with no title is not neutral
+    — it is called after the second it was born in (`2026-08-20 01-05-33`), which is a
+    row of digits carrying nothing, in a list read by eye.
+
+    Returns "" for a body with nothing in it, and an empty name is never written: there
+    is no text to quote, so there is nothing honest to put there.
+    """
+    return _F_first_line(text).strip()[:_FALLBACK_NAME_MAX].strip()
+
+
+async def _make_summary(text: str) -> tuple[str, bool]:
     """Write a one-sentence gist through the same LLM channel the dehydrator uses.
-    On failure it returns an empty string (never blocking the backfill of the
-    other fields)."""
+
+    Returns `(summary, came_from_fallback)`. The second half of that pair is the whole
+    reason this signature changed: the degraded path below produces a perfectly
+    ordinary-looking summary, and the caller could not previously tell it apart from one
+    the model wrote — so it could not stamp it either.
+
+    On failure it returns `("", False)` (never blocking the backfill of the other
+    fields); an empty summary is the marker `backfill_sweep` finds this bucket by, and
+    that is a different state from "a stand-in is in place".
+    """
     chat = getattr(rt.dehydrator, "_chat", None)
     if not callable(chat):
-        return ""
+        return "", False
     # Give max_tokens plenty of room: a reasoning model spends tokens thinking, so
     # a budget of 100 gets eaten entirely and content comes back empty
     # (_chat_once returns an empty string for an empty response rather than
@@ -108,17 +150,19 @@ async def _make_summary(text: str) -> str:
             raw = await chat(_SUMMARY_PROMPT, text[:2000], max_tokens=400, temperature=0.3)
         except Exception as e:
             rt.logger.warning(f"summary 生成失败（正文已落盘，不影响）: {e}")
-            return ""
+            return "", False
         out = (raw or "").strip().strip('"').strip()[:200]
         if out:
-            return out
+            return out, False
         rt.logger.warning("summary 返回空，重试一次" if _attempt == 0 else
                           "summary 两次为空（疑似内容过滤），降级用正文开头")
     # Degraded path: use the start of the body as the gist — it is the caller's
     # own text, not something invented. Better than leaving it empty: a gist is
     # the hook by which you know an entry exists, and without the hook that
     # memory is invisible in the zoomed-out views.
-    return text[:60].strip()
+    # It comes back stamped, because from here on it is indistinguishable from a
+    # real one by looking at it.
+    return text[:60].strip(), True
 
 
 # The similarity line for "possibly the same thing". It is **the same number** as
@@ -171,12 +215,32 @@ async def _backfill_one(bucket_id: str, text: str, kind: str) -> None:
             # domain is now used purely as a folder; retrieval does not consume
             # it, so whatever it gets filled with makes no difference
             update_kwargs["domain"] = meta["domain"]
-        if meta.get("suggested_name"):
-            update_kwargs["name"] = meta["suggested_name"]
+    # --- Naming, and what happens when no name comes back ---
+    # 🔴 Deliberately OUTSIDE the `if meta:` block above: the case this exists for is
+    #    "the model call did not succeed", and the commonest shape of that is meta being
+    #    None altogether. Fold it back inside and the fallback stops firing in exactly
+    #    the situation it was written for — silently, since a bucket named after its own
+    #    birth-second looks like a bucket, not like a failure.
+    # She settled this on 2026-08-20: fall back, **but stamp it**.
+    if meta and meta.get("suggested_name"):
+        update_kwargs["name"] = meta["suggested_name"]
+        # The model named it, so any earlier stand-in is over. None deletes the field.
+        # Written only alongside a real name — never on its own, or a bucket that never
+        # had a stamp would get a pointless write (and, worse, `if not update_kwargs`
+        # below would stop being able to tell "nothing to do" from "something to do").
+        update_kwargs["name_source"] = None
+    else:
+        fallback = _fallback_name(text)
+        if fallback:
+            update_kwargs["name"] = fallback
+            update_kwargs["name_source"] = _SOURCE_FALLBACK
 
-    summary = await _make_summary(text)
+    summary, summary_is_fallback = await _make_summary(text)
     if summary:
         update_kwargs["summary"] = summary
+        # Same two-state rule as the name: stamped while standing in, cleared the moment
+        # the model supplies a real one.
+        update_kwargs["summary_source"] = _SOURCE_FALLBACK if summary_is_fallback else None
 
     # The "possibly the same thing" hint: nothing is merged and nothing is
     # blocked. Similarity is checked once in the background, and above the

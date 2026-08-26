@@ -10,9 +10,29 @@ WHAT THIS FREEZES AND WHY IT IS FROZEN NOW
     a network that is not there. The contract is about what the failure is allowed to cost:
 
         the body                 never at risk; it was on disk before the model was asked
-        tags / subjects / name   left ABSENT, never filled with a guess
+        tags / subjects          left ABSENT, never filled with a guess
         summary                  falls back to the opening of the body — the caller's own
                                  words, quoted, not a model's paraphrase of them
+        name                     same, since 2026-08-20 — and both fallbacks are STAMPED
+
+    🔴 THE 2026-08-20 AMENDMENT (name moved lines in that table)
+        `name` used to sit on the "left absent" row. It was moved on her decision, and
+        the reasoning is worth keeping because the two rows are not the same kind of
+        thing at all. "Absent" is honest when the alternative would be a guess. But a
+        nameless bucket is not absent — it is named after the second it was born in, a
+        row of digits, and that is what shows up in every list read by eye.
+
+        Her words: 「可以兜底 但是能不能做个记号 比如说谁没打标是兜底的 然后不是正好
+        也要做一个一键打标的按钮嘛」. The second half is the load-bearing half. A
+        fallback is invisible **by construction**: it fills the field in, so every
+        "this one is unfinished" check stops matching, and nothing ever comes back. So
+        the price of falling back is a stamp — `name_source: fallback`,
+        `summary_source: fallback` — present exactly while a stand-in is standing in,
+        and cleared the moment the model supplies the real thing.
+
+        The line that did NOT move: nothing is invented. A fallback quotes the caller's
+        own body verbatim. The distinction this whole file is about is guess vs. quote,
+        and a stamped quote is on the right side of it.
 
     The dangerous version of this code is not one that crashes. It is one that helpfully
     writes `tags: []` and `subjects: []` when the model fails, because an empty list is
@@ -126,6 +146,8 @@ def test_nothing_is_invented_when_analyze_fails(runtime):
     # Criterion: THE assertion of this file. With no answer from the model, none of the
     # fields it would have filled may be written — not as empty, not as a placeholder.
     # An absent field can be retried; a field written empty looks answered forever.
+    # `name` is no longer on this list (see the 2026-08-20 amendment at the top): it is
+    # filled from the body, which is a quote, not a guess — and it is checked below.
     d = FakeDehydrator(analyze_raises=True, chat_returns=["a real summary"])
     store = FakeStore()
     runtime(d, store)
@@ -133,7 +155,7 @@ def test_nothing_is_invented_when_analyze_fails(runtime):
 
     assert len(store.updates) == 1
     written = store.updates[0]
-    for invented in ("tags", "subjects", "domain", "name", "aliases"):
+    for invented in ("tags", "subjects", "domain", "aliases"):
         assert invented not in written, f"{invented!r} was fabricated out of a failed model call"
 
 
@@ -166,19 +188,27 @@ def test_a_failed_write_does_not_propagate_either(runtime):
     run(R._backfill_one("b1", BODY, "event"))
 
 
-def test_no_write_at_all_when_there_is_nothing_to_write(runtime):
-    # Criterion: model down AND summary unavailable means there is genuinely nothing to
-    # add. Writing an empty update would bump the file's timestamp and, worse, clear the
-    # "unfinished" marker that `backfill_sweep` uses to find this bucket again later.
-    # Both halves have to be unavailable for there to be genuinely nothing to write, and
-    # only one shape of failure does that: no chat channel at all (an unconfigured
-    # deployment). With a channel present, `_make_summary` degrades to the body's opening
-    # and there is always a summary to write.
+def test_the_unfinished_marker_survives_a_total_model_outage(runtime):
+    # Criterion: model down AND no chat channel at all (an unconfigured deployment) —
+    # nothing the model would have answered may be written, and above all the "unfinished"
+    # marker `backfill_sweep` finds this bucket by, an ABSENT summary, has to survive.
+    # Fill that in and the bucket drops out of the sweep and is never completed.
+    #
+    # 📌 This assertion used to read `store.updates == []`, which was the same criterion
+    #    written in terms of the implementation of the day. Since 2026-08-20 there IS one
+    #    honest thing to write with the model down — a stamped fallback name, quoted from
+    #    the body — so "no write at all" would now fail while the thing it was protecting
+    #    is untouched. It is spelled out as the marker itself instead.
     d = FakeDehydrator(analyze_raises=True, has_chat=False)
     store = FakeStore()
     runtime(d, store)
     run(R._backfill_one("b1", BODY, "event"))
-    assert store.updates == []
+    written = store.updates[0] if store.updates else {}
+    assert "summary" not in written, (
+        "a summary written during a total outage clears the only marker that would have "
+        "brought this bucket back for a second try")
+    for invented in ("tags", "subjects", "domain", "aliases"):
+        assert invented not in written
 
 
 # ───────────────────────── the summary's own fallback ─────────────────────────
@@ -242,7 +272,7 @@ def test_fields_the_model_left_out_are_not_written(runtime):
     run(R._backfill_one("b1", BODY, "event"))
     written = store.updates[0]
     assert written["tags"] == ["one"]
-    for absent in ("subjects", "domain", "name", "aliases"):
+    for absent in ("subjects", "domain", "aliases"):
         assert absent not in written
 
 
@@ -258,6 +288,234 @@ def test_valence_and_arousal_are_never_backfilled(runtime):
     run(R._backfill_one("b1", BODY, "event"))
     written = store.updates[0]
     assert "valence" not in written and "arousal" not in written
+
+
+# ───────────────────── the naming fallback, and its stamp ─────────────────────
+# Her decision of 2026-08-20. Two halves, and the second one is the one that gets
+# forgotten: falling back is only allowed **because** the fallback leaves a mark a
+# re-tagging pass can find it by.
+
+NAMELESS = {"tags": ["t"], "subjects": ["Es"]}   # a model that answered, but named nothing
+
+
+def _written(store):
+    assert store.updates, "backfill wrote nothing at all"
+    return store.updates[0]
+
+
+def test_a_bucket_the_model_did_not_name_still_gets_a_name(runtime):
+    # Criterion: the first half. Without this the bucket keeps the name it was born with
+    # — `2026-08-20 01-05-33`, the second it happened to be written in — forever, because
+    # nothing ever revisits it. That is what shows in every list a human reads.
+    d = FakeDehydrator(analyze_returns=NAMELESS, chat_returns=["s"])
+    store = FakeStore()
+    runtime(d, store)
+    run(R._backfill_one("b1", BODY, "event"))
+    assert _written(store)["name"].strip(), "no name was written at all"
+
+
+def test_the_fallback_name_is_quoted_from_the_body_not_invented(runtime):
+    # Criterion: the line that did not move in the 2026-08-20 amendment. The fallback is
+    # allowed only because it is the caller's own words — a model-flavoured guess at a
+    # title would be exactly the invention this whole file forbids.
+    d = FakeDehydrator(analyze_returns=NAMELESS, chat_returns=["s"])
+    store = FakeStore()
+    runtime(d, store)
+    run(R._backfill_one("b1", BODY, "event"))
+    assert BODY.startswith(_written(store)["name"])
+
+
+def test_the_fallback_name_is_stamped(runtime):
+    # Criterion: THE assertion of this section. The stamp is not decoration — it is the
+    # only handle by which a bucket named this way can ever be found again, because the
+    # act of naming it is precisely what stops it looking unfinished.
+    d = FakeDehydrator(analyze_returns=NAMELESS, chat_returns=["s"])
+    store = FakeStore()
+    runtime(d, store)
+    run(R._backfill_one("b1", BODY, "event"))
+    assert _written(store)["name_source"] == "fallback"
+
+
+def test_the_fallback_name_fires_when_the_model_never_answered_at_all(runtime):
+    # Criterion: the commonest shape of "no name" is not a model that replied without one
+    # — it is a model that did not reply. If the fallback is nested inside the
+    # "we got an answer" branch it stops firing in exactly the case it was written for,
+    # and it does so silently, because a bucket named after its birth-second looks like a
+    # bucket rather than like a failure.
+    d = FakeDehydrator(analyze_raises=True, chat_returns=["s"])
+    store = FakeStore()
+    runtime(d, store)
+    run(R._backfill_one("b1", BODY, "event"))
+    written = _written(store)
+    assert BODY.startswith(written["name"])
+    assert written["name_source"] == "fallback"
+
+
+def test_a_name_from_the_model_is_not_stamped(runtime):
+    # Criterion: the stamp has to mean something. Stamp everything and it distinguishes
+    # nothing, and the re-tagging pass it exists for would come back for buckets that are
+    # already properly named — forever, on every run.
+    d = FakeDehydrator(analyze_returns={"tags": ["t"], "suggested_name": "面板留中文"},
+                       chat_returns=["s"])
+    store = FakeStore()
+    runtime(d, store)
+    run(R._backfill_one("b1", BODY, "event"))
+    written = _written(store)
+    assert written["name"] == "面板留中文"
+    assert written.get("name_source") is None, (
+        "a name the model actually supplied must not carry the fallback stamp")
+
+
+def test_a_real_name_takes_the_earlier_stamp_back_off(runtime):
+    # Criterion: the stamp is a two-state thing — standing in, or not. A bucket that was
+    # given a fallback name and is later re-tagged successfully must come out of the
+    # stamped set, or the re-tagging pass keeps finding it and the button never finishes.
+    # `None` is how this store deletes a frontmatter field.
+    d = FakeDehydrator(analyze_returns={"tags": ["t"], "suggested_name": "真名"},
+                       chat_returns=["s"])
+    store = FakeStore()
+    runtime(d, store)
+    run(R._backfill_one("b1", BODY, "event"))
+    written = _written(store)
+    assert "name_source" in written and written["name_source"] is None, (
+        "clearing the stamp has to be an explicit delete; leaving the key out entirely "
+        "would let a stale `fallback` sit on a properly named bucket forever")
+
+
+def test_an_empty_body_gets_no_name_and_no_stamp(runtime):
+    # Criterion: there is nothing to quote, so there is nothing honest to write. An empty
+    # name would be a fabricated field wearing a stamp that says it came from the body.
+    d = FakeDehydrator(analyze_returns=NAMELESS, chat_returns=["s"])
+    store = FakeStore()
+    runtime(d, store)
+    run(R._backfill_one("b1", "   \n  ", "event"))
+    written = store.updates[0] if store.updates else {}
+    assert "name" not in written
+    assert "name_source" not in written
+
+
+def test_the_fallback_name_is_one_line_not_the_whole_body(runtime):
+    # Criterion: a name is a label in a list. Multi-line bodies are the norm here, and
+    # pasting a paragraph into the name field makes both the list and the filename it
+    # derives from unusable.
+    d = FakeDehydrator(analyze_returns=NAMELESS, chat_returns=["s"])
+    store = FakeStore()
+    runtime(d, store)
+    run(R._backfill_one("b1", "第一行就是标题\n第二行不该进名字\n第三行也不该", "event"))
+    assert _written(store)["name"] == "第一行就是标题"
+
+
+def test_a_very_long_first_line_is_cut(runtime):
+    # Criterion: the cap is real. Bucket names become filenames, and an unbounded one
+    # fails at the OS rather than anywhere this code can explain it.
+    d = FakeDehydrator(analyze_returns=NAMELESS, chat_returns=["s"])
+    store = FakeStore()
+    runtime(d, store)
+    run(R._backfill_one("b1", "长" * 500, "event"))
+    assert 0 < len(_written(store)["name"]) <= 80
+
+
+# ───────────────────── the summary's fallback is stamped the same way ─────────────────────
+
+def test_the_fallback_summary_is_stamped(runtime):
+    # Criterion: the same blindness, on the field that had the fallback all along. A
+    # degraded summary has been landing on disk looking exactly like a real one since
+    # before the stamp existed — this is the half of the job that was already shipped and
+    # never marked.
+    d = FakeDehydrator(analyze_returns={"tags": ["t"], "suggested_name": "n"},
+                       chat_returns=["", ""])
+    store = FakeStore()
+    runtime(d, store)
+    run(R._backfill_one("b1", BODY, "event"))
+    written = _written(store)
+    assert BODY.startswith(written["summary"])
+    assert written["summary_source"] == "fallback"
+
+
+def test_a_summary_from_the_model_is_not_stamped(runtime):
+    d = FakeDehydrator(analyze_returns={"tags": ["t"], "suggested_name": "n"},
+                       chat_returns=["a real summary"])
+    store = FakeStore()
+    runtime(d, store)
+    run(R._backfill_one("b1", BODY, "event"))
+    written = _written(store)
+    assert written["summary"] == "a real summary"
+    assert written.get("summary_source") is None
+
+
+def test_no_summary_means_no_summary_stamp_either(runtime):
+    # Criterion: absent and stood-in-for are different states, and the stamp must not
+    # blur them. A stamp on a bucket with no summary would claim a stand-in is in place
+    # when the field is simply still waiting.
+    d = FakeDehydrator(analyze_returns={"tags": ["t"], "suggested_name": "n"},
+                       chat_raises=True)
+    store = FakeStore()
+    runtime(d, store)
+    run(R._backfill_one("b1", BODY, "event"))
+    written = _written(store)
+    assert "summary" not in written
+    assert "summary_source" not in written
+
+
+def test_the_two_stamps_are_independent(runtime):
+    # Criterion: they record two different model calls (analyze and chat), which fail
+    # separately. One stamp standing in for both would misreport whichever half worked.
+    d = FakeDehydrator(analyze_returns=NAMELESS, chat_returns=["a real summary"])
+    store = FakeStore()
+    runtime(d, store)
+    run(R._backfill_one("b1", BODY, "event"))
+    written = _written(store)
+    assert written["name_source"] == "fallback"
+    assert written.get("summary_source") is None
+
+
+# ───────────────────── the stamp has to reach disk ─────────────────────
+
+def _real_store(tmp_path):
+    from core.bucket_manager import BucketManager
+    return BucketManager({"buckets_dir": str(tmp_path)})
+
+
+def _frontmatter_of(store, bucket_id):
+    import frontmatter
+    return frontmatter.load(store._find_bucket_file(bucket_id)).metadata
+
+
+def test_the_stamp_really_reaches_disk(tmp_path):
+    # Criterion: `bucket_manager.update()` writes **only** whitelisted keys and silently
+    # drops everything else — its own comments carry the epitaph of `last_dreamt`, a
+    # field written at one end, never listed, dropped without a sound, while a smoke test
+    # reported None and the bug looked like it lived somewhere else entirely. That
+    # comment concludes that remembering to add it to the list does not work as a method,
+    # and that the cure is an assertion. This is the assertion.
+    #
+    # A stamp that never lands is worse than no stamp at all: the re-tagging pass finds
+    # nothing and reports a clean library. So this drives the **real** store rather than
+    # the fake one, and reads the frontmatter back off the file.
+    store = _real_store(tmp_path)
+    bucket_id = asyncio.run(store.create(
+        content=BODY, tags=[], importance=5, domain=["未分类"],
+        valence=0.5, arousal=0.3, room="EVENT/SELF"))
+    asyncio.run(store.update(bucket_id, name="stand-in", name_source="fallback",
+                             summary="stand-in", summary_source="fallback"))
+    meta = _frontmatter_of(store, bucket_id)
+    assert meta.get("name_source") == "fallback"
+    assert meta.get("summary_source") == "fallback"
+
+
+def test_clearing_the_stamp_really_removes_it_from_disk(tmp_path):
+    # Criterion: the other half. Backfill clears the stamp by passing None, and this
+    # store's convention is that None deletes the field. If that convention ever changes,
+    # a properly re-tagged bucket keeps a `fallback` stamp it no longer deserves and the
+    # re-tagging pass comes back for it on every single run.
+    store = _real_store(tmp_path)
+    bucket_id = asyncio.run(store.create(
+        content=BODY, tags=[], importance=5, domain=["未分类"],
+        valence=0.5, arousal=0.3, room="EVENT/SELF"))
+    asyncio.run(store.update(bucket_id, name="stand-in", name_source="fallback"))
+    asyncio.run(store.update(bucket_id, name="a real name", name_source=None))
+    meta = _frontmatter_of(store, bucket_id)
+    assert "name_source" not in meta, "the stamp outlived the stand-in it was marking"
 
 
 def test_placeholder_metadata_is_neutral_and_local(runtime):

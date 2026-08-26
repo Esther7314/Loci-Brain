@@ -365,6 +365,9 @@ _MEDIA_NOTE_MAX = 500
 _METADATA_TEXT_LIMITS = {
     "status": 32,
     "type": 32,
+    # Provenance stamps for name/summary: a single short enum-ish word ("fallback").
+    "name_source": 32,
+    "summary_source": 32,
     "resolution_reason": 500,
     "resolved_by": 128,
     "related_bucket": 128,
@@ -2188,7 +2191,22 @@ class BucketManager:
                   #    -> What cures it is not remembering harder, it is the assertion in
                   #      smoke_dream that last_dreamt really was written: that one goes red
                   #      when the list entry is missing.
-                  "last_dreamt"):
+                  "last_dreamt",
+                  # Where `name` / `summary` came from. Present with the value
+                  # "fallback" = that field is not the model's answer, it is a slice of
+                  # the caller's own body standing in for one that never arrived; absent
+                  # = the ordinary case. Written and cleared by grow's background
+                  # backfill, and the only reason they are persisted at all is so a
+                  # re-tagging pass can still **find** those buckets — a fallback fills
+                  # the field in, which makes every "this one is unfinished" check stop
+                  # matching it.
+                  # 📌 And note where this line sits: right under the `last_dreamt`
+                  #    epitaph, which is the same mistake written down — a field added at
+                  #    one end, never listed here, silently dropped by update(), and the
+                  #    symptom looking like a bug somewhere else entirely. What catches
+                  #    it is not remembering, it is the assertion that the stamp really
+                  #    reached disk.
+                  "name_source", "summary_source"):
             if k in kwargs:
                 if k == "weight" and kwargs[k] is not None:
                     post[k] = _clamp01(kwargs[k], _DEFAULT_VALENCE)
