@@ -293,6 +293,19 @@ async def save_gist(text: str, room: str, v: float, a: float,
     if when:
         cover = []          # a period is a pure naming layer; this line is its foundation, do not remove it
     tags = [GIST_TAG] + ([BIGEVENT_TAG] if when else [])
+    # ---- 🔴 a version change keeps the profile page's job at the door ----
+    # The door finds its page by the tag alone and skips a superseded page, so a new
+    # version created without the tag leaves the door's cell empty.
+    # The pin is carried further down with an update; the tag goes on at creation
+    # instead, because backfill merges into whatever tags exist at that moment.
+    carries_profile = False
+    if supersedes:
+        from .profile import _PROFILE_TAG      # lazy: core.profile imports this module
+        old_page = await rt.bucket_mgr.get(supersedes)
+        old_tags = [str(t) for t in (((old_page or {}).get("metadata") or {}).get("tags") or [])]
+        if _PROFILE_TAG in old_tags:
+            tags.append(_PROFILE_TAG)
+            carries_profile = True
     new_id = await rt.bucket_mgr.create(
         content=text,
         tags=tags,                       # set at create time: backfill merges and never replaces, so this cannot be washed off
@@ -308,7 +321,8 @@ async def save_gist(text: str, room: str, v: float, a: float,
         test_data=test_data,
     )
 
-    report: dict = {"cover": cover, "叠盖": [], "没写上": [], "链没写全": False}
+    report: dict = {"cover": cover, "叠盖": [], "没写上": [], "链没写全": False,
+                    "接着当门口": carries_profile}
 
     # ---- write both ends ----
     # 🔴 **A version chain does not count as bookkeeping**: when a period changes version
@@ -406,4 +420,6 @@ def format_report(report: dict) -> str:
     elif report.get("接着钉") is False:
         out.append("🔴 旧版是钉着的，但新版**没钉上**——门口那行现在是空的，"
                    "手动 trace(bucket_id=新版id, pinned=1) 补上。")
+    if report.get("接着当门口"):
+        out.append("📇 旧版是门口那张纸（名字页），新版**接着当**——下次 breath 门口显示的就是新版。")
     return "\n".join(out)

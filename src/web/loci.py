@@ -939,7 +939,10 @@ async def build_profile() -> dict:
         "recollect_pool": len(_ev_pool),
         "facts": facts,
         "facts_warning": (f"有 {len(facts)} 个 {_PROFILE_TAG} 桶——只该有一个，去合并"
-                          if len(facts) > 1 else ""),
+                          if len(facts) > 1 else
+                          f"名字页 {door['facts_covered'][0]['id']} 被换掉了，"
+                          f"新版没带 {_PROFILE_TAG}——门口那格是空的"
+                          if not facts and door["facts_covered"] else ""),
         "rules": rules,
         # freq_i / freq_you were removed. A front-end still reading those keys gets
         # undefined rather than an empty array, so the section simply disappears. That is
@@ -1513,9 +1516,19 @@ async def build_health() -> dict:
         return [str(t) for t in raw] if isinstance(raw, (list, tuple)) else []
 
     def sec_profile():
-        profile = [m for m in metas if _PROFILE_TAG in _tags_of(m)]
+        # The same gate the door uses (core.profile.door_note): a covered page keeps its
+        # tag but is no longer the page.
+        from core import _fold as _F
+        tagged = [m for m in metas if _PROFILE_TAG in _tags_of(m)]
+        profile = [m for m in tagged if not _F.is_covered(m)]
         if len(profile) == 1:
             add("门口那张纸", "ok", "名字页在，且只有一张")
+        elif not profile and tagged:
+            gone = tagged[0]
+            add("门口那张纸", "error",
+                f"名字页 {gone.get('id')} 被 {'、'.join(_F.covers_of(gone))} 换掉了，"
+                "新版没带 tag —— 睁眼时档案那格是空的",
+                f"给新版补上 tag {_PROFILE_TAG}（trace 的 tags 是整份替换，原来的一起写上）")
         elif not profile:
             add("门口那张纸", "note" if not visible else "warn",
                 "还没有名字页 —— 睁眼时档案那格是空的"

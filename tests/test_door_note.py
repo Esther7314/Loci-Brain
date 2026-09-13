@@ -208,6 +208,39 @@ def test_profile_facts_come_back_earliest_first_so_a_duplicate_is_visible():
     assert ids(out["facts"]) == ["earlier", "later"]
 
 
+@pytest.mark.parametrize("covered", [
+    {"superseded_by": "newpage00000"},
+    {"covered_by": ["gist00000000"]},
+])
+def test_a_profile_page_that_was_replaced_is_not_the_door(covered):
+    """The page is found by its tag, and a replaced page keeps its tag on disk.
+
+    Being older, it sorts ahead of its successor — so without this gate the door shows
+    the old text indefinitely, with no warning, because there is still exactly one
+    page it counts as current.
+    """
+    out = door_note([
+        bucket("old_page", "old text", tags=[_PROFILE_TAG],
+               created=NOW - timedelta(days=30), **covered),
+        bucket("new_page", "new text", tags=[_PROFILE_TAG],
+               created=NOW - timedelta(days=1)),
+    ], NOW)
+    assert ids(out["facts"]) == ["new_page"]
+    assert ids(out["facts_covered"]) == ["old_page"]
+
+
+def test_a_replaced_page_with_nothing_taking_over_is_reported_by_name():
+    """The successor was written without the tag. The cell is empty either way; what
+    this pins down is that the empty cell can say why, instead of reading like a store
+    that never had a page."""
+    out = door_note([
+        bucket("old_page", tags=[_PROFILE_TAG], superseded_by="untagged0000"),
+        bucket("untagged0000", "new text"),
+    ], NOW)
+    assert out["facts"] == []
+    assert out["facts_covered"] == [{"id": "old_page", "by": ["untagged0000"]}]
+
+
 def test_a_finished_period_is_not_listed():
     out = door_note([
         bucket("running", tags=[_BIGEVENT_TAG], when="2026-07-31.."),

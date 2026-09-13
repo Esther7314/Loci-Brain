@@ -209,12 +209,15 @@ def door_note(all_buckets: list, now: datetime) -> dict:
     """Name + rules + ⏰ reminders + 🫀 what is weighing on me + the list of periods —
     **one pass over the store, one set of rules.**
 
-    Returns {"facts": [...], "rules": [...], "reminders": [...], "heavy": [...],
-             "big": [...], "entries": [...]}, with the raw `meta` / `content` carried on
-    each element. Rendering (the text skin, the JSON skin) is each caller's own business:
-    **not one judgement is made in the render layer.**
+    Returns {"facts": [...], "facts_covered": [...], "rules": [...], "reminders": [...],
+             "heavy": [...], "big": [...], "entries": [...]}, with the raw `meta` /
+    `content` carried on each element (`facts_covered` carries only {"id", "by"}: a
+    profile page that has been replaced, and what replaced it). Rendering (the text
+    skin, the JSON skin) is each caller's own business: **not one judgement is made in
+    the render layer.**
     """
-    facts: list[dict] = []        # collect (created, content), keep the earliest; warn if >1
+    facts: list[dict] = []        # live profile pages, earliest first; the door warns if >1
+    facts_covered: list[dict] = []  # profile pages something has replaced: {"id", "by"}
     rules: list[dict] = []
     reminders: list[dict] = []
     heavy: list[dict] = []        # weighing on me: wants with no date, or a date that passed unresolved
@@ -228,8 +231,16 @@ def door_note(all_buckets: list, now: datetime) -> dict:
         tags = [str(t) for t in (meta.get("tags") or [])]
 
         if _PROFILE_TAG in tags:
-            facts.append({"id": bid, "created": str(meta.get("created") or ""),
-                          "content": content})
+            # 🔴 A page that has been re-versioned or folded keeps its tag on disk, and
+            #    being older it would sort ahead of its successor for good — the door
+            #    would go on showing the old text with nothing to say it is old. Only a
+            #    page nothing covers is the door. The covered ones come back separately,
+            #    so that an empty cell can say which page went and what replaced it.
+            if _F.is_covered(meta):
+                facts_covered.append({"id": bid, "by": _F.covers_of(meta)})
+            else:
+                facts.append({"id": bid, "created": str(meta.get("created") or ""),
+                              "content": content})
             continue
         if _BIGEVENT_TAG in tags:
             # Periods do not appear in the awakening, but the profile page lists a line
@@ -331,8 +342,8 @@ def door_note(all_buckets: list, now: datetime) -> dict:
     # the list above. "Which comes first" is two different questions here, so this is
     # computed separately rather than by reordering `heavy` or truncating it.
     heavy_question_id = (max(heavy, key=lambda h: h["held"])["id"] if heavy else "")
-    return {"facts": facts, "rules": rules, "reminders": reminders,
-            "heavy": heavy, "big": big, "entries": entries,
+    return {"facts": facts, "facts_covered": facts_covered, "rules": rules,
+            "reminders": reminders, "heavy": heavy, "big": big, "entries": entries,
             "heavy_question_id": heavy_question_id}
 
 

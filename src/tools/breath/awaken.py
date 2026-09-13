@@ -123,9 +123,24 @@ async def surface_awaken() -> str:
     # ---- 1 Profile: two sides of a thin sheet ----
     parts.append("═══ 档案（门口那张纸）═══")
     if profile_pages:
-        parts.append(profile_pages[0]["content"].strip())
+        page = profile_pages[0]
+        parts.append(page["content"].strip())
+        # The page's own id, printed in full. The ids quoted inside the body are its
+        # sources, and without this line they are the only ids in the cell — so "change
+        # the page" gets read as "change one of those", and the edit lands on a bucket the
+        # door never reads. Full rather than short because regrow looks up an exact id.
+        parts.append(f"   └ 这张纸是 {page['id']}：改它就 regrow 这个 id（正文括号里的是来源，不是这张纸）")
         if len(profile_pages) > 1:
             parts.append(f"⚠️ 有 {len(profile_pages)} 个 {_PROFILE_TAG} 桶——只该有一个，去合并")
+    elif door["facts_covered"]:
+        # Every page is covered and nothing took the tag over: the cell is empty because
+        # of a change, not because there never was a page. Say which one, and the fix.
+        gone = door["facts_covered"][0]
+        by = "、".join(gone["by"]) or "?"
+        parts.append(
+            f"⚠️ 名字页 {gone['id']} 已经被 {by} 换掉，但新版没带 {_PROFILE_TAG}——门口这格现在是空的。"
+            f"给新版补上：trace(bucket_id=新版id, tags=原来的标签加上 {_PROFILE_TAG})，tags 是整份替换。"
+        )
     else:
         parts.append(f"（事实格空着：存一条带 tag {_PROFILE_TAG} 的记忆当名字页，每行带来处）")
     if pinned_mind:
