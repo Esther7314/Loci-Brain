@@ -263,6 +263,62 @@ def test_existing_tags_are_merged_not_replaced(runtime):
     assert store.updates[0]["tags"] == ["__archive_fact__", "evening", "panel"]
 
 
+class FakeEmbeddings:
+    enabled = True
+
+    def __init__(self, hits):
+        self.hits = hits
+
+    async def search_similar(self, text, top_k=3):
+        return list(self.hits)
+
+
+class NeighbourStore(FakeStore):
+    """One close neighbour, shaped as a thought so the mind branch accepts it too."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.embedding_engine = FakeEmbeddings([("neighbour001", 0.93)])
+
+    async def get(self, bucket_id):
+        b = await super().get(bucket_id)
+        if bucket_id != "b1":
+            b["metadata"]["room"] = "MIND/TRAITS"
+        return b
+
+
+@pytest.mark.parametrize("kind, hint", [
+    ("event", "疑似同件:neighb"),
+    ("mind", "相似认知:neighb"),
+])
+def test_a_similarity_hint_goes_on_top_of_the_tags_already_there(runtime, kind, hint):
+    # Criterion: the model gave nothing this round, so the similarity hint is the only tag
+    # being written. A regrown entry is always close to the version it replaced, so this
+    # path runs on nearly every regrow — and a hint written on its own replaces the list,
+    # taking __gist__ and the profile page's tag with it, with no sign.
+    d = FakeDehydrator(analyze_returns=None, chat_returns=["s"])
+    store = NeighbourStore(existing_tags=["__gist__", "__档案事实__"])
+    runtime(d, store)
+    run(R._backfill_one("b1", BODY, kind))
+    assert store.updates[0]["tags"] == ["__gist__", "__档案事实__", hint]
+
+
+class UnreadableStore(FakeStore):
+    async def get(self, bucket_id):
+        raise OSError("file is locked")
+
+
+def test_tags_are_not_written_when_the_current_ones_cannot_be_read(runtime):
+    # Criterion: without the current list, any write of tags is a replacement. Missing one
+    # round of added tags can be retried; the system tags already there cannot be recovered.
+    d = FakeDehydrator(analyze_returns={"tags": ["evening"]}, chat_returns=["s"])
+    store = UnreadableStore(existing_tags=["__gist__"])
+    runtime(d, store)
+    run(R._backfill_one("b1", BODY, "event"))
+    assert store.updates, "name and summary still get written"
+    assert "tags" not in store.updates[0]
+
+
 def test_fields_the_model_left_out_are_not_written(runtime):
     # Criterion: a model that answers with tags but no subjects has not said "no subjects".
     # Only what came back gets written; the rest stays absent and retryable.

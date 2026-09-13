@@ -9,9 +9,11 @@ WHY THIS FILE EXISTS
     text — or, with the door skipping superseded pages, shows nothing.
 
 WHAT THIS DOES NOT CHECK
-    Backfill, which runs in the background and is stubbed out here. How the door reads a
-    covered page is test_door_note.py's business; the last test here only joins the two
-    ends once, because the failure lived in the gap between them.
+    Backfill, which runs in the background and is stubbed out here. The tag has to survive
+    it too, and that half lives in test_contract_backfill_failure_keeps_body.py
+    (a similarity hint written on top of the existing tags). How the door reads a covered
+    page is test_door_note.py's business; the last test here only joins the two ends once,
+    because the failure lived in the gap between them.
 """
 import asyncio
 from datetime import datetime

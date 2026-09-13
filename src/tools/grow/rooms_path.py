@@ -171,6 +171,30 @@ async def _make_summary(text: str) -> tuple[str, bool]:
 _DUP_COS_THRESHOLD = 0.80
 
 
+async def _merged_tags(bucket_id: str, additions: list[str]) -> list[str] | None:
+    """The bucket's current tags with `additions` appended, read right before the write.
+
+    🔴 `bucket_mgr.update(tags=...)` replaces the whole list. System tags (`__gist__`,
+       `__档案事实__`, `__大event__`) are put on at creation, before backfill runs, and the
+       model knows nothing about them — so every tag backfill writes has to go on top of
+       what is already there. That includes a lone similarity hint on a round where the
+       model returned no tags: a regrown entry is always close to the version it replaced,
+       so that round is the common case, not the rare one.
+    Read as late as possible, so tags applied while the model calls were running are kept.
+    Returns None when the current tags cannot be read: writing the additions alone would
+    be a replacement, and skipping one round of added tags is the cheaper loss.
+    """
+    try:
+        cur = await rt.bucket_mgr.get(bucket_id)
+    except Exception as e:
+        rt.logger.warning(f"backfill 读不到 {bucket_id} 现有的 tags，这轮不写 tags: {e}")
+        return None
+    if not cur:
+        return None
+    existing = [str(t) for t in ((cur.get("metadata") or {}).get("tags") or [])]
+    return list(dict.fromkeys(existing + additions))
+
+
 async def _backfill_one(bucket_id: str, text: str, kind: str) -> None:
     """Fill in one bucket's metadata in the background: tags / aliases / gist /
     name.
@@ -183,6 +207,9 @@ async def _backfill_one(bucket_id: str, text: str, kind: str) -> None:
     so its tags come out empty — that is normal and accepted.
     """
     update_kwargs: dict = {}
+    # Every tag this backfill wants to add. They are only ever added: the list goes on
+    # top of the bucket's current tags right before the write (see _merged_tags).
+    tag_additions: list[str] = []
     try:
         meta = await rt.dehydrator.analyze(text, for_mind=(kind == "mind"))
     except Exception as e:
@@ -190,17 +217,7 @@ async def _backfill_one(bucket_id: str, text: str, kind: str) -> None:
         meta = None
     if meta:
         if meta.get("tags"):
-            # Merge, never replace: tags applied between create and backfill
-            # (especially system tags such as __档案事实__) must not be washed
-            # away by DeepSeek's tags — that happened for real once
-            existing: list = []
-            try:
-                cur = await rt.bucket_mgr.get(bucket_id)
-                if cur:
-                    existing = [str(t) for t in (cur.get("metadata", {}).get("tags") or [])]
-            except Exception:
-                pass
-            update_kwargs["tags"] = list(dict.fromkeys(existing + [str(t) for t in meta["tags"]]))
+            tag_additions += [str(t) for t in meta["tags"]]
         if meta.get("aliases"):
             # Broadenings feed bm25 only (bm25_index.build consumes them); they
             # never appear on the tag line a human reads
@@ -264,9 +281,7 @@ async def _backfill_one(bucket_id: str, text: str, kind: str) -> None:
                 for sid, s in sims:
                     sid = str(sid)
                     if sid and sid != bucket_id and float(s) >= _DUP_COS_THRESHOLD:
-                        tags_now = update_kwargs.get("tags") or []
-                        update_kwargs["tags"] = list(dict.fromkeys(
-                            tags_now + [f"疑似同件:{sid[:6]}"]))
+                        tag_additions.append(f"疑似同件:{sid[:6]}")
                         break
         except Exception:
             pass
@@ -297,14 +312,16 @@ async def _backfill_one(bucket_id: str, text: str, kind: str) -> None:
                         continue
                     if smeta.get("superseded_by"):
                         continue  # a superseded thought is not "surfacing again" — it is the same entry's earlier life
-                    tags_now = update_kwargs.get("tags") or []
-                    update_kwargs["tags"] = list(dict.fromkeys(
-                        tags_now + [f"相似认知:{sid[:6]}"]))
+                    tag_additions.append(f"相似认知:{sid[:6]}")
                     rt.logger.info(f"[准则冒头] {bucket_id} ≈ {sid[:6]} cos={float(s):.2f}")
                     break
         except Exception:
             pass
 
+    if tag_additions:
+        merged = await _merged_tags(bucket_id, tag_additions)
+        if merged is not None:
+            update_kwargs["tags"] = merged
     if not update_kwargs:
         return
     try:
