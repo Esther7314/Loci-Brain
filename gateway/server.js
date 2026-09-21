@@ -21,7 +21,8 @@
 //    carries a function that pastes a whole breath() into the system prompt on the
 //    first turn of a window (`attach_once`), and here it is **deliberately left
 //    unwired**: "breathe before you speak" is a hand **the AI has to reach out with
-//    itself**, and it lives in the system prompt (docs/系统提示-中文.md). Have the
+//    itself**, and it lives in the system prompt (docs/系统提示-英文.md, or
+//    docs/系统提示-中文.md for the Chinese version). Have the
 //    gateway paste it in and the AI is no longer "remembering to open its eyes" —
 //    it is "being handed a summary". Those are two entirely different things.
 //    If you do want the gateway to do it for you, the function is right there in the

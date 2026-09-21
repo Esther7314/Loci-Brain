@@ -36,7 +36,7 @@
 //
 // Two jobs, both done in a single call (the gateway pokes both every round):
 //   · Breath paste — on the first turn of a window, one HTTP call to breath(), and the
-//     whole thing (all six parts of opening one's eyes, nothing picked over, nothing
+//     whole thing (the full waking screen breath() returns, nothing picked over, nothing
 //     trimmed) goes into the system prompt / context. Later turns in the same window do
 //     not call Loci again, they just re-paste the cached copy. (The messages array will
 //     not remember what was pasted last round for us — the messages arriving each round
@@ -93,14 +93,14 @@ const MARKER = "[Loci memory context]";
 
 // Strong trigger = the sentence contains a word that **says outright** it is digging
 // up the past.
-// 🔴 Made configurable: this Chinese list used to be hard-coded while the weak trigger
-//    was off by default, and together that meant **anyone who does not speak Chinese
-//    would install this and never see it fire once, with nothing to tell them why**.
-//    The same failure as "5 second timeout, so it never worked from the day it
-//    shipped": quietly doing nothing.
+// 🔴 Configurable on purpose: the defaults are Chinese and the weak trigger is off by
+//    default, so without this **anyone who does not speak Chinese would install this and
+//    never see it fire once, with nothing to tell them why** — quietly doing nothing.
+//    The config file name is ASCII for the same reason: it is a file that person has to
+//    create by hand.
 // How to change it (pick one, nearest first):
 //    RELEVANCE_STRONG_WORDS="remember,last time,earlier"   comma separated, replaces the whole list
-//    gateway/强档词.json                                    a JSON array, same effect
+//    gateway/strong_words.json                              a JSON array, same effect
 //    set nothing → the Chinese defaults below
 const CHINESE_STRONG_WORDS = [
   "我记得", "记得吗", "还记得", "上次", "之前", "以前", "那时候", "那天", "那次", "记不记得",
@@ -113,7 +113,7 @@ function read_strong_words() {
     if (words.length) return words;
   }
   try {
-    const config_file = path.join(__dirname, "强档词.json");
+    const config_file = path.join(__dirname, "strong_words.json");
     if (fs.existsSync(config_file)) {
       const words = JSON.parse(fs.readFileSync(config_file, "utf8"));
       if (Array.isArray(words) && words.length) return words.map(String);

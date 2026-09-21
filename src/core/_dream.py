@@ -100,8 +100,9 @@ Lifecycle: a dream is forgotten, and genuinely so
                into the window; while nobody comes back, the whole version simply stays.
                **The whole layer does not decay with time.** Its only death is the
                degrade signal: `POST /api/loci/dream/wake` -> `degrade_on_wake()`, fired
-               by the second message after the user returns. That is the bridge's job;
-               see gateway `src/loci-bridge/戳戳送达.js`.
+               by the user's next message after the dream has been handed into the
+               window. That is the caller's job; the caller is lento-v2
+               `src/chat/梦桥.js`.
     after      the whole version is deleted from disk, and the fragment layer starts
     degrading counting from **the moment of degradation**, not from the moment of weaving:
                ~30 min / 15 turns   the **fragment** is still available
@@ -763,9 +764,9 @@ def layer_of(rec: dict, now: datetime, c: dict) -> str:
 # Waking: 🔴 the one and only death of the whole layer
 # ============================================================
 def degrade_on_wake() -> list[str]:
-    """The degrade signal, fired by the second message after the user comes back (the
-    bridge's job; see gateway `src/loci-bridge/戳戳送达.js`). It drops any living `完整`
-    layer down to the fragment layer.
+    """The degrade signal, fired by the user's next message after the dream has been handed
+    into the window (the caller's job; the caller is lento-v2 `src/chat/梦桥.js`). It drops
+    any living `完整` layer down to the fragment layer.
 
     **Idempotent**: with no living whole layer it does nothing and silently returns an
     empty list — that is not an error. If the gateway's state and this side ever fall out
@@ -983,8 +984,8 @@ async def current_dream(recall: bool = True, cfg: dict | None = None) -> dict | 
     **Whether the whole version is still available depends on the timeline between the
     reader and this dream**: through a genuine night with nobody sending messages,
     degrade_on_wake() has never been called and the full text still comes out of here.
-    Once the user comes back and sends a second message, the bridge calls
-    `/api/loci/dream/wake` once and the whole version really does drop to a fragment —
+    Once the dream has been handed over and the user sends their next message, the caller
+    hits `/api/loci/dream/wake` once and the whole version really does drop to a fragment —
     from then on this behaves exactly like the old rule: fragment, then one sentence, then
     genuinely gone.
     `recall=True` (the default) means **this fetch counts as one recall**: the start point

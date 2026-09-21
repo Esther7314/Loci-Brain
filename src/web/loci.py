@@ -1054,9 +1054,9 @@ async def build_poke(query: str = "", when: str = "", room: str = "",
     the whole version survives on disk, and this endpoint hands back the full text as-is
     (`rec["完整"]`, uncut and unmodified, following the same discipline as the fragment
     layer: a dream is a delivery, so give the whole thing). The whole layer does not decay
-    with time. Only when the user returns and sends a second message, and the bridge calls
-    `POST /api/loci/dream/wake` (`core._dream.degrade_on_wake()`), does it drop to the
-    fragment layer. This endpoint remains **read-only**: it does not call
+    with time. Only when the dream has been handed over and the user sends their next message,
+    and the bridge hits `POST /api/loci/dream/wake` (`core._dream.degrade_on_wake()`), does it
+    drop to the fragment layer. This endpoint remains **read-only**: it does not call
     `degrade_on_wake()`. Demotion is always something the bridge asks for explicitly, and is
     never done on its behalf here.
 
@@ -2496,8 +2496,9 @@ def register(mcp) -> None:
     # ---------------------------------------------------------
     @mcp.custom_route("/api/loci/dream/wake", methods=["POST"])
     async def api_loci_dream_wake(request: Request) -> Response:
-        """The demotion signal, triggered by the user's second message after returning.
-        Counting messages and deciding which one is "the second" is the bridge's job.
+        """The demotion signal, triggered by the user's next message after the dream has been
+        handed into the window. Deciding which message that is belongs to the caller
+        (lento-v2 `src/chat/梦桥.js`).
         It drops a still-live whole-dream layer to the fragment layer, and the old lifecycle
         — 30 minutes as a fragment, 60 minutes as a single sentence — starts from **this
         moment**.
@@ -2528,10 +2529,11 @@ def register(mcp) -> None:
         ------------------------------------------------------------
         Three rules. All three are principles, not implementation details.
         ------------------------------------------------------------
-        1. **On waking you get the fragment, never the whole dream** — the whole version was
-           never written to disk. After a while only a single sentence remains
-           (`layer = "一句"`), and after that it is **really gone**: the file is deleted and a
-           trace is left behind.
+        1. **The whole dream lasts only until the user wakes** — the whole version is
+           persisted (layer `完整`) and survives until the degrade signal
+           (`/api/loci/dream/wake`); after that you get the fragment. After a while only a
+           single sentence remains (`layer = "一句"`), and after that it is **really gone**:
+           the file is deleted and a trace is left behind.
         2. **Each call counts as an act of recollection**: the expiry point moves out a
            little, **but by less each time** — recollection can delay a dream's fading, not
            prevent it. So this GET **does write to disk** (updating the expiry point and the
