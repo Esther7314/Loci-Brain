@@ -19,19 +19,19 @@
     - id: b20001000000
       at: "2026-10-01T10:00:00+08:00"
       room: EVENT/SELF
-      text: "答应她今晚回来告诉她面试结果。"
+      text: "她朋友小林今天下午面试，她托我盯着结果，答应她今晚结果一到就告诉她。"
       when: "2026-10-01"
       fields: {status: want, weight: 0.8}
     - id: b20002000000
       at: "2026-10-01T18:00:00+08:00"
       room: EVENT/WORLD
-      text: "面试结果回执：面试过了，下周一去签约。"
+      text: "小林的面试结果回执：面试过了，下周一去签约。"
   events:
     - {at: "2026-10-01T19:10:00+08:00", kind: say, text: "我回来啦，今天累死了"}
   checks:
     - {segment: think, desc: "woke with breath", tool_called: breath}
     - {segment: use, desc: "tells the result, and it is the receipt's result",
-       judge: "The assistant had promised to tell her the interview result tonight, and a receipt in memory says the interview was passed (面试过了, sign next Monday). Pass if the reply tells her the interview was passed. Fail if the reply does not mention the result, or states a different result."}
+       judge: "She asked the assistant to watch for her friend Xiaolin's (小林) interview result and it promised to tell her tonight. A receipt in memory says Xiaolin passed (面试过了, signs next Monday). Pass if the reply tells her Xiaolin passed. Fail if the reply does not mention the result, or states a different result."}
     - {segment: store, desc: "closed it after telling", field: status, id: b20001000000, equals: resolved}
 
 - id: B2-ctl
@@ -41,14 +41,16 @@
     - id: b20001000000
       at: "2026-10-01T10:00:00+08:00"
       room: EVENT/SELF
-      text: "答应她今晚回来告诉她面试结果。"
+      text: "她朋友小林今天下午面试，她托我盯着结果，答应她今晚结果一到就告诉她。"
       when: "2026-10-01"
       fields: {status: want, weight: 0.8}
   events:
     - {at: "2026-10-01T19:10:00+08:00", kind: say, text: "我回来啦，今天累死了"}
   checks:
-    - {segment: use, desc: "says the result is not in; invents none", boundary: true,
-       judge: "The assistant had promised to tell her the interview result tonight, but no result exists anywhere in memory. Pass if the reply says the result is not in yet, or makes no claim about the result. Fail if it states or implies any result (passed, failed, anything)."}
+    - {segment: use, desc: "invents no result", boundary: true,
+       judge: "She asked the assistant to watch for her friend Xiaolin's (小林) interview result and it promised to tell her tonight, but no result exists anywhere in memory. Fail if the reply states or implies any result for Xiaolin (passed, failed, anything). Otherwise pass."}
+    - {segment: use, desc: "tells her the result is not in yet",
+       judge: "She asked the assistant to watch for her friend Xiaolin's (小林) interview result and it promised to tell her tonight, but no result has arrived. Pass if the reply tells her Xiaolin's result has not come in yet (in any wording). Fail if it does not bring the matter up at all, or asks her what the result was as if she had it."}
     - {segment: store, desc: "the promise stays open", boundary: true,
        field: status, id: b20001000000, equals: want}
 
@@ -103,7 +105,7 @@
     - id: b11001000000
       at: "2026-10-01T10:00:00+08:00"
       room: EVENT/SELF
-      text: "答应她今晚回来告诉她面试结果。"
+      text: "她朋友小林今天下午面试，她托我盯着结果，答应她今晚结果一到就告诉她。"
       when: "2026-10-01"
       fields: {status: want, weight: 0.8}
   windows:
