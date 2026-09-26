@@ -118,9 +118,10 @@ class LentoHost:
         self.speaker = speaker
         self.workdir: Path | None = None
         self.proxy: Proxy | None = None
-        self.session: str | None = None
+        # One CLI session per window, so going back to a window resumes its session.
+        self.windows: dict[str, Window] = {}
+        self.sessions: dict[str, str | None] = {}
         self.window: Window | None = None
-        self.first_turn = True
 
     def capabilities(self) -> set[str]:
         return {"model_input", "preinject"}
@@ -147,9 +148,8 @@ class LentoHost:
         self.proxy = Proxy(self.workdir / "requests.jsonl").__enter__()
 
     async def open_window(self, window: Window, at: datetime) -> None:
-        self.window = window
-        self.session = None
-        self.first_turn = True
+        self.windows[window.window_id] = window
+        self.sessions[window.window_id] = None
 
     def _seed(self) -> str:
         """The shape of Lento's seed, recent lines only (no daily report in the exam)."""
@@ -179,21 +179,23 @@ class LentoHost:
             args += ["--effort", self.effort]
         for name in CLOSED_TOOLS + EXAM_ONLY_CLOSED:
             args += ["--disallowedTools", name]
-        if self.session:
-            args += ["--resume", self.session]
+        session = self.sessions.get(self.window.window_id) if self.window else None
+        if session:
+            args += ["--resume", session]
         return args
 
     async def deliver(self, event: Event) -> list[Turn]:
         if event.kind != "say":
             raise NotImplementedError(f"{self.name} cannot deliver '{event.kind}'")
+        self.window = self.windows[event.window_id]
+        wid = self.window.window_id
         at = event.at
         head = f"Current time: {at.strftime('%Y-%m-%d %H:%M:%S')} {WEEKDAYS[at.weekday()]}"
         body = f"{head}\n\n—— 以下是她说的 ——\n{event.text}"
-        if self.first_turn:
+        if self.sessions.get(wid) is None:  # the window's first turn carries the seed
             seed = self._seed()
             if seed:
                 body = f"{seed}\n\n{body}"
-        self.first_turn = False
 
         before = self.proxy.recorder.seq
         env = dict(os.environ)
@@ -213,7 +215,7 @@ class LentoHost:
             except ValueError:
                 continue
             if ev.get("type") == "system" and ev.get("session_id"):
-                self.session = ev["session_id"]
+                self.sessions[wid] = ev["session_id"]
             msg = ev.get("message") or {}
             for block in msg.get("content") or [] if isinstance(msg.get("content"), list) else []:
                 if block.get("type") == "tool_use":
@@ -227,7 +229,7 @@ class LentoHost:
                         tc.output = _flatten(inner) if isinstance(inner, list) else str(inner or "")
             if ev.get("type") == "result":
                 if ev.get("session_id"):
-                    self.session = ev["session_id"]
+                    self.sessions[wid] = ev["session_id"]
                 if ev.get("result"):
                     reply_parts = [ev["result"]]
         if proc.returncode != 0 and not reply_parts:

@@ -10,7 +10,8 @@ This directory runs it.
 | **tool** | `runner.py` calls Loci's MCP tools itself, moves a fake clock, reads the disk | no | every code change |
 | **whole-turn** | a real model answers through a host plug (`host.py`) | yes | after each batch |
 
-Only the tool layer exists so far. The whole-turn plug is a proposal in `host.py`.
+Both layers are in the repo. The tool layer has a 1.4.0 baseline; the whole-turn layer's
+code is delivered and awaits its first full run.
 
 ## Running the tool layer
 
@@ -81,6 +82,10 @@ python exam/turn.py exam/turns/*.yaml                      # 3 runs per item
   to the report: paste it into any model (or read it), save the JSON lines it answers with,
   then `python exam/judge_import.py exam/out/turn-<time> verdicts.txt`.
 - On another machine set `CLAUDE_CLI_EXE` to the CLI binary.
+- Input checks read every request of a turn unless `call:` names one (1 = first,
+  -1 = last). Anything about the first request (preinject) must name it. A request read
+  back only in part leaves `input_contains` not covered even when the fragment is there;
+  a leak seen in it still fails.
 
 ## How the isolation works
 

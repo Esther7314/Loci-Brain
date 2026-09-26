@@ -9,8 +9,9 @@ exam/turn.py — the whole-turn layer: a real model answers, through a host plug
 ONE ITEM, ONE RUN
     1. Build the item's library exactly as the tool layer does (runner.library).
     2. Open the host with that library's Loci attached (host.py: LociLaunch).
-    3. Play the events in order: move the fake clock to each event's time, open windows
-       when asked, deliver the event, collect every Turn the host reports.
+    3. Play the events in order: move the fake clock to each event's time, open each
+       window the first time it is used (never again: A -> B -> A goes back to the open
+       A), deliver the event with every field the script gave, collect every Turn.
     4. Run the checks: disk checks (as in the tool layer), tool-call checks, input
        checks against the recorded model requests, and rubric checks sent to the judge.
 
@@ -25,11 +26,15 @@ SCORING ACROSS RUNS
 ITEM SHAPE (on top of the tool layer's `start` / `setup`)
     windows: {w1: {entry: "private:U", audience: [U], grant: ["*"], history: [...]}}
     needs:   [model_input, ...]           capabilities the host must have
-    events:  [{at, kind: say, window: w1, text: "..."}, {at, kind: open, window: w2}, ...]
+    events:  [{at, kind: say, window: w1, text: "..."}, {at, kind: open, window: w2},
+              {at, kind: audience, window: w1, audience: [...], grant: [...]},
+              {at, kind: withdraw, ref: "where:id", midturn: true},
+              {at, kind: sync, window: w2, source_window: w1, fail: true}, ...]
     checks:  [{segment, desc, turn: 1, judge: "rubric" | tool_called: recall |
-               tool_not_called: grow | input_contains: "..." | input_lacks: "..." |
+               tool_not_called: grow | input_contains: "..." | input_lacks: "..." (+ call: 1) |
                any tool-layer disk check}, ...]
     `turn` counts the Turns of the whole item from 1; default is the last one.
+    `call` picks one request inside that Turn (1 = first, -1 = last); see _input_check.
 """
 
 from __future__ import annotations
@@ -92,14 +97,27 @@ class TurnItemResult:
     transcripts: list[list[dict]] = field(default_factory=list)
 
 
-def _said(events: list[dict], turn_index: int) -> str:
-    says = [e for e in events if e.get("kind", "say") == "say"]
-    return says[turn_index].get("text", "") if 0 <= turn_index < len(says) else ""
+def _cause(ev: dict) -> str:
+    """What a Turn answered, as a grader should read it."""
+    kind = ev.get("kind", "say")
+    text = ev.get("text", "")
+    return text if kind == "say" else f"[{kind}] {text or ev.get('ref', '')}".strip()
+
+
+def make_event(ev: dict, at: _dt.datetime) -> Event:
+    """Every field the script gives reaches the host; nothing is dropped on the way."""
+    return Event(at=at, kind=ev.get("kind", "say"), window_id=ev.get("window", "w1"),
+                 speaker=ev.get("speaker", "U"), text=ev.get("text", ""),
+                 ref=ev.get("ref", ""), audience=list(ev.get("audience") or []),
+                 grant=list(ev.get("grant") or []),
+                 source_window=ev.get("source_window", ""),
+                 fail=bool(ev.get("fail")), midturn=bool(ev.get("midturn")))
 
 
 async def run_once(item: dict, host, judge, keep: bool, run_no: int):
-    """One run of one item. Returns (per-check CheckRun list, transcript)."""
+    """One run of one item. Returns (per-check CheckRun list, transcript, causes)."""
     turns: list[Turn] = []
+    causes: list[str] = []          # causes[i] = the event Turn i+1 answered
     async with library(item, keep, tag=f"-r{run_no}") as L:
         await host.open(LociLaunch(L.command, L.args, L.server_env))
         try:
@@ -108,32 +126,33 @@ async def run_once(item: dict, host, judge, keep: bool, run_no: int):
                                  grant=v.get("grant", ["*"]),
                                  history=v.get("history", []))
                        for k, v in (item.get("windows") or {"w1": {}}).items()}
-            opened = None
+            # A window is opened once. Going A -> B -> A delivers to the A that is already
+            # open; reopening it would be a new window with a fresh seed and session.
+            opened: set[str] = set()
             for ev in item["events"]:
                 at = _dt.datetime.fromisoformat(ev["at"])
                 L.set_clock(ev["at"])
                 wid = ev.get("window", "w1")
-                kind = ev.get("kind", "say")
-                if kind == "open" or wid != opened:
+                if wid not in opened:
                     await host.open_window(windows[wid], at)
-                    opened = wid
-                    if kind == "open":
-                        continue
-                event = Event(at=at, kind=kind, window_id=wid, speaker=ev.get("speaker", "U"),
-                              text=ev.get("text", ""), ref=ev.get("ref", ""))
-                turns.extend(await host.deliver(event))
+                    opened.add(wid)
+                if ev.get("kind", "say") == "open":
+                    continue
+                got = await host.deliver(make_event(ev, at))
+                turns.extend(got)
+                causes.extend([_cause(ev)] * len(got))
 
             disk = Run(L.lib, L.clock_file, session=None)
             results: list[CheckRun] = []
             for c in item.get("checks", []):
                 idx = (c.get("turn") or len(turns)) - 1
-                turn = turns[idx] if 0 <= idx < len(turns) else None
-                results.append(await _check(c, turn, disk, judge,
-                                            _said(item["events"], idx)))
+                ok = 0 <= idx < len(turns)
+                results.append(await _check(c, turns[idx] if ok else None, disk, judge,
+                                            causes[idx] if ok else ""))
         finally:
             await host.close()
     transcript = [asdict(t) for t in turns]
-    return results, transcript
+    return results, transcript, causes
 
 
 async def _check(c: dict, turn: Turn | None, disk: Run, judge, said: str) -> CheckRun:
@@ -152,22 +171,42 @@ async def _check(c: dict, turn: Turn | None, disk: Run, judge, said: str) -> Che
         shown = f"calls: {', '.join(called) or '(none)'}"
         return CheckRun(bool(hits) if "tool_called" in c else not hits, shown)
     if "input_contains" in c or "input_lacks" in c:
-        needle = c.get("input_contains") or c.get("input_lacks")
-        if not turn.model_calls:
-            return CheckRun(None, "not covered: no model request was recorded")
-        found = any(needle in m.content for call in turn.model_calls for m in call.messages)
-        partial = not all(call.complete for call in turn.model_calls)
-        if "input_contains" in c:
-            if found:
-                return CheckRun(True, f"input has {needle!r}")
-            return CheckRun(None if partial else False,
-                            f"input lacks {needle!r}" + (" (input only partly read back: not covered)" if partial else ""))
-        if found:
-            return CheckRun(False, f"input has {needle!r}")
-        return CheckRun(None if partial else True,
-                        f"input lacks {needle!r}" + (" (partial: not covered)" if partial else ""))
+        return _input_check(c, turn)
     ok, evidence = disk._judge(c)
     return CheckRun(ok, evidence)
+
+
+def _input_check(c: dict, turn: Turn) -> CheckRun:
+    """input_contains / input_lacks, optionally narrowed to one request with `call:`
+    (1 = the first request of the turn, -1 = the last). Without `call` every request of
+    the turn is read, which cannot tell "in the first call" from "fetched by a tool and
+    in a later one" — items where that matters (preinject) must name the call.
+
+    A request read back only in part decides nothing it did not see: a fragment found
+    there is noted but the check stays not covered, since the rest of the input is
+    unknown. A leak that is seen fails, partial or not."""
+    needle = c.get("input_contains") or c.get("input_lacks")
+    calls = turn.model_calls
+    if not calls:
+        return CheckRun(None, "not covered: no model request was recorded")
+    where = "input"
+    if "call" in c:
+        n = int(c["call"])
+        i = n - 1 if n > 0 else len(calls) + n
+        if not 0 <= i < len(calls):
+            return CheckRun(False, f"no request #{n}: the turn made {len(calls)}")
+        calls, where = [calls[i]], f"request #{i + 1} of {len(turn.model_calls)}"
+    found = any(needle in m.content for call in calls for m in call.messages)
+    partial = not all(call.complete for call in calls)
+    has, lacks = f"{where} has {needle!r}", f"{where} lacks {needle!r}"
+    not_covered = " (only partly read back: not covered)"
+    if "input_contains" in c:
+        if partial:
+            return CheckRun(None, (has if found else lacks) + not_covered)
+        return CheckRun(found, has if found else lacks)
+    if found:
+        return CheckRun(False, has + (" (seen in a partial read-back)" if partial else ""))
+    return CheckRun(None if partial else True, lacks + (not_covered if partial else ""))
 
 
 async def run_item(item: dict, host_factory, judge, runs: int, keep: bool) -> TurnItemResult:
@@ -177,20 +216,21 @@ async def run_item(item: dict, host_factory, judge, runs: int, keep: bool) -> Tu
     if missing:
         res.status, res.reason = "blocked", f"host cannot: {', '.join(missing)}"
         return res
-    n_says = sum(1 for e in item["events"] if e.get("kind", "say") == "say")
     res.checks = [CheckSummary(c.get("segment", ""), c.get("desc", ""), bool(c.get("boundary")),
-                               rubric=c.get("judge", ""), turn=c.get("turn") or 0,
-                               said=_said(item["events"], (c.get("turn") or n_says) - 1))
+                               rubric=c.get("judge", ""), turn=c.get("turn") or 0)
                   for c in item.get("checks", [])]
     for n in range(1, runs + 1):
         print(f"  … {item['id']} run {n}/{runs}", flush=True)
         try:
-            results, transcript = await run_once(item, host_factory(), judge, keep, n)
+            results, transcript, causes = await run_once(item, host_factory(), judge, keep, n)
         except Exception as exc:
             res.status, res.reason = "error", f"run {n}: {type(exc).__name__}: {exc}"
             return res
         for summary, r in zip(res.checks, results):
             summary.runs.append(r)
+            if not summary.said and causes:
+                idx = (summary.turn or len(causes)) - 1
+                summary.said = causes[idx] if 0 <= idx < len(causes) else ""
         res.transcripts.append(transcript)
     return res
 
