@@ -56,7 +56,7 @@ sys.path.insert(0, str(ROOT))
 from exam.host import Event, LociLaunch, Turn, Window  # noqa: E402
 from exam.judge import default_judge  # noqa: E402
 from exam.runner import (Run, git_head, library, loci_version,  # noqa: E402
-                         require_search_deps, SEAMS)
+                         require_search_deps, seams)
 
 OUT_DIR = ROOT / "exam" / "out"
 
@@ -251,7 +251,7 @@ def render(results: list[TurnItemResult], host_desc: dict, judge_name: str, runs
              f"- Loci {loci_version()} · {git_head()} · runs per item: {runs}",
              f"- host: {json.dumps(host_desc, ensure_ascii=False)}",
              f"- judge: {judge_name}",
-             f"- test seams: {'; '.join(SEAMS)}", ""]
+             f"- test seams: {'; '.join(seams())}", ""]
     for r in results:
         if r.status != "ran":
             lines += [f"## {r.item_id} · {r.status.upper()} · {r.title}", f"- {r.reason}", ""]

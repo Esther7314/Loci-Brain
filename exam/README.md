@@ -90,12 +90,17 @@ python exam/turn.py exam/turns/*.yaml                      # 3 runs per item
 ## How the isolation works
 
 - Each item gets a fresh temp directory as its library (`LOCI_BUCKETS_DIR`) and its own
-  config (`LOCI_CONFIG_PATH`: no model keys, no embeddings). No real library is opened.
+  config (`LOCI_CONFIG_PATH`: no model keys). No real library is opened.
+- Embeddings are off by default. Set `EXAM_EMBED_URL` to a local Ollama
+  (`http://127.0.0.1:11434/v1`; model `bge-m3` unless `EXAM_EMBED_MODEL` says otherwise)
+  and the exam scores search the way a library with vectors does. Setup entries are
+  embedded before the server starts. The report's seam line says which of the two ran;
+  scores from the two are not comparable on items that search.
 - `serve.py` starts the real server with `clock.py` installed: every read of "now" in
   Loci reads a small file the runner rewrites between steps. See `clock.py` for the
   places it patches and why naive stamps are kept as UTC.
 - `random` is seeded per item (`seed:`, default 0).
-- With embeddings off, search is BM25 plus whole-query substrings. Both runners stop
+- Without embeddings, search is BM25 plus whole-query substrings. Both runners stop
   at start if `rank_bm25` or `jieba` is missing, because Loci would otherwise drop BM25
   without a word. `serve.py` rebuilds a stale BM25 index before each search instead of
   in the background, so an item's first search does not score against an empty index.

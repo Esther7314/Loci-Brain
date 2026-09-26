@@ -59,8 +59,8 @@ OUT_DIR = ROOT / "exam" / "out"
 SETTLE_SECONDS = 0.4
 
 # The exam config: no model keys (nothing leaves the machine, results do not depend on
-# a remote model), embeddings off, no auth on stdio, decay checks far apart so the
-# background decay pass never lands in the middle of an item.
+# a remote model), no auth on stdio, decay checks far apart so the background decay
+# pass never lands in the middle of an item.
 EXAM_CONFIG = {
     "transport": "stdio",
     "log_level": "WARNING",
@@ -69,6 +69,34 @@ EXAM_CONFIG = {
     "embedding": {"enabled": False},
     "decay": {"check_interval_hours": 100000},
 }
+
+# Embeddings are off unless EXAM_EMBED_URL names a local Ollama (…/v1). Real search
+# weighs vectors 2.5 against BM25's 1.5; with vectors off the best BM25 hit scores 37.5
+# against recall's line of 35, so little more than the top hit survives. A baseline
+# meant to match a library that has vectors has to run with them.
+EMBED_URL_ENV = "EXAM_EMBED_URL"
+EMBED_MODEL_ENV = "EXAM_EMBED_MODEL"
+
+
+def exam_config() -> dict:
+    cfg = json.loads(json.dumps(EXAM_CONFIG))
+    url = os.environ.get(EMBED_URL_ENV, "").strip()
+    if url:
+        cfg["embedding"] = {
+            "enabled": True,
+            "api_format": "ollama",
+            "base_url": url,
+            "model": os.environ.get(EMBED_MODEL_ENV, "").strip() or "bge-m3",
+            "timeout_seconds": 60,
+        }
+    return cfg
+
+
+def embeddings_label() -> str:
+    cfg = exam_config()["embedding"]
+    if not cfg.get("enabled"):
+        return "embeddings off"
+    return f"embeddings {cfg['model']} via local Ollama {cfg['base_url']}"
 
 
 # ───────────────────────── results ─────────────────────────
@@ -117,8 +145,16 @@ async def seed(lib: Path, clock_file: Path, entries: list[dict]) -> None:
     """Write setup entries with Loci's own BucketManager, each at its own fake time."""
     from utils import load_config
     from core.bucket_manager import BucketManager
+    from core.embedding_engine import EmbeddingEngine
 
-    bm = BucketManager(load_config())
+    config = load_config()
+    engine = EmbeddingEngine(config)
+    if config.get("embedding", {}).get("enabled") and not engine.enabled:
+        raise RuntimeError(f"embeddings asked for ({os.environ.get(EMBED_URL_ENV)}) "
+                           "but the engine did not start")
+    # No outbox is attached, so each create() embeds inline before returning: every
+    # setup entry has its vector before the server starts.
+    bm = BucketManager(config, embedding_engine=engine)
     for e in entries:
         clock.set_now(clock_file, e["at"])
         bid = await bm.create(
@@ -388,7 +424,7 @@ async def library(item: dict, keep: bool, tag: str = ""):
     lib = Path(tempfile.mkdtemp(prefix=f"loci-exam-{item['id']}{tag}-"))
     clock_file = lib.parent / f"{lib.name}.clock"
     config_file = lib.parent / f"{lib.name}.config.yaml"
-    config_file.write_text(yaml.safe_dump(EXAM_CONFIG), encoding="utf-8")
+    config_file.write_text(yaml.safe_dump(exam_config()), encoding="utf-8")
     env = dict(os.environ)
     env.update({
         "LOCI_BUCKETS_DIR": str(lib),
@@ -474,11 +510,13 @@ async def run_item(item: dict, keep: bool) -> ItemResult:
 
 # The only test seams this runner adds to the version under test. A baseline has to say
 # them out loud: anything more than this and it is no longer the old version's score.
-SEAMS = ("fake clock (exam/clock.py: core._when.now, utils.now_iso and its by-name "
-         "imports, datetime.now in bucket_manager / decay_engine / bucket_scoring / "
-         "plan_history)", "random seeded per item", "no model keys, embeddings off",
-         "BM25 rebuilt before a search when stale (exam/serve.py; live Loci rebuilds it "
-         "in the background)")
+def seams() -> tuple[str, ...]:
+    return ("fake clock (exam/clock.py: core._when.now, utils.now_iso and its by-name "
+            "imports, datetime.now in bucket_manager / decay_engine / bucket_scoring / "
+            "plan_history)", "random seeded per item", "no model keys",
+            embeddings_label(),
+            "BM25 rebuilt before a search when stale (exam/serve.py; live Loci rebuilds "
+            "it in the background)")
 
 
 def require_search_deps() -> None:
@@ -512,7 +550,7 @@ def render(results: list[ItemResult]) -> str:
     lines = ["# Loci exam — tool layer", "",
              f"- Loci {loci_version()} · {git_head()} · LOCI_TZ="
              f"{os.environ.get('LOCI_TZ') or 'Asia/Shanghai (default)'}",
-             f"- test seams: {'; '.join(SEAMS)}", ""]
+             f"- test seams: {'; '.join(seams())}", ""]
     ran = [r for r in results if r.status == "ran"]
     lines.append(f"items: {len(results)} · ran: {len(ran)} · passed: "
                  f"{sum(r.passed for r in ran)} · no interface: "

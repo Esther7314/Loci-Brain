@@ -6,7 +6,8 @@ The runner launches this instead of src/server.py. Everything the server reads c
 from the environment the runner sets:
 
     LOCI_BUCKETS_DIR    the throwaway library for this item
-    LOCI_CONFIG_PATH    the exam config (no model keys, no embeddings)
+    LOCI_CONFIG_PATH    the exam config (no model keys; embeddings only from a local
+                        Ollama, when EXAM_EMBED_URL is set — see runner.exam_config)
     EXAM_CLOCK_FILE     where the fake "now" lives (see clock.py)
     EXAM_SEED           seed for random: breath's "suddenly remembered" and dream picks
 
