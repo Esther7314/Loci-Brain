@@ -33,3 +33,13 @@
   title: "a descendant of two sources is rewritten from the one left"
   interface: none
   needs: "the delete signal (F2), withholding until rewritten, sources carrying 'where + id'"
+
+- id: F4
+  title: "a withdrawn source is also cleared from Loci's own derived stores"
+  interface: none
+  needs: "the delete signal (F2) reaching embeddings.db, the BM25 index, dream records (night_fall/dreams) and sunk bodies (archive/原文)"
+
+- id: F5
+  title: "the same source delivered twice is one thing"
+  interface: none
+  needs: "sources carrying 'where + id'; write-time dedup on that, not only on identical text"
