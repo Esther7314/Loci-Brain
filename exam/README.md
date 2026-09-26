@@ -65,6 +65,23 @@ reach it (dreams, today). It is reported as BLOCKED, never as the version lackin
 Every report opens with the Loci version, commit, time zone and the test seams the
 runner added. A baseline that needed more seams than those is not a baseline.
 
+## Running the whole-turn layer
+
+```
+python exam/turn.py exam/turns/i-recall.yaml --runs 1     # measure one run first
+python exam/turn.py exam/turns/*.yaml                      # 3 runs per item
+```
+
+- Host: `exam/hosts/lento.py` (the Lento life line; neutral prompts in `exam/hosts/neutral/`).
+  Another entry writes its own host against `exam/host.py`.
+- Model: `--model`, default `claude-opus-4-6`. Baseline and acceptance must use the same one.
+- Input evidence: `exam/proxy.py` records every request the CLI sends (bodies only, never headers).
+- Grading: with `EXAM_JUDGE_BASE_URL` / `EXAM_JUDGE_KEY` / `EXAM_JUDGE_MODEL` set, an
+  OpenAI-compatible model grades the rubrics. Without them, `judge-packet.md` is written next
+  to the report: paste it into any model (or read it), save the JSON lines it answers with,
+  then `python exam/judge_import.py exam/out/turn-<time> verdicts.txt`.
+- On another machine set `CLAUDE_CLI_EXE` to the CLI binary.
+
 ## How the isolation works
 
 - Each item gets a fresh temp directory as its library (`LOCI_BUCKETS_DIR`) and its own

@@ -67,6 +67,9 @@ class CheckSummary:
     desc: str
     boundary: bool
     runs: list[CheckRun] = field(default_factory=list)
+    rubric: str = ""            # set for judge checks, so a person or an outside judge can grade
+    turn: int = 0               # which Turn the check reads (1-based; 0 = the last)
+    said: str = ""              # the user's line that turn answered
 
     @property
     def verdict(self) -> str:
@@ -174,7 +177,10 @@ async def run_item(item: dict, host_factory, judge, runs: int, keep: bool) -> Tu
     if missing:
         res.status, res.reason = "blocked", f"host cannot: {', '.join(missing)}"
         return res
-    res.checks = [CheckSummary(c.get("segment", ""), c.get("desc", ""), bool(c.get("boundary")))
+    n_says = sum(1 for e in item["events"] if e.get("kind", "say") == "say")
+    res.checks = [CheckSummary(c.get("segment", ""), c.get("desc", ""), bool(c.get("boundary")),
+                               rubric=c.get("judge", ""), turn=c.get("turn") or 0,
+                               said=_said(item["events"], (c.get("turn") or n_says) - 1))
                   for c in item.get("checks", [])]
     for n in range(1, runs + 1):
         print(f"  … {item['id']} run {n}/{runs}", flush=True)
@@ -234,15 +240,62 @@ async def main_async(args) -> int:
     for item in items:
         print(f"… {item['id']}", flush=True)
         results.append(await run_item(item, factory, judge, args.runs, args.keep))
-    report = render(results, factory().describe(), judge.name, args.runs)
+    meta = {"host": factory().describe(), "judge": judge.name, "runs": args.runs}
     out = OUT_DIR / ("turn-" + _dt.datetime.now().strftime("%Y%m%d-%H%M%S"))
     out.mkdir(parents=True, exist_ok=True)
-    (out / "report.md").write_text(report, encoding="utf-8")
+    save(out, results, meta)
+    packet = judge_packet(results)
+    if packet:
+        (out / "judge-packet.md").write_text(packet, encoding="utf-8")
+    print((out / "report.md").read_text(encoding="utf-8"))
+    print(f"\nreport: {out / 'report.md'}")
+    if packet:
+        print(f"unjudged rubrics: {out / 'judge-packet.md'} "
+              f"(grade outside, then: python exam/judge_import.py {out} <verdicts file>)")
+    return 0
+
+
+def save(out: Path, results: list[TurnItemResult], meta: dict) -> None:
+    (out / "report.md").write_text(render(results, meta["host"], meta["judge"], meta["runs"]),
+                                   encoding="utf-8")
     (out / "results.json").write_text(json.dumps([asdict(r) for r in results],
                                                  ensure_ascii=False, indent=2), encoding="utf-8")
-    print(report)
-    print(f"\nreport: {out / 'report.md'}")
-    return 0
+    (out / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2),
+                                   encoding="utf-8")
+
+
+PACKET_HEAD = """# Grading packet
+
+You are grading replies from a chat assistant against rubrics. For each case below, read
+the rubric, the user's line, the tool calls the assistant made and its reply. Judge only
+the rubric; style, length and tone do not matter unless the rubric says so.
+
+Answer with one JSON object per line and nothing else, in any order:
+{"key": "<the key of the case>", "pass": true or false, "reason": "<one sentence quoting the reply>"}
+"""
+
+
+def judge_packet(results: list[TurnItemResult]) -> str:
+    """Every rubric nobody has graded yet, as one self-contained text a person can paste
+    into any model (or read themselves). judge_import.py takes the answers back."""
+    cases = []
+    for r in results:
+        for ci, c in enumerate(r.checks):
+            if not c.rubric:
+                continue
+            for ri, run in enumerate(c.runs):
+                if run.ok is not None:
+                    continue
+                turns = r.transcripts[ri] if ri < len(r.transcripts) else []
+                t = turns[(c.turn or len(turns)) - 1] if turns else {}
+                tools = "\n".join(
+                    f"- {tc['name'].split('__')[-1]} {json.dumps(tc['arguments'], ensure_ascii=False)}"
+                    f" -> {tc['output'][:400]!r}" for tc in t.get("tool_calls", [])) or "(none)"
+                cases.append(
+                    f"## key: {r.item_id}#{ci + 1}/run{ri + 1}\n\n"
+                    f"**Rubric**\n{c.rubric}\n\n**User said**\n{c.said or '(none)'}\n\n"
+                    f"**Tool calls**\n{tools}\n\n**Reply**\n{t.get('reply') or '(empty)'}\n")
+    return PACKET_HEAD + "\n" + "\n".join(cases) if cases else ""
 
 
 def main() -> None:
@@ -254,7 +307,8 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Loci exam, whole-turn layer")
     ap.add_argument("items", nargs="+")
     ap.add_argument("--runs", type=int, default=3)
-    ap.add_argument("--model", default="opus")
+    ap.add_argument("--model", default="claude-opus-4-6",
+                    help="the model the life line really runs; baseline and acceptance must match")
     ap.add_argument("--system-prompt", default="")
     ap.add_argument("--claude-md", default="")
     ap.add_argument("--keep", action="store_true")
