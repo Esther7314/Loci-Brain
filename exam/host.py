@@ -90,6 +90,9 @@ class Window:
     entry: str                      # "private:P", "group:X", ...
     audience: list[str]             # who actually sees replies in this window
     grant: list[str]                # scopes this entry may read; [] = none, ["*"] = whole library
+    history: list[dict] = field(default_factory=list)
+    # Earlier lines of this conversation, oldest first: {"at", "speaker", "text"}. A host
+    # uses them the way it really would (a seed, a replayed transcript) or not at all.
 
 
 @dataclass

@@ -40,6 +40,7 @@ import re
 import shutil
 import sys
 import tempfile
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -284,14 +285,30 @@ class Run:
         raise ValueError(f"unknown check: {sorted(c)}")
 
 
-async def run_item(item: dict, keep: bool) -> ItemResult:
-    res = ItemResult(item["id"], item.get("title", ""), "ran")
-    if item.get("interface") in ("none", "blocked"):
-        res.status = "no-interface" if item["interface"] == "none" else "blocked"
-        res.needs = item.get("needs", "")
-        return res
+@dataclass
+class Library:
+    """One throwaway library, seeded and ready. `launch` starts Loci's MCP server on it."""
+    lib: Path
+    clock_file: Path
+    server_env: dict
 
-    lib = Path(tempfile.mkdtemp(prefix=f"loci-exam-{item['id']}-"))
+    @property
+    def command(self) -> str:
+        return sys.executable
+
+    @property
+    def args(self) -> list[str]:
+        return [str(ROOT / "exam" / "serve.py")]
+
+    def set_clock(self, iso: str) -> None:
+        clock.set_now(self.clock_file, iso)
+
+
+@asynccontextmanager
+async def library(item: dict, keep: bool, tag: str = ""):
+    """Build the item's library (setup entries at their own fake times), leave the clock
+    at `start`, yield it, then delete it unless `keep`."""
+    lib = Path(tempfile.mkdtemp(prefix=f"loci-exam-{item['id']}{tag}-"))
     clock_file = lib.parent / f"{lib.name}.clock"
     config_file = lib.parent / f"{lib.name}.config.yaml"
     config_file.write_text(yaml.safe_dump(EXAM_CONFIG), encoding="utf-8")
@@ -317,53 +334,61 @@ async def run_item(item: dict, keep: bool) -> ItemResult:
         clock.install(clock_file)
         await seed(lib, clock_file, item.get("setup", []))
         clock.set_now(clock_file, item["start"])
-
-        from mcp import ClientSession, StdioServerParameters
-        from mcp.client.stdio import stdio_client
-
-        params = StdioServerParameters(
-            command=sys.executable,
-            args=[str(ROOT / "exam" / "serve.py")],
-            env=env,
-            cwd=str(lib),
-        )
-        errlog = open(lib.parent / f"{lib.name}.server.log", "w", encoding="utf-8")
-        try:
-            async with stdio_client(params, errlog=errlog) as (r, w):
-                async with ClientSession(r, w) as session:
-                    await session.initialize()
-                    run = Run(lib, clock_file, session)
-                    for step in item.get("steps", []):
-                        if "at" in step:
-                            clock.set_now(clock_file, step["at"])
-                        elif "call" in step:
-                            await run.call(step)
-                        elif "snapshot" in step:
-                            run.snapshot(step)
-                        elif "newest" in step:
-                            run.follow_versions(step)
-                        elif "check" in step:
-                            run.check(step)
-                        else:
-                            raise ValueError(f"unknown step: {sorted(step)}")
-                    res.checks = run.checks
-                    res.outputs = run.outputs
-        finally:
-            errlog.close()
-    except Exception as exc:
-        res.status, res.error = "error", f"{type(exc).__name__}: {exc}"
+        yield Library(lib, clock_file, env)
     finally:
         for k, v in saved_env.items():
             if v is None:
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
-        if keep:
-            res.error = (res.error + " " if res.error else "") + f"[library kept at {lib}]"
-        else:
+        if not keep:
             shutil.rmtree(lib, ignore_errors=True)
             for suffix in (".clock", ".config.yaml", ".server.log"):
                 (lib.parent / f"{lib.name}{suffix}").unlink(missing_ok=True)
+
+
+async def run_item(item: dict, keep: bool) -> ItemResult:
+    res = ItemResult(item["id"], item.get("title", ""), "ran")
+    if item.get("interface") in ("none", "blocked"):
+        res.status = "no-interface" if item["interface"] == "none" else "blocked"
+        res.needs = item.get("needs", "")
+        return res
+
+    try:
+        async with library(item, keep) as L:
+            if keep:
+                res.error = f"[library kept at {L.lib}]"
+            from mcp import ClientSession, StdioServerParameters
+            from mcp.client.stdio import stdio_client
+
+            params = StdioServerParameters(command=L.command, args=L.args,
+                                           env=L.server_env, cwd=str(L.lib))
+            errlog = open(L.lib.parent / f"{L.lib.name}.server.log", "w", encoding="utf-8")
+            try:
+                async with stdio_client(params, errlog=errlog) as (r, w):
+                    async with ClientSession(r, w) as session:
+                        await session.initialize()
+                        run = Run(L.lib, L.clock_file, session)
+                        for step in item.get("steps", []):
+                            if "at" in step:
+                                L.set_clock(step["at"])
+                            elif "call" in step:
+                                await run.call(step)
+                            elif "snapshot" in step:
+                                run.snapshot(step)
+                            elif "newest" in step:
+                                run.follow_versions(step)
+                            elif "check" in step:
+                                run.check(step)
+                            else:
+                                raise ValueError(f"unknown step: {sorted(step)}")
+                        res.checks = run.checks
+                        res.outputs = run.outputs
+            finally:
+                errlog.close()
+    except Exception as exc:
+        res.status = "error"
+        res.error = (res.error + " " if res.error else "") + f"{type(exc).__name__}: {exc}"
     return res
 
 

@@ -1,0 +1,265 @@
+# -*- coding: utf-8 -*-
+"""
+exam/turn.py — the whole-turn layer: a real model answers, through a host plug.
+
+    python exam/turn.py exam/turns/i7.yaml                 # Lento host, 3 runs each
+    python exam/turn.py exam/turns/i7.yaml --runs 1        # one run (to measure cost)
+    python exam/turn.py ... --keep                         # keep libraries and host dirs
+
+ONE ITEM, ONE RUN
+    1. Build the item's library exactly as the tool layer does (runner.library).
+    2. Open the host with that library's Loci attached (host.py: LociLaunch).
+    3. Play the events in order: move the fake clock to each event's time, open windows
+       when asked, deliver the event, collect every Turn the host reports.
+    4. Run the checks: disk checks (as in the tool layer), tool-call checks, input
+       checks against the recorded model requests, and rubric checks sent to the judge.
+
+SCORING ACROSS RUNS
+    Ordinary checks pass when they pass in at least 2 of the runs. A check marked
+    `boundary: true` (reading out of scope, leaking, using what was withdrawn, a corrected
+    basis used as verified, an invented result closing a promise) fails the item if it
+    fails in any single run. An item needing a capability the host did not declare is
+    BLOCKED with the missing capability named, not failed. An input check against a
+    request the host could only read back in part is recorded as not covered.
+
+ITEM SHAPE (on top of the tool layer's `start` / `setup`)
+    windows: {w1: {entry: "private:U", audience: [U], grant: ["*"], history: [...]}}
+    needs:   [model_input, ...]           capabilities the host must have
+    events:  [{at, kind: say, window: w1, text: "..."}, {at, kind: open, window: w2}, ...]
+    checks:  [{segment, desc, turn: 1, judge: "rubric" | tool_called: recall |
+               tool_not_called: grow | input_contains: "..." | input_lacks: "..." |
+               any tool-layer disk check}, ...]
+    `turn` counts the Turns of the whole item from 1; default is the last one.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import datetime as _dt
+import json
+import sys
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+
+import yaml
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT))
+
+from exam.host import Event, LociLaunch, Turn, Window  # noqa: E402
+from exam.judge import default_judge  # noqa: E402
+from exam.runner import Run, git_head, library, loci_version, SEAMS  # noqa: E402
+
+OUT_DIR = ROOT / "exam" / "out"
+
+
+@dataclass
+class CheckRun:
+    ok: bool | None             # None = not decided (unjudged / not covered)
+    evidence: str
+
+
+@dataclass
+class CheckSummary:
+    segment: str
+    desc: str
+    boundary: bool
+    runs: list[CheckRun] = field(default_factory=list)
+
+    @property
+    def verdict(self) -> str:
+        decided = [r.ok for r in self.runs if r.ok is not None]
+        if self.boundary and any(ok is False for ok in decided):
+            return "fail (boundary)"
+        if len(decided) < len(self.runs):
+            return "undecided"
+        need = 2 if len(self.runs) >= 3 else len(self.runs)
+        return "pass" if sum(decided) >= need else "fail"
+
+
+@dataclass
+class TurnItemResult:
+    item_id: str
+    title: str
+    status: str = "ran"                     # ran | blocked | error
+    reason: str = ""
+    checks: list[CheckSummary] = field(default_factory=list)
+    transcripts: list[list[dict]] = field(default_factory=list)
+
+
+def _said(events: list[dict], turn_index: int) -> str:
+    says = [e for e in events if e.get("kind", "say") == "say"]
+    return says[turn_index].get("text", "") if 0 <= turn_index < len(says) else ""
+
+
+async def run_once(item: dict, host, judge, keep: bool, run_no: int):
+    """One run of one item. Returns (per-check CheckRun list, transcript)."""
+    turns: list[Turn] = []
+    async with library(item, keep, tag=f"-r{run_no}") as L:
+        await host.open(LociLaunch(L.command, L.args, L.server_env))
+        try:
+            windows = {k: Window(window_id=k, entry=v.get("entry", "private:U"),
+                                 audience=v.get("audience", ["U"]),
+                                 grant=v.get("grant", ["*"]),
+                                 history=v.get("history", []))
+                       for k, v in (item.get("windows") or {"w1": {}}).items()}
+            opened = None
+            for ev in item["events"]:
+                at = _dt.datetime.fromisoformat(ev["at"])
+                L.set_clock(ev["at"])
+                wid = ev.get("window", "w1")
+                kind = ev.get("kind", "say")
+                if kind == "open" or wid != opened:
+                    await host.open_window(windows[wid], at)
+                    opened = wid
+                    if kind == "open":
+                        continue
+                event = Event(at=at, kind=kind, window_id=wid, speaker=ev.get("speaker", "U"),
+                              text=ev.get("text", ""), ref=ev.get("ref", ""))
+                turns.extend(await host.deliver(event))
+
+            disk = Run(L.lib, L.clock_file, session=None)
+            results: list[CheckRun] = []
+            for c in item.get("checks", []):
+                idx = (c.get("turn") or len(turns)) - 1
+                turn = turns[idx] if 0 <= idx < len(turns) else None
+                results.append(await _check(c, turn, disk, judge,
+                                            _said(item["events"], idx)))
+        finally:
+            await host.close()
+    transcript = [asdict(t) for t in turns]
+    return results, transcript
+
+
+async def _check(c: dict, turn: Turn | None, disk: Run, judge, said: str) -> CheckRun:
+    if any(k in c for k in ("judge", "tool_called", "tool_not_called",
+                            "input_contains", "input_lacks")) and turn is None:
+        return CheckRun(False, "no such turn: the host ran the model fewer times")
+    if "judge" in c:
+        ok, why = await judge.grade(c["judge"], turn, said)
+        return CheckRun(ok, why)
+    if "tool_called" in c or "tool_not_called" in c:
+        name = c.get("tool_called") or c.get("tool_not_called")
+        hits = [t for t in turn.tool_calls if t.name.endswith(name)]
+        if "args_contains" in c:
+            hits = [t for t in hits if c["args_contains"] in json.dumps(t.arguments, ensure_ascii=False)]
+        called = [t.name.split("__")[-1] for t in turn.tool_calls]
+        shown = f"calls: {', '.join(called) or '(none)'}"
+        return CheckRun(bool(hits) if "tool_called" in c else not hits, shown)
+    if "input_contains" in c or "input_lacks" in c:
+        needle = c.get("input_contains") or c.get("input_lacks")
+        if not turn.model_calls:
+            return CheckRun(None, "not covered: no model request was recorded")
+        found = any(needle in m.content for call in turn.model_calls for m in call.messages)
+        partial = not all(call.complete for call in turn.model_calls)
+        if "input_contains" in c:
+            if found:
+                return CheckRun(True, f"input has {needle!r}")
+            return CheckRun(None if partial else False,
+                            f"input lacks {needle!r}" + (" (input only partly read back: not covered)" if partial else ""))
+        if found:
+            return CheckRun(False, f"input has {needle!r}")
+        return CheckRun(None if partial else True,
+                        f"input lacks {needle!r}" + (" (partial: not covered)" if partial else ""))
+    ok, evidence = disk._judge(c)
+    return CheckRun(ok, evidence)
+
+
+async def run_item(item: dict, host_factory, judge, runs: int, keep: bool) -> TurnItemResult:
+    res = TurnItemResult(item["id"], item.get("title", ""))
+    probe = host_factory()
+    missing = sorted(set(item.get("needs", [])) - probe.capabilities())
+    if missing:
+        res.status, res.reason = "blocked", f"host cannot: {', '.join(missing)}"
+        return res
+    res.checks = [CheckSummary(c.get("segment", ""), c.get("desc", ""), bool(c.get("boundary")))
+                  for c in item.get("checks", [])]
+    for n in range(1, runs + 1):
+        print(f"  … {item['id']} run {n}/{runs}", flush=True)
+        try:
+            results, transcript = await run_once(item, host_factory(), judge, keep, n)
+        except Exception as exc:
+            res.status, res.reason = "error", f"run {n}: {type(exc).__name__}: {exc}"
+            return res
+        for summary, r in zip(res.checks, results):
+            summary.runs.append(r)
+        res.transcripts.append(transcript)
+    return res
+
+
+def render(results: list[TurnItemResult], host_desc: dict, judge_name: str, runs: int) -> str:
+    lines = ["# Loci exam — whole-turn layer", "",
+             f"- Loci {loci_version()} · {git_head()} · runs per item: {runs}",
+             f"- host: {json.dumps(host_desc, ensure_ascii=False)}",
+             f"- judge: {judge_name}",
+             f"- test seams: {'; '.join(SEAMS)}", ""]
+    for r in results:
+        if r.status != "ran":
+            lines += [f"## {r.item_id} · {r.status.upper()} · {r.title}", f"- {r.reason}", ""]
+            continue
+        verdicts = [c.verdict for c in r.checks]
+        overall = ("FAIL" if any(v.startswith("fail") for v in verdicts)
+                   else "UNDECIDED" if "undecided" in verdicts else "PASS")
+        lines.append(f"## {r.item_id} · {overall} · {r.title}")
+        for c in r.checks:
+            marks = " ".join("✓" if x.ok else "·" if x.ok is None else "✗" for x in c.runs)
+            lines.append(f"- {c.verdict} [{marks}] {c.segment} · {c.desc}"
+                         + (" (boundary)" if c.boundary else ""))
+            for i, x in enumerate(c.runs, 1):
+                lines.append(f"    - run {i}: `{x.evidence[:200]}`")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def make_host_factory(args):
+    from exam.hosts.lento import LentoHost
+    kw = {"model": args.model}
+    if args.system_prompt:
+        kw["system_prompt_file"] = args.system_prompt
+    if args.claude_md:
+        kw["claude_md_file"] = args.claude_md
+    return lambda: LentoHost(**kw)
+
+
+async def main_async(args) -> int:
+    items = []
+    for p in args.items:
+        data = yaml.safe_load(Path(p).read_text(encoding="utf-8"))
+        items.extend(data if isinstance(data, list) else [data])
+    factory = make_host_factory(args)
+    judge = default_judge()
+    results = []
+    for item in items:
+        print(f"… {item['id']}", flush=True)
+        results.append(await run_item(item, factory, judge, args.runs, args.keep))
+    report = render(results, factory().describe(), judge.name, args.runs)
+    out = OUT_DIR / ("turn-" + _dt.datetime.now().strftime("%Y%m%d-%H%M%S"))
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "report.md").write_text(report, encoding="utf-8")
+    (out / "results.json").write_text(json.dumps([asdict(r) for r in results],
+                                                 ensure_ascii=False, indent=2), encoding="utf-8")
+    print(report)
+    print(f"\nreport: {out / 'report.md'}")
+    return 0
+
+
+def main() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
+    ap = argparse.ArgumentParser(description="Loci exam, whole-turn layer")
+    ap.add_argument("items", nargs="+")
+    ap.add_argument("--runs", type=int, default=3)
+    ap.add_argument("--model", default="opus")
+    ap.add_argument("--system-prompt", default="")
+    ap.add_argument("--claude-md", default="")
+    ap.add_argument("--keep", action="store_true")
+    sys.exit(asyncio.run(main_async(ap.parse_args())))
+
+
+if __name__ == "__main__":
+    main()
