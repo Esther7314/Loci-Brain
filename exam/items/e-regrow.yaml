@@ -75,7 +75,7 @@
   needs: "sources that can report 'temporarily unavailable'; an 'unverifiable' mark"
 
 - id: E5
-  title: "corrections walk down one layer at a time"
+  title: "a correction marks every descendant at once, cards them one layer at a time"
   start: "2026-10-01T10:00:00+08:00"
   setup:
     - id: e50001000000
@@ -101,8 +101,11 @@
     - call: recall
       args: {query: e50003000000}
       as: grandchild
-    - check: {segment: find, desc: "first step: the child is marked", output: child, contains: 待复核}
-    - check: {segment: find, desc: "first step: the grandchild is not yet", output: grandchild, lacks: 待复核}
+    - check: {segment: find, desc: "stop trusting at once: the child is marked", output: child, contains: 待复核}
+    - check: {segment: find, desc: "stop trusting at once: the grandchild is marked too", output: grandchild, contains: 待复核}
+    - call: breath
+    - check: {segment: think, desc: "layer by layer: the child gets the card first", output: breath, contains: e50002}
+    - check: {segment: think, desc: "layer by layer: no card for the grandchild yet", output: breath, lacks: e50003}
 
 - id: E6
   title: "fixing a typo keeps no version and cards nobody"

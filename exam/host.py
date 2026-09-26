@@ -2,46 +2,67 @@
 """
 exam/host.py — the plug between the whole-turn layer and whoever runs the model.
 
-STATUS: proposal. Nothing implements it yet; it is here so both sides can read the
-shape before any adapter is written.
+STATUS: proposal for both sides to review. Nothing implements it yet.
 
 WHY A PLUG
     The tool layer (runner.py) needs no model: it calls Loci's tools itself. The whole-turn
     layer asks a different question — given a real input, does the model use Loci well —
-    and "the real input" is different for every host. One host starts a long-lived CLI
-    window with a seed of yesterday's report and recent lines; another opens a fresh
-    window per conversation and runs its own context assembly. So the shared part stops
-    at this interface:
+    and "the real input" differs per host. One host keeps a long-lived CLI window seeded
+    with yesterday's report and recent lines; another opens windows per conversation,
+    across several entries, with its own context assembly. So the shared part stops here:
 
-        shared                      per host (the plug)
-        ─────────────────────────   ───────────────────────────────
-        build the throwaway library start the model with Loci attached
-        move the fake clock         turn one user line into one turn
-        read the disk, run checks   report what the model saw, called, said
+        shared                          per host (the plug)
+        ─────────────────────────────   ─────────────────────────────────────
+        build the throwaway library     start the model with Loci attached
+        move the fake clock             open windows on the right entry
+        feed events in order            turn each event into what really happens
+        read the disk, run checks       report what the model saw, called, said
         score, report
 
-WHAT A HOST MUST REPORT
-    For each user line, one Turn. The three fields map onto the paper's segments:
+WHAT GOES IN: EVENTS, IN ORDER
+    An item's script is a list of events with fake times. A user line is one kind; the
+    others are things a host has to be able to show a model: a receipt arriving, a
+    source being withdrawn, a host wake-up with nobody talking. The runner delivers them
+    in order and never reorders; a host that cannot express one kind says so up front
+    (see CAPABILITIES) and the item is reported "host cannot", not failed.
 
-        model_input   the whole text that reached the model this turn, as sent    -> input
-        tool_calls    every Loci call: name, arguments, the text it got back      -> find / think
-        reply         what the model said                                        -> use
+WHERE: ENTRY, AUDIENCE, GRANT
+    Every window is opened on an entry ("private:P", "group:X", ...), with the people who
+    will actually see the replies, and the scope this entry is allowed to read. These are
+    what scope and leak checks are judged against, so they are part of the input, not
+    something a host infers.
+
+WHAT COMES OUT: ONE TURN PER MODEL RUN
+    model_input   the whole text that reached the model, as sent       -> input
+    tool_calls    each call: name, arguments, the exact text returned  -> find / think
+    reply         what the model said, and where it went               -> use
 
     `model_input` is the one hosts are most tempted to skip. Without it, "the card was
     in the input" cannot be told apart from "the card was built and dropped".
 
 THE LOCI THE HOST MUST USE
-    The runner starts nothing for the host. It hands over a LociLaunch — the command,
+    The runner starts nothing for the host. It hands over a LociLaunch — command,
     arguments and environment that start Loci's MCP server on the exam library with the
-    exam clock — and the host attaches that server to its model however it attaches MCP
-    servers. The host must not attach any other Loci.
+    exam clock — and the host attaches it however it attaches MCP servers. No other Loci.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Protocol
+from typing import Literal, Protocol
+
+# What a host can declare. An item lists the ones it needs; a host missing one gets
+# "host cannot" for that item instead of a fail, and the report lists the gap.
+CAPABILITIES = {
+    "model_input",      # can return the exact text sent to the model
+    "multi_entry",      # can open windows on more than one entry
+    "audience",         # knows who actually sees a reply
+    "grant",            # passes an entry's read scope on to Loci
+    "wake",             # can run the model with nobody talking (host timer)
+    "receipt",          # can show a delivery / result receipt arriving
+    "withdraw",         # can tell Loci a source may no longer be used
+}
 
 
 @dataclass
@@ -53,6 +74,24 @@ class LociLaunch:
 
 
 @dataclass
+class Window:
+    window_id: str
+    entry: str                      # "private:P", "group:X", ...
+    audience: list[str]             # who actually sees replies in this window
+    grant: list[str]                # scopes this entry may read; [] = none, ["*"] = whole library
+
+
+@dataclass
+class Event:
+    at: datetime
+    kind: Literal["say", "receipt", "withdraw", "wake"]
+    window_id: str = ""
+    speaker: str = ""               # say: who is talking
+    text: str = ""                  # say: the line; receipt: its content
+    ref: str = ""                   # receipt / withdraw: the source it is about ("where:id")
+
+
+@dataclass
 class ToolCall:
     name: str
     arguments: dict
@@ -61,26 +100,31 @@ class ToolCall:
 
 @dataclass
 class Turn:
+    window_id: str
     model_input: str
     tool_calls: list[ToolCall] = field(default_factory=list)
     reply: str = ""
+    sent_to: list[str] = field(default_factory=list)   # where the reply actually went
 
 
 class Host(Protocol):
-    """One model, one entry. The runner calls these in order:
-    open -> (new_window -> say ...)+ -> close."""
+    """One model, one or more entries. The runner calls:
+    capabilities -> open -> (open_window | deliver)* -> close."""
 
     name: str
+
+    def capabilities(self) -> set[str]:
+        """Which of CAPABILITIES this host really supports. Declare only what works."""
 
     async def open(self, loci: LociLaunch) -> None:
         """Start whatever the host needs, with this Loci attached."""
 
-    async def new_window(self, window_id: str, at: datetime) -> None:
-        """Start a fresh window the way this host really does it (seed, first-turn rules).
-        The same window_id is later passed to Loci wherever a window matters."""
+    async def open_window(self, window: Window, at: datetime) -> None:
+        """A fresh window the way this host really opens one (seed, first-turn rules)."""
 
-    async def say(self, text: str, at: datetime) -> Turn:
-        """One user line in the current window, at the fake time `at`."""
+    async def deliver(self, event: Event) -> list[Turn]:
+        """Make the event happen. Return every model run it caused, in order; [] if the
+        host, by its own rules, runs nothing (that is a result too)."""
 
     async def close(self) -> None:
         """Stop everything open() started."""
@@ -88,7 +132,9 @@ class Host(Protocol):
 
 class Judge(Protocol):
     """Grades what a check cannot read off the disk: "did the reply bring up the dessert
-    plan". A model can do it; a person spot-checks a sample of its verdicts."""
+    plan". A model can do it; a person spot-checks a sample of its verdicts. Boundary
+    checks (reading out of scope, leaking, using what was withdrawn) fail the item on a
+    single occurrence; ordinary ones pass on 2 of 3 runs."""
 
     async def grade(self, rubric: str, turn: Turn) -> tuple[bool, str]:
         """Pass or not, and one line of reason quoting the reply."""
