@@ -114,7 +114,7 @@
     - {at: "2026-10-01T19:10:00+08:00", kind: say, window: w2, text: "我回来啦"}
   checks:
     - {segment: think, desc: "woke with breath", tool_called: breath}
-    - {segment: input, desc: "the promise reached the model in that turn", input_contains: "面试结果"}
+    - {segment: input, desc: "the promise reached the model in that turn", input_contains: "托我盯着结果"}
 
 - id: B13
   title: "a MIND question, answered, can be put down"
