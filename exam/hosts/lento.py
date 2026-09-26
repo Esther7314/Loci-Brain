@@ -35,6 +35,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import subprocess
 import tempfile
 from datetime import datetime
@@ -250,7 +251,8 @@ class LentoHost:
         if self.workdir:
             shutil.rmtree(self.workdir, ignore_errors=True)
             # The CLI keeps each session's transcript under ~/.claude/projects/<cwd as a
-            # name>; an exam window is not a conversation anyone will resume.
+            # name>; an exam window is not a conversation anyone will resume. That name
+            # has every character other than a letter or digit turned into "-".
             projects = Path.home() / ".claude" / "projects"
-            for d in projects.glob(f"*{self.workdir.name}*"):
+            for d in projects.glob(f"*{re.sub(r'[^A-Za-z0-9]', '-', self.workdir.name)}*"):
                 shutil.rmtree(d, ignore_errors=True)
