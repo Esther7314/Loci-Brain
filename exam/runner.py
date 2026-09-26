@@ -84,7 +84,7 @@ class CheckResult:
 class ItemResult:
     item_id: str
     title: str
-    status: str                     # ran | no-interface | error
+    status: str                     # ran | no-interface | blocked | error
     checks: list[CheckResult] = field(default_factory=list)
     needs: str = ""
     error: str = ""
@@ -286,8 +286,9 @@ class Run:
 
 async def run_item(item: dict, keep: bool) -> ItemResult:
     res = ItemResult(item["id"], item.get("title", ""), "ran")
-    if item.get("interface") == "none":
-        res.status, res.needs = "no-interface", item.get("needs", "")
+    if item.get("interface") in ("none", "blocked"):
+        res.status = "no-interface" if item["interface"] == "none" else "blocked"
+        res.needs = item.get("needs", "")
         return res
 
     lib = Path(tempfile.mkdtemp(prefix=f"loci-exam-{item['id']}-"))
@@ -368,17 +369,44 @@ async def run_item(item: dict, keep: bool) -> ItemResult:
 
 # ───────────────────────── report ─────────────────────────
 
+# The only test seams this runner adds to the version under test. A baseline has to say
+# them out loud: anything more than this and it is no longer the old version's score.
+SEAMS = ("fake clock (exam/clock.py: core._when.now, utils.now_iso and its by-name "
+         "imports, datetime.now in bucket_manager / decay_engine / bucket_scoring / "
+         "plan_history)", "random seeded per item", "no model keys, embeddings off")
+
+
+def loci_version() -> str:
+    try:
+        return (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    except OSError:
+        return "?"
+
+
+def git_head() -> str:
+    try:
+        import subprocess
+        return subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"],
+                              capture_output=True, text=True, timeout=10).stdout.strip()
+    except Exception:
+        return "?"
+
+
 def render(results: list[ItemResult]) -> str:
-    lines = ["# Loci exam — tool layer", ""]
+    lines = ["# Loci exam — tool layer", "",
+             f"- Loci {loci_version()} · {git_head()} · LOCI_TZ="
+             f"{os.environ.get('LOCI_TZ') or 'Asia/Shanghai (default)'}",
+             f"- test seams: {'; '.join(SEAMS)}", ""]
     ran = [r for r in results if r.status == "ran"]
     lines.append(f"items: {len(results)} · ran: {len(ran)} · passed: "
                  f"{sum(r.passed for r in ran)} · no interface: "
-                 f"{sum(r.status == 'no-interface' for r in results)} · errors: "
+                 f"{sum(r.status == 'no-interface' for r in results)} · blocked: "
+                 f"{sum(r.status == 'blocked' for r in results)} · errors: "
                  f"{sum(r.status == 'error' for r in results)}")
     lines.append("")
     for r in results:
-        mark = {"ran": "PASS" if r.passed else "FAIL",
-                "no-interface": "NO INTERFACE", "error": "ERROR"}[r.status]
+        mark = {"ran": "PASS" if r.passed else "FAIL", "no-interface": "NO INTERFACE",
+                "blocked": "BLOCKED", "error": "ERROR"}[r.status]
         lines.append(f"## {r.item_id} · {mark} · {r.title}")
         if r.needs:
             lines.append(f"- needs: {r.needs}")

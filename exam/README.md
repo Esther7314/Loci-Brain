@@ -59,6 +59,11 @@ Checks, each tagged with the paper's segment (store / find / think / source / in
 
 `interface: none` + `needs:` marks an item the current version has nothing to call for.
 It is reported as NO INTERFACE, with what the next version has to expose.
+`interface: blocked` is different: the version has the behaviour but the harness cannot
+reach it (dreams, today). It is reported as BLOCKED, never as the version lacking it.
+
+Every report opens with the Loci version, commit, time zone and the test seams the
+runner added. A baseline that needed more seams than those is not a baseline.
 
 ## How the isolation works
 

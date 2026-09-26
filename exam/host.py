@@ -62,6 +62,10 @@ CAPABILITIES = {
     "wake",             # can run the model with nobody talking (host timer)
     "receipt",          # can show a delivery / result receipt arriving
     "withdraw",         # can tell Loci a source may no longer be used
+    "withdraw_midturn", # can withdraw after context was prefetched, before the model call
+    "audience_change",  # can change who is present in a window and reassemble the next call
+    "sync",             # can sync one entry's news into another (and report a failed sync)
+    "preinject",        # puts shared history into the first model call, not only via tools
 }
 
 
@@ -84,11 +88,16 @@ class Window:
 @dataclass
 class Event:
     at: datetime
-    kind: Literal["say", "receipt", "withdraw", "wake"]
+    kind: Literal["say", "receipt", "withdraw", "wake", "audience", "sync"]
     window_id: str = ""
     speaker: str = ""               # say: who is talking
     text: str = ""                  # say: the line; receipt: its content
     ref: str = ""                   # receipt / withdraw: the source it is about ("where:id")
+    audience: list[str] = field(default_factory=list)  # audience: who is present from now on
+    grant: list[str] = field(default_factory=list)     # audience: what this window may read now
+    source_window: str = ""         # sync: the window whose news is pulled into window_id
+    fail: bool = False              # sync: make this sync fail (the failure variant)
+    midturn: bool = False           # withdraw: land after prefetch, before the model call
 
 
 @dataclass
@@ -109,12 +118,18 @@ class Turn:
 
 class Host(Protocol):
     """One model, one or more entries. The runner calls:
-    capabilities -> open -> (open_window | deliver)* -> close."""
+    capabilities -> open -> (open_window | deliver)* -> close.
+    Every variant of every item gets its own open..close, so sessions, caches and
+    delivery state never carry over from one variant to the next."""
 
     name: str
 
     def capabilities(self) -> set[str]:
         """Which of CAPABILITIES this host really supports. Declare only what works."""
+
+    def describe(self) -> dict:
+        """What goes on every run record: host name and version, model, tool config,
+        time zone. The runner adds item, variant, run number, Loci version, fake time."""
 
     async def open(self, loci: LociLaunch) -> None:
         """Start whatever the host needs, with this Loci attached."""

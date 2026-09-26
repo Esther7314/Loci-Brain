@@ -1,6 +1,7 @@
 # Paper sections 庚 (scope), 辛 (dream), 癸 (usage records): nothing in 1.4.0 to call.
 # Dreams are woven by a background hook and a web route, not by an MCP tool, so even
-# the parts of 辛 that 1.4.0 does have are out of reach from the tool layer.
+# the parts of 辛 that 1.4.0 does have are out of reach from the tool layer: those are
+# BLOCKED (the harness cannot reach them), not NO INTERFACE (the version lacks them).
 
 - id: G1
   title: "scope sits on each entry"
@@ -25,11 +26,11 @@
 
 - id: H1
   title: "what a dream wrote is marked automatically and keeps the mark through fold"
-  interface: none
+  interface: blocked
   needs: "a way for the harness to weave and expire a dream (today: background hook + web route); a 'from a dream' mark"
 - id: H2
   title: "being dreamt does not warm an entry"
-  interface: none
+  interface: blocked
   needs: "a way for the harness to weave a dream on demand, without a model key"
 - id: H4
   title: "'don't touch' keeps an entry out of dreams; 'don't nag' does not"
