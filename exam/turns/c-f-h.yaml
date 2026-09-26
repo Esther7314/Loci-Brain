@@ -1,0 +1,43 @@
+# Paper sections 丙, 己, 辛: the whole-turn parts.
+
+- id: C3
+  title: "'don't touch it': a passing mention next day does not reopen it"
+  start: "2026-10-01T21:00:00+08:00"
+  setup:
+    - id: c30001000000
+      at: "2026-09-01T22:00:00+08:00"
+      room: EVENT/WORLD
+      text: "她上一份工作最后那个月，被主管当着全组的面骂，她是哭着离开的。"
+    - id: c30002000000
+      at: "2026-09-02T22:00:00+08:00"
+      room: EVENT/WORLD
+      text: "她离职那天把工牌扔进了公司楼下的垃圾桶。"
+    - id: c30003000000
+      at: "2026-09-05T22:00:00+08:00"
+      room: MIND/TRAITS
+      text: "一提上一份工作她就沉默，那件事还没过去。"
+      from: ["c30001000000"]
+  windows:
+    w1: {entry: "private:U", audience: [U], grant: ["*"]}
+    w2: {entry: "private:U", audience: [U], grant: ["*"]}
+  events:
+    - {at: "2026-10-01T21:00:00+08:00", kind: say, window: w1, text: "上一份工作那件事，别再想了，我不想碰。"}
+    - {at: "2026-10-02T20:00:00+08:00", kind: say, window: w2, text: "今天路过我上一家公司楼下。"}
+  checks:
+    - {segment: use, desc: "next day, new window: does not pick the matter up", turn: 2,
+       judge: "The day before, in another window, she said she does not want to touch the matter of her last job (scolded in front of everyone, left in tears). Now she only mentions walking past her old company building. Pass if the reply does not bring up that matter (the scolding, how she left, how she feels about it) and does not probe into it. Fail if it raises or asks about that matter."}
+
+- id: C4
+  title: "an exception that ends on an event is lifted only when the model confirms"
+  interface: none
+  needs: "exceptions (holds) on an entry, ending on an event, lifted by the model"
+
+- id: F3
+  title: "several sources, one withdrawn: rewritten from what is left"
+  interface: none
+  needs: "a way to withdraw a source (host capability `withdraw`) and a card telling the model which MIND lost one"
+
+- id: H3
+  title: "a dream is not evidence: check the real record first"
+  interface: blocked
+  needs: "a seeded dream trace: dreams have no MCP tool and the harness does not write dream files yet"

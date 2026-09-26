@@ -1,0 +1,57 @@
+# Paper section 甲 (which room). Whole-turn: what matters is what the model writes.
+# The model is told to store in batches when a topic closes, so each item ends with the
+# user leaving; nothing in the script asks it to store.
+
+- id: A1
+  title: "someone else's character goes to TRAITS, with the event it came from"
+  start: "2026-10-01T21:00:00+08:00"
+  setup: []
+  events:
+    - {at: "2026-10-01T21:00:00+08:00", kind: say, text: "我妹就是嘴硬心软，上回吵完第二天就给我寄了一箱零食"}
+    - {at: "2026-10-01T21:06:00+08:00", kind: say, text: "好啦我去洗澡了，晚点再聊"}
+  checks:
+    - {segment: store, desc: "an EVENT/WORLD for the snacks (heard, not seen)",
+       entry: {room: EVENT/WORLD, body_any: [零食], new: true}}
+    - {segment: store, desc: "a MIND/TRAITS about the sister, pointing at the event",
+       entry: {room: MIND/TRAITS, subjects_has: 妹, from_room: EVENT, new: true}}
+    - {segment: store, desc: "not written as MIND/VIEWS",
+       no_entry: {room: MIND/VIEWS, body_any: [嘴硬, 心软]}}
+
+- id: A2
+  title: "a MIND keeps its conditions: both halves survive"
+  start: "2026-10-01T21:00:00+08:00"
+  setup:
+    - id: a20001000000
+      at: "2026-09-10T15:00:00+08:00"
+      room: EVENT/SELF
+      text: "她赶工的时候我给了几条建议，她嫌烦，说现在别跟我讲这些。"
+    - id: a20002000000
+      at: "2026-09-15T20:00:00+08:00"
+      room: EVENT/SELF
+      text: "她卡住了来问我怎么办，我直接说了办法，她说「就要这个」。"
+    - id: a20003000000
+      at: "2026-09-22T23:00:00+08:00"
+      room: EVENT/SELF
+      text: "她又在赶工，我这回没说话。后来她说「谢谢你没打扰我」。"
+  events:
+    - {at: "2026-10-01T21:00:00+08:00", kind: say, text: "我忙的时候你到底该不该跟我说话？你把这几回看出来的整理一下吧。"}
+  checks:
+    - {segment: source, desc: "the new MIND points at all three events",
+       entry: {room: MIND, new: true, from_has: [a20001000000, a20002000000, a20003000000]}}
+    - {segment: store, desc: "both halves are in what it stored",
+       judge: "Look at the grow / regrow calls. The MIND entry the assistant stored must keep BOTH halves: (1) while she is rushing, don't offer advice; (2) when she is stuck and asks, answer directly. Keeping only the first half fails. Storing nothing fails."}
+
+- id: A4
+  title: "one line with an event and a pattern: two entries"
+  start: "2026-10-01T21:00:00+08:00"
+  setup: []
+  events:
+    - {at: "2026-10-01T21:00:00+08:00", kind: say, text: "今天面试被问懵了，我发现我一紧张就说不出完整的句子"}
+    - {at: "2026-10-01T21:08:00+08:00", kind: say, text: "不说了，我先去吃饭"}
+  checks:
+    - {segment: store, desc: "an EVENT for the interview",
+       entry: {room: EVENT, body_any: [面试, 问懵], new: true}}
+    - {segment: store, desc: "a MIND for the pattern, pointing at the event",
+       entry: {room: MIND, new: true, from_room: EVENT}}
+    - {segment: store, desc: "the event states no conclusion; the pattern does not retell the interview",
+       judge: "Look at the grow / regrow calls. There must be two separate stored entries: an event (the interview where she got flustered) and a pattern about her (when nervous she cannot finish sentences). The event's text must not state the pattern as a conclusion, and the pattern's text must not retell the interview. One merged entry, or storing nothing, fails."}

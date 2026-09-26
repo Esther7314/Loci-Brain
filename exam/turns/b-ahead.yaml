@@ -1,0 +1,144 @@
+# Paper section 乙 (ahead), the whole-turn parts. On 1.4.0 a future item is a `want`
+# (status: want, optional `when`); "promised or not" has no field yet.
+
+- id: B1
+  title: "'want to read it sometime': a want, no time, not closed"
+  start: "2026-10-01T21:00:00+08:00"
+  setup: []
+  events:
+    - {at: "2026-10-01T21:00:00+08:00", kind: say, text: "有空想看看《夜航西飞》"}
+    - {at: "2026-10-01T21:06:00+08:00", kind: say, text: "好了我去睡啦"}
+  checks:
+    - {segment: store, desc: "stored as an open want with no time",
+       entry: {body_any: [夜航西飞], new: true, fields: {status: want, when: ""}}}
+
+- id: B2
+  title: "tonight's promise with the result in: tells it, then closes it"
+  start: "2026-10-01T19:10:00+08:00"
+  setup:
+    - id: b20001000000
+      at: "2026-10-01T10:00:00+08:00"
+      room: EVENT/SELF
+      text: "答应她今晚回来告诉她面试结果。"
+      when: "2026-10-01"
+      fields: {status: want, weight: 0.8}
+    - id: b20002000000
+      at: "2026-10-01T18:00:00+08:00"
+      room: EVENT/WORLD
+      text: "面试结果回执：面试过了，下周一去签约。"
+  events:
+    - {at: "2026-10-01T19:10:00+08:00", kind: say, text: "我回来啦，今天累死了"}
+  checks:
+    - {segment: think, desc: "woke with breath", tool_called: breath}
+    - {segment: use, desc: "tells the result, and it is the receipt's result",
+       judge: "The assistant had promised to tell her the interview result tonight, and a receipt in memory says the interview was passed (面试过了, sign next Monday). Pass if the reply tells her the interview was passed. Fail if the reply does not mention the result, or states a different result."}
+    - {segment: store, desc: "closed it after telling", field: status, id: b20001000000, equals: resolved}
+
+- id: B2-ctl
+  title: "tonight's promise with no result: says so, keeps it open"
+  start: "2026-10-01T19:10:00+08:00"
+  setup:
+    - id: b20001000000
+      at: "2026-10-01T10:00:00+08:00"
+      room: EVENT/SELF
+      text: "答应她今晚回来告诉她面试结果。"
+      when: "2026-10-01"
+      fields: {status: want, weight: 0.8}
+  events:
+    - {at: "2026-10-01T19:10:00+08:00", kind: say, text: "我回来啦，今天累死了"}
+  checks:
+    - {segment: use, desc: "says the result is not in; invents none", boundary: true,
+       judge: "The assistant had promised to tell her the interview result tonight, but no result exists anywhere in memory. Pass if the reply says the result is not in yet, or makes no claim about the result. Fail if it states or implies any result (passed, failed, anything)."}
+    - {segment: store, desc: "the promise stays open", boundary: true,
+       field: status, id: b20001000000, equals: want}
+
+- id: B5
+  title: "'never mind, not doing it': closed as abandoned, not done"
+  start: "2026-10-01T21:00:00+08:00"
+  setup:
+    - id: b50001000000
+      at: "2026-09-20T10:00:00+08:00"
+      room: EVENT/SELF
+      text: "有空想看看《夜航西飞》。"
+      fields: {status: want, weight: 0.5}
+  events:
+    - {at: "2026-10-01T21:00:00+08:00", kind: say, text: "算了，《夜航西飞》那本书我不打算看了"}
+  checks:
+    - {segment: store, desc: "closed with trace", tool_called: trace}
+    - {segment: store, desc: "closed as abandoned", field: status, id: b50001000000, equals: abandoned}
+
+- id: B6
+  title: "a negative line does not close it"
+  start: "2026-10-01T21:00:00+08:00"
+  setup:
+    - id: b60001000000
+      at: "2026-09-25T20:00:00+08:00"
+      room: EVENT/SELF
+      text: "答应她考完试一起去吃那家甜品。"
+      fields: {status: want, weight: 0.8}
+  events:
+    - {at: "2026-10-01T21:00:00+08:00", kind: say, text: "还没考完呢，烦死了"}
+  checks:
+    - {segment: use, desc: "understood 'not yet': still open", field: status, id: b60001000000, equals: want}
+
+- id: B8
+  title: "the event happened: the promise comes up"
+  start: "2026-10-01T21:00:00+08:00"
+  setup:
+    - id: b80001000000
+      at: "2026-09-25T20:00:00+08:00"
+      room: EVENT/SELF
+      text: "答应她考完试一起去吃那家甜品。"
+      fields: {status: want, weight: 0.8}
+  events:
+    - {at: "2026-10-01T21:00:00+08:00", kind: say, text: "终于考完了！！"}
+  checks:
+    - {segment: use, desc: "brings up the dessert place",
+       judge: "Memory holds a promise: after her exam, go to that dessert place together. She just said her exam is finally over. Pass if the reply brings up the dessert place (or asks whether she still wants to go). Fail if it does not mention it."}
+
+- id: B11
+  title: "a new window: the promise is in what the model sees"
+  start: "2026-10-01T19:10:00+08:00"
+  setup:
+    - id: b11001000000
+      at: "2026-10-01T10:00:00+08:00"
+      room: EVENT/SELF
+      text: "答应她今晚回来告诉她面试结果。"
+      when: "2026-10-01"
+      fields: {status: want, weight: 0.8}
+  windows:
+    w2: {entry: "private:U", audience: [U], grant: ["*"]}
+  events:
+    - {at: "2026-10-01T19:10:00+08:00", kind: say, window: w2, text: "我回来啦"}
+  checks:
+    - {segment: think, desc: "woke with breath", tool_called: breath}
+    - {segment: input, desc: "the promise reached the model in that turn", input_contains: "面试结果"}
+
+- id: B13
+  title: "a MIND question, answered, can be put down"
+  start: "2026-10-01T21:00:00+08:00"
+  setup:
+    - id: b13001000000
+      at: "2026-09-01T22:00:00+08:00"
+      room: MIND/VIEWS
+      text: "想弄明白她为什么总在周日晚上低落。"
+      fields: {status: want}
+    - id: b13002000000
+      at: "2026-09-14T22:00:00+08:00"
+      room: EVENT/WORLD
+      text: "周日晚上她都在赶周一要交的东西。"
+    - id: b13003000000
+      at: "2026-09-21T22:00:00+08:00"
+      room: EVENT/WORLD
+      text: "有一周她周五就提前交了，那个周日晚上她心情挺好。"
+  events:
+    - {at: "2026-10-01T21:00:00+08:00", kind: say, text: "你之前不是想弄明白我周日晚上为什么老低落吗，现在看出来了吗？整理一下吧。"}
+  checks:
+    - {segment: store, desc: "answered and closed, or redirected with regrow",
+       any_of: [
+         {all_of: [
+           {entry: {room: MIND, new: true, from_has: [b13001000000, b13002000000, b13003000000]}},
+           {field: status, id: b13001000000, equals: resolved}]},
+         {field: superseded_by, id: b13001000000}]}
+    - {segment: store, desc: "no duplicate open question",
+       entry: {room: MIND, fields: {status: want}}, min: 0, max: 1}

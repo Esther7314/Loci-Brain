@@ -91,7 +91,7 @@ class CheckSummary:
 class TurnItemResult:
     item_id: str
     title: str
-    status: str = "ran"                     # ran | blocked | error
+    status: str = "ran"                     # ran | no-interface | blocked | error
     reason: str = ""
     checks: list[CheckSummary] = field(default_factory=list)
     transcripts: list[list[dict]] = field(default_factory=list)
@@ -143,6 +143,7 @@ async def run_once(item: dict, host, judge, keep: bool, run_no: int):
                 causes.extend([_cause(ev)] * len(got))
 
             disk = Run(L.lib, L.clock_file, session=None)
+            disk.setup_ids = {e["id"] for e in item.get("setup", [])}
             results: list[CheckRun] = []
             for c in item.get("checks", []):
                 idx = (c.get("turn") or len(turns)) - 1
@@ -172,7 +173,10 @@ async def _check(c: dict, turn: Turn | None, disk: Run, judge, said: str) -> Che
         return CheckRun(bool(hits) if "tool_called" in c else not hits, shown)
     if "input_contains" in c or "input_lacks" in c:
         return _input_check(c, turn)
-    ok, evidence = disk._judge(c)
+    try:
+        ok, evidence = disk._judge(c)
+    except Exception as exc:
+        ok, evidence = False, f"check could not run: {type(exc).__name__}: {exc}"
     return CheckRun(ok, evidence)
 
 
@@ -211,6 +215,12 @@ def _input_check(c: dict, turn: Turn) -> CheckRun:
 
 async def run_item(item: dict, host_factory, judge, runs: int, keep: bool) -> TurnItemResult:
     res = TurnItemResult(item["id"], item.get("title", ""))
+    if item.get("interface") in ("none", "blocked"):
+        # Same meaning as in the tool layer: `none` = this Loci has nothing for it,
+        # `blocked` = it has, but the harness cannot reach it.
+        res.status = "no-interface" if item["interface"] == "none" else "blocked"
+        res.reason = str(item.get("needs") or "")
+        return res
     probe = host_factory()
     missing = sorted(set(item.get("needs", [])) - probe.capabilities())
     if missing:

@@ -162,6 +162,7 @@ class Run:
         self.outputs: dict[str, str] = {}
         self.snapshots: dict[str, dict] = {}
         self.checks: list[CheckResult] = []
+        self.setup_ids: set[str] = set()    # the item's own fixtures, for `new: true`
 
     def sub(self, value: Any) -> Any:
         """Replace $name with a captured value, anywhere in strings, lists and dicts."""
@@ -282,7 +283,83 @@ class Run:
             diffs = [f"{k}: {before.get(k)!r} -> {after.get(k)!r}"
                      for k in c["keys"] if before.get(k) != after.get(k)]
             return not diffs, "; ".join(diffs) if diffs else f"{', '.join(c['keys'])} unchanged"
+        if "entry" in c or "no_entry" in c:
+            return self._entries(c)
+        if "any_of" in c or "all_of" in c:
+            parts = [self._judge(p) for p in (c.get("any_of") or c.get("all_of"))]
+            ok = any(p[0] for p in parts) if "any_of" in c else all(p[0] for p in parts)
+            return ok, " | ".join(("✓ " if p[0] else "✗ ") + p[1] for p in parts)
         raise ValueError(f"unknown check: {sorted(c)}")
+
+    def _entries(self, c: dict) -> tuple[bool, str]:
+        """Entries found by what they are, not by id: the ones the model wrote itself.
+
+        entry: {spec}      passes when at least `min` (default 1) and at most `max` live
+                           entries match; `as: var` keeps the first match's id
+        no_entry: {spec}   passes when none match
+
+        spec keys, all optional, all must hold:
+          room         room starts with this ("MIND" matches MIND/TRAITS)
+          subjects_has one subject contains this
+          body_has     body (name included) contains each of these
+          body_any     body contains at least one of these
+          body_lacks   body contains none of these
+          from_has     `from` lists each of these ids
+          from_room    `from` lists at least one entry whose room starts with this
+          fields       frontmatter values, compared as text ("" = absent)
+          new          true = not one of the item's setup entries
+        Superseded versions are skipped unless `versions: all`."""
+        from core.bucket_manager import read_from_ids
+
+        spec = self.sub(c.get("entry") or c.get("no_entry"))
+        as_list = lambda v: v if isinstance(v, list) else [v]  # noqa: E731
+        rooms: dict[str, str] = {}
+        rows = []
+        for path in self.lib.rglob("*.md"):
+            m = re.search(r"_([0-9a-f]{12})\.md$", path.name)
+            if not m:
+                continue
+            post = frontmatter.load(path)
+            meta, bid = dict(post.metadata), m.group(1)
+            rooms[bid] = str(meta.get("room") or "")
+            rows.append((bid, meta, f"{meta.get('name') or ''}\n{post.content}"))
+
+        def match(bid: str, meta: dict, body: str) -> bool:
+            if meta.get("superseded_by") and spec.get("versions") != "all":
+                return False
+            if "room" in spec and not rooms[bid].startswith(spec["room"]):
+                return False
+            if "subjects_has" in spec and not any(
+                    spec["subjects_has"] in str(s) for s in meta.get("subjects") or []):
+                return False
+            if any(n not in body for n in as_list(spec.get("body_has", []))):
+                return False
+            if "body_any" in spec and not any(n in body for n in as_list(spec["body_any"])):
+                return False
+            if any(n in body for n in as_list(spec.get("body_lacks", []))):
+                return False
+            froms = set(read_from_ids(meta))
+            if any(i not in froms for i in as_list(spec.get("from_has", []))):
+                return False
+            if "from_room" in spec and not any(
+                    rooms.get(i, "").startswith(spec["from_room"]) for i in froms):
+                return False
+            for k, want in (spec.get("fields") or {}).items():
+                if str(meta.get(k) or "") != str(want):
+                    return False
+            if spec.get("new") and bid in self.setup_ids:
+                return False
+            return True
+
+        hits = [bid for bid, meta, body in rows if match(bid, meta, body)]
+        shown = ", ".join(f"{h} ({rooms[h]})" for h in hits[:5]) or "none"
+        if "no_entry" in c:
+            return not hits, f"matching entries: {shown}"
+        if hits and c.get("as"):
+            self.vars[c["as"]] = hits[0]
+        lo, hi = int(c.get("min", 1)), c.get("max")
+        ok = len(hits) >= lo and (hi is None or len(hits) <= int(hi))
+        return ok, f"{len(hits)} matching: {shown}"
 
 
 @dataclass
@@ -369,6 +446,7 @@ async def run_item(item: dict, keep: bool) -> ItemResult:
                     async with ClientSession(r, w) as session:
                         await session.initialize()
                         run = Run(L.lib, L.clock_file, session)
+                        run.setup_ids = {e["id"] for e in item.get("setup", [])}
                         for step in item.get("steps", []):
                             if "at" in step:
                                 L.set_clock(step["at"])

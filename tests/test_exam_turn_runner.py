@@ -121,3 +121,33 @@ def test_partial_read_back_never_passes_but_a_seen_leak_fails():
     assert _input_check({"input_contains": "Q"}, _turn(partial)).ok is None
     assert _input_check({"input_lacks": "P"}, _turn(partial)).ok is False
     assert _input_check({"input_lacks": "Q"}, _turn(partial)).ok is None
+
+
+def test_entries_are_found_by_what_they_are():
+    from exam.runner import Run, library
+
+    item = {"id": "T2", "start": "2026-10-01T20:00:00+08:00", "setup": [
+        {"id": "e10001000000", "at": "2026-09-01T10:00:00+08:00", "room": "EVENT/WORLD",
+         "text": "she said her sister mailed a box of snacks"},
+        {"id": "e20001000000", "at": "2026-09-02T10:00:00+08:00", "room": "MIND/TRAITS",
+         "text": "the sister: sharp tongue, soft heart", "subjects": ["sister"],
+         "from": ["e10001000000"], "fields": {"status": "want"}},
+    ]}
+
+    async def go():
+        async with library(item, keep=False) as L:
+            run = Run(L.lib, L.clock_file, session=None)
+            run.setup_ids = {"e10001000000"}
+            j = run._judge
+            assert j({"entry": {"room": "MIND", "subjects_has": "sis", "from_room": "EVENT"}})[0]
+            assert j({"entry": {"room": "MIND", "new": True, "from_has": ["e10001000000"]}})[0]
+            assert not j({"entry": {"room": "EVENT", "new": True}})[0]
+            assert j({"no_entry": {"room": "MIND/VIEWS"}})[0]
+            assert not j({"no_entry": {"body_any": ["snacks", "nothing"]}})[0]
+            assert j({"entry": {"body_has": "snacks", "fields": {"when": ""}}})[0]
+            assert j({"entry": {"fields": {"status": "want"}}, "min": 0, "max": 1})[0]
+            assert j({"any_of": [{"no_entry": {"room": "EVENT"}},
+                                 {"all_of": [{"entry": {"room": "EVENT"}},
+                                             {"entry": {"room": "MIND"}}]}]})[0]
+
+    asyncio.run(go())
