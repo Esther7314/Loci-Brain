@@ -32,13 +32,20 @@ WHERE: ENTRY, AUDIENCE, GRANT
     what scope and leak checks are judged against, so they are part of the input, not
     something a host infers.
 
-WHAT COMES OUT: ONE TURN PER MODEL RUN
-    model_input   the whole text that reached the model, as sent       -> input
-    tool_calls    each call: name, arguments, the exact text returned  -> find / think
-    reply         what the model said, and where it went               -> use
+WHAT COMES OUT: ONE TURN PER EVENT, ONE MODEL CALL PER REQUEST
+    A turn is everything one event caused. Inside it, every request sent to the model is
+    its own ModelCall — the first one, and each one after a tool returned:
 
-    `model_input` is the one hosts are most tempted to skip. Without it, "the card was
-    in the input" cannot be told apart from "the card was built and dropped".
+    model_calls   per request: the messages as sent, with role and order    -> input
+    tool_calls    each call: name, arguments, the exact text returned       -> find / think
+    reply         what the model said, and where it went                    -> use
+
+    Input evidence is the thing hosts are most tempted to approximate. Without it,
+    "the card was in the input" cannot be told apart from "the card was built and
+    dropped". So a ModelCall says whether it is complete: a host that resumes a CLI
+    session and only sees the text it appended this time sets complete=False, and the
+    input segment of that item is recorded as not covered — never as passed. Everything
+    else in the item still runs.
 
 THE LOCI THE HOST MUST USE
     The runner starts nothing for the host. It hands over a LociLaunch — command,
@@ -55,7 +62,7 @@ from typing import Literal, Protocol
 # What a host can declare. An item lists the ones it needs; a host missing one gets
 # "host cannot" for that item instead of a fail, and the report lists the gap.
 CAPABILITIES = {
-    "model_input",      # can return the exact text sent to the model
+    "model_input",      # can return every request sent to the model, complete, with roles
     "multi_entry",      # can open windows on more than one entry
     "audience",         # knows who actually sees a reply
     "grant",            # passes an entry's read scope on to Loci
@@ -108,9 +115,21 @@ class ToolCall:
 
 
 @dataclass
+class Message:
+    role: str                       # system / user / assistant / tool, as the host sent it
+    content: str
+
+
+@dataclass
+class ModelCall:
+    messages: list[Message]
+    complete: bool                  # False = only part of the input could be read back
+
+
+@dataclass
 class Turn:
     window_id: str
-    model_input: str
+    model_calls: list[ModelCall] = field(default_factory=list)
     tool_calls: list[ToolCall] = field(default_factory=list)
     reply: str = ""
     sent_to: list[str] = field(default_factory=list)   # where the reply actually went
