@@ -1,0 +1,50 @@
+# Paper sections 庚 (scope), 辛 (dream), 癸 (usage records): nothing in 1.4.0 to call.
+# Dreams are woven by a background hook and a web route, not by an MCP tool, so even
+# the parts of 辛 that 1.4.0 does have are out of reach from the tool layer.
+
+- id: G1
+  title: "scope sits on each entry"
+  interface: none
+  needs: "a scope per entry; a scope argument on every read"
+- id: G2
+  title: "a restricted caller that forgets the scope gets nothing"
+  interface: none
+  needs: "callers declare restricted vs whole-library mode"
+- id: G3
+  title: "whole-library mode has to be asked for"
+  interface: none
+  needs: "an explicit whole-library mode"
+- id: G4
+  title: "a derivation from mixed scopes takes the strictest"
+  interface: none
+  needs: "scope inherited through `from`"
+- id: G5
+  title: "every read goes through the same gate"
+  interface: none
+  needs: "scope honoured by recall, read by id, breath, dream material, tidy material"
+
+- id: H1
+  title: "what a dream wrote is marked automatically and keeps the mark through fold"
+  interface: none
+  needs: "a way for the harness to weave and expire a dream (today: background hook + web route); a 'from a dream' mark"
+- id: H2
+  title: "being dreamt does not warm an entry"
+  interface: none
+  needs: "a way for the harness to weave a dream on demand, without a model key"
+- id: H4
+  title: "'don't touch' keeps an entry out of dreams; 'don't nag' does not"
+  interface: none
+  needs: "the two hold levels (丙); dream weaving from the harness"
+
+- id: J1
+  title: "shown, searched and derived-from are recorded by code"
+  interface: none
+  needs: "usage records"
+- id: J2
+  title: "the three whys each live in their own place"
+  interface: none
+  needs: "signposts carrying their reason; cards carrying theirs in the turn input record"
+- id: J3
+  title: "changes since number N"
+  interface: none
+  needs: "a read-only 'changes since seq N' over _ledger/events.jsonl (the ledger itself exists)"

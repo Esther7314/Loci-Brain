@@ -1,0 +1,31 @@
+# Paper item 乙4: regrowing a promised future item keeps its state.
+# Known to fail on 1.4.0 (regrow writes a fresh bucket that drops the want fields).
+id: B4
+title: regrow keeps a promised item's state
+start: "2026-10-01T10:00:00+08:00"
+setup:
+  - id: b40001000000
+    at: "2026-10-01T10:00:00+08:00"
+    room: EVENT/SELF
+    text: "答应今晚回来告诉她面试结果。"
+    when: "2026-10-01"
+    tags: [面试]
+    subjects: [用户]
+    fields: {status: want, weight: 0.8}
+steps:
+  - snapshot: b40001000000
+    as: before
+  - at: "2026-10-01T12:00:00+08:00"
+  - call: regrow
+    args: {bucket_id: b40001000000, text: "答应今晚回来跟她说二面怎么样。", v: 0.6, a: 0.4}
+  - newest: b40001000000
+    as: new
+  - check: {segment: store, desc: "a new version exists", field: supersedes, id: $new, equals: b40001000000}
+  - check: {segment: store, desc: "new version still open (status want)", field: status, id: $new, equals: want}
+  - check: {segment: store, desc: "new version keeps its time", field: when, id: $new, equals: "2026-10-01"}
+  - check: {segment: store, desc: "new version keeps its weight", field: weight, id: $new}
+  - check: {segment: store, desc: "new version keeps subjects", field: subjects, id: $new, contains: 用户}
+  - check: {segment: store, desc: "new version keeps user tags", field: tags, id: $new, contains: 面试}
+  - check: {segment: find, desc: "old version still readable by id", field: superseded_by, id: b40001000000, equals: $new}
+  - call: breath
+  - check: {segment: think, desc: "breath reminders still show the promise (new wording)", output: breath, section: 提醒, contains: 二面}

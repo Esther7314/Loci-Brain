@@ -1,0 +1,21 @@
+# Paper section 丁: how cards count. 1.4.0 has no cards and no idea of a window.
+- id: D1
+  title: "once per window"
+  interface: none
+  needs: "cards; window id from the host"
+- id: D2
+  title: "a changed entry is carded again in the same window"
+  interface: none
+  needs: "cards; entry version"
+- id: D3
+  title: "a card counts only once it reached the model input"
+  interface: none
+  needs: "cards; the host reports 'delivered'"
+- id: D4
+  title: "a card does not change the entry"
+  interface: none
+  needs: "cards"
+- id: D5
+  title: "the card says why this one, and that reason is not written back"
+  interface: none
+  needs: "cards; the turn input record"

@@ -1,0 +1,35 @@
+# Paper section 己: archiving is light, deleting a source is heavy.
+- id: F1
+  title: "archiving a source leaves its descendants as they were"
+  start: "2026-10-01T10:00:00+08:00"
+  setup:
+    - id: f10001000000
+      at: "2026-09-27T20:00:00+08:00"
+      room: EVENT/SELF
+      text: "周六和她去爬山，她一路都在笑。"
+    - id: f10002000000
+      at: "2026-09-28T09:00:00+08:00"
+      room: MIND/TRAITS
+      text: "她累的时候反而想出门。"
+      from: [f10001000000]
+  steps:
+    - call: trace
+      args: {bucket_id: f10001000000, delete: true}
+    - check: {segment: store, desc: "the source went to the archive", field: _path, id: f10001000000, contains: archive}
+    - call: recall
+      args: {query: 出门}
+    - check: {segment: find, desc: "the descendant is still found", output: recall, contains: f10002}
+    - call: recall
+      args: {query: f10002000000}
+      as: child
+    - check: {segment: source, desc: "the descendant can still reach its source", output: child, contains: f10001}
+
+- id: F2
+  title: "a deleted source stops its descendants on every road"
+  interface: none
+  needs: "a 'this source can no longer be used' signal from the entry; descendants withheld in breath, recall, read by id, dream and tidy material, cards"
+
+- id: F3
+  title: "a descendant of two sources is rewritten from the one left"
+  interface: none
+  needs: "the delete signal (F2), withholding until rewritten, sources carrying 'where + id'"

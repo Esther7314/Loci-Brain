@@ -1,0 +1,173 @@
+# Paper section 乙 (ahead, the first slice). B4 lives in its own file.
+# On 1.4.0 a future item is a `want`: an event with status: want and an optional `when`.
+# Where the paper asks for something 1.4.0 has no way to express (promised or not,
+# awake or asleep, cards), the item says so with `interface: none`.
+
+- id: B1
+  title: "a light interest sleeps, is not nagged, and search does not wake it"
+  start: "2026-10-01T10:00:00+08:00"
+  setup:
+    - id: b10001000000
+      at: "2026-10-01T10:00:00+08:00"
+      room: EVENT/SELF
+      text: "有空想看看《夜航西飞》。"
+      fields: {status: want, weight: 0.3}
+  steps:
+    - at: "2026-10-04T10:00:00+08:00"
+    - call: breath
+      as: day3
+    - check: {segment: think, desc: "day 3: not in the reminders", output: day3, section: 提醒, lacks: b10001}
+    - check: {segment: think, desc: "day 3: not weighing (light, not promised)", output: day3, section: 压在心头, lacks: b10001}
+    - at: "2026-10-31T10:00:00+08:00"
+    - call: breath
+      as: day30
+    - check: {segment: think, desc: "day 30: asleep, in no breath block", output: day30, lacks: b10001}
+    - snapshot: b10001000000
+      as: before_search
+    - call: recall
+      args: {query: 夜航西飞}
+    - check: {segment: find, desc: "search finds it", output: recall, contains: b10001}
+    - check: {segment: think, desc: "being found does not warm it", unchanged: b10001000000, since: before_search, keys: [last_active, activation_count, status, weight]}
+    - call: breath
+      as: after_search
+    - check: {segment: think, desc: "after search: still asleep", output: after_search, lacks: b10001}
+    - check: {segment: store, desc: "never closed by itself", field: status, id: b10001000000, equals: want}
+
+- id: B2
+  title: "a promise for tonight: quiet in the day, back at the next chance, gone once done"
+  start: "2026-10-01T10:00:00+08:00"
+  setup:
+    - id: b20001000000
+      at: "2026-10-01T10:00:00+08:00"
+      room: EVENT/SELF
+      text: "答应今晚回来告诉她面试结果。"
+      when: "2026-10-01"
+      fields: {status: want, weight: 0.8}
+  steps:
+    - check: {segment: store, desc: "the time is on disk", field: when, id: b20001000000, equals: "2026-10-01"}
+    - at: "2026-10-01T14:00:00+08:00"
+    - call: breath
+      as: afternoon
+    - check: {segment: think, desc: "14:00: awake but not in breath yet", output: afternoon, lacks: b20001}
+    - at: "2026-10-01T19:10:00+08:00"
+    - call: breath
+      as: evening
+    - check: {segment: think, desc: "19:10: in breath with a reason", output: evening, section: 提醒, contains: b20001}
+    - call: trace
+      args: {bucket_id: b20001000000, status: resolved}
+    - at: "2026-10-01T19:20:00+08:00"
+    - call: breath
+      as: after
+    - check: {segment: think, desc: "19:20: closed, gone from reminders", output: after, section: 提醒, lacks: b20001}
+    - check: {segment: think, desc: "19:20: closed, not weighing either", output: after, section: 压在心头, lacks: b20001}
+
+- id: B3
+  title: "rescheduling in the same window sends the card again"
+  interface: none
+  needs: "cards (strong reminder), a version number per entry, a window id from the host"
+
+- id: B5
+  title: "'never mind, not doing it' really closes it"
+  start: "2026-10-01T10:00:00+08:00"
+  setup:
+    - id: b50001000000
+      at: "2026-09-20T10:00:00+08:00"
+      room: EVENT/SELF
+      text: "有空想看看《夜航西飞》。"
+      fields: {status: want, weight: 0.5}
+  steps:
+    - call: trace
+      args: {bucket_id: b50001000000, status: abandoned}
+    - check: {segment: store, desc: "closed as abandoned, not as done", field: status, id: b50001000000, equals: abandoned}
+    - call: breath
+    - check: {segment: think, desc: "not weighing any more", output: breath, section: 压在心头, lacks: b50001}
+    - check: {segment: think, desc: "not in the reminders", output: breath, section: 提醒, lacks: b50001}
+    - call: recall
+      args: {query: 夜航西飞}
+    - check: {segment: find, desc: "search still finds it", output: recall, contains: b50001}
+
+- id: B6
+  title: "a negated mention sends a card but changes nothing"
+  interface: none
+  needs: "cards (strong reminder) on message intake; event-waited ahead items with trigger words"
+
+- id: B7
+  title: "searching a sleeping item does not warm it"
+  start: "2026-11-01T10:00:00+08:00"
+  setup:
+    - id: b70001000000
+      at: "2026-09-01T10:00:00+08:00"
+      room: EVENT/SELF
+      text: "想学做酸面包。"
+      fields: {status: want, weight: 0.2}
+  steps:
+    - snapshot: b70001000000
+      as: before
+    - call: recall
+      args: {query: 面包}
+    - check: {segment: find, desc: "search finds it", output: recall, contains: b70001}
+    - check: {segment: think, desc: "state and heat unchanged by the search", unchanged: b70001000000, since: before, keys: [last_active, activation_count, status, weight, decay_stage]}
+    - call: breath
+    - check: {segment: think, desc: "next breath: still not shown", output: breath, lacks: b70001}
+
+- id: B9
+  title: "promised without a time: in breath, asking for a time or condition"
+  start: "2026-10-05T10:00:00+08:00"
+  setup:
+    - id: b90001000000
+      at: "2026-10-01T10:00:00+08:00"
+      room: EVENT/SELF
+      text: "答应帮她把旧照片按年份理一下。"
+      fields: {status: want, weight: 0.7}
+  steps:
+    - call: breath
+    - check: {segment: think, desc: "shows up in breath", output: breath, contains: b90001}
+    - check: {segment: think, desc: "the reason is 'promised but no time'", output: breath, contains: 没定时间}
+    - check: {segment: think, desc: "it asks for a time or condition", output: breath, contains: 定个时间}
+
+- id: B10
+  title: "promised items do not sink; light ones do"
+  interface: none
+  needs: "promised yes/no on ahead items; awake/asleep computed per entry"
+
+- id: B11
+  title: "still there after a window change"
+  interface: none
+  needs: "a window id from the host. Loci keeps nothing per window, so on the tool layer this is B2; the whole-turn layer checks the new window's first turn"
+
+- id: B12
+  title: "promises rise in recall only among results that match"
+  start: "2026-10-01T10:00:00+08:00"
+  setup:
+    - id: b12001000000
+      at: "2026-09-28T10:00:00+08:00"
+      room: EVENT/SELF
+      text: "答应周末陪她去看牙。"
+      when: "2026-10-04"
+      fields: {status: want, weight: 0.8}
+    - id: b12002000000
+      at: "2026-09-20T10:00:00+08:00"
+      room: EVENT/WORLD
+      text: "她在读一本讲航海的书，说很好看。"
+    - id: b12003000000
+      at: "2026-09-22T10:00:00+08:00"
+      room: EVENT/SELF
+      text: "我给她推荐了两本书。"
+    - id: b12004000000
+      at: "2026-09-25T10:00:00+08:00"
+      room: EVENT/WORLD
+      text: "她说书架快放不下了。"
+  steps:
+    - call: recall
+      args: {query: 书}
+      as: books
+    - check: {segment: find, desc: "a search for books does not pull in the dentist promise", output: books, lacks: b12001}
+    - call: recall
+      args: {query: 周末}
+      as: weekend
+    - check: {segment: find, desc: "a search for the weekend finds it", output: weekend, contains: b12001}
+
+- id: B13
+  title: "a MIND question about the future can be closed as answered"
+  interface: none
+  needs: "MIND entries with tense ahead, and a close reason 'answered'"

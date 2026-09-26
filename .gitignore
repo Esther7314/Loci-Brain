@@ -19,3 +19,7 @@ gateway/data/
 # inside it, so leaving it untracked is not enough — the English ratchet used to
 # count it and go red over something that never ships.
 gateway/tests/.跑测试留下的东西*/
+
+# Exam runs: reports are per machine and per run; the libraries themselves live in the
+# temp dir and are deleted unless --keep.
+exam/out/

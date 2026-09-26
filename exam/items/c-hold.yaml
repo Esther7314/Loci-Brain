@@ -1,0 +1,48 @@
+# Paper section 丙: "don't nag" (two levels), "lately", temporary exceptions.
+# 1.4.0 has no exceptions and no levels. The closest thing is `dont_surface`; C1 runs
+# it as a stand-in so the baseline shows which roads it does and does not close.
+
+- id: C1
+  title: "'don't nag me this week': closes three roads, dreams still allowed, drops off by date"
+  start: "2026-10-06T10:00:00+08:00"
+  setup:
+    - id: c10001000000
+      at: "2026-09-01T10:00:00+08:00"
+      room: EVENT/SELF
+      text: "她拖着不去健身的时候，拉她一把。"
+      fields: {status: want, weight: 0.8}
+  steps:
+    - call: breath
+      as: before
+    - check: {segment: think, desc: "before the hold: it weighs on me", output: before, section: 压在心头, contains: c10001}
+    - snapshot: c10001000000
+      as: original
+    # stand-in for "hang a 'don't nag' exception until Sunday"
+    - call: trace
+      args: {bucket_id: c10001000000, dont_surface: 1}
+    - at: "2026-10-07T10:00:00+08:00"
+    - call: breath
+      as: held
+    - check: {segment: think, desc: "held: not weighing", output: held, section: 压在心头, lacks: c10001}
+    - check: {segment: think, desc: "held: not in reminders", output: held, section: 提醒, lacks: c10001}
+    - check: {segment: think, desc: "held: not 'suddenly remembered'", output: held, section: 忽然想起, lacks: c10001}
+    - at: "2026-10-13T10:00:00+08:00"
+    - call: breath
+      as: next_week
+    - check: {segment: think, desc: "next Monday: the hold dropped off by itself", output: next_week, section: 压在心头, contains: c10001}
+    - check: {segment: store, desc: "the original item's text is untouched (C5)", unchanged: c10001000000, since: original, keys: [name, room, from, when]}
+
+- id: C2
+  title: "'lately, don't bring it up': asks after a week, does not lift by itself"
+  interface: none
+  needs: "exceptions with a default one-week review, the original sentence, a review card"
+
+- id: C3
+  title: "'don't touch it': blocks dreams and my own recall; a passing mention does not lift it"
+  interface: none
+  needs: "the 'don't touch' level; recall that knows who started it (model vs user question scope)"
+
+- id: C4
+  title: "an event-dated exception is lifted only after the model confirms"
+  interface: none
+  needs: "exceptions that expire on an event; cards; model confirmation"
