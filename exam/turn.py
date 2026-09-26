@@ -55,7 +55,8 @@ sys.path.insert(0, str(ROOT))
 
 from exam.host import Event, LociLaunch, Turn, Window  # noqa: E402
 from exam.judge import default_judge  # noqa: E402
-from exam.runner import Run, git_head, library, loci_version, SEAMS  # noqa: E402
+from exam.runner import (Run, git_head, library, loci_version,  # noqa: E402
+                         require_search_deps, SEAMS)
 
 OUT_DIR = ROOT / "exam" / "out"
 
@@ -280,6 +281,7 @@ def make_host_factory(args):
 
 
 async def main_async(args) -> int:
+    require_search_deps()
     items = []
     for p in args.items:
         data = yaml.safe_load(Path(p).read_text(encoding="utf-8"))

@@ -476,7 +476,20 @@ async def run_item(item: dict, keep: bool) -> ItemResult:
 # them out loud: anything more than this and it is no longer the old version's score.
 SEAMS = ("fake clock (exam/clock.py: core._when.now, utils.now_iso and its by-name "
          "imports, datetime.now in bucket_manager / decay_engine / bucket_scoring / "
-         "plan_history)", "random seeded per item", "no model keys, embeddings off")
+         "plan_history)", "random seeded per item", "no model keys, embeddings off",
+         "BM25 rebuilt before a search when stale (exam/serve.py; live Loci rebuilds it "
+         "in the background)")
+
+
+def require_search_deps() -> None:
+    """Without rank_bm25 / jieba, Loci drops BM25 without a word and, with embeddings
+    off, search only matches the whole query as a substring. Stop before scoring that."""
+    try:
+        import jieba  # noqa: F401
+        import rank_bm25  # noqa: F401
+    except ImportError as exc:
+        sys.exit(f"exam: {exc.name} is missing in {sys.executable} — "
+                 "pip install rank-bm25 jieba (see requirements.txt)")
 
 
 def loci_version() -> str:
@@ -536,6 +549,7 @@ def load_items(patterns: list[str]) -> list[dict]:
 
 
 async def main_async(args) -> int:
+    require_search_deps()
     results = []
     for item in load_items(args.items):
         print(f"… {item['id']}", flush=True)
