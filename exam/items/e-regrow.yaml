@@ -2,6 +2,8 @@
 # 1.4.0's regrow takes no "supplement / correction" argument and never touches
 # descendants. The checks below read the marks the next version has to show
 # (「待复核」 on a descendant whose basis was corrected) from recall's own output.
+# Where the card goes is not designed yet; these items assume a breath block titled
+# 待复核 and change with the design if it lands elsewhere.
 
 - id: E1
   title: "a supplement leaves descendants alone"
@@ -52,7 +54,7 @@
       as: child
     - check: {segment: find, desc: "read by id: the descendant carries 待复核", output: child, contains: 待复核}
     - call: breath
-    - check: {segment: think, desc: "the model got a card about the corrected basis", output: breath, contains: e20002}
+    - check: {segment: think, desc: "the model got a card about the corrected basis", output: breath, section: 待复核, contains: e20002}
 
 - id: E3
   title: "regrow without saying supplement or correction is refused"
@@ -104,8 +106,8 @@
     - check: {segment: find, desc: "stop trusting at once: the child is marked", output: child, contains: 待复核}
     - check: {segment: find, desc: "stop trusting at once: the grandchild is marked too", output: grandchild, contains: 待复核}
     - call: breath
-    - check: {segment: think, desc: "layer by layer: the child gets the card first", output: breath, contains: e50002}
-    - check: {segment: think, desc: "layer by layer: no card for the grandchild yet", output: breath, lacks: e50003}
+    - check: {segment: think, desc: "layer by layer: the child gets the card first", output: breath, section: 待复核, contains: e50002}
+    - check: {segment: think, desc: "layer by layer: no card for the grandchild yet", output: breath, section: 待复核, lacks: e50003}
 
 - id: E6
   title: "fixing a typo keeps no version and cards nobody"
