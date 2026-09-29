@@ -25,20 +25,37 @@ becomes wrong.** If that change is made, the write side must start
 emitting the `+08:00` suffix in the same commit — with a suffix present, this side
 can tell.
 
-Exports: `LOCAL_TZ` · `now()` · `today()` · `parse_stamp()` · `parse_date()` · `to_local()`
+Exports: `LOCAL_TZ` · `now()` · `today()` · `parse_stamp()` · `parse_date()` · `to_local()` · `tz_status()`
 """
 
 import os
 import re
 from datetime import datetime, timedelta, timezone
 
-_TZ_NAME = os.environ.get("LOCI_TZ", "").strip() or "Asia/Shanghai"
+_DEFAULT_TZ = "Asia/Shanghai"
+_TZ_SET = os.environ.get("LOCI_TZ", "").strip()
+_TZ_NAME = _TZ_SET or _DEFAULT_TZ
+_TZ_PROBLEM = ""       # why "today" may be cut in the wrong place; "" when LOCI_TZ is set and loads
 
 try:
     from zoneinfo import ZoneInfo
     LOCAL_TZ = ZoneInfo(_TZ_NAME)
-except Exception:      # no tzdata in the image: fall back to a fixed +8 (China has had no DST since 1991)
+except Exception:      # unknown name, or no tzdata: fall back to a fixed +8 (China has had no DST since 1991)
     LOCAL_TZ = timezone(timedelta(hours=8), "UTC+8")
+    _TZ_PROBLEM = f"LOCI_TZ={_TZ_NAME} could not be loaded; using fixed UTC+8"
+
+if not _TZ_SET and not _TZ_PROBLEM:
+    _TZ_PROBLEM = f"LOCI_TZ is not set; using {_DEFAULT_TZ}"
+
+if _TZ_PROBLEM:
+    import logging as _logging
+    _logging.getLogger("loci_brain.when").warning(
+        "[when] %s. Today / yesterday / this week are cut in this zone.", _TZ_PROBLEM)
+
+
+def tz_status() -> dict:
+    """For the health and setup pages: {name, set, problem}."""
+    return {"name": _TZ_NAME, "set": bool(_TZ_SET), "problem": _TZ_PROBLEM}
 
 UTC = timezone.utc
 

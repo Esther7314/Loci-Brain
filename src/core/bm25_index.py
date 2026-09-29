@@ -3,8 +3,12 @@ bm25_index.py — sparse BM25 retrieval, with jieba for Chinese segmentation.
 
 Supplies bucket_manager.search() with TF-IDF-weighted keyword recall (Dim 7).
 
-rank_bm25 and jieba are both soft dependencies: when either is missing every method
-becomes a silent no-op and the other retrieval dimensions carry on unaffected.
+rank_bm25 and jieba are soft dependencies: without rank_bm25 every method is a no-op and
+the other retrieval dimensions carry on; without jieba Chinese is split on whitespace,
+which for Chinese text means whole sentences. Either one missing is said loudly: a
+WARNING at import and a red row on the health page (`dependency_status()`), because
+literal search degrading to whole-sentence substring matching looks like "search got
+worse" and nothing else.
 BM25Index is owned by BucketManager, marked dirty after any write, and rebuilt lazily
 on the next search().
 """
@@ -20,7 +24,8 @@ try:
 except ImportError:
     _BM25Okapi = None  # type: ignore
     _BM25_AVAILABLE = False
-    logger.info("[bm25] rank_bm25 未安装 — BM25 关键词检索已禁用（pip install rank-bm25 启用）")
+    logger.warning("[bm25] rank_bm25 is not installed: literal (BM25) search is off. "
+                   "pip install rank-bm25")
 
 try:
     import jieba as _jieba
@@ -29,7 +34,13 @@ try:
 except ImportError:
     _jieba = None  # type: ignore
     _JIEBA_AVAILABLE = False
-    logger.info("[bm25] jieba 未安装 — 回退空格分词（pip install jieba 启用中文分词）")
+    logger.warning("[bm25] jieba is not installed: Chinese is split on whitespace, i.e. "
+                   "into whole sentences. pip install jieba")
+
+
+def dependency_status() -> dict:
+    """For the health page: which of the two literal-search dependencies are importable."""
+    return {"rank_bm25": _BM25_AVAILABLE, "jieba": _JIEBA_AVAILABLE}
 
 
 def _tokenize(text: str) -> list[str]:

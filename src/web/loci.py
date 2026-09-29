@@ -1224,15 +1224,14 @@ async def build_setup() -> dict:
         "按人找记忆就永远只找到一半。",
         "面板「整理 → 人名表」上点一下就是往这张表里写")
 
-    # 5. The container timezone — the nastiest trap of the five
-    tz = _os.environ.get("TZ", "").strip()
-    row("tz", "容器时区", not tz,
-        ("没设（对的）" if not tz else "设成了 " + tz + " ⚠️"),
-        "盘上的 created 存的是容器本地时间、读的时候按 UTC 解。容器不是 UTC 的话，"
-        "新记忆会被戳成「未来」，从时间视图里整个消失 —— 不报错，"
-        "而且是「今天存的东西今天翻不到」这种最吓人的样子。"
-        "要改显示时区用 LOCI_TZ，不是 TZ。",
-        "别在 compose 里给这个容器设 TZ")
+    # 5. Which timezone "today" is cut in. (The container's own TZ no longer matters:
+    #    stamps are written as UTC by name, see utils.now_iso.)
+    tz = _w.tz_status()
+    row("tz", "时区", not tz["problem"],
+        ("LOCI_TZ=" + tz["name"]) if not tz["problem"] else (tz["problem"] + " ⚠️"),
+        "「今天」「昨天」「这周」都按这个时区切。设错或者没设、又不在 +8 的话，"
+        "每天有几个小时的记忆会算到隔壁那天去，「今天存的东西今天翻不到」。",
+        "在启动环境里设 LOCI_TZ，例如 Asia/Shanghai、America/Los_Angeles")
 
     # 6. The panel lock — after the strip-down /api/* stopped authenticating, so that gate
     #    never appeared again
@@ -1462,6 +1461,31 @@ async def build_health() -> dict:
                 "关着 —— query 门只能靠关键词，搜不到「意思相近」的",
                 "在 config.yaml 里开 embedding.enabled")
     guard("向量", sec_embedding, "检查 config.yaml 的 embedding 段")
+
+    def sec_literal():
+        from core.bm25_index import dependency_status
+        deps = dependency_status()
+        missing = [name for name, ok in deps.items() if not ok]
+        if not missing:
+            add("字面搜索", "ok", "rank_bm25 和 jieba 都在")
+        else:
+            add("字面搜索", "error",
+                f"缺 {' / '.join(missing)} —— 字面搜索退成了整句子串匹配，"
+                "换个说法、中文拆词都搜不到",
+                "pip install " + " ".join(
+                    "rank-bm25" if n == "rank_bm25" else n for n in missing)
+                + "，装完重启")
+    guard("字面搜索", sec_literal)
+
+    def sec_tz():
+        st = _w.tz_status()
+        if st["problem"]:
+            add("时区", "error",
+                f"{st['problem']} —— 「今天」「昨天」「这周」按这个时区切",
+                "在启动环境里设 LOCI_TZ，例如 Asia/Shanghai，然后重启")
+        else:
+            add("时区", "ok", f"LOCI_TZ={st['name']}")
+    guard("时区", sec_tz)
 
     # ---- Could anything lost be recovered ----
     bd = str(cfg.get("buckets_dir") or "")
