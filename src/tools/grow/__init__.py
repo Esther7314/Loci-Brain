@@ -68,6 +68,17 @@ async def dispatch(
         except (ValueError, TypeError):
             pass
 
+    # A top-level `when` is the default for every item that does not carry its own:
+    # the tool face documents grow(kind="event", when="2026-09-01", items=[...]).
+    when = str(when or "").strip()
+    if when and isinstance(items, list):
+        items = [
+            {**item, "when": when}
+            if isinstance(item, dict) and not str(item.get("when") or "").strip()
+            else item
+            for item in items
+        ]
+
     # --- The kind=event|mind path ---
     # The body lands on disk first and the real id comes back immediately; tags,
     # gist and naming are backfilled in the background, and nothing is merged.
