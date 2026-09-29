@@ -23,13 +23,7 @@ Exports: dispatch(items=... / kind+text) -> str
 from typing import Optional
 
 from .. import _runtime as rt
-from .._common import check_grow_input_size, check_grow_items_payload
-# ⚰️ The two old long-prose splitting paths (grow_shortpath / grow_core) were
-#    deleted, code and all.
-#    "Retire it, don't delete the archive" is about **data** (memories, the
-#    thirteen seeds) — not about code. Leaving a pile of uncalled dead code in a
-#    repository that ships only makes the next reader think it is still alive.
-from .core import grow_items
+from .._common import check_grow_items_payload
 from .rooms_path import (grow_event, grow_mind, backfill_sweep,
                          _retired_fields_msg)
 
@@ -101,6 +95,9 @@ async def dispatch(
             import asyncio as _asyncio
             _asyncio.create_task(backfill_sweep())
     if kind == "event":
+        payload_err = check_grow_items_payload(items or [])
+        if payload_err:
+            return payload_err
         return await grow_event(items or [], direction_of_fit=direction_of_fit,
                                 bound=bound, evidential=evidential,
                                 internally_generated=internally_generated, weight=weight,
@@ -127,29 +124,8 @@ async def dispatch(
                 '"mind"（我从中看出什么）。'
                 '给一段日子起名字是 fold 的活。')
 
-    # --- Everything below is the old path, kept verbatim ---
-    # Pre-split mode: the calling model has already produced N final bodies ->
-    # store them verbatim, skipping digest's second round of rewriting.
-    # Passing items (a non-empty list) takes this path; omitting it behaves
-    # exactly like the old version (backward compatible).
-    if isinstance(items, list) and len(items) > 0:
-        err = check_grow_items_payload(items)
-        if err:
-            return err
-        return await grow_items(items)
-
-    # ⚰️ `content` (throw in a long passage and let the system split it into
-    #    several) was cut.
-    #    The rule behind it: **that was the one place in the whole system where
-    #    the system decided for me how many things this was**, which runs against
-    #    "the one who writes it down is always me"; and `items=[...]` already
-    #    covers the case completely — working out for yourself, at the end of a
-    #    stretch, how many things happened and then storing them in one call is
-    #    the posture this system is built around.
-    #    (The two splitting paths `grow_core` / `grow_shortpath`, along with
-    #     dehydrator.cut(), **stay in the archive**; they simply have no entry
-    #     point on the tool face any more.)
-    return ("grow 现在只收拆好的：items=[{room,text,v,a},...] 存多条，"
-            "或 kind=\"mind\"/\"big\" + text 存一条。"
-            "长文丢进来让系统替你拆成几条那条路已经撤了——"
-            "这一摊是几件事，得你自己说了算。")
+    # No kind: refused, with what to write. (The kind-less items path merged into
+    # existing entries and fed the old plan's auto-closing; both are gone.)
+    return ('grow 要说存的是什么：kind="event" + items=[{room, text, v, a, when?}, ...] '
+            '存发生了什么（想要的事也是事件，加 direction_of_fit="telic"）；'
+            'kind="mind" + room + text + from 存你从中看出的一句。')
