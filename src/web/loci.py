@@ -1409,7 +1409,7 @@ async def build_health() -> dict:
         if homeless:
             add("没房间的记忆", "warn",
                 f"{len(homeless)} 条没有 room，recall 的房间门筛不到它们",
-                "跑 scripts/migrate_rooms.py --apply 补房间")
+                "跑 scripts/backfill_rooms.py --buckets <库目录> 先看，再加 --apply 补房间")
         else:
             add("房间", "ok", "每条都有房间")
     need_buckets("记忆总量", sec_total)
@@ -2240,9 +2240,9 @@ def register(mcp) -> None:
         return JSONResponse({
             "ok": True,
             "env_locked": bool(os.environ.get("LOCI_DASHBOARD_PASSWORD", "")),
-            "next": ("密码已经存进文件了。现在去 docker-compose.v2.yml 删掉 "
-                     "LOCI_DASHBOARD_PASSWORD 那一行、重启容器，新密码才真正接管"
-                     "（环境变量还在的时候它优先）。"),
+            "next": ("密码已经存进文件了。现在去启动 Loci 的地方（docker-compose 文件，"
+                     "或者你设环境变量的地方）删掉 LOCI_DASHBOARD_PASSWORD、重启，"
+                     "新密码才真正接管（环境变量还在的时候它优先）。"),
         })
 
     # ---------------------------------------------------------
