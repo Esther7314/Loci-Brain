@@ -910,12 +910,13 @@ def _fmt_card(label: str, st: dict) -> str:
 
 
 # The Chinese display names of the four rooms. Always normalize_room() before
-# looking one up — old data's ten room names are translated to the new ones first,
-# so the screen carries only one vocabulary (use _room_cn(), never a bare .get()).
+# looking one up, so a room that is not one of the four shows as itself rather than
+# crashing a lookup (use _room_cn(), never a bare .get()).
+# TRAITS is about a person, any person: myself, the other, anyone else.
 ROOM_CN: dict[str, str] = {
     "EVENT/SELF":  "我亲历的",
     "EVENT/WORLD": "我听说看到的",
-    "MIND/TRAITS": "我是什么样",
+    "MIND/TRAITS": "人是什么样",
     "MIND/VIEWS":  "我怎么看",
 }
 

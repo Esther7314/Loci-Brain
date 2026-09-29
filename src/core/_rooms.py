@@ -62,7 +62,7 @@ EVENT_ROOMS: tuple[str, ...] = (
 )
 
 MIND_ROOMS: tuple[str, ...] = (
-    "MIND/TRAITS",     # what kind of person I am (I am always investing in "later")
+    "MIND/TRAITS",     # about a person, any person: myself, the other, anyone (goes quiet when tired)
     "MIND/VIEWS",      # how I see something (where I stand on machine memory)
 )
 
@@ -77,7 +77,7 @@ def _rooms_help() -> str:
         "  mind  两间: " + " / ".join(MIND_ROOMS) + "\n"
         "怎么判（两问）：\n"
         "  SELF/WORLD   ← 这事我在场吗？亲历→SELF；听说、看到→WORLD\n"
-        "  TRAITS/VIEWS ← 这句在说人（我是什么样的），还是在说我怎么看一件事\n"
+        "  TRAITS/VIEWS ← 这句在说人（自己、对方、别人是什么样的），还是在说我怎么看一件事\n"
         "（I/YOU 和 WHO/WHAT 已砍：每一条都是我的记忆，立场不在房间里；"
         "「关于谁」交给 subjects 字段）"
     )
