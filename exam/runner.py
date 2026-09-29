@@ -513,8 +513,8 @@ async def run_item(item: dict, keep: bool) -> ItemResult:
 # them out loud: anything more than this and it is no longer the old version's score.
 def seams() -> tuple[str, ...]:
     return ("fake clock (exam/clock.py: core._when.now, utils.now_iso and its by-name "
-            "imports, utils.datetime (utc_now), datetime.now in bucket_manager / "
-            "plan_history)", "random seeded per item", "no model keys",
+            "imports, utils.datetime (utc_now), datetime.now in bucket_manager)",
+            "random seeded per item", "no model keys",
             embeddings_label(),
             "BM25 rebuilt before a search when stale (exam/serve.py; live Loci rebuilds "
             "it in the background)")

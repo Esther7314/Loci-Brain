@@ -375,9 +375,6 @@ def _visible(meta: dict) -> bool:
         # letters moved to Home; archived sinks; i stays out until it is merged
         # into MIND (old I entries that have not been migrated yet)
         return t == "i" and bool(meta.get("room"))
-    # type=plan is deliberately **kept** on the timeline: the plan tool is retired,
-    # but those entries are "memories of what was wanted", the direct ancestor of
-    # tense=want — what was once wanted is history too.
     # ⚠️ This used to **stop** excluding an entry outright just because it had a
     # `superseded_by`.
     # ------------------------------------------------------------

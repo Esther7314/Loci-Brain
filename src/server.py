@@ -142,7 +142,7 @@ try:
         # (permanent/<domain>/x.md), so an os.listdir of the top level sees only domain
         # folders and always concludes "empty" -> a false "fresh install" report. The data
         # is all still there and breath still reads it; the log line is just alarming.
-        for sub in ("permanent", "dynamic", "feel", "plans", "letters"):
+        for sub in ("permanent", "dynamic", "feel", "letters"):
             p = os.path.join(_bd, sub)
             if not os.path.isdir(p):
                 continue

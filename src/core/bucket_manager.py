@@ -8,7 +8,7 @@ reading them, writing them back, and filtering them by domain, emotion coordinat
 fuzzy text matching.
 
 Key behaviours:
-- One bucket = one .md file, stored under permanent / dynamic / archive / feel / plans /
+- One bucket = one .md file, stored under permanent / dynamic / archive / feel /
   letters
 - Create, read, update, delete and move all live here
 - Retrieval = pre-filter by domain, then weighted ordering by emotion coordinates and text
@@ -47,7 +47,6 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import date, datetime
 
-from locibrain.domain.plan_history import append_plan_change_log
 from locibrain.eventsourcing.footprint import FootprintSnapshot
 
 # The unified error system: clamping an out-of-range value reports OB-W001/OB-W002
@@ -246,7 +245,6 @@ from utils import (
     atomic_write_text,
     generate_bucket_id,
     is_closed,
-    read_from,
     read_from_ids,
     sanitize_name,
     safe_path,
@@ -319,11 +317,9 @@ _DEFAULT_IMPORTANCE = 5
 _PINNED_IMPORTANCE = 10           # the importance a pinned/protected bucket is locked to
 _DEFAULT_DOMAIN_NAME = "未分类"     # the placeholder used when no domain was supplied
 _EDITABLE_BUCKET_TYPES = frozenset(
-    {"dynamic", "permanent", "feel", "plan", "letter", "i", "self"}
+    {"dynamic", "permanent", "feel", "letter", "i", "self"}
 )
-_PLAN_STATUSES = frozenset({"active", "resolved", "abandoned"})
-
-# The write-layer fields of v2 (plan part 1). Absent is the default reading of each:
+# The write-layer fields of v2 (part 1 of the plan document). Absent is the default reading of each:
 # no direction_of_fit = thetic (recording what is), no evidential = not marked,
 # no internally_generated = it happened out there. So only a marked value is stored.
 DIRECTIONS_OF_FIT = frozenset({"thetic", "telic"})
@@ -382,7 +378,7 @@ _METADATA_TEXT_LIMITS = {
     "resolved_by": 128,
     "related_bucket": 128,
     # Closing a want records who closed it. The field name is deliberately kept separate
-    # from the resolved_by above, which plan linkage uses: that one holds a bucket_id or a
+    # from the resolved_by above, which older data uses for a bucket_id or a
     # source label, while this one holds a person's name.
     "closed_by": 50,
     "author": 120,
@@ -468,7 +464,6 @@ class BucketManager:
         self.dynamic_dir = os.path.join(self.base_dir, "dynamic")
         self.archive_dir = os.path.join(self.base_dir, "archive")
         self.feel_dir = os.path.join(self.base_dir, "feel")
-        self.plan_dir = os.path.join(self.base_dir, "plans")
         self.letter_dir = os.path.join(self.base_dir, "letters")
         self.fuzzy_threshold = config.get("matching", {}).get("fuzzy_threshold", 50)
         self.max_results = config.get("matching", {}).get("max_results", 5)
@@ -600,9 +595,9 @@ class BucketManager:
     # ---------------------------------------------------------
     @property
     def _active_dirs(self) -> list[str]:
-        """The active bucket directories, archive excluded (used by list_all, _collect_all_tags and lookups). The order must not be shuffled: feel/plan/letter come after dynamic to preserve the original scan order."""
+        """The active bucket directories, archive excluded (used by list_all, _collect_all_tags and lookups). The order must not be shuffled: feel/letter come after dynamic to preserve the original scan order."""
         return [self.permanent_dir, self.dynamic_dir,
-                self.feel_dir, self.plan_dir, self.letter_dir]
+                self.feel_dir, self.letter_dir]
 
     def _iter_md_files(self, dirs: list[str]):
         """Recursively walk several directories for *.md, yielding (root, filename, full_path).
@@ -1313,9 +1308,8 @@ class BucketManager:
             backfilled=backfilled).items() if v is not None})
         # --- "weight of the promise", 0.0-1.0, which is not importance ---
         # importance = how important this thing is; weight = how heavily it presses on me.
-        # It belongs to what is wanted: telic (and the old plan type until it goes).
-        if (bucket_type == "plan" or metadata.get("direction_of_fit") == "telic") \
-                and weight is not None:
+        # It belongs to what is wanted (telic).
+        if metadata.get("direction_of_fit") == "telic" and weight is not None:
             metadata["weight"] = _clamp01(weight, _DEFAULT_VALENCE)
         # --- bucket_type_defaults: per-type default values ---
         # config.bucket_type_defaults may hold {letter: {weight: 1.0, dont_surface: false}, ...}
@@ -1355,16 +1349,12 @@ class BucketManager:
             type_dir = self.permanent_dir
         elif bucket_type == "feel":
             type_dir = self.feel_dir
-        elif bucket_type == "plan":
-            type_dir = self.plan_dir
         elif bucket_type == "letter":
             type_dir = self.letter_dir
         else:
             type_dir = self.dynamic_dir
         if bucket_type == "feel":
             primary_domain = "沉淀物"  # feel subfolder name
-        elif bucket_type == "plan":
-            primary_domain = "active"  # plans/active/ by default; trace can move via status update
         elif bucket_type == "letter":
             primary_domain = "history"
         else:
@@ -1605,10 +1595,6 @@ class BucketManager:
         elif normalized_type == "feel":
             type_dir = self.feel_dir
             subdir = "沉淀物"
-        elif normalized_type == "plan":
-            type_dir = self.plan_dir
-            normalized_status = str(status or "active").strip().lower()
-            subdir = normalized_status if normalized_status in _PLAN_STATUSES else "active"
         elif normalized_type == "letter":
             type_dir = self.letter_dir
             subdir = "history"
@@ -1823,7 +1809,6 @@ class BucketManager:
         *,
         old_str: str,
         new_str: str,
-        append_plan_history: bool = False,
         **kwargs,
     ) -> dict[str, Any]:
         """Atomically replace one unique literal fragment in a bucket body.
@@ -1892,15 +1877,6 @@ class BucketManager:
                 }
 
             updates = dict(kwargs)
-            if append_plan_history and str(post.get("type") or "") == "plan":
-                history = list(post.get("change_log") or [])
-                if "status" in updates and updates["status"] != post.get("status"):
-                    history = append_plan_change_log(
-                        history,
-                        "status",
-                        **{"from": post.get("status"), "to": updates["status"]},
-                    )
-                updates["change_log"] = append_plan_change_log(history, "edit")
             updates["content"] = updated_content
             try:
                 committed = await self._update_locked(bucket_id, **updates)
@@ -1932,7 +1908,7 @@ class BucketManager:
         """
         Update bucket content or metadata fields.
 
-        bump_active=False (the default): a pure metadata or content edit — trace, plan,
+        bump_active=False (the default): a pure metadata or content edit — trace,
         anchor, a background auto-resolve, an import — which does **not** refresh
         last_active and does not touch activation_count.
         bump_active=True: treat this write as a genuine activation (hold/grow merging into a
@@ -2184,17 +2160,13 @@ class BucketManager:
             except ValueError as exc:
                 logger.warning(f"update() refused {bucket_id}: {exc}")
                 return False
-        # --- Pass-through fields for the plan/letter lifecycle ---
+        # --- Pass-through fields for the letter lifecycle and the rest ---
         # These fields have no validation or conversion logic: whatever is given is written.
         # A new field only has to be added to this tuple.
-        # "change_log" was added here for plan buckets — a list[dict] of status and edit
-        # history, maintained by server.py's plan() / trace() / /api/plans/{id}/action;
-        # bucket_manager takes no part in producing it.
         for k in ("status", "type", "resolution_reason", "resolved_by",
                   "related_bucket", "author", "user_name", "title", "letter_date",
-                  "change_log",
                   # Everything below passes through unconverted, weight included.
-                  # weight only means anything on a plan; its type is not checked in this
+                  # weight only means anything on something wanted; its type is not checked in this
                   # loop, and server.py above guarantees the range it passes in.
                   "why_remembered", "dont_surface", "first_of_kind",
                   "weight", FROM_FIELD,
@@ -2331,7 +2303,7 @@ class BucketManager:
         # --- Activation time and activation count ---
         # last_active means "the last genuine activation or recall" and nothing else, and it
         # is the input to decay's recency scoring.
-        # A metadata edit — trace, plan, anchor, a background auto-resolve — **does not
+        # A metadata edit — trace, anchor, a background auto-resolve — **does not
         # count as activity**: refreshing it unconditionally here would reset the forgetting
         # clock, and would also leave activation_count and last_active permanently out of
         # step (the count static while the timestamp keeps getting newer). Only a genuine new
@@ -3249,7 +3221,6 @@ class BucketManager:
             "dynamic_count": 0,
             "archive_count": 0,
             "feel_count": 0,
-            "plan_count": 0,
             "letter_count": 0,
             "total_size_kb": 0.0,
             "domains": {},
@@ -3260,7 +3231,6 @@ class BucketManager:
             (self.dynamic_dir, "dynamic_count"),
             (self.archive_dir, "archive_count"),
             (self.feel_dir, "feel_count"),
-            (self.plan_dir, "plan_count"),
             (self.letter_dir, "letter_count"),
         ]:
             if not os.path.exists(subdir):
@@ -3382,7 +3352,6 @@ class BucketManager:
                 self.dynamic_dir,
                 self.archive_dir,
                 self.feel_dir,
-                self.plan_dir,
                 self.letter_dir,
             ]
             index: dict[str, str] = {}
@@ -3424,7 +3393,6 @@ class BucketManager:
             self.dynamic_dir,
             self.archive_dir,
             self.feel_dir,
-            self.plan_dir,
             self.letter_dir,
         ]
         for _root, fname, full_path in self._iter_md_files(dirs):

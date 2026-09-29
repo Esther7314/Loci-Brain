@@ -362,7 +362,7 @@ def test_long_free_text_fields_are_truncated_to_their_caps(store):
 
 def test_closing_a_want_actually_records_who_closed_it(store):
     async def go():
-        bid = await store.create(BODY, bucket_type="plan", weight=0.5)
+        bid = await store.create(BODY, direction_of_fit="telic", weight=0.5)
         assert await store.update(bid, status="resolved", closed_by="Es",
                                   last_asked="2026-08-01") is True
         meta = await _meta(store, bid)
@@ -511,24 +511,6 @@ def test_changing_type_to_feel_moves_the_file_and_the_id_still_resolves(store, t
         # Criterion: a move that loses the id->path mapping makes the very next
         # update() on this bucket silently return False — the lost-write shape.
         assert (await store.get(bid))["content"] == BODY
-    run(go())
-
-
-def test_a_resolved_plan_lands_in_the_resolved_folder(store, tmp_path):
-    async def go():
-        bid = await store.create(BODY, bucket_type="plan", weight=0.5)
-        assert await store.update(bid, status="resolved") is True
-        assert len(list((tmp_path / "plans" / "resolved").glob(f"*{bid}*.md"))) == 1
-    run(go())
-
-
-def test_an_unknown_plan_status_falls_back_to_the_active_folder(store, tmp_path):
-    async def go():
-        bid = await store.create(BODY, bucket_type="plan", weight=0.5)
-        assert await store.update(bid, status="someday-maybe") is True
-        # Criterion: an unrecognized status must not create a new sibling directory
-        # per typo; the file stays findable in the layout the panel scans.
-        assert len(list((tmp_path / "plans" / "active").glob(f"*{bid}*.md"))) == 1
     run(go())
 
 

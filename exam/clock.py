@@ -10,7 +10,7 @@ WHY THIS EXISTS
       utils.now_iso()             created / last_active / touch / deleted_at, imported
                                   by name into several modules
       utils.utc_now()             decay_engine, retrieval scoring (reads utils.datetime)
-      datetime.now()              bucket_manager (file names), plan history
+      datetime.now()              bucket_manager (file names)
 
     install() replaces all three. It must run AFTER the modules that did
     `from datetime import datetime` are imported (their name is rebound in place) and
@@ -44,7 +44,6 @@ UTC = _dt.timezone.utc
 # datetime.now() directly and is not listed here reads the real clock.
 _DIRECT_CALLERS = (
     "core.bucket_manager",
-    "locibrain.domain.plan_history",
 )
 
 _clock_file: Path | None = None

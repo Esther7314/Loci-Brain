@@ -3,15 +3,11 @@
 tools/letter/core.py — letter_write / letter_read implementation
 ========================================
 
-A plan bucket records something promised — to someone else, to myself, or just
-meant to be finished; a letter bucket holds a long letter between the two sides
-of this conversation. Both are their own type: kept forever, never decayed, and
-never surfacing in an ordinary breath.
+A letter bucket holds a long letter between the two sides of this conversation.
+It is its own type: kept forever, never decayed, and never surfacing in an
+ordinary breath.
 
 Key behaviour:
-- plan_create: deduplicates (same body + an existing status=active -> the
-  original ID is returned straight away), and writes type=plan + status +
-  weight + the first change_log entry
 - letter_write: the text is kept forever; author accepts any string as a
   signature ("ai", or a value equal to ai_name, is stored as ai_name's value,
   any other string is stored verbatim as the signature, and "user" means the
@@ -21,10 +17,9 @@ Key behaviour:
   field is returned exactly as stored, never converted
 
 What this file deliberately does not do:
-- plan does no vector deduplication, only exact text deduplication
 - letters are never merged, never compressed, never archived by decay
 
-Exports: plan_create / letter_write / letter_read
+Exports: letter_write / letter_read
 ========================================
 """
 

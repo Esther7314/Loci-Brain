@@ -196,13 +196,11 @@ limits:
 # --- iter 1.9 G: 桶类型默认值 / per-type frontmatter defaults ---
 # Applied at create() time only when caller doesn't pass that field.
 # 写入时若调用方未显式传入对应字段，使用此处默认值。
-# 设计意图：letter 天然有重量、信件天然不该被静音；plan 默认中等承诺。
+# 设计意图：letter 天然有重量、信件天然不该被静音。
 bucket_type_defaults:
   letter:
     weight: 1.0
     dont_surface: false
-  plan:
-    weight: 0.5
 
 # --- Deprecated: Obsidian wikilinks auto injection / 已废弃 ---
 # wikilink 自动注入已禁用；OB 只读取正文里的 [[wikilink]] 做网络图。

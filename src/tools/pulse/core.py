@@ -15,7 +15,7 @@ readability.
 Key behaviour:
 - anchor_set / anchor_release: call bucket_mgr.set_anchor and translate the
   result as-is
-- pulse: aggregate stats + list_all, group by type (normal/feel/plan/letter),
+- pulse: aggregate stats + list_all, group by type (normal/feel/letter),
   and show icon + domain + emotion + weight + tags line by line
 - pulse also carries an "index drift" self-check: the ID set in embedding.db is
   reconciled against the ID set of buckets on disk, and if missing/orphan > 0 it
@@ -159,7 +159,6 @@ async def pulse(include_archive: Optional[bool] = False) -> str:
         f"动态桶: {stats['dynamic_count']} 个\n"
         f"归档桶: {stats['archive_count']} 个\n"
         f"feel 桶: {stats.get('feel_count', 0)} 条\n"
-        f"plan 桶: {stats.get('plan_count', 0)} 条\n"
         f"letter 桶: {stats.get('letter_count', 0)} 封\n"
         f"总占用: {stats['total_size_kb']:.1f} KB\n"
         f"衰减引擎: {'运行中' if rt.decay_engine.is_running else '已停止'}\n"
@@ -227,7 +226,6 @@ async def pulse(include_archive: Optional[bool] = False) -> str:
 
     normal_lines: list[str] = []
     feel_lines: list[str] = []
-    plan_lines: list[str] = []
     letter_lines: list[str] = []
     for b in buckets:
         meta = b.get("metadata", {})
@@ -238,8 +236,6 @@ async def pulse(include_archive: Optional[bool] = False) -> str:
             icon = "📦"
         elif btype == "feel":
             icon = "🫧"
-        elif btype == "plan":
-            icon = "📋"
         elif btype == "letter":
             icon = "💌"
         elif btype == "archived":
@@ -270,9 +266,6 @@ async def pulse(include_archive: Optional[bool] = False) -> str:
             line += f" 标签:{','.join(tags)}"
         if btype == "feel":
             feel_lines.append(line)
-        elif btype == "plan":
-            plan_status = meta.get("status", "active")
-            plan_lines.append(line + f" [{plan_status}]")
         elif btype == "letter":
             author = meta.get("author", "?")
             letter_lines.append(line + f" [{author}]")
@@ -282,8 +275,6 @@ async def pulse(include_archive: Optional[bool] = False) -> str:
     sections = [status]
     if normal_lines:
         sections.append("=== 记忆列表 ===\n" + "\n".join(normal_lines))
-    if plan_lines:
-        sections.append(f"=== 计划（{len(plan_lines)} 条）===\n" + "\n".join(plan_lines))
     if feel_lines:
         sections.append(f"=== feel（{len(feel_lines)} 条）===\n" + "\n".join(feel_lines))
     if letter_lines:

@@ -186,7 +186,7 @@ def _buckets_rev() -> tuple:
 
     root = str(sh.config.get("buckets_dir") or "")
     newest, count = 0.0, 0
-    for sub in ("dynamic", "permanent", "feel", "plans", "letters", "archive"):
+    for sub in ("dynamic", "permanent", "feel", "letters", "archive"):
         for dirpath, _dirs, names in os.walk(os.path.join(root, sub)):
             for name in names:
                 if not name.endswith(".md"):

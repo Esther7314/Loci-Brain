@@ -9,10 +9,9 @@ The body is what the caller wrote; lose it and it is gone. Metadata (tags, gist,
 naming, vectors) is derived, and arriving ten seconds late hurts nobody.
 
 Key behaviour:
-- event: several at a time, each going straight to bucket_mgr.create(), **never
-  through merge_or_create** (no search, no judge_same_event, no LLM merge — that
-  chain was the root cause of the timeouts, and the culprit behind "different
-  things merged into one bucket")
+- event: several at a time, each going straight to bucket_mgr.create(); nothing
+  is searched for, judged or merged on the way in (merging was the root cause of
+  the timeouts, and of "different things merged into one bucket")
 - The real list of bucket_ids comes back immediately (target: under 3 seconds);
   tagging, gist and naming go to background backfill
 - mind: its own bucket + from (structure copied from feel), and v/a must

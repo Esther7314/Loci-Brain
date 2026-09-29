@@ -12,19 +12,18 @@ Key behaviour:
   is cleaned up
 - hard_delete=True -> only clears test buckets explicitly marked test_data=True at
   creation time; a non-empty delete_reason must be supplied as well, and ordinary
-  memories and plans are both refused and left where they are
+  memories are refused and left where they are
 - The passed fields are collected into an updates dict (status/weight/
   dont_surface/pinned/tags/domain/name/valence/arousal/media and so on)
 - pinned=1 forces importance=10 and runs the quota check; pinned=0 only clears
   the flag
   (⚠️ importance is an **internal field**: only pin touches it, and there is no
   entry point from outside)
-- An old_str/new_str partial replacement rebuilds the embedding in step, and
-  appends to change_log for plan buckets
+- An old_str/new_str partial replacement rebuilds the embedding in step
 - Switching status to resolved/abandoned appends a short note about what that means
 
 What this file deliberately does not do:
-- Never creates a bucket (that is hold/grow/plan/letter's job)
+- Never creates a bucket (that is grow/letter's job)
 - Never converts an ordinary memory into erasable test data, and never physically
   deletes an ordinary memory
 - Returns no structured data; always one short sentence
@@ -373,7 +372,7 @@ async def trace_core(
             return f"已永久删除测试桶: {bucket_id}"
         if result.get("error") == "not_erasable_test_data":
             return (
-                "拒绝永久删除：普通记忆桶（包括 plan）不可被 trace 物理删除；"
+                "拒绝永久删除：普通记忆桶不可被 trace 物理删除；"
                 "只有创建时明确标记为 test_data 的测试桶可以清理。"
                 "本次未删除、未归档；若只想从日常召回隐藏，请改用 delete=True 归档。"
             )
@@ -558,13 +557,10 @@ async def trace_core(
                         '/ "abandoned"（不做了）。')
             updates["status"] = s
         # --- Who closed it ---
-        # 🔴 The field is deliberately not called resolved_by — that name is
-        #   already taken by plan's propagation
-        #   (see cascade_plan_resolved_to_buckets in tools/_common.py: a plan
-        #   bucket's resolved_by points at *which bucket closed it*, and is a
-        #   bucket_id or "manual"/"llm_judge". That is a different thing from
-        #   *which person closed it*, and colliding on the name would fold two
-        #   meanings into one word).
+        # 🔴 The field is deliberately not called resolved_by — older data uses that
+        #   name for *which bucket* closed something (a bucket_id or
+        #   "manual"/"llm_judge"). This one says *which person* closed it; one name
+        #   for both would fold two meanings into one word.
         # This parameter is also absent from the trace tool signature server.py
         # exposes to me — only the close button's route in web/loci.py, clicked
         # by hand, passes a closed_by naming the user. Calling trace myself over
@@ -653,33 +649,11 @@ async def trace_core(
         if not updates and not patch_args_supplied:
             return "没有任何字段需要修改。"
 
-        # --- plan buckets: append to change_log when status or content changes ---
-        # The whole-body replacement entry point is gone, so the body can only be
-        # changed piecewise through old_str/new_str
-        content_change_requested = patch_args_supplied
-        is_plan = bucket.get("metadata", {}).get("type") == "plan"
-        append_plan_history_in_patch = is_plan and patch_args_supplied
-        if is_plan and not patch_args_supplied and (
-            "status" in updates or content_change_requested
-        ):
-            from .._common import append_plan_change_log
-            old_meta = bucket.get("metadata", {})
-            history = list(old_meta.get("change_log") or [])
-            if "status" in updates and updates["status"] != old_meta.get("status"):
-                history = append_plan_change_log(
-                    history, "status",
-                    **{"from": old_meta.get("status"), "to": updates["status"]},
-                )
-            if content_change_requested:
-                history = append_plan_change_log(history, "edit")
-            updates["change_log"] = history
-
         if patch_args_supplied:
             patch_result = await rt.bucket_mgr.update_content_fragment(
                 bucket_id,
                 old_str=old_str,
                 new_str=new_str,
-                append_plan_history=append_plan_history_in_patch,
                 **updates,
             )
             if not patch_result.get("ok"):
@@ -713,26 +687,6 @@ async def trace_core(
     # embedding outbox. Calling generate_and_store again here is unnecessary and
     # would be wrong — the same content would hit the vector API twice.
 
-    # --- An explicit human/AI resolve on a plan bucket -> propagate to
-    # related_bucket / resolved_by ---
-    # A plan is a promise: once the promise is explicitly set down, the event
-    # buckets carrying it should stop surfacing too.
-    # Triggered only when trace changes plan.status to resolved; no other path
-    # (the automatic second judgement) propagates.
-    cascaded: list[str] = []
-    if (
-        bucket.get("metadata", {}).get("type") == "plan"
-        and updates.get("status") == "resolved"
-    ):
-        from .._common import cascade_plan_resolved_to_buckets
-        # Use the post-update metadata view, so related_bucket / resolved_by are
-        # the latest values
-        merged_meta = {**bucket.get("metadata", {}), **{k: v for k, v in updates.items() if k != "change_log"}}
-        try:
-            cascaded = await cascade_plan_resolved_to_buckets(merged_meta, bucket_id)
-        except Exception as e:
-            rt.logger.warning(f"trace plan cascade outer error: {e}")
-
     _display_updates = {
         k: v for k, v in updates.items()
         if k not in ("content", "meaning_append", "meaning", "media_append", "media")
@@ -748,8 +702,6 @@ async def trace_core(
         changed += f" → {resolved_hint(True)}"
     elif updates.get("status") == "active":
         changed += f" → {resolved_hint(False)}"
-    if cascaded:
-        changed += f" → 同步把 {len(cascaded)} 个关联事件桶也标为已放下（{', '.join(cascaded)}）"
     out = f"已修改记忆桶 {bucket_id}: {changed}"
     # pin's reminder trails the **success receipt**: it is not an error, the pin
     # is already on disk (see the epitaph in tools/_pin.py)

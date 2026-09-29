@@ -85,7 +85,6 @@ _TYPE_SUBDIR: dict[str, str] = {
     "archive": "archive",
     "archived": "archive",
     "feel": "feel",
-    "plan": "plans",
     "letter": "letters",
 }
 
@@ -1110,8 +1109,6 @@ class MigrateEngine:
         domain = meta.get("domain") or pb.domain or []
         if btype == "feel":
             primary_domain = "沉淀物"
-        elif btype == "plan":
-            primary_domain = str(meta.get("status", "active") or "active")
         elif btype == "letter":
             primary_domain = "history"
         elif isinstance(domain, list) and domain:

@@ -41,7 +41,7 @@ from typing import Optional
 
 from openai import AsyncOpenAI
 
-from utils import clean_llm_json, count_tokens_approx, parse_bool, positive_float
+from utils import clean_llm_json, count_tokens_approx, positive_float
 from tools._subjects import normalize_subjects
 
 from locibrain.integrations.provider_detect import (
@@ -107,16 +107,10 @@ _DEHYDRATE_INPUT_LIMIT = 3000
 _MERGE_INPUT_LIMIT = 2000     # one each for old and new
 _ANALYZE_INPUT_LIMIT = 2000
 _DIGEST_INPUT_LIMIT = 5000    # a whole day of diary is a lot of text
-_PLAN_JUDGE_INPUT_LIMIT = 1500  # one each for the plan and the new event
-_SAME_EVENT_INPUT_LIMIT = 1800  # one each for the old bucket and the new content
 
 # --- max_tokens overrides for the specialised calls ---
 _ANALYZE_MAX_TOKENS = 4096      # thinking models burn a lot of tokens; leave headroom
 _DIGEST_MAX_TOKENS = 8192       # splitting a diary produces a lot: thinking and output both need room
-_PLAN_JUDGE_MAX_TOKENS = 2048   # under a thinking model, 200 tokens is nowhere near enough
-_PLAN_JUDGE_TEMPERATURE = 0.0   # a judgement has to be deterministic
-_SAME_EVENT_MAX_TOKENS = 1024   # it only returns compact JSON
-_SAME_EVENT_TEMPERATURE = 0.0   # deciding an event boundary has to be deterministic
 _DIGEST_TEMPERATURE = 0.0       # splitting has to be deterministic
 
 # --- Default emotion coordinates (kept in step with bucket_manager) ---
@@ -176,8 +170,6 @@ def _person_tags() -> frozenset:
     return frozenset(_PRONOUN_TAGS | {n for n in names if n})
 _DOMAIN_MAX = 3          # how many domains are kept at most (rule.md recommends picking 1~2)
 _NAME_MAX_CHARS = 20     # cap on suggested_name
-_PLAN_REASON_MAX = 200   # cap on the reason from a plan judgement
-_SAME_EVENT_REASON_MAX = 200  # cap on the reason from a merge-boundary judgement
 _PARSE_ERR_PREVIEW = 200  # how much of `raw` is previewed in the log when JSON parsing fails
 
 # --- importance range (in step with the philosophical boundary) ---
@@ -916,8 +908,6 @@ class Dehydrator:
                 _icon = "📦"
             elif _btype == "feel":
                 _icon = "🫧"
-            elif _btype == "plan":
-                _icon = "📋"
             elif _btype == "letter":
                 _icon = "💌"
             else:
@@ -1279,89 +1269,3 @@ class Dehydrator:
                 "importance": importance,
             })
         return validated
-
-    # ---------------------------------------------------------
-    # API call: judge whether a new event resolves an active plan
-    # ---------------------------------------------------------
-    async def judge_plan_resolution(self, plan_text: str, new_event_text: str) -> dict:
-        """
-        Conservative judgement: false negatives are encouraged, false positives are not.
-        resolved=True is returned only when the new event states plainly that the plan is done.
-        Returns: {"resolved": bool, "confidence": float, "reason": str}
-        Returns {"resolved": False} silently when API unavailable.
-        """
-        if not self.api_available:
-            return {"resolved": False, "confidence": 0.0, "reason": "API 不可用"}
-        system = (
-            "你是一个保守的计划完成判断器。给定一条 plan 和一条新事件，"
-            "只在新事件明确表示该 plan 已被完成、放弃或不再相关时，输出 resolved=true；"
-            "其它情况一律 false。返回严格 JSON：{\"resolved\": true/false, \"confidence\": 0~1, \"reason\": \"...\"}。"
-            "不要解释、不要 markdown、不要多余文本。"
-        )
-        user = (
-            f"PLAN:\n{plan_text[:_PLAN_JUDGE_INPUT_LIMIT]}\n\n"
-            f"NEW EVENT:\n{new_event_text[:_PLAN_JUDGE_INPUT_LIMIT]}"
-        )
-        try:
-            raw = await self._chat(
-                system,
-                user,
-                max_tokens=_PLAN_JUDGE_MAX_TOKENS,
-                temperature=_PLAN_JUDGE_TEMPERATURE,
-            )
-            if not raw:
-                return {"resolved": False, "confidence": 0.0, "reason": "空响应"}
-            cleaned = self._strip_md_fence(raw)
-            data = json.loads(cleaned)
-            return {
-                "resolved": parse_bool(data.get("resolved", False), default=False),
-                "confidence": float(data.get("confidence", 0.0)),
-                "reason": str(data.get("reason", ""))[:_PLAN_REASON_MAX],
-            }
-        except Exception as e:
-            logger.warning(f"judge_plan_resolution failed: {e}")
-            return {"resolved": False, "confidence": 0.0, "reason": str(e)}
-
-    async def judge_same_event(self, old_memory: str, new_content: str) -> dict:
-        """Conservatively decide whether two pieces of content describe the same concrete
-        event.
-
-        A shared topic is not enough to merge on; same_event=True is returned only when the
-        latter is an addition to, a development of, a correction of, or a restatement of the
-        former. With the API unavailable, or on a parse failure, it conservatively returns
-        False.
-        """
-        if old_memory.strip() == new_content.strip():
-            return {"same_event": True, "confidence": 1.0, "reason": "正文完全相同"}
-        if not self.api_available:
-            return {"same_event": False, "confidence": 0.0, "reason": "API 不可用"}
-        system = (
-            "你是一个保守的记忆事件边界判定器。判断新内容与旧记忆是否描述同一个具体事件。"
-            "只有新内容是旧事件的补充、进展、纠正或重复表述时才能判为 true。"
-            "仅主题、人物、情绪或 tags 相似必须判为 false。"
-            "日期不同、场景不同、关键动作不同，或两段各自已是语义闭合的独立事件，必须判为 false。"
-            "有疑问时一律 false。只返回严格 JSON："
-            '{"same_event": true/false, "confidence": 0~1, "reason": "..."}。'
-        )
-        user = (
-            f"OLD MEMORY:\n{old_memory[:_SAME_EVENT_INPUT_LIMIT]}\n\n"
-            f"NEW CONTENT:\n{new_content[:_SAME_EVENT_INPUT_LIMIT]}"
-        )
-        try:
-            raw = await self._chat(
-                system,
-                user,
-                max_tokens=_SAME_EVENT_MAX_TOKENS,
-                temperature=_SAME_EVENT_TEMPERATURE,
-            )
-            if not raw:
-                return {"same_event": False, "confidence": 0.0, "reason": "空响应"}
-            data = json.loads(self._strip_md_fence(raw))
-            return {
-                "same_event": parse_bool(data.get("same_event", False), default=False),
-                "confidence": float(data.get("confidence", 0.0)),
-                "reason": str(data.get("reason", ""))[:_SAME_EVENT_REASON_MAX],
-            }
-        except Exception as e:
-            logger.warning(f"judge_same_event failed: {e}")
-            return {"same_event": False, "confidence": 0.0, "reason": str(e)}

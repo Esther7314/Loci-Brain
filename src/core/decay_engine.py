@@ -77,7 +77,7 @@ _DEFAULT_AROUSAL_BOOST = 0.8      # each +1 of arousal -> +0.8 emotion weight
 
 # --- Locked scores: some buckets do not take part in decay at all ---
 _SCORE_PINNED = 999.0    # pinned / protected / permanent: permanently high (never archived)
-_SCORE_FEEL = 50.0       # feel / plan / letter: fixed middling score (lifecycle driven by status)
+_SCORE_FEEL = 50.0       # feel / letter: fixed middling score
 
 # --- Periodic self-heal: how many missing vectors one cycle may backfill at most,
 #     so the embedding API is not blown out in a single burst ---
@@ -256,10 +256,8 @@ class DecayEngine:
         if metadata.get("type") == "feel":
             return _SCORE_FEEL
 
-        # --- Plan / letter buckets: never decay (status-driven, not time-driven) ---
-        # --- plan / letter buckets do not decay: a plan's lifecycle is driven by its
-        #     status field, and a letter is kept forever ---
-        if metadata.get("type") in ("plan", "letter"):
+        # --- Letters never decay: a letter is kept forever ---
+        if metadata.get("type") == "letter":
             return _SCORE_FEEL
 
         try:
