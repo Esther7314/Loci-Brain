@@ -1614,7 +1614,13 @@ async def recall_core(when: str, room: str, tag: str, query: str,
                     smeta = src.get("metadata", {}) or {}
                     hint = str(smeta.get("summary") or smeta.get("name") or "").strip()
                     hint = re.sub(r"^[\d\- :]+", "", hint)[:60]
-                    src_lines.append(f"  ← {fid}  {hint}")
+                    # Same test as this entry's own "在归档区" line below: a source that
+                    # sank or was deleted still explains the thought, but reading it as
+                    # current would be wrong.
+                    archived = (str(smeta.get("type") or "") == "archived"
+                                or smeta.get("tombstone") or smeta.get("deleted_at"))
+                    src_lines.append(f"  ← {fid}  {hint}"
+                                     + ("  ⚠️在归档区" if archived else ""))
                 else:
                     src_lines.append(f"  ← {fid}  （查无此桶——源可能被硬删过）")
             if meta.get("supersedes"):
