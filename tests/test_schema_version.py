@@ -104,3 +104,69 @@ def test_a_later_backup_does_not_contain_earlier_ones(old_library):
     with zipfile.ZipFile(second) as zf:
         assert not any(n.startswith(S.BACKUP_DIR + "/") for n in zf.namelist())
     assert first.exists()
+
+
+# ───────────────────────── 2 -> 3: want and the old plan become telic ─────────────────────────
+
+@pytest.fixture
+def v2_library(tmp_path):
+    """A library at version 2: one want, three old plans (open, done, dropped)."""
+    _write(tmp_path / "dynamic" / "日常" / "w_aaaaaaaaaaaa.md",
+           {"id": "aaaaaaaaaaaa", "room": "EVENT/SELF", "status": "want", "weight": 0.6,
+            "when": "2026-10-01"}, body="Finish her gift.")
+    for status, bid in (("active", "bbbbbbbbbbbb"), ("resolved", "cccccccccccc"),
+                        ("abandoned", "dddddddddddd")):
+        _write(tmp_path / "plans" / status / f"p_{bid}.md",
+               {"id": bid, "type": "plan", "status": status, "room": "EVENT/SELF",
+                "domain": ["学习"], "weight": 0.5, "change_log": [{"kind": "create"}]},
+               body=f"Plan {status}.")
+    (tmp_path / "_state").mkdir()
+    (tmp_path / "_state" / "schema.json").write_text(
+        json.dumps({"schema_version": 2, "history": []}), encoding="utf-8")
+    return tmp_path
+
+
+def test_a_dry_run_lists_every_wanted_entry_and_moves_nothing(v2_library):
+    report = S.migrate(v2_library)
+    step = report["steps"][0]
+    assert (step["from"], step["files"], step["moved"]) == (2, 4, 3)
+    assert step["fields"] == {"want": 1, "plan": 3}
+    assert sorted(r["id"] for r in report["telic"]) == [
+        "aaaaaaaaaaaa", "bbbbbbbbbbbb", "cccccccccccc", "dddddddddddd"]
+    assert (v2_library / "plans" / "active" / "p_bbbbbbbbbbbb.md").exists()
+
+
+def test_apply_turns_want_and_plans_into_telic_events(v2_library):
+    S.migrate(v2_library, apply=True)
+    want = _meta(v2_library / "dynamic" / "日常" / "w_aaaaaaaaaaaa.md")
+    assert want["direction_of_fit"] == "telic" and "status" not in want
+    assert want["weight"] == 0.6 and want["when"] == "2026-10-01"
+
+    assert not list((v2_library / "plans").rglob("*.md")), "plans/ is emptied"
+    opened = _meta(v2_library / "dynamic" / "学习" / "p_bbbbbbbbbbbb.md")
+    assert (opened["type"], opened["direction_of_fit"]) == ("dynamic", "telic")
+    assert "status" not in opened, "an open plan is simply open"
+    done = _meta(v2_library / "dynamic" / "学习" / "p_cccccccccccc.md")
+    dropped = _meta(v2_library / "dynamic" / "学习" / "p_dddddddddddd.md")
+    assert (done["status"], dropped["status"]) == ("resolved", "abandoned")
+    assert done["change_log"] == [{"kind": "create"}], "history stays as data"
+    assert S.library_version(v2_library) == 3
+
+
+def test_the_moved_plans_are_found_by_the_store(v2_library):
+    import asyncio
+    from core.bucket_manager import BucketManager
+    S.migrate(v2_library, apply=True)
+    mgr = BucketManager({"buckets_dir": str(v2_library)})
+    ids = {b["id"] for b in asyncio.run(mgr.list_all())}
+    assert {"aaaaaaaaaaaa", "bbbbbbbbbbbb", "cccccccccccc", "dddddddddddd"} <= ids
+
+
+def test_a_deleted_plan_stays_in_the_archive(v2_library):
+    _write(v2_library / "archive" / "p_eeeeeeeeeeee.md",
+           {"id": "eeeeeeeeeeee", "type": "plan", "status": "active",
+            "deleted_at": "2026-07-06T20:26:53"}, body="Dropped long ago.")
+    S.migrate(v2_library, apply=True)
+    meta = _meta(v2_library / "archive" / "p_eeeeeeeeeeee.md")
+    assert (meta["type"], meta["direction_of_fit"]) == ("dynamic", "telic")
+    assert meta["deleted_at"] == "2026-07-06T20:26:53"

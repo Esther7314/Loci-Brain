@@ -45,7 +45,19 @@ def main() -> int:
           + ("" if args.apply else "  (dry run, nothing written)"))
     for s in report["steps"]:
         fields = ", ".join(f"{k} {n}" for k, n in sorted(s["fields"].items())) or "nothing"
-        print(f"  step {s['from']} -> {s['to']}: {s['files']} files ({fields})")
+        moved = f", {s['moved']} moved" if s.get("moved") else ""
+        print(f"  step {s['from']} -> {s['to']}: {s['files']} files ({fields}{moved})")
+    if report["telic"]:
+        print()
+        print(f"Wanted entries touched ({len(report['telic'])}). `bound` is not guessed:")
+        print("fill it in by hand with trace(bucket_id=..., bound=[...]).")
+        rows = sorted(report["telic"], key=lambda r: (r["archived"], bool(r["status"])))
+        for row in rows:
+            closed = f" [{row['status']}]" if row["status"] else ""
+            if row["archived"]:
+                closed += " [archive]"
+            when = f" when={row['when']}" if row["when"] else ""
+            print(f"  {row['id']}{closed}{when}  {row['text']}")
     if args.apply:
         print(f"Backup: {report['backup']}")
     else:
