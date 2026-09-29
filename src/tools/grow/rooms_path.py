@@ -20,8 +20,9 @@ Key behaviour:
 - event's v/a became mandatory too; background backfill **never touches any
   bucket's v/a**; importance/meaning are passed by the caller (optional);
   tags are scene anchors, while broadenings go into aliases and feed bm25 only
-- tense="want" -> after create, an update(status="want", weight=...) follows
-- With tense="want", when accepts one more form: a duration marker (3w/10d/2m/1y)
+- direction_of_fit / bound / evidential / internally_generated / weight are
+  validated here and written by create() itself, in the same write as the body
+- With direction_of_fit="telic", when accepts one more form: a duration marker (3w/10d/2m/1y)
   which, together with absolute dates, makes up a want's "three kinds of clock";
   the third is waiting for a trigger (when is left empty and the condition is
   written into the body). How the three are read belongs to
@@ -36,20 +37,24 @@ What this file deliberately does not do:
 - A failed background backfill only logger.warning()s — no rollback, no retrying
   to death
 
-Exports: grow_event(items, tense, weight, test_data) -> str
-         grow_mind(room, text, from_ids, v, a, tense, weight, test_data) -> str
+Exports: grow_event(items, direction_of_fit, bound, evidential, internally_generated,
+                    weight, from_ids, test_data) -> str
+         grow_mind(room, text, from_ids, v, a, direction_of_fit, bound, evidential,
+                   internally_generated, weight, test_data) -> str
 ========================================
 """
 
 import asyncio
 import uuid
+from datetime import timedelta
 
 from core import _fold as _F       # a big event = fold's way of circling time
 from .. import _runtime as rt
 from core._bigevent import SPAN_RE, first_line as _F_first_line
 from .._common import check_content_size
 from core._rooms import check_room, is_mind_room
-from .._subjects import normalize_subjects
+from .._subjects import normalize_bound, normalize_subjects
+from utils import parse_bool
 
 # from (a 64-character ceiling): five 12-hex-digit ids plus four
 # commas = 64, which fits exactly; from the sixth on it would be silently
@@ -71,7 +76,7 @@ _WHEN_RE = _re.compile(r"^\d{4}-\d{2}-\d{2}([ T].*)?$")
 # A want's duration marker, which carries a magnitude — `<N><unit>`, where
 # d=day w=week m=month (~30 days) y=year (~365 days). No prefix symbol: a symbol
 # that carries no meaning does not stay.
-# Recognised only when tense="want" — an ordinary event's when is "the day this
+# Recognised only for something wanted (telic) — an ordinary event's when is "the day this
 # happened", where a duration marker means nothing, so that path still accepts
 # absolute dates only.
 _WANT_DURATION_RE = _re.compile(r"^\d+[dwmy]$")
@@ -395,25 +400,47 @@ def _retired_item_fields(item: dict) -> str:
     return _retired_fields_msg(*hit)
 
 
-def _check_tense(tense: str) -> str | None:
-    if tense and tense not in ("want",):
-        return f'tense 无效：{tense}。可选："want"（想发生的）；已发生就不传。'
-    return None
+def _check_v2(kind: str, direction_of_fit, bound, evidential,
+              internally_generated, weight) -> tuple[dict, str]:
+    """The v2 write-layer arguments -> the create() keywords, or an error to hand back.
 
-
-async def _apply_tense(bucket_id: str, tense: str, weight) -> str:
-    """tense="want" -> status="want" (its ending goes through resolved/abandoned);
-    weight = how heavily the promise sits on me.
-    Returns a warning string (empty = success). A failed update must not be
-    swallowed: the body is there but its orientation never got written, and the
-    caller has to know."""
-    if tense != "want":
-        return ""
-    kwargs: dict = {"status": "want"}
+    Written in the same create() as the body: a follow-up update() that fails would
+    leave a body without its orientation."""
+    d = str(direction_of_fit or "").strip().lower()
+    if d not in ("", "thetic", "telic"):
+        return {}, ('direction_of_fit 只有两个值："telic"（想让它发生：答应的、计划的、想要的），'
+                    '或者不填（记下已经是这样的）。')
+    telic = d == "telic"
+    names, err = normalize_bound(bound)
+    if err:
+        return {}, err
+    if names and not telic:
+        return {}, 'bound 只跟 direction_of_fit="telic" 一起用：只有想要的事才有谁被绑着。'
+    ev = str(evidential or "").strip().lower()
+    if ev and kind != "mind":
+        return {}, ('evidential 只给 mind。事件是亲历还是听说，写在房间里：'
+                    'EVENT/SELF 亲历，EVENT/WORLD 听说、看到。')
+    if ev not in ("", "inference", "assumption"):
+        return {}, 'evidential 只有两个值："inference"（有看得见的迹象）/ "assumption"（凭推理、常识）。'
+    ig = parse_bool(internally_generated, default=False)
+    if ig and kind != "event":
+        return {}, ("internally_generated 只给事件：梦和想象是一段经历，存成 EVENT/SELF；"
+                    "梦醒后想明白的才是 mind，它不带这个记号。")
+    if weight is not None and not telic:
+        return {}, 'weight 只跟 direction_of_fit="telic" 一起用：压在心上多重，只有想要的事才有。'
+    fields = {"direction_of_fit": d if telic else "", "bound": names,
+              "evidential": ev, "internally_generated": ig}
     if weight is not None:
-        kwargs["weight"] = max(0.0, min(1.0, float(weight)))
-    ok = await rt.bucket_mgr.update(bucket_id, **kwargs)
-    return "" if ok else f"⚠️{bucket_id} 正文已存但 want 状态没写上，用 trace 补 status"
+        fields["weight"] = max(0.0, min(1.0, float(weight)))
+    return fields, ""
+
+
+def _in_the_future(when: str) -> bool:
+    """Is `when` after now? A bare date is its local midnight; ten minutes of slack for
+    a clock that runs a little ahead."""
+    from core import _when as _w
+    t = _w.parse_stamp(when)
+    return bool(t) and t > _w.now() + timedelta(minutes=10)
 
 
 async def backfill_sweep() -> int:
@@ -479,13 +506,16 @@ def _normalize_from(from_ids) -> tuple[list[str] | None, str]:
     return ids, ""
 
 
-async def grow_event(items: list, tense: str = "", weight=None,
-                     from_ids=None, test_data: bool = False) -> str:
+async def grow_event(items: list, direction_of_fit: str = "", bound=None,
+                     evidential: str = "", internally_generated: bool = False,
+                     weight=None, from_ids=None, test_data: bool = False) -> str:
     if not isinstance(items, list) or not items:
         return 'kind="event" 需要 items=[{room, text, when?}, ...]，至少一条。'
-    tense_err = _check_tense(tense)
-    if tense_err:
-        return tense_err
+    v2, v2_err = _check_v2("event", direction_of_fit, bound, evidential,
+                           internally_generated, weight)
+    if v2_err:
+        return v2_err
+    telic = v2["direction_of_fit"] == "telic"
     # from is optional for an event (a want should carry a from where possible,
     # but it is not enforced — otherwise it becomes something invented out of
     # nothing).
@@ -516,20 +546,28 @@ async def grow_event(items: list, tense: str = "", weight=None,
             return f"items[{idx}]: {room_err}"
         if not text.strip():
             return f"items[{idx}]: text 不能为空。"
-        # With tense="want", when accepts one more legal form: a duration marker
+        # Something wanted accepts one more legal form of when: a duration marker
         # (one that carries a magnitude).
         # How the three kinds are read lives in core/profile.py._want_clock; this
         # only decides whether the value can be stored.
         if when:
             _when_ok = bool(_WHEN_RE.match(when))
-            if not _when_ok and tense == "want" and _WANT_DURATION_RE.match(when):
+            if not _when_ok and telic and _WANT_DURATION_RE.match(when):
                 _when_ok = True
             if not _when_ok:
-                if tense == "want":
+                if telic:
                     return (f"items[{idx}]: when 格式无效：{when}。三种填法：有期限写 "
                             "YYYY-MM-DD；有量级写时长记号（3w=3周/10d=10天/2m=2个月/1y=1年）；"
                             "等触发就不填 when，条件写在正文里。")
                 return f"items[{idx}]: when 格式无效：{when}。用 YYYY-MM-DD（可带时间），不填＝存入时间。"
+        # You live things only in the past. A lived event set in the future is either
+        # something wanted (telic) or something imagined (internally_generated).
+        if (room == "EVENT/SELF" and when and not telic
+                and not v2["internally_generated"] and _WHEN_RE.match(when)
+                and _in_the_future(when)):
+            return (f"items[{idx}]: 亲历只能在过去——{when} 还没到。想让它发生就加 "
+                    'direction_of_fit="telic"；是梦或想象就加 internally_generated=true；'
+                    "是听别人说的就放 EVENT/WORLD。")
         size_err = check_content_size(text)
         if size_err:
             return f"items[{idx}]: {size_err}"
@@ -596,10 +634,8 @@ async def grow_event(items: list, tense: str = "", weight=None,
             when=item["when"],
             from_ids=",".join(from_ids) if from_ids else "",
             test_data=test_data,
+            **v2,
         )
-        tense_warn = await _apply_tense(bucket_id, tense, weight)
-        if tense_warn:
-            results.append(tense_warn)
         results.append(f"📝{bucket_id} {item['room']}")
         pairs.append((bucket_id, item["text"], "event"))
         existing_by_content.setdefault(item["text"], bucket_id)
@@ -612,8 +648,8 @@ async def grow_event(items: list, tense: str = "", weight=None,
     head = f"{len(pairs)}条 event 已落盘 batch:{batch_id}"
     if dup_n:
         head += f"（另 {dup_n} 条同文已存过，未重建）"
-    if tense == "want":
-        head += " [want]"
+    if telic:
+        head += " [telic]"
     out = head + "（标签/摘要后台回填中，几十秒内可检索）\n" + "\n".join(results)
 
     # Overlong entries get a single remark; **whether and how to split is my
@@ -645,7 +681,8 @@ async def grow_event(items: list, tense: str = "", weight=None,
 # ------------------------------------------------------------
 
 async def grow_mind(room: str, text: str, from_ids, v, a,
-                    tense: str = "", weight=None,
+                    direction_of_fit: str = "", bound=None, evidential: str = "",
+                    internally_generated: bool = False, weight=None,
                     importance=None, meaning: str = "",
                     test_data: bool = False) -> str:
     room = str(room or "").strip()
@@ -658,9 +695,10 @@ async def grow_mind(room: str, text: str, from_ids, v, a,
     size_err = check_content_size(text)
     if size_err:
         return size_err
-    tense_err = _check_tense(tense)
-    if tense_err:
-        return tense_err
+    v2, v2_err = _check_v2("mind", direction_of_fit, bound, evidential,
+                           internally_generated, weight)
+    if v2_err:
+        return v2_err
     # importance / meaning are retired — rejected on the spot, never silently
     # swallowed (the reasoning is in _RETIRED_MSG).
     # The parameters are kept so that this human-readable message can be
@@ -710,8 +748,8 @@ async def grow_mind(room: str, text: str, from_ids, v, a,
         source_tool="grow",
         room=room,
         test_data=test_data,
+        **v2,
     )
-    tense_warn = await _apply_tense(bucket_id, tense, weight)
     try:
         await rt.bucket_mgr.touch_many(from_ids)  # distilling a thought = remembering its sources
     except Exception:
@@ -722,8 +760,6 @@ async def grow_mind(room: str, text: str, from_ids, v, a,
     asyncio.create_task(_backfill_batch([(bucket_id, text, "mind")]))
 
     head = f"🧠mind→{bucket_id} {room} ←{{{','.join(from_ids)}}} V{v:.2f}/A{a:.2f}"
-    if tense == "want":
-        head += " [want]"
-    if tense_warn:
-        head += "\n" + tense_warn
+    if v2["direction_of_fit"] == "telic":
+        head += " [telic]"
     return head + "（标签/摘要后台回填中）"

@@ -1173,3 +1173,11 @@ def is_closed(meta: Optional[dict]) -> bool:
     if str(m.get("status") or "").strip().lower() in ("resolved", "abandoned"):
         return True
     return bool(m.get("resolved", False))
+
+
+def is_telic(meta: Optional[dict]) -> bool:
+    """Is this something wanted — a promise, a plan, a wish (direction_of_fit telic)?
+
+    Wanted and closed are separate questions: an open want is `is_telic and not
+    is_closed`. Nothing closes itself; resolved / abandoned are written by hand."""
+    return str((meta or {}).get("direction_of_fit") or "").strip() == "telic"

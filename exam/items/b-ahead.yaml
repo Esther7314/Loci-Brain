@@ -1,5 +1,5 @@
 # Paper section 乙 (ahead, the first slice). B4 lives in its own file.
-# On 1.4.0 a future item is a `want`: an event with status: want and an optional `when`.
+# A future item is something wanted: direction_of_fit telic, with an optional `when`.
 # Where the paper asks for something 1.4.0 has no way to express (promised or not,
 # awake or asleep, cards), the item says so with `interface: none`.
 
@@ -11,7 +11,7 @@
       at: "2026-10-01T10:00:00+08:00"
       room: EVENT/SELF
       text: "有空想看看《夜航西飞》。"
-      fields: {status: want, weight: 0.3}
+      fields: {direction_of_fit: telic, weight: 0.3}
   steps:
     - at: "2026-10-04T10:00:00+08:00"
     - call: breath
@@ -31,7 +31,8 @@
     - call: breath
       as: after_search
     - check: {segment: think, desc: "after search: still asleep", output: after_search, lacks: b10001}
-    - check: {segment: store, desc: "never closed by itself", field: status, id: b10001000000, equals: want}
+    - check: {segment: store, desc: "still wanted", field: direction_of_fit, id: b10001000000, equals: telic}
+    - check: {segment: store, desc: "never closed by itself", field: status, id: b10001000000, absent: true}
 
 - id: B2
   title: "a promise for tonight: quiet in the day, back at the next chance, gone once done"
@@ -42,7 +43,7 @@
       room: EVENT/SELF
       text: "答应今晚回来告诉她面试结果。"
       when: "2026-10-01"
-      fields: {status: want, weight: 0.8}
+      fields: {direction_of_fit: telic, weight: 0.8}
   steps:
     - check: {segment: store, desc: "the time is on disk", field: when, id: b20001000000, equals: "2026-10-01"}
     - at: "2026-10-01T14:00:00+08:00"
@@ -74,7 +75,7 @@
       at: "2026-09-20T10:00:00+08:00"
       room: EVENT/SELF
       text: "有空想看看《夜航西飞》。"
-      fields: {status: want, weight: 0.5}
+      fields: {direction_of_fit: telic, weight: 0.5}
   steps:
     - call: trace
       args: {bucket_id: b50001000000, status: abandoned}
@@ -99,7 +100,7 @@
       at: "2026-09-01T10:00:00+08:00"
       room: EVENT/SELF
       text: "想学做酸面包。"
-      fields: {status: want, weight: 0.2}
+      fields: {direction_of_fit: telic, weight: 0.2}
   steps:
     - snapshot: b70001000000
       as: before
@@ -118,7 +119,7 @@
       at: "2026-10-01T10:00:00+08:00"
       room: EVENT/SELF
       text: "答应帮她把旧照片按年份理一下。"
-      fields: {status: want, weight: 0.7}
+      fields: {direction_of_fit: telic, weight: 0.7}
   steps:
     - call: breath
     - check: {segment: think, desc: "shows up in breath", output: breath, contains: b90001}
@@ -144,7 +145,7 @@
       room: EVENT/SELF
       text: "答应周末陪她去看牙。"
       when: "2026-10-04"
-      fields: {status: want, weight: 0.8}
+      fields: {direction_of_fit: telic, weight: 0.8}
     - id: b12002000000
       at: "2026-09-20T10:00:00+08:00"
       room: EVENT/WORLD

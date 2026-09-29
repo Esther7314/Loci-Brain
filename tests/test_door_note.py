@@ -57,7 +57,7 @@ def ids(rows):
 # ── reminders ────────────────────────────────────────────────────────────────
 
 def test_a_date_inside_the_window_is_a_reminder_and_the_countdown_is_right():
-    out = door_note([bucket("aaa", when=day(3), status="want")], NOW)
+    out = door_note([bucket("aaa", when=day(3), direction_of_fit="telic")], NOW)
     assert ids(out["reminders"]) == ["aaa"]
     assert out["reminders"][0]["days"] == 3
 
@@ -70,20 +70,20 @@ def test_todays_date_reminds_only_when_it_is_something_you_want():
     today carries when=今天, letting those in buries the real reminders.
     """
     out = door_note([
-        bucket("want_today", when=day(0), status="want"),
+        bucket("want_today", when=day(0), direction_of_fit="telic"),
         bucket("event_today", when=day(0)),
     ], NOW)
     assert ids(out["reminders"]) == ["want_today"]
 
 
 def test_a_date_that_has_passed_does_not_remind():
-    out = door_note([bucket("aaa", when=day(-1), status="want")], NOW)
+    out = door_note([bucket("aaa", when=day(-1), direction_of_fit="telic")], NOW)
     assert out["reminders"] == []
 
 
 def test_beyond_the_window_does_not_remind():
-    inside = door_note([bucket("aaa", when=day(_REMIND_DAYS), status="want")], NOW)
-    outside = door_note([bucket("aaa", when=day(_REMIND_DAYS + 1), status="want")], NOW)
+    inside = door_note([bucket("aaa", when=day(_REMIND_DAYS), direction_of_fit="telic")], NOW)
+    outside = door_note([bucket("aaa", when=day(_REMIND_DAYS + 1), direction_of_fit="telic")], NOW)
     assert ids(inside["reminders"]) == ["aaa"]
     assert outside["reminders"] == []
 
@@ -102,18 +102,18 @@ def test_things_that_have_been_put_down_stop_reminding(silenced):
 # ── what is weighing on me ───────────────────────────────────────────────────
 
 def test_a_want_with_no_date_weighs_on_you():
-    out = door_note([bucket("aaa", status="want")], NOW)
+    out = door_note([bucket("aaa", direction_of_fit="telic")], NOW)
     assert ids(out["heavy"]) == ["aaa"]
 
 
 def test_a_want_whose_day_went_by_unclosed_weighs_on_you():
-    out = door_note([bucket("aaa", when=day(-5), status="want")], NOW)
+    out = door_note([bucket("aaa", when=day(-5), direction_of_fit="telic")], NOW)
     assert ids(out["heavy"]) == ["aaa"]
 
 
 def test_a_want_already_ringing_is_not_also_weighing():
     """Otherwise one entry takes up two slots on the same screen."""
-    out = door_note([bucket("aaa", when=day(3), status="want")], NOW)
+    out = door_note([bucket("aaa", when=day(3), direction_of_fit="telic")], NOW)
     assert ids(out["reminders"]) == ["aaa"]
     assert out["heavy"] == []
 
@@ -126,9 +126,9 @@ def test_a_weight_of_zero_is_zero_and_not_the_default():
     still pressing in plain view.
     """
     out = door_note([
-        bucket("zeroed", status="want", weight=0),
-        bucket("unset", status="want"),
-        bucket("empty_string", status="want", weight=""),
+        bucket("zeroed", direction_of_fit="telic", weight=0),
+        bucket("unset", direction_of_fit="telic"),
+        bucket("empty_string", direction_of_fit="telic", weight=""),
     ], NOW)
     by_id = {h["id"]: h["weight"] for h in out["heavy"]}
     assert by_id["zeroed"] == 0.0, "a deliberately zeroed weight must stay zero"
@@ -143,9 +143,9 @@ def test_the_list_ranks_by_weight_but_the_question_asks_the_oldest():
     earns the single spoken question. Deriving one from the other loses the other.
     """
     out = door_note([
-        bucket("heavy_and_new", status="want", weight=0.9,
+        bucket("heavy_and_new", direction_of_fit="telic", weight=0.9,
                created=NOW - timedelta(days=2)),
-        bucket("light_and_old", status="want", weight=0.1,
+        bucket("light_and_old", direction_of_fit="telic", weight=0.1,
                created=NOW - timedelta(days=60)),
     ], NOW)
     assert ids(out["heavy"]) == ["heavy_and_new", "light_and_old"]
@@ -163,8 +163,8 @@ def test_held_counts_the_days_it_has_hung():
     absolute number would pass here and fail on any machine in another timezone.
     """
     out = door_note([
-        bucket("old", status="want", created=NOW - timedelta(days=60)),
-        bucket("recent", status="want", created=NOW - timedelta(days=10)),
+        bucket("old", direction_of_fit="telic", created=NOW - timedelta(days=60)),
+        bucket("recent", direction_of_fit="telic", created=NOW - timedelta(days=10)),
     ], NOW)
     held = {h["id"]: h["held"] for h in out["heavy"]}
     assert held["old"] - held["recent"] == 50

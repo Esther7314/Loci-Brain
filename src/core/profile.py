@@ -37,7 +37,7 @@ Exports: door_note(all_buckets, now) / event_pool(all_buckets) / edited_by_user(
 import re
 from datetime import datetime
 
-from utils import is_closed
+from utils import is_closed, is_telic
 
 from . import _fold as _F         # anything covered stops surfacing on its own
 from . import _when as _w          # "today" on the local calendar
@@ -253,6 +253,7 @@ def door_note(all_buckets: list, now: datetime) -> dict:
         # Nothing closed (resolved/abandoned), deliberately forgotten, or superseded
         # gets a reminder.
         _status = str(meta.get("status") or "")
+        _telic = is_telic(meta)
         _remindable = (not is_closed(meta)  # only `status` marks an ending; the old booleans stay read-only for compatibility
                        and not meta.get("dont_surface")
                        and not meta.get("superseded_by"))
@@ -268,10 +269,11 @@ def door_note(all_buckets: list, now: datetime) -> dict:
                 # today's `when` is a record, not a reminder; otherwise every single
                 # entry stored today would shout "that's today!" and push the real
                 # reminders out of all three slots. (Which is exactly what happened.)
-                if 0 <= days <= _REMIND_DAYS and (days > 0 or _status == "want"):
+                if 0 <= days <= _REMIND_DAYS and (days > 0 or _telic):
                     reminders.append({"id": bid, "meta": meta, "content": content,
                                       "days": days, "when": m.group(1),
-                                      "status": _status, "loud": _reminder_loudness(days)})
+                                      "status": _status, "telic": _telic,
+                                      "loud": _reminder_loudness(days)})
                     _reminded = True
             except ValueError:
                 pass
@@ -283,7 +285,7 @@ def door_note(all_buckets: list, now: datetime) -> dict:
         # 🔴 No automatic closing was added (that would quietly erase things left
         #    undone). Instead **the number of days it has hung is pushed into view**:
         #    on day 40 with still nothing done, that number asks the question by itself.
-        if _status == "want" and _remindable and not _reminded:
+        if _telic and _remindable and not _reminded:
             _c = _w.parse_stamp(meta.get("created"))
             # ⚠️ Caught while building dreaming: this used to read
             #    `float(meta.get("weight") or 0.5)`, and in Python `0.0 or 0.5` is 0.5 —

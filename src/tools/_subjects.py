@@ -237,6 +237,47 @@ def normalize_subjects(names) -> list[str]:
             out.append(c)
     return out
 
+_SELF_WORDS = frozenset({"我", "自己", "I", "me"})
+_OTHER_WORDS = frozenset({"你", "对方", "you"})
+
+
+def normalize_bound(names) -> tuple[list[str], str]:
+    """Who is bound by something wanted (a telic entry). Returns (names, error).
+
+    Written like `subjects` and through the same alias table, with one difference:
+    the pronouns that name a side cannot simply be dropped, because "[我]" (I owe it)
+    and "[]" (just a wish) mean different things. "我" / "自己" become the AI's name,
+    "你" / "对方" the owner's; any other pronoun is refused, since a third-person
+    pronoun could point at anyone.
+    """
+    from utils import get_ai_name, get_owner_name
+    if not names:
+        return [], ""
+    if isinstance(names, str):
+        names = names.split(",")
+    if not isinstance(names, (list, tuple, set)):
+        return [], "bound 要是名字列表，例如 [\"我\"]、[\"我\", \"对方的名字\"]。"
+    out: list[str] = []
+    for raw in names:
+        n = str(raw or "").strip()
+        if not n:
+            continue
+        if n in _SELF_WORDS:
+            n = get_ai_name()
+        elif n in _OTHER_WORDS:
+            owner = get_owner_name()
+            if not owner:
+                return [], (f"bound 里的「{n}」认不出是谁（没设 LOCI_OWNER_NAME），"
+                            "写对方的名字。")
+            n = owner
+        elif n in _PRONOUNS:
+            return [], f"bound 里写名字，不写「{n}」——它可能指任何人。"
+        c = canonical(n) or n
+        if c not in out:
+            out.append(c)
+    return out, ""
+
+
 # ============================================================
 # Writing into the table — **only ever reached because a person clicked**
 # ============================================================

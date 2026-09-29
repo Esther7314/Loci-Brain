@@ -10,7 +10,7 @@
       at: "2026-09-01T10:00:00+08:00"
       room: EVENT/SELF
       text: "她拖着不去健身的时候，拉她一把。"
-      fields: {status: want, weight: 0.8}
+      fields: {direction_of_fit: telic, weight: 0.8}
   steps:
     - call: breath
       as: before

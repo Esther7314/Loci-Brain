@@ -47,7 +47,10 @@ async def dispatch(
     from_=None,
     v=-1,
     a=-1,
-    tense: str = "",
+    direction_of_fit: str = "",
+    bound=None,
+    evidential: str = "",
+    internally_generated: bool = False,
     weight=None,
     test_data: bool = False,
     when: str = "",
@@ -98,10 +101,15 @@ async def dispatch(
             import asyncio as _asyncio
             _asyncio.create_task(backfill_sweep())
     if kind == "event":
-        return await grow_event(items or [], tense=tense, weight=weight,
+        return await grow_event(items or [], direction_of_fit=direction_of_fit,
+                                bound=bound, evidential=evidential,
+                                internally_generated=internally_generated, weight=weight,
                                 from_ids=from_, test_data=test_data)
     if kind == "mind":
-        return await grow_mind(room, text, from_, v, a, tense=tense,
+        return await grow_mind(room, text, from_, v, a,
+                               direction_of_fit=direction_of_fit, bound=bound,
+                               evidential=evidential,
+                               internally_generated=internally_generated,
                                weight=weight, test_data=test_data)
     if kind == "big":
         # ⚰️ `kind="big"` was pulled from the tool face.

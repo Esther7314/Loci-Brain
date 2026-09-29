@@ -392,16 +392,16 @@ def _days_since_dreamt(meta: dict, now: datetime) -> int | None:
 def want_pool(recs: list[tuple[dict, str]], now: datetime) -> list[Ingredient]:
     """What weighs on me: **wants that have not been closed**, weighted by `weight`.
 
-    Same definition as "weighing on me" in `breath/awaken.py` (status=="want", not
-    closed, not deliberately forgotten, not superseded). ⚠️ With one **deliberate**
+    Same definition as "weighing on me" in `core/profile.py` (telic, not closed, not
+    deliberately forgotten, not superseded). ⚠️ With one **deliberate**
     difference: awaken moves anything with a date inside 30 days over to the ⏰ reminders
     column, but that is a **display split**. As far as a dream is concerned they are all
     still unfinished business, so all of them count here.
     """
-    from utils import is_closed
+    from utils import is_closed, is_telic
     out: list[Ingredient] = []
     for meta, text in recs:
-        if str(meta.get("status") or "") != "want":
+        if not is_telic(meta):
             continue
         if is_closed(meta) or meta.get("dont_surface") or meta.get("superseded_by"):
             continue
@@ -816,8 +816,8 @@ async def leave_a_trace(rec: dict) -> str:
     > recall what it was.**
 
     ⛔ **It does not go into "weighing on me"** — a dream is not something that weighs on
-       you; that column belongs to wants. So no `tense` is passed here and the status
-       stays an ordinary event.
+       you; that column belongs to what is wanted. So it is grown thetic, an ordinary
+       event.
     🔴 **Neutral v/a are used, not the dream's own**, for two solid reasons:
        ① the dream's v/a were **assigned by the model**, and storing them as my own
           feeling breaks "v/a are mine to assign and are never outsourced";

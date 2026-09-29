@@ -44,7 +44,7 @@ from contextlib import AsyncExitStack
 from typing import Optional
 
 from locibrain.domain.memory_messages import resolved_hint
-from utils import parse_bool
+from utils import is_telic, parse_bool
 from .. import _runtime as rt
 from .._pin import pin_note
 from core._rooms import check_room
@@ -103,7 +103,7 @@ def _check_when(when: str, meta: dict) -> str | None:
     matching the definition used by grow.
 
     ⚠️ This one parameter carries three meanings (an event = which day / a period
-       = which stretch / a want = a deadline or a duration). If a parameter
+       = which stretch / something wanted (telic) = a deadline or a duration). If a parameter
        raises that question at all, the design is the problem, and whether to
        split it is still open.
        Until it is split, at least **reject the wrong shape on the spot**: never
@@ -115,7 +115,7 @@ def _check_when(when: str, meta: dict) -> str | None:
             return ('时期的 when 要写成起止："2026-07-31..2026-08-05"，'
                     '进行中就把止留空："2026-07-31.."。')
         return _check_real_dates(m.group(1), m.group(2) or "")
-    if str(meta.get("status") or "") == "want" or meta.get("tense") == "want":
+    if is_telic(meta):
         if not (_DATE_RE.match(when) or _DUR_RE.match(when)):
             return ('想发生的事，when 要么是个日子（"2026-09-01"），'
                     '要么是段时长（"3w" / "10d" / "2m" / "1y"）。')
@@ -191,6 +191,8 @@ async def trace_core(
     folds_append: Optional[list | str] = None,
     closed_by: Optional[str] = "",
     mark_asked: Optional[bool] = False,
+    direction_of_fit: Optional[str] = "",
+    bound: Optional[list | str] = None,
 ) -> str:
     bucket_id = "" if bucket_id is None else str(bucket_id)
     if name is None:
@@ -228,6 +230,16 @@ async def trace_core(
     delete_reason = "" if delete_reason is None else str(delete_reason).strip()
     room = "" if room is None else str(room).strip()
     when = "" if when is None else str(when).strip()
+    direction_of_fit = "" if direction_of_fit is None else str(direction_of_fit).strip().lower()
+    if direction_of_fit and direction_of_fit not in ("thetic", "telic"):
+        return ('direction_of_fit 只有两个值："telic"（想让它发生：答应的、计划的、想要的）'
+                '或 "thetic"（记下已经是这样的）。')
+    bound_names: list | None = None
+    if bound is not None:
+        from .._subjects import normalize_bound
+        bound_names, bound_err = normalize_bound(bound)
+        if bound_err:
+            return bound_err
     if folds_append is None:
         folds_append = []
     if isinstance(folds_append, str):
@@ -538,10 +550,13 @@ async def trace_core(
                 updates["importance"] = 10
         if status:
             s = status.strip().lower()
-            # "want" is a legal status too (reactivating a wish); it used to be
-            # missing from this list and was therefore silently discarded
-            if s in ("active", "resolved", "abandoned", "want"):
-                updates["status"] = s
+            if s == "want":
+                return ('status 不再有 "want"：想不想要是 direction_of_fit="telic"，'
+                        'status 只管关没关。重新打开写 status="active"。')
+            if s not in ("active", "resolved", "abandoned"):
+                return (f'status 无效：{status}。"active"（还开着）/ "resolved"（做完了）'
+                        '/ "abandoned"（不做了）。')
+            updates["status"] = s
         # --- Who closed it ---
         # 🔴 The field is deliberately not called resolved_by — that name is
         #   already taken by plan's propagation
@@ -580,8 +595,15 @@ async def trace_core(
             if room_err:
                 return room_err
             updates["room"] = room
+        if direction_of_fit:
+            updates["direction_of_fit"] = direction_of_fit
+        if bound_names is not None:
+            updates["bound"] = bound_names
         if when:
-            when_err = _check_when(when, meta)
+            # Checked against the direction this same call leaves it in.
+            when_meta = ({**meta, "direction_of_fit": direction_of_fit}
+                         if direction_of_fit else meta)
+            when_err = _check_when(when, when_meta)
             if when_err:
                 return when_err
             updates["when"] = when
@@ -611,12 +633,12 @@ async def trace_core(
 
         # On reactivation, neutralise the old resolved boolean — leave it and
         # is_closed will push the just-reopened entry straight back down
-        if updates.get("status") in ("active", "want") and bucket.get("metadata", {}).get("resolved"):
+        if updates.get("status") == "active" and bucket.get("metadata", {}).get("resolved"):
             updates["resolved"] = False
         # On reactivation, clear the previous round's "who closed it" as well —
         # otherwise, after reopening and then closing it myself, the panel would
         # still be showing the stale marker saying the user closed it.
-        if updates.get("status") in ("active", "want") and bucket.get("metadata", {}).get("closed_by"):
+        if updates.get("status") == "active" and bucket.get("metadata", {}).get("closed_by"):
             updates["closed_by"] = ""
 
         # --- The "last asked" timestamp ---
@@ -724,7 +746,7 @@ async def trace_core(
         changed += (", " if changed else "") + f"media=整体替换({len(updates['media'])}项)"
     if updates.get("status") in ("resolved", "abandoned"):
         changed += f" → {resolved_hint(True)}"
-    elif updates.get("status") in ("active", "want"):
+    elif updates.get("status") == "active":
         changed += f" → {resolved_hint(False)}"
     if cascaded:
         changed += f" → 同步把 {len(cascaded)} 个关联事件桶也标为已放下（{', '.join(cascaded)}）"

@@ -894,7 +894,7 @@ async def build_profile() -> dict:
     # legacy data (a read-side judgement; see core/profile._want_clock). is_question marks
     # the "ask only about the longest-standing one" entry. last_asked/closed_by pass meta
     # straight through, for the front-end to build the "never asked about this" phrase and
-    # to decide whether to show the close button, which only appears for status=="want".
+    # to decide whether to show the close button, which only appears for an open telic entry.
     heavy = [{"id": h["id"], "short": _short_id(h["id"]), "held": h["held"],
               "weight": h["weight"], "label": _label(h), "loud": h["loud"],
               "clock": h["clock"], "clock_note": h["clock_note"],
@@ -1975,8 +1975,8 @@ def register(mcp) -> None:
         """The close button: one click sets status to resolved or abandoned and records that
         the user closed it.
 
-        Open only to buckets whose `status` is currently `"want"` — closing is not an action
-        that applies to anything else. A repeat click on something already closed is caught
+        Open only to something wanted that is still open (telic, not closed) — closing is not
+        an action that applies to anything else. A repeat click on something already closed is caught
         by trace's "no fields need changing" path, so it neither errors nor overwrites
         closed_by a second time.
         """
@@ -2001,9 +2001,10 @@ def register(mcp) -> None:
         if not target:
             return JSONResponse({"error": f"查无此桶：{bucket_id}"}, status_code=404)
         tmeta = target.get("metadata", {}) or {}
-        if str(tmeta.get("status") or "") != "want":
+        from utils import is_closed, is_telic
+        if not is_telic(tmeta) or is_closed(tmeta):
             return JSONResponse(
-                {"error": f"这条不是待了结的 want（当前 status={tmeta.get('status') or '空'}），没有结案这个动作"},
+                {"error": "这条不是还开着的想要（telic 且没关），没有结案这个动作"},
                 status_code=409)
 
         try:

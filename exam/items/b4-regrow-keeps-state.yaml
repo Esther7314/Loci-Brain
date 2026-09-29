@@ -11,7 +11,7 @@ setup:
     when: "2026-10-01"
     tags: [面试]
     subjects: [用户]
-    fields: {status: want, weight: 0.8}
+    fields: {direction_of_fit: telic, weight: 0.8}
 steps:
   - snapshot: b40001000000
     as: before
@@ -21,7 +21,7 @@ steps:
   - newest: b40001000000
     as: new
   - check: {segment: store, desc: "a new version exists", field: supersedes, id: $new, equals: b40001000000}
-  - check: {segment: store, desc: "new version still open (status want)", field: status, id: $new, equals: want}
+  - check: {segment: store, desc: "new version still wanted (telic)", field: direction_of_fit, id: $new, equals: telic}
   - check: {segment: store, desc: "new version keeps its time", field: when, id: $new, equals: "2026-10-01"}
   - check: {segment: store, desc: "new version keeps its weight", field: weight, id: $new}
   - check: {segment: store, desc: "new version keeps subjects", field: subjects, id: $new, contains: 用户}

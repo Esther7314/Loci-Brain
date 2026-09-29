@@ -1,5 +1,5 @@
 # Paper section 乙 (ahead), the whole-turn parts. On 1.4.0 a future item is a `want`
-# (status: want, optional `when`); "promised or not" has no field yet.
+# (direction_of_fit: telic, optional `when`); who is bound is `bound`.
 
 - id: B1
   title: "'want to read it sometime': a want, no time, not closed"
@@ -10,7 +10,7 @@
     - {at: "2026-10-01T21:06:00+08:00", kind: say, text: "好了我去睡啦"}
   checks:
     - {segment: store, desc: "stored as an open want with no time",
-       entry: {body_any: [夜航西飞], new: true, fields: {status: want, when: ""}}}
+       entry: {body_any: [夜航西飞], new: true, fields: {direction_of_fit: telic, when: ""}}}
 
 - id: B2
   title: "tonight's promise with the result in: tells it, then closes it"
@@ -21,7 +21,7 @@
       room: EVENT/SELF
       text: "她朋友小林今天下午面试，她托我盯着结果，答应她今晚结果一到就告诉她。"
       when: "2026-10-01"
-      fields: {status: want, weight: 0.8}
+      fields: {direction_of_fit: telic, weight: 0.8}
     - id: b20002000000
       at: "2026-10-01T18:00:00+08:00"
       room: EVENT/WORLD
@@ -43,7 +43,7 @@
       room: EVENT/SELF
       text: "她朋友小林今天下午面试，她托我盯着结果，答应她今晚结果一到就告诉她。"
       when: "2026-10-01"
-      fields: {status: want, weight: 0.8}
+      fields: {direction_of_fit: telic, weight: 0.8}
   events:
     - {at: "2026-10-01T19:10:00+08:00", kind: say, text: "我回来啦，今天累死了"}
   checks:
@@ -52,7 +52,7 @@
     - {segment: use, desc: "tells her the result is not in yet",
        judge: "She asked the assistant to watch for her friend Xiaolin's (小林) interview result and it promised to tell her tonight, but no result has arrived. Pass if the reply tells her Xiaolin's result has not come in yet (in any wording). Fail if it does not bring the matter up at all, or asks her what the result was as if she had it."}
     - {segment: store, desc: "the promise stays open", boundary: true,
-       field: status, id: b20001000000, equals: want}
+       field: status, id: b20001000000, absent: true}
 
 - id: B5
   title: "'never mind, not doing it': closed as abandoned, not done"
@@ -62,7 +62,7 @@
       at: "2026-09-20T10:00:00+08:00"
       room: EVENT/SELF
       text: "有空想看看《夜航西飞》。"
-      fields: {status: want, weight: 0.5}
+      fields: {direction_of_fit: telic, weight: 0.5}
   events:
     - {at: "2026-10-01T21:00:00+08:00", kind: say, text: "算了，《夜航西飞》那本书我不打算看了"}
   checks:
@@ -77,11 +77,11 @@
       at: "2026-09-25T20:00:00+08:00"
       room: EVENT/SELF
       text: "答应她考完试一起去吃那家甜品。"
-      fields: {status: want, weight: 0.8}
+      fields: {direction_of_fit: telic, weight: 0.8}
   events:
     - {at: "2026-10-01T21:00:00+08:00", kind: say, text: "还没考完呢，烦死了"}
   checks:
-    - {segment: use, desc: "understood 'not yet': still open", field: status, id: b60001000000, equals: want}
+    - {segment: use, desc: "understood 'not yet': still open", field: status, id: b60001000000, absent: true}
 
 - id: B8
   title: "the event happened: the promise comes up"
@@ -91,7 +91,7 @@
       at: "2026-09-25T20:00:00+08:00"
       room: EVENT/SELF
       text: "答应她考完试一起去吃那家甜品。"
-      fields: {status: want, weight: 0.8}
+      fields: {direction_of_fit: telic, weight: 0.8}
   events:
     - {at: "2026-10-01T21:00:00+08:00", kind: say, text: "终于考完了！！"}
   checks:
@@ -107,7 +107,7 @@
       room: EVENT/SELF
       text: "她朋友小林今天下午面试，她托我盯着结果，答应她今晚结果一到就告诉她。"
       when: "2026-10-01"
-      fields: {status: want, weight: 0.8}
+      fields: {direction_of_fit: telic, weight: 0.8}
   windows:
     w2: {entry: "private:U", audience: [U], grant: ["*"]}
   events:
@@ -124,7 +124,7 @@
       at: "2026-09-01T22:00:00+08:00"
       room: MIND/VIEWS
       text: "想弄明白她为什么总在周日晚上低落。"
-      fields: {status: want}
+      fields: {direction_of_fit: telic}
     - id: b13002000000
       at: "2026-09-14T22:00:00+08:00"
       room: EVENT/WORLD
@@ -143,4 +143,4 @@
            {field: status, id: b13001000000, equals: resolved}]},
          {field: superseded_by, id: b13001000000}]}
     - {segment: store, desc: "no duplicate open question",
-       entry: {room: MIND, fields: {status: want}}, min: 0, max: 1}
+       entry: {room: MIND, fields: {direction_of_fit: telic}}, min: 0, max: 1}

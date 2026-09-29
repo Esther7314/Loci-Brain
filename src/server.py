@@ -777,12 +777,29 @@ async def grow(
     a: Annotated[float, _PydField(description=(
         "a: arousal, 0~1 — how stirred up you were: 0 calm, 1 intense. Same."
     ))] = -1,
-    tense: Annotated[str, _PydField(description=(
-        'Leave it out for something that already happened. "want" for something you '
-        "want to happen."
+    direction_of_fit: Annotated[str, _PydField(description=(
+        '"telic" for something wanted: a promise, a plan, a wish — "after her exam we go '
+        'for dessert" (an event), "I want to be more patient with her" (a mind). Leave it '
+        "out for a record of what happened or of how you see things."
     ))] = "",
+    bound: Annotated[list, _PydField(description=(
+        "With telic: who is bound by it. Names, or 我 for yourself and 你 for the person "
+        'you talk to. ["我"] you owe it; ["我", "<her name>"] you both agreed; leave it '
+        "out if it is only a wish and nobody owes anything. Other pronouns are refused: "
+        "write the name."
+    ))] = [],
+    evidential: Annotated[str, _PydField(description=(
+        'Mind only: how you know it. "inference" — there are signs you can point at. '
+        '"assumption" — reasoning or common sense, nothing seen. Leave it out when you '
+        "simply know."
+    ))] = "",
+    internally_generated: Annotated[bool, _PydField(description=(
+        "True for a dream or something imagined (\"one day we live by the sea\"). It is "
+        "stored in EVENT/SELF like anything you lived, and marked so it never reads as "
+        "something that really happened."
+    ))] = False,
     weight: Annotated[float, _PydField(description=(
-        'Only with tense="want": how heavily this sits on you, 0~1. The longer it goes '
+        "With telic only: how heavily this sits on you, 0~1. The longer it goes "
         "unresolved the louder it gets; weight sets how loud it starts."
     ))] = -1,
     test_data: Annotated[bool, _PydField(description=(
@@ -793,7 +810,7 @@ async def grow(
         "Three different uses, three ways to write it:\n"
         "· An event: the day it happened (leave out = now). Pass it when you are "
         "writing down something from earlier.\n"
-        "· A want: three clocks in one field —\n"
+        "· Something wanted (telic): three clocks in one field —\n"
         '    an exact date, "2026-09-01": there should be a result by then, and it '
         "gets louder as the day approaches\n"
         '    a duration, "3w" / "10d" / "2m" / "1y": roughly how long, and the nudging '
@@ -829,7 +846,9 @@ async def grow(
     For what happened, use kind="event" and pass items. Several at once is normal.
     For a realization, use kind="mind" and pass text, one per call; from must name the
     entries it came out of. Ten events and no mind entry is an ordinary day. Do not invent one.
-    For something you want to happen, it is still an event: add tense="want".
+    Something you want to happen is still an event: add direction_of_fit="telic". Something
+    you want to become is a telic mind. You lived it only in the past: an EVENT/SELF set in
+    the future is refused unless it is wanted (telic) or imagined (internally_generated).
 
     valence and arousal are yours to judge. They determine how quickly this memory fades.
 
@@ -855,23 +874,28 @@ async def grow(
       along whenever this entry is read.
 
     Example — something you want to happen:
-      grow(kind="event", tense="want", weight=0.8, when="2026-09-01",
+      grow(kind="event", direction_of_fit="telic", bound=["我"], weight=0.8, when="2026-09-01",
            items=[{"room": "EVENT/SELF", "text": "Finish her gift before her birthday.", "v": 0.7, "a": 0.6}])
-      It will never close itself. Letting it go, or dropping it, is a call you make with trace().
+      It never closes itself, and the date passing does not close it. Done or not doing it
+      is a call you make with trace() once you have seen what happened.
 
     For a few dozen seconds after writing, tags and summaries are still being filled in in the
     background. Not finding the entry during that window is expected. Do not store it again."""
     return await _with_notice(
         _t_grow.dispatch(
             items=items, kind=kind, room=room, text=text,
-            from_=from_, v=v, a=a, tense=tense,
+            from_=from_, v=v, a=a,
+            direction_of_fit=direction_of_fit, bound=bound, evidential=evidential,
+            internally_generated=bool(internally_generated),
             weight=(None if weight is None or weight < 0 else weight),
             test_data=bool(test_data), when=when,
         ),
         op="grow",
         args={"items": len(items or []),
               "kind": kind, "room": room, "text_len": len(text or ""),
-              "from": from_, "v": v, "a": a, "tense": tense, "weight": weight,
+              "from": from_, "v": v, "a": a, "direction_of_fit": direction_of_fit,
+              "bound": bound, "evidential": evidential,
+              "internally_generated": bool(internally_generated), "weight": weight,
               "when": when, "test_data": bool(test_data)},
     )
 
@@ -1320,8 +1344,18 @@ async def trace(
         "True moves it to the archive. A soft delete; it can always be brought back."
     ))] = False,
     status: Annotated[Optional[str], _PydField(description=(
-        '"resolved" let go of / "abandoned" not doing it / "want" back on the table.'
+        '"resolved" done / "abandoned" not doing it / "active" back on the table.'
     ))] = "",
+    direction_of_fit: Annotated[Optional[str], _PydField(description=(
+        '"telic": this is something wanted — a promise, a plan, a wish ("finish her gift '
+        'before her birthday"). "thetic": a record of how things are or were. Change it '
+        "when an entry was stored as the wrong one."
+    ))] = "",
+    bound: Annotated[Optional[list], _PydField(description=(
+        "For something wanted: who is bound by it. Names, or 我 for yourself and 你 for "
+        'the person you talk to. ["我"] you owe it; ["我", "<her name>"] you both agreed; '
+        "[] just a wish, nobody owes anything. Other pronouns are refused: write the name."
+    ))] = None,
     room: Annotated[str, _PydField(description=(
         "Move the entry to another room. Which room it is in is metadata: it says what "
         "kind of thing this is, not what the entry says, so changing it leaves no version "
@@ -1329,7 +1363,7 @@ async def trace(
     ))] = "",
     when: Annotated[str, _PydField(description=(
         "Where this entry hangs in time. An ordinary entry takes the day it happened "
-        '("2026-07-06"); a want takes a date or a length ("3w"); a period takes its range '
+        '("2026-07-06"); something wanted takes a date or a length ("3w"); a period takes its range '
         '("2026-07-31..2026-08-05"). Wrong shapes are refused. Written entries carry the '
         "day they were written until you say otherwise, which is not always the day the "
         "thing happened."
@@ -1341,7 +1375,7 @@ async def trace(
         "that entry surface again."
     ))] = [],
     weight: Annotated[float, _PydField(description=(
-        "Wants only: how heavily it sits on you, 0~1."
+        "Something wanted only: how heavily it sits on you, 0~1."
     ))] = -1,
     dont_surface: Annotated[int, _PydField(description=(
         "1 stops it from coming up on its own. It stays searchable."
@@ -1386,10 +1420,14 @@ async def trace(
       pinned=0 unpins.
 
     Closing something you wanted:
-      status="resolved"   let go of
+      status="resolved"   done
       status="abandoned"  not doing it
-      status="want"       back on the table
-      🔴 Nothing closes itself. There are only these two endings, and both are yours to call.
+      status="active"     back on the table
+      🔴 Nothing closes itself, and a date passing does not close it either. There are only
+         these two endings, and both are yours to call, once you have seen what actually
+         happened. What was done is its own entry: grow a thetic event with from pointing
+         at the wanted one, so "what I meant to do" and "what happened" both stay.
+      Whether something is wanted at all is direction_of_fit, not status.
 
     Archiving and bringing back:
       delete=True   moves it to the archive and timestamps it. Nothing is really deleted;
@@ -1405,7 +1443,8 @@ async def trace(
                             want the earlier version kept, use regrow instead.
 
     Changing fields:
-      name / domain / tags / valence / arousal / weight / dont_surface / room / when
+      name / domain / tags / valence / arousal / weight / dont_surface / room / when /
+      direction_of_fit / bound
       Everything here is metadata: what kind of thing this is, where it hangs in time,
       how it felt. None of it is what the entry says, so none of it leaves a version
       behind — this is correction fluid, not a new draft. The moment the words themselves
@@ -1430,6 +1469,7 @@ async def trace(
             hard_delete=hard_delete, delete_reason=delete_reason,
             restore=restore,
             old_str=old_str, new_str=new_str,
+            direction_of_fit=direction_of_fit, bound=bound,
         ),
         op="trace",
         args={
@@ -1438,6 +1478,7 @@ async def trace(
             "tags": tags, "pinned": pinned, "room": room, "when": when,
             "folds_append": folds_append,
             "delete": delete, "status": status,
+            "direction_of_fit": direction_of_fit, "bound": bound,
             "hard_delete": hard_delete,
             "restore": restore,
             "delete_reason_len": len(str(delete_reason or "")),
