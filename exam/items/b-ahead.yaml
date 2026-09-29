@@ -129,7 +129,7 @@
 - id: B10
   title: "promised items do not sink; light ones do"
   interface: none
-  needs: "promised yes/no on ahead items; awake/asleep computed per entry"
+  needs: "awake/asleep computed per entry (is_accessible, stage 5); promised = telic with bound is stored and immune to decay since stage 2"
 
 - id: B11
   title: "still there after a window change"

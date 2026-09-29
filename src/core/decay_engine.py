@@ -48,7 +48,7 @@ import math
 import asyncio
 import logging
 
-from utils import parse_iso_datetime, is_closed, utc_now
+from utils import parse_iso_datetime, is_closed, is_telic, utc_now
 from ._bigevent import BIGEVENT_TAG
 from ._rooms import is_mind_room
 
@@ -332,7 +332,8 @@ class DecayEngine:
         as i/feel never sank while the 61 held as dynamic did. Testing `room` says it in
         one line instead.
         pinned · rules · letter · seed · profile facts · periods · anything in a /MIND/
-        room.
+        room · something wanted that binds someone and is still open · anything that
+        comes back every year.
         (Every permanent bucket is pinned or protected anyway, so the first test already
         covers them.)
 
@@ -359,6 +360,14 @@ class DecayEngine:
         tags = meta.get("tags") or []
         if isinstance(tags, list) and any(
                 str(t) in ("__档案事实__", BIGEVENT_TAG) for t in tags):
+            return True
+        # Owed and not yet settled: it must not sink while someone is bound by it
+        # (plan part 1, rule 6). Closing it lets it age like anything else. It still
+        # does not have to be in front of you every day; that is breath's business.
+        if is_telic(meta) and meta.get("bound") and not is_closed(meta):
+            return True
+        # A birthday or an anniversary rings again next year: it never sinks.
+        if meta.get("recurrence"):
             return True
         return False
 

@@ -86,6 +86,7 @@ IMMUNE_KINDS = [
     ("an insight (MIND/VIEWS)",   {"room": "MIND/VIEWS"}),
     ("a profile fact",            {"tags": ["__档案事实__"]}),
     ("a period (__大event__)",     {"tags": ["__大event__"]}),
+    ("comes back every year",     {"recurrence": "FREQ=YEARLY"}),
 ]
 
 
@@ -156,3 +157,29 @@ def test_the_immune_marks_are_read_from_this_bucket_and_not_guessed():
     # ambient (a global flag, a cached previous call) rather than by this metadata.
     DecayEngine.stage_of(_meta(3650, pinned=True))
     assert DecayEngine.stage_of(_meta(3650)) == "sunk"
+
+
+# ============================================================
+# Owed and open: immune until it is closed, then it ages like anything else
+# ============================================================
+
+OWED = {"direction_of_fit": "telic", "bound": ["DT"]}
+
+
+def _open(days: float, **fields) -> dict:
+    meta = _meta(days, **fields)
+    meta.pop("status", None)          # the fixture closes everything; open is no status
+    return meta
+
+
+@pytest.mark.parametrize("days", AGES_IN_DAYS)
+def test_something_owed_and_open_never_sinks(days):
+    assert DecayEngine.stage_of(_open(days, **OWED)) == "alive"
+
+
+def test_once_closed_what_was_owed_ages_again():
+    assert DecayEngine.stage_of(_meta(3650, **OWED)) != "alive"
+
+
+def test_a_wish_nobody_owes_ages_like_anything_else():
+    assert DecayEngine.stage_of(_open(3650, direction_of_fit="telic")) != "alive"
