@@ -106,7 +106,7 @@ def test_the_future_is_fine_when_imagined_or_heard(store):
     ({"weight": 0.5}, "weight 只跟"),
     ({"evidential": "inference"}, "evidential 只给 mind"),
     ({"direction_of_fit": "want"}, "direction_of_fit 只有两个值"),
-    ({"direction_of_fit": "telic", "bound": ["她"]}, "bound 里写名字"),
+    ({"direction_of_fit": "telic", "bound": ["他"]}, "bound 里写名字"),
 ])
 def test_misplaced_companions_are_refused(store, kwargs, needle):
     out = run(grow_mod.dispatch(kind="event", items=[ITEM], **kwargs))
