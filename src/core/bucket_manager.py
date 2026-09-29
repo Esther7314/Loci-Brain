@@ -1464,6 +1464,22 @@ class BucketManager:
             return None
         return data
 
+    def is_live(self, bucket_id: str) -> bool:
+        """Is this id a bucket in the active store? Archived, soft-deleted (both live in
+        archive/) and missing ids are not. Synchronous and file-level: a cover check runs
+        once per covered entry inside read loops, and must not parse YAML."""
+        if not bucket_id or not isinstance(bucket_id, str):
+            return False
+        file_path = self._find_bucket_file(bucket_id)
+        if not file_path:
+            return False
+        path = os.path.normcase(os.path.abspath(file_path))
+        archive = os.path.normcase(os.path.abspath(self.archive_dir))
+        try:
+            return os.path.commonpath((path, archive)) != archive
+        except ValueError:
+            return True
+
     async def get_including_archive(self, bucket_id: str) -> Optional[dict]:
         """Read one bucket by ID without hiding its archived/tombstoned state."""
         if not bucket_id or not isinstance(bucket_id, str):

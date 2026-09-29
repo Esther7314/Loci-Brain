@@ -160,7 +160,8 @@ def _usable(meta: dict) -> bool:
     recalled stretch of time — show the topmost layer, and keep the ones underneath
     reachable by drilling down.
     """
-    if meta.get("superseded_by") or meta.get("covered_by") or meta.get("deleted_at"):
+    from ._fold import is_covered   # _fold imports this module
+    if is_covered(meta) or meta.get("deleted_at"):
         return False
     if str(meta.get("status") or "") in ("resolved", "abandoned"):
         return False

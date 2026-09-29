@@ -126,16 +126,26 @@ from ._bigevent import BIGEVENT_TAG, SPAN_RE
 GIST_TAG = "__gist__"
 
 
-def is_covered(meta: dict) -> bool:
-    """Is this one covered?
+def _is_live(bucket_id: str) -> bool:
+    """A cover only counts while the one covering is in the active store. Without a
+    store (unit tests that never started one) every recorded cover counts."""
+    mgr = rt.bucket_mgr
+    if mgr is None or not hasattr(mgr, "is_live"):
+        return True
+    return mgr.is_live(bucket_id)
 
-    🔴 Either field being non-empty counts: `covered_by` (written by fold) and
-    `superseded_by` (the older field regrow has always written; plenty of it on disk,
-    kept read-only for compatibility).
+
+def is_covered(meta: dict) -> bool:
+    """Is this one covered by something still in the active store?
+
+    🔴 Either field counts: `covered_by` (written by fold) and `superseded_by` (the
+    older field regrow has always written; plenty of it on disk, kept read-only for
+    compatibility).
+    🔴 A cover whose gist / newer version was archived or deleted no longer counts, so
+    the entry surfaces again. The fields on disk are left alone: restoring the gist
+    from the archive covers it again with nothing to rewrite.
     """
-    if not isinstance(meta, dict):
-        return False
-    return bool(meta.get("covered_by") or meta.get("superseded_by"))
+    return bool(covers_of(meta))
 
 
 def _covered_list(meta: dict) -> list[str]:
@@ -152,15 +162,16 @@ def _covered_list(meta: dict) -> list[str]:
 
 
 def covers_of(meta: dict) -> list[str]:
-    """Every gist id covering this entry (they may cross — rule 6). The `covered_by`
-    roster plus `superseded_by` for compatibility."""
+    """Every live gist id covering this entry (they may cross — rule 6). The
+    `covered_by` roster plus `superseded_by` for compatibility; ids no longer in the
+    active store are dropped (see `is_covered`)."""
     if not isinstance(meta, dict):
         return []
     out = _covered_list(meta)
     sup = str(meta.get("superseded_by") or "").strip()
     if sup and sup not in out:
         out.append(sup)
-    return out
+    return [cid for cid in out if _is_live(cid)]
 
 
 def cover_ids(meta: dict) -> list[str]:

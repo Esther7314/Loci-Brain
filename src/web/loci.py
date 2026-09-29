@@ -248,7 +248,8 @@ def _sim_visible(meta: dict) -> bool:
         return False
     if "__seed__" in [str(t) for t in (meta.get("tags") or [])]:
         return False
-    if (meta.get("superseded_by") or meta.get("covered_by")
+    from core import _fold as _F
+    if (_F.is_covered(meta)
             or meta.get("tombstone") or meta.get("deleted_at")):
         return False
     return True
