@@ -323,6 +323,16 @@ _EDITABLE_BUCKET_TYPES = frozenset(
 )
 _PLAN_STATUSES = frozenset({"active", "resolved", "abandoned"})
 
+# The write-layer fields of v2 (plan part 1). Absent is the default reading of each:
+# no direction_of_fit = thetic (recording what is), no evidential = not marked,
+# no internally_generated = it happened out there. So only a marked value is stored.
+DIRECTIONS_OF_FIT = frozenset({"thetic", "telic"})
+EVIDENTIALS = frozenset({"inference", "assumption"})
+# RFC 5545 RRULE, the subset this version reads: yearly, on the date in `when`.
+RECURRENCES = frozenset({"FREQ=YEARLY"})
+V2_FIELDS = ("direction_of_fit", "bound", "evidential", "internally_generated",
+             "recurrence", "backfilled")
+
 # --- Field truncation lengths, so the frontmatter cannot bloat ---
 _SOURCE_TOOL_MAX = 32
 _GROW_BATCH_ID_MAX = 64
@@ -347,6 +357,7 @@ _MAX_DOMAIN_CHARS = 128
 # Not many people appear in one memory; the cap exists to stop a model having a fit and
 # splitting an entire passage into person names.
 _MAX_SUBJECTS = 8
+_MAX_BOUND = 8
 _MAX_SUBJECT_CHARS = 64
 
 # --- meaning / media: hold's experience-anchoring extension ---
@@ -644,6 +655,39 @@ class BucketManager:
                 f"内容过大（{size / 1024:.1f} KB > 上限 {cap / 1024:.0f} KB）。"
                 "请拆分后存入，或调整 config.limits.max_bucket_bytes。"
             )
+
+    def _v2_fields(self, **given) -> dict:
+        """The v2 write-layer fields in their stored form; raises ValueError on a value
+        outside the enums. A field at its default comes back as None, which update()
+        reads as "remove the field" and create() drops."""
+        out: dict = {}
+        if "direction_of_fit" in given:
+            v = str(given["direction_of_fit"] or "").strip()
+            if v and v not in DIRECTIONS_OF_FIT:
+                raise ValueError(f"direction_of_fit must be thetic or telic, got {v!r}")
+            out["direction_of_fit"] = "telic" if v == "telic" else None
+        if "bound" in given:
+            names = self._normalize_metadata_list(
+                given["bound"] or [], max_items=_MAX_BOUND, max_chars=_MAX_SUBJECT_CHARS)
+            out["bound"] = names or None
+        if "evidential" in given:
+            v = str(given["evidential"] or "").strip()
+            if v and v not in EVIDENTIALS:
+                raise ValueError(f"evidential must be inference or assumption, got {v!r}")
+            out["evidential"] = v or None
+        if "internally_generated" in given:
+            out["internally_generated"] = (
+                True if parse_bool(given["internally_generated"], default=False) else None)
+        if "recurrence" in given:
+            v = str(given["recurrence"] or "").strip().upper()
+            if v and v not in RECURRENCES:
+                raise ValueError(f"recurrence: only FREQ=YEARLY is read, got {v!r}")
+            out["recurrence"] = v or None
+        if "backfilled" in given:
+            fields = self._normalize_metadata_list(
+                given["backfilled"] or [], max_items=16, max_chars=32)
+            out["backfilled"] = fields or None
+        return out
 
     @classmethod
     def _normalize_metadata_list(
@@ -1104,6 +1148,12 @@ class BucketManager:
         summary: str = "",
         when: str = "",
         subjects: Optional[list[str]] = None,
+        direction_of_fit: str = "",
+        bound: Optional[list[str]] = None,
+        evidential: str = "",
+        internally_generated: bool = False,
+        recurrence: str = "",
+        backfilled: Optional[list[str]] = None,
     ) -> str:
         """
         Create a new memory bucket, return bucket ID.
@@ -1256,9 +1306,16 @@ class BucketManager:
         meaning_item = self._normalize_meaning_item(meaning)
         if meaning_item:
             metadata["meaning"] = [meaning_item]
-        # --- a plan's "weight of the promise", 0.0-1.0, which is not importance ---
+        # --- v2 write-layer fields (validated here too: a bad value never reaches disk) ---
+        metadata.update({k: v for k, v in self._v2_fields(
+            direction_of_fit=direction_of_fit, bound=bound, evidential=evidential,
+            internally_generated=internally_generated, recurrence=recurrence,
+            backfilled=backfilled).items() if v is not None})
+        # --- "weight of the promise", 0.0-1.0, which is not importance ---
         # importance = how important this thing is; weight = how heavily it presses on me.
-        if bucket_type == "plan" and weight is not None:
+        # It belongs to what is wanted: telic (and the old plan type until it goes).
+        if (bucket_type == "plan" or metadata.get("direction_of_fit") == "telic") \
+                and weight is not None:
             metadata["weight"] = _clamp01(weight, _DEFAULT_VALENCE)
         # --- bucket_type_defaults: per-type default values ---
         # config.bucket_type_defaults may hold {letter: {weight: 1.0, dont_surface: false}, ...}
@@ -2119,6 +2176,14 @@ class BucketManager:
             if isinstance(existing_meaning, str):
                 existing_meaning = [existing_meaning]
             post["meaning"] = (list(existing_meaning) + [kwargs["meaning_append"]])[:_MEANING_LIST_MAX_ITEMS]
+        # --- v2 write-layer fields: stored form; None (= the default) removes the field ---
+        _v2_given = {k: kwargs[k] for k in V2_FIELDS if k in kwargs}
+        if _v2_given:
+            try:
+                kwargs.update(self._v2_fields(**_v2_given))
+            except ValueError as exc:
+                logger.warning(f"update() refused {bucket_id}: {exc}")
+                return False
         # --- Pass-through fields for the plan/letter lifecycle ---
         # These fields have no validation or conversion logic: whatever is given is written.
         # A new field only has to be added to this tuple.
@@ -2209,7 +2274,9 @@ class BucketManager:
                   #    symptom looking like a bug somewhere else entirely. What catches
                   #    it is not remembering, it is the assertion that the stamp really
                   #    reached disk.
-                  "name_source", "summary_source"):
+                  "name_source", "summary_source",
+                  # v2 write-layer fields, already normalised just above this loop.
+                  *V2_FIELDS):
             if k in kwargs:
                 if k == "weight" and kwargs[k] is not None:
                     post[k] = _clamp01(kwargs[k], _DEFAULT_VALENCE)
