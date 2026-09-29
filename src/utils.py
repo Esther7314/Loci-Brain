@@ -38,7 +38,7 @@ import math
 import tempfile
 import threading
 from pathlib import Path
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Callable, Optional
 
 
@@ -397,12 +397,11 @@ def parse_bool(value, *, default=...) -> bool:
 
 
 def parse_iso_datetime(value) -> datetime:
-    """Parse ISO/date metadata into a timezone-compatible local datetime.
+    """Parse ISO/date metadata into a naive UTC datetime.
 
-    OB historically stores naive local timestamps, while imported/frontmatter
-    data may contain ``Z`` or explicit offsets. Converting aware values to local
-    time and dropping ``tzinfo`` lets existing ``datetime.now()`` comparisons
-    remain correct instead of treating valid timestamps as corrupt data.
+    Stored stamps are naive UTC (see ``now_iso``), while imported/frontmatter
+    data may carry ``Z`` or an explicit offset. Aware values are converted to UTC
+    and stripped, so every result compares against ``utc_now()``.
     """
     if isinstance(value, datetime):
         parsed = value
@@ -416,7 +415,7 @@ def parse_iso_datetime(value) -> datetime:
             raw = raw[:-1] + "+00:00"
         parsed = datetime.fromisoformat(raw)
     if parsed.tzinfo is not None:
-        parsed = parsed.astimezone().replace(tzinfo=None)
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
     return parsed
 
 
@@ -1120,11 +1119,19 @@ def count_tokens_approx(text: str) -> int:
     )
 
 
+def utc_now() -> datetime:
+    """Now as a naive UTC datetime: the one form stored stamps are compared against."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 def now_iso() -> str:
+    """Now as the stored stamp: naive UTC, on every machine.
+
+    Naive stamps are read as UTC (core/_when.py). The container's clock is UTC, so
+    plain ``datetime.now()`` happened to match there; on a host running at +08 it
+    wrote local time and every stamp read back eight hours off.
     """
-    Return current time as ISO format string.
-    """
-    return datetime.now().isoformat(timespec="seconds")
+    return utc_now().isoformat(timespec="seconds")
 
 
 # ============================================================

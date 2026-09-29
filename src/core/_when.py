@@ -14,12 +14,14 @@ shifts the entire history by eight hours):
 
 | field | what is on disk | how to read it |
 |---|---|---|
-| `created` / `last_active` | no suffix (`datetime.now().isoformat()` in the container) | **as UTC**, then converted to local |
+| `created` / `last_active` | no suffix (`utils.now_iso()`: naive UTC on every machine) | **as UTC**, then converted to local |
 | anything carrying `Z` / `+08:00` | says its own timezone | as it says |
 | `when` as a bare date `YYYY-MM-DD` | that is "which day", not "which instant" | **as a local calendar day**, never as UTC |
 
-⚠️ **If the write side ever switches to local time while still omitting the suffix,
-everything here becomes wrong.** If that change is made, the write side must start
+⚠️ **The write side must stay UTC while it omits the suffix** (`utils.now_iso` asks for
+UTC by name, so a host running at +08 writes the same stamp as the UTC container).
+**If it ever switches to local time while still omitting the suffix, everything here
+becomes wrong.** If that change is made, the write side must start
 emitting the `+08:00` suffix in the same commit — with a suffix present, this side
 can tell.
 

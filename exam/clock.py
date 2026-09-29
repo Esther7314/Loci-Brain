@@ -9,8 +9,8 @@ WHY THIS EXISTS
       core._when.now()            recall, breath, dream, muse, periods
       utils.now_iso()             created / last_active / touch / deleted_at, imported
                                   by name into several modules
-      datetime.now()              bucket_manager (file names), decay_engine,
-                                  retrieval scoring, plan history
+      utils.utc_now()             decay_engine, retrieval scoring (reads utils.datetime)
+      datetime.now()              bucket_manager (file names), plan history
 
     install() replaces all three. It must run AFTER the modules that did
     `from datetime import datetime` are imported (their name is rebound in place) and
@@ -44,8 +44,6 @@ UTC = _dt.timezone.utc
 # datetime.now() directly and is not listed here reads the real clock.
 _DIRECT_CALLERS = (
     "core.bucket_manager",
-    "core.decay_engine",
-    "locibrain.retrieval.bucket_scoring",
     "locibrain.domain.plan_history",
 )
 

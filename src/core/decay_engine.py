@@ -47,9 +47,8 @@ Exports: the DecayEngine class
 import math
 import asyncio
 import logging
-from datetime import datetime
 
-from utils import parse_iso_datetime, is_closed
+from utils import parse_iso_datetime, is_closed, utc_now
 from ._bigevent import BIGEVENT_TAG
 from ._rooms import is_mind_room
 
@@ -179,7 +178,7 @@ def _days_since_active(meta: dict, fallback_days: float = _DEFAULT_DAYS_FALLBACK
     raw = meta.get("last_active") or meta.get("created") or ""
     try:
         last_active = parse_iso_datetime(raw)
-        return max(0.0, (datetime.now() - last_active).total_seconds() / _SECONDS_PER_DAY)
+        return max(0.0, (utc_now() - last_active).total_seconds() / _SECONDS_PER_DAY)
     except (ValueError, TypeError):
         return float(fallback_days)
 

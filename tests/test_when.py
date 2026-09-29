@@ -8,7 +8,7 @@ historical dataset by 8 hours), so every one of them needs an assertion holding 
 
 | what it looks like on disk | how it should be read |
 |---|---|
-| no suffix (in the container, `datetime.now().isoformat()`) | **as UTC**, then converted to local |
+| no suffix (`utils.now_iso()`, naive UTC on every machine) | **as UTC**, then converted to local |
 | carries `Z` / `+08:00` | at its own word |
 | a bare date `YYYY-MM-DD` | that is "which day", not "which moment" — **on the local calendar** |
 
@@ -265,3 +265,35 @@ def test_week_and_month_bucketing_use_the_literal_calendar_passed_in_and_convert
     month_end_utc = datetime(2026, 8, 31, 20, 0, tzinfo=UTC)     # locally it is already the small hours of 9-01
     assert _w.year_month(month_end_utc) == (2026, 8)
     assert _w.year_month(_w.to_local(month_end_utc)) == (2026, 9)
+
+
+# ── the write side: stamps are naive UTC whatever the machine's own clock says ──
+# A host running at +08 used to write local time with no suffix, and this side read it as
+# UTC: every stamp written outside the container came back eight hours off.
+
+def test_a_fresh_stamp_reads_back_as_now():
+    from utils import now_iso
+    back = _w.parse_stamp(now_iso())
+    assert abs(back - _w.now()) < timedelta(minutes=1)
+
+
+def test_a_fresh_stamp_is_utc_and_carries_no_suffix():
+    from utils import now_iso
+    stamp = now_iso()
+    assert "+" not in stamp and not stamp.endswith("Z")
+    written = datetime.fromisoformat(stamp).replace(tzinfo=UTC)
+    assert abs(written - datetime.now(UTC)) < timedelta(minutes=1)
+
+
+def test_an_aware_stamp_is_compared_in_utc():
+    from utils import parse_iso_datetime
+    assert parse_iso_datetime("2026-09-28T14:00:00+08:00") == datetime(2026, 9, 28, 6, 0)
+    assert parse_iso_datetime("2026-09-28T06:00:00Z") == datetime(2026, 9, 28, 6, 0)
+    assert parse_iso_datetime("2026-09-28T06:00:00") == datetime(2026, 9, 28, 6, 0)
+
+
+def test_something_touched_just_now_has_been_idle_for_no_days():
+    from core.decay_engine import _days_since_active
+    from utils import now_iso
+    days = _days_since_active({"last_active": now_iso()})
+    assert days < 0.01
