@@ -1137,29 +1137,18 @@ def now_iso() -> str:
 # ============================================================
 # `from` — the provenance chain
 # ------------------------------------------------------------
-# One thing used to have two names: the tool parameter was `from`, and what landed in the
-# frontmatter was `triggered_by`. Anyone reading the code had to translate between them in
-# their head every time, and a translation step performed by hand eventually gets skipped.
-# It is `from` everywhere now: **writes only ever write `from`, reads accept both**. Old
-# stores are still full of `triggered_by` — the migration script was delivered but never run
-# against a real store.
+# The field is `from` on disk and in the tools. (The library migration, core/schema.py step
+# 1 -> 2, moved every older `triggered_by` into it.)
 #
 # WARNING: `from` is a Python keyword, so it can only be used as a string key; `meta.from`
-# is a syntax error. That is exactly why the persisted name was `triggered_by` in the first
-# place — but that reason only holds inside Python, and frontmatter is for people to read.
+# is a syntax error.
 # ============================================================
 FROM_FIELD = "from"
-FROM_FIELD_LEGACY = "triggered_by"
 
 
 def read_from(meta: Optional[dict]) -> str:
-    """A memory's raw provenance chain: comma-separated ids. The new `from` field wins; the
-    old field is still accepted."""
-    m = meta or {}
-    raw = m.get(FROM_FIELD)
-    if raw is None or str(raw).strip() == "":
-        raw = m.get(FROM_FIELD_LEGACY)
-    return str(raw or "").strip()
+    """A memory's raw provenance chain: comma-separated ids."""
+    return str((meta or {}).get(FROM_FIELD) or "").strip()
 
 
 def read_from_ids(meta: Optional[dict]) -> list[str]:

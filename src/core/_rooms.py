@@ -37,21 +37,16 @@ go digging through history for it)
    A third party in the story no longer has to be crammed into the WORLD branch.
 
 ------------------------------------------------------------
-🔴 The write side accepts only the new four; the read side must still accept the old ten
+🔴 Only the four names exist
 ------------------------------------------------------------
-The migration script (scripts/migrate_v3.py) is **delivered but not yet run against the
-real store**, so what is lying on disk still carries the old ten-room names. That gives
-this file two faces, and they must not be confused:
-  · `check_room()`  — the write-side gate: an old name is **rejected on the spot**, with
-    no silent compatibility. The harm in silent compatibility is not untidiness; it is
-    that old names would keep being written in forever, so disk would permanently hold
-    both sets of room names — while the migration script only ever runs once.
-  · `normalize_room()` — the read-side translation: old names map to new ones so that
-    recall's room gate, decay's never-sink list and awaken's event pool keep working on
-    **data that has not been migrated**. Once migration has run this layer is pure
-    redundancy — harmless to keep, and only safe to delete after the real store is done.
+The old ten-room names are rewritten on disk by the library migration (core/schema.py,
+step 1 -> 2), so nothing reads them any more:
+  · `check_room()`  — the write-side gate: anything but the four is rejected, with no
+    fallback room.
+  · `normalize_room()` — the read side: a stored room comes back as-is when it is one of
+    the four, and as the empty string otherwise (a bucket that belongs to no room).
 
-Exports: EVENT_ROOMS / MIND_ROOMS / ALL_ROOMS / ROOMS / LEGACY_ROOMS
+Exports: EVENT_ROOMS / MIND_ROOMS / ALL_ROOMS / ROOMS
          check_room(room, kind) · normalize_room(room)
          is_mind_room(room) · is_event_room(room) · room_matches(room, gate)
 ========================================
@@ -74,22 +69,6 @@ MIND_ROOMS: tuple[str, ...] = (
 ALL_ROOMS: tuple[str, ...] = EVENT_ROOMS + MIND_ROOMS
 ROOMS = ALL_ROOMS  # the export name the spec asks for
 
-# Old ten -> new four. **Read side only**; the write side rejects these names outright.
-# The I/YOU axis was not lost, it moved to `subjects` (the migration script seeds
-# subjects from this very table).
-LEGACY_ROOMS: dict[str, str] = {
-    "I/EVENT/SELF/WHO":    "EVENT/SELF",
-    "I/EVENT/SELF/WHAT":   "EVENT/SELF",
-    "I/EVENT/WORLD/WHO":   "EVENT/WORLD",
-    "I/EVENT/WORLD/WHAT":  "EVENT/WORLD",
-    "YOU/EVENT/SELF/WHO":  "EVENT/SELF",
-    "YOU/EVENT/SELF/WHAT": "EVENT/SELF",
-    "I/MIND/TRAITS":       "MIND/TRAITS",
-    "I/MIND/VIEWS":        "MIND/VIEWS",
-    "YOU/MIND/TRAITS":     "MIND/TRAITS",
-    "YOU/MIND/VIEWS":      "MIND/VIEWS",
-}
-
 
 def _rooms_help() -> str:
     return (
@@ -105,23 +84,17 @@ def _rooms_help() -> str:
 
 
 def normalize_room(room) -> str:
-    """Read-side normalisation: an old ten-room name becomes its new one, a new name is
-    returned as-is, anything unrecognised becomes the empty string.
+    """Read side: one of the four rooms as-is, anything else the empty string.
 
     ⚠️ Only for the **read** paths (recall's room gate, the decay list, awaken's pool,
-    the panels). Write paths want check_room() — an old name has to be rejected there,
-    and must not be quietly caught here instead.
+    the panels). Write paths want check_room(), which rejects instead.
     """
     r = str(room or "").strip()
-    if not r:
-        return ""
-    if r in ALL_ROOMS:
-        return r
-    return LEGACY_ROOMS.get(r, "")
+    return r if r in ALL_ROOMS else ""
 
 
 def is_mind_room(room) -> bool:
-    """Is this an insight (the MIND branch)? Accepts both old and new names.
+    """Is this an insight (the MIND branch)?
 
     🔴 Never write `"/MIND/" in room` again — the new names look like `MIND/TRAITS`,
     with no leading slash, so that literal test **silently returns False** and kicks
@@ -131,7 +104,7 @@ def is_mind_room(room) -> bool:
 
 
 def is_event_room(room) -> bool:
-    """Is this an event (the EVENT branch)? Accepts both old and new names.
+    """Is this an event (the EVENT branch)?
 
     🔴 Same as above: never write `room.find("/EVENT/") > 0` again.
     """
@@ -142,8 +115,8 @@ def room_matches(room, gate: str) -> bool:
     """Does a memory's room fall inside the gate `gate`? A gate may be a full room name
     or a prefix (EVENT / MIND).
 
-    The comparison happens **after normalisation**, so an `I/MIND/TRAITS` still sitting
-    on old disk is caught by `room="MIND"` too.
+    The comparison happens after normalisation, so a room that is not one of the four
+    matches no gate.
     """
     r = normalize_room(room)
     g = str(gate or "").strip().rstrip("/")
@@ -159,11 +132,7 @@ def check_gate(gate: str) -> str | None:
         return None
     if any(r == g or r.startswith(g + "/") for r in ALL_ROOMS):
         return None
-    hint = ""
-    if g in LEGACY_ROOMS or g in ("I", "YOU"):
-        hint = ("\n（`I` / `YOU` 已经不是房间了——每一条都是我的记忆，"
-                "立场不在房间结构里。想按「关于谁」筛，等 subjects 接上检索。）")
-    return f"room 无效：{gate}\n{_rooms_help()}{hint}"
+    return f"room 无效：{gate}\n{_rooms_help()}"
 
 
 def check_room(room: str, kind: str) -> str | None:
@@ -172,18 +141,10 @@ def check_room(room: str, kind: str) -> str | None:
 
     ⚠️ No falling back to a default room — a fallback invites the "just make up a room
     name" disease straight back in.
-    ⚠️ And no quietly translating an old ten-room name into a new one either (see the
-    "two faces" section in the file header for why).
     """
     room = (room or "").strip()
     if not room:
         return f"room 必填。\n{_rooms_help()}"
-
-    if room in LEGACY_ROOMS:
-        return (f"room 已退役：{room} —— 房间 2026-08-16 从十间收成四间。\n"
-                f"这条现在该填 {LEGACY_ROOMS[room]}。\n"
-                f"（`I`/`YOU` 那一维搬去了 subjects；`WHO`/`WHAT` 整个砍了——"
-                f"大部分记忆既是人又是事，判不清说明判据不清。）\n{_rooms_help()}")
 
     if kind == "event":
         if room not in EVENT_ROOMS:

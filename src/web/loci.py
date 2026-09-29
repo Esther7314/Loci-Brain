@@ -356,7 +356,7 @@ _SEED_NAMES = frozenset({
 
 
 def _split_ids(raw) -> list[str]:
-    """triggered_by is persisted as a comma-separated string; early buckets stored a list,
+    """`from` is persisted as a comma-separated string; early buckets stored a list,
     which is still accepted."""
     if isinstance(raw, (list, tuple)):
         items = [str(x) for x in raw]
@@ -656,7 +656,7 @@ async def build_graph() -> dict:
             by_name[nm] = bid
         raw[bid] = {"meta": meta, "content": content, "tags_all": tags_all}
 
-    # ---- Real edges: triggered_by / supersedes / [[wikilinks]] in the body ----
+    # ---- Real edges: from / supersedes / [[wikilinks]] in the body ----
     edges: list[dict] = []
     seen_edge: set = set()
 
@@ -672,8 +672,7 @@ async def build_graph() -> dict:
     unresolved: Counter = Counter()
     for bid, r in raw.items():
         meta, content = r["meta"], r["content"]
-        # The edge kind was renamed along with the field, to `from`; read_from still accepts
-        # the older triggered_by.
+        # The edge kind carries the field's name, `from`.
         for src in _split_ids(read_from(meta)):
             _add(src, bid, "from")
         for old in _split_ids(meta.get("supersedes")):
@@ -1599,7 +1598,7 @@ async def build_health() -> dict:
             all_ids = live_ids                       # if the archive cannot be read, fall back to the old measure
         sunk = gone = 0
         for m in metas:
-            for src in _split_ids(read_from(m)):     # `from` first, triggered_by still accepted
+            for src in _split_ids(read_from(m)):
                 if src in live_ids:
                     continue
                 if src in all_ids:
@@ -2622,7 +2621,6 @@ def register(mcp) -> None:
                 # Subjects are a third kind of tag, sitting alongside tags and aliases and
                 # never mixed with them.
                 "subjects": [str(s) for s in (meta.get("subjects") or [])],
-                # `from` is the current name; reads still accept the older triggered_by.
                 "from": _split_ids(read_from(meta)),
                 "supersedes": _split_ids(meta.get("supersedes")),
                 "superseded_by": str(meta.get("superseded_by") or ""),

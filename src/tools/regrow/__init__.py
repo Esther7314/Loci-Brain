@@ -44,7 +44,7 @@ from .._common import _keyed_turn
 from utils import read_from_ids
 from ..grow.rooms_path import _normalize_from
 
-_CHAIN_LIMIT = 64  # the underlying ceiling on triggered_by
+_CHAIN_LIMIT = 64  # the underlying ceiling on from
 
 
 async def dispatch(bucket_id: str = "", text: str = "", v=-1, a=-1, from_=None) -> str:
@@ -130,7 +130,7 @@ async def dispatch(bucket_id: str = "", text: str = "", v=-1, a=-1, from_=None) 
 
         # The source chain: inherit the old chain, then append new sources one at
         # a time — however many fit, fit
-        inherited = read_from_ids(old_meta)   # from wins; triggered_by is the compatible fallback
+        inherited = read_from_ids(old_meta)
         sources = list(dict.fromkeys(inherited))
         dropped: list[str] = []
         for fid in (extra or []):

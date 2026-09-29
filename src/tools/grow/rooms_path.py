@@ -15,7 +15,7 @@ Key behaviour:
   things merged into one bucket")
 - The real list of bucket_ids comes back immediately (target: under 3 seconds);
   tagging, gist and naming go to background backfill
-- mind: its own bucket + triggered_by (structure copied from feel), and v/a must
+- mind: its own bucket + from (structure copied from feel), and v/a must
   be supplied by the caller
 - event's v/a became mandatory too; background backfill **never touches any
   bucket's v/a**; importance/meaning are passed by the caller (optional);
@@ -51,7 +51,7 @@ from .._common import check_content_size
 from core._rooms import check_room, is_mind_room
 from .._subjects import normalize_subjects
 
-# from -> triggered_by (a 64-character ceiling): five 12-hex-digit ids plus four
+# from (a 64-character ceiling): five 12-hex-digit ids plus four
 # commas = 64, which fits exactly; from the sixth on it would be silently
 # truncated into half an id pointing at a bucket that does not exist. So it is
 # stopped dead here.
@@ -490,7 +490,7 @@ async def grow_event(items: list, tense: str = "", weight=None,
     # but it is not enforced — otherwise it becomes something invented out of
     # nothing).
     # If passed, it is checked for existence and written into each entry's
-    # triggered_by.
+    # from.
     from_ids, from_err = _normalize_from(from_ids)
     if from_err:
         return from_err

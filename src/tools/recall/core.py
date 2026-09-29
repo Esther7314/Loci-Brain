@@ -1608,7 +1608,7 @@ async def recall_core(when: str, room: str, tag: str, query: str,
             # bring the sources' gists along or the thinking has nothing to stand
             # on.
             src_lines: list[str] = []
-            for fid in read_from_ids(meta):   # from wins; triggered_by is the compatible fallback
+            for fid in read_from_ids(meta):
                 src = await rt.bucket_mgr.get_including_archive(fid)
                 if src:
                     smeta = src.get("metadata", {}) or {}

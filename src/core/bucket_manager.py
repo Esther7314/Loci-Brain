@@ -243,7 +243,6 @@ import frontmatter
 
 from utils import (
     FROM_FIELD,
-    FROM_FIELD_LEGACY,
     atomic_write_text,
     generate_bucket_id,
     is_closed,
@@ -380,11 +379,7 @@ _METADATA_TEXT_LIMITS = {
     "title": 120,
     "letter_date": 64,
     "why_remembered": _WHY_REMEMBERED_MAX,
-    # The new name `from` is the only write entry point; the old name triggered_by has to
-    # stay in this table because an old bucket on disk still goes through the length check
-    # whenever update() touches it.
     FROM_FIELD: _TRIGGERED_BY_MAX,
-    FROM_FIELD_LEGACY: _TRIGGERED_BY_MAX,
     "source_tool": _SOURCE_TOOL_MAX,
     "grow_batch_id": _GROW_BATCH_ID_MAX,
     "last_merged_by": _SOURCE_TOOL_MAX,
@@ -1227,12 +1222,7 @@ class BucketManager:
         # An empty string means no reason was given, and the dashboard simply omits the row.
         if why_remembered:
             metadata["why_remembered"] = str(why_remembered).strip()[:_WHY_REMEMBERED_MAX]
-        # --- The source chain. What lands on disk is now uniformly `from`; triggered_by is
-        #     no longer written. ---
-        # The parameter had always been called `from` while disk said triggered_by: one
-        # thing under two names.
-        # 🔴 Only the new name is written; triggered_by on old buckets is handled on read by
-        #    read_from(), and a migration script is responsible for the disk.
+        # --- The source chain: `from` ---
         if from_ids:
             metadata[FROM_FIELD] = str(from_ids).strip()[:_TRIGGERED_BY_MAX]
         # --- room / summary / when ---
@@ -2142,10 +2132,7 @@ class BucketManager:
                   # weight only means anything on a plan; its type is not checked in this
                   # loop, and server.py above guarantees the range it passes in.
                   "why_remembered", "dont_surface", "first_of_kind",
-                  # `from` is the new name. triggered_by stays here for exactly one reason:
-                  # so that a migration script or an old caller passing it explicitly does
-                  # not have it silently dropped.
-                  "weight", FROM_FIELD, FROM_FIELD_LEGACY,
+                  "weight", FROM_FIELD,
                   # subjects. The dehydrator's backfill comes through this path.
                   "subjects",
                   # anchor: a bool that takes no part in scoring, hard-capped at 24.
@@ -2513,7 +2500,7 @@ class BucketManager:
 
     # ---------------------------------------------------------
     # The reverse chain: who has this memory in their `from`.
-    # The forward chain has always existed (triggered_by); the reverse one is computed on the
+    # The forward chain is `from`; the reverse one is computed on the
     # spot by scanning the parse cache — the store holds a few hundred entries, so with a warm
     # cache it is one in-memory pass, and no separate index is built (building one would be a
     # second source of truth).
@@ -2524,7 +2511,7 @@ class BucketManager:
         out: list[str] = []
         for b in await self.list_all(include_archive=False):
             meta = b.get("metadata", {}) or {}
-            if bucket_id in read_from_ids(meta):   # `from` first, triggered_by for compatibility
+            if bucket_id in read_from_ids(meta):
                 out.append(str(meta.get("id") or b.get("id") or ""))
         return out
 
@@ -3080,28 +3067,6 @@ class BucketManager:
     # ---------------------------------------------------------
     # List all buckets
     # ---------------------------------------------------------
-    async def get_triggered_feels(self, source_bucket_id: str) -> list[dict]:
-        """
-        Return all feel buckets whose triggered_by == source_bucket_id.
-        It scans feel_dir only, so the cost is O(feel buckets) rather than O(the whole
-        store) — an optimisation of the reverse-chain lookup.
-        Each entry comes back as {id, name, created}.
-        """
-        results = []
-        for _root, _fname, file_path in self._iter_md_files([self.feel_dir]):
-            bucket = self._load_bucket(file_path)
-            if not bucket:
-                continue
-            meta = bucket.get("metadata", {})
-            if meta.get("triggered_by") == source_bucket_id:
-                results.append({
-                    "id": bucket["id"],
-                    "name": meta.get("name") or bucket["id"],
-                    "created": meta.get("created", ""),
-                })
-        results.sort(key=lambda x: x.get("created", ""), reverse=True)
-        return results
-
     async def list_all(self, include_archive: bool = False) -> list[dict]:
         """
         Recursively walk directories (including domain subdirs), list all buckets.

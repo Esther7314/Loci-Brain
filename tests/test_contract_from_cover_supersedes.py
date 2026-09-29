@@ -52,24 +52,11 @@ def test_from_reads_as_an_ordered_list_of_ids():
     assert read_from_ids({"from": "e1, e2 ,,e3"}) == ["e1", "e2", "e3"]
 
 
-def test_from_falls_back_to_the_legacy_field_name():
-    # Criterion: `triggered_by` is what this was called before the rename, and there are
-    # buckets on disk still carrying it. Dropping the fallback would not raise — the
-    # sources would just silently read as empty, and the link back to the material would
-    # be gone for every memory written before the rename.
-    assert read_from_ids({"triggered_by": "e1,e2"}) == ["e1", "e2"]
-
-
-def test_the_new_field_wins_when_both_are_present():
-    # Criterion: a bucket migrated but not cleaned carries both. The new one is the truth.
-    assert read_from_ids({"from": "new1", "triggered_by": "old1,old2"}) == ["new1"]
-
-
-def test_an_empty_new_field_still_falls_through_to_the_legacy_one():
-    # Criterion: the fallback tests emptiness, not absence. A migration that writes
-    # `from: ""` onto every bucket would otherwise orphan every legacy source chain,
-    # and the failure would be invisible: no error, just nothing there.
-    assert read_from_ids({"from": "  ", "triggered_by": "old1"}) == ["old1"]
+def test_the_old_field_name_is_not_read_any_more():
+    # Criterion: the library migration (core/schema.py, step 1 -> 2) moves every
+    # `triggered_by` into `from`, so reading it too would only hide a library that was
+    # never migrated (the health page says so instead).
+    assert read_from_ids({"triggered_by": "e1,e2"}) == []
 
 
 # ───────────────────────── `covered_by`: folded away, not gone ─────────────────────────

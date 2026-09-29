@@ -14,12 +14,10 @@ What this script does NOT do — stated first, on purpose
   to actually write.
 
 Why it fills in only the room and nothing else:
-    Every read path — recall, the waking screen, the panel — goes through
-    `core/_rooms.normalize_room()`, which recognises the older room names and translates
-    them on the fly. **So a migrated library is already readable.** The one thing that is
-    not readable is a bucket with no room field at all: it belongs to no room, so it
-    cannot be found through the panel's or recall's room filters. That is the single gap
-    this script closes.
+    Older room names are rewritten by the library migration (`scripts/migrate.py`, run it
+    first). What that leaves is a bucket with no room field at all: it belongs to no room,
+    so it cannot be found through the panel's or recall's room filters. That is the
+    single gap this script closes.
 
 Why it does not guess the room from the content:
     "Is this an event or a realization" is a judgement about meaning, and rules guess it
@@ -48,7 +46,7 @@ from collections import Counter
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
 ROOMS = ("EVENT/SELF", "EVENT/WORLD", "MIND/TRAITS", "MIND/VIEWS")
-# The older ten rooms → the current four. Same mapping as `core/_rooms.LEGACY_ROOMS`.
+# The older ten rooms → the current four. Same names as `core/schema.py` step 1 -> 2.
 # It is duplicated here on purpose: this script has to be runnable on its own, without
 # importing the rest of the codebase, because someone may well want to point it at a
 # library and see what it says before installing anything.
@@ -90,8 +88,7 @@ def fill_one(path: str, room: str, apply: bool) -> str:
         if cur in ROOMS:
             return "have"                 # already one of the current names
         if cur in LEGACY:
-            return "legacy"               # an older name — translated on read, so the
-                                          # stored file does not need to change
+            return "legacy"               # an older name — scripts/migrate.py rewrites it
         # A name we do not recognise. Leave it and report it: better that someone sees it
         # than that a script quietly rewrites something it did not understand.
         return "skip"
@@ -130,7 +127,7 @@ def main():
     print("DRY RUN — not one byte written" if not a.apply else "written")
     print("=" * 46)
     print("  already on a current room   %d" % c["have"])
-    print("  on an older room name      %d   <- translated on read; the stored file is fine as it is"
+    print("  on an older room name      %d   <- run scripts/migrate.py, it rewrites these"
           % c["legacy"])
     print("  no room at all            %d   <- %s" % (
         c["fill"], ("would be filled with " + a.room) if not a.apply

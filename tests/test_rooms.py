@@ -30,17 +30,14 @@ def test_normalize_returns_the_four_new_rooms_untouched():
         assert _rooms.normalize_room(room) == room
 
 
-def test_normalize_translates_all_ten_legacy_rooms_and_every_landing_is_a_valid_new_room():
-    # Criterion: the LEGACY_ROOMS table is **the only lifeline unmigrated old data has**.
-    # One entry missing, or one that translates to a room name that does not exist, and that
-    # batch of old memories disappears simultaneously from recall's room gate, from decay's
-    # never-sink list, and from awaken's event pool.
-    # So walk it entry by entry, and require every landing to be one of the four rooms
-    # (no translating into a misspelled name).
-    assert len(_rooms.LEGACY_ROOMS) == 10          # ten rooms collapsed into four, so the map should hold ten entries
-    for legacy, new in _rooms.LEGACY_ROOMS.items():
-        assert _rooms.normalize_room(legacy) == new
-        assert new in _rooms.ALL_ROOMS
+def test_an_old_ten_room_name_is_no_longer_a_room():
+    # Criterion: the library migration (core/schema.py, step 1 -> 2) rewrites the old
+    # ten-room names on disk, so the read side no longer translates them: one that slipped
+    # through reads as "no room" and the write side rejects it like any other bad name.
+    assert _rooms.normalize_room("I/MIND/TRAITS") == ""
+    assert not _rooms.room_matches("I/MIND/TRAITS", "MIND")
+    assert not _rooms.is_mind_room("YOU/MIND/VIEWS")
+    assert _rooms.check_room("I/MIND/TRAITS", "mind") is not None
 
 
 def test_normalize_gives_an_empty_string_for_unrecognized_names_and_never_falls_back():
@@ -65,7 +62,7 @@ def test_normalize_eats_leading_and_trailing_whitespace():
     # Criterion: a space that came in by hand-copying or pasting shouldn't drop a memory out
     # of its room.
     assert _rooms.normalize_room("  MIND/TRAITS  ") == "MIND/TRAITS"
-    assert _rooms.normalize_room("\tI/MIND/VIEWS\n") == "MIND/VIEWS"
+    assert _rooms.normalize_room("\tMIND/VIEWS\n") == "MIND/VIEWS"
 
 
 def test_normalize_does_not_fall_back_on_case():
@@ -88,13 +85,6 @@ def test_is_mind_room_recognizes_new_names_even_without_a_leading_slash():
     # never-sink list (no error, they are just gone one day).
     assert _rooms.is_mind_room("MIND/TRAITS")
     assert _rooms.is_mind_room("MIND/VIEWS")
-
-
-def test_is_mind_room_recognizes_legacy_names_too():
-    # Criterion: this is the read side, and the disk still holds the old ten rooms. Old mind
-    # entries have to stay on the list just the same.
-    assert _rooms.is_mind_room("I/MIND/TRAITS")
-    assert _rooms.is_mind_room("YOU/MIND/VIEWS")
 
 
 def test_the_two_branches_are_mutually_exclusive_event_is_not_mind_and_mind_is_not_event():
@@ -156,16 +146,6 @@ def test_a_full_room_name_used_as_the_gate_is_an_exact_match():
     # not being able to filter finely is the same as not having four rooms at all.
     assert _rooms.room_matches("MIND/TRAITS", "MIND/TRAITS")
     assert not _rooms.room_matches("MIND/VIEWS", "MIND/TRAITS")
-
-
-def test_legacy_names_on_the_old_disk_are_still_caught_by_the_new_prefix_gate():
-    # Criterion: the function's docstring states plainly that "the comparison **happens after
-    # normalization**". This is where the whole read-side compatibility story lands: the real
-    # store has not been migrated, so searching with a new name has to find old memories,
-    # otherwise everything stored before 8-16 vanishes from recall all at once.
-    assert _rooms.room_matches("I/MIND/TRAITS", "MIND")
-    assert _rooms.room_matches("YOU/EVENT/SELF/WHAT", "EVENT")
-    assert _rooms.room_matches("I/EVENT/WORLD/WHO", "EVENT/WORLD")
 
 
 def test_half_a_word_is_not_a_prefix():
@@ -236,19 +216,12 @@ def test_a_mistyped_gate_errors_on_the_spot_instead_of_silently_returning_nothin
         assert "room 无效" in err
 
 
-def test_I_or_YOU_as_a_gate_is_rejected_and_told_where_it_moved_to():
-    # Criterion: `I`/`YOU` were cut on 8-16 — every entry is my memory, and standpoint doesn't
-    # live in the room structure. But whatever gets cut **has to leave a forwarding address**:
-    # say only "invalid" and I will write it again next time.
-    # (The assertion picks wording that **appears only in that forwarding note** — the ordinary
-    #  help text about the four rooms also mentions subjects, so grepping for "subjects" alone
-    #  would go green for the wrong reason.)
-    for gate in ("I", "YOU"):
+def test_I_or_YOU_as_a_gate_is_rejected_with_the_four_rooms():
+    # Criterion: `I`/`YOU` were cut on 8-16. As a gate they are just invalid now, and the
+    # message lists the four rooms and how to choose, like any other bad gate.
+    for gate in ("I", "YOU", "I/MIND/TRAITS"):
         err = _rooms.check_gate(gate)
-        assert err is not None
-        assert "已经不是房间了" in err
-    err = _rooms.check_gate("I/MIND/TRAITS")
-    assert err is not None and "已经不是房间了" in err
+        assert err is not None and "合法房间" in err
 
 
 def test_the_error_message_must_list_all_four_rooms():
@@ -290,25 +263,6 @@ def test_write_side_room_is_required_and_an_empty_one_is_rejected_on_the_spot():
         err = _rooms.check_room(value, "event")
         assert err is not None
         assert "必填" in err
-
-
-def test_write_side_rejects_the_ten_legacy_rooms_on_the_spot_but_spells_out_which_one_to_use():
-    # Criterion: this is where the "two faces" paragraph at the top of the file lands — old
-    # names **must be rejected** on the write side, not quietly translated the way the read
-    # side does. Quiet translation means I keep storing under the old names, so the disk
-    # permanently holds two sets of room names while the migration script only ever ran once.
-    # And rejecting isn't enough: it has to hand back the new room name, otherwise this gate
-    # only ever shuts people out.
-    # (The assertion picks the whole sentence "这条现在该填 X" — the help text about the four
-    #  rooms also prints MIND/TRAITS, so searching for the room name alone would go green for
-    #  the wrong reason and tell you nothing about whether **this particular entry** got a
-    #  forwarding address.)
-    err = _rooms.check_room("I/MIND/TRAITS", "mind")
-    assert err is not None
-    assert "已退役" in err
-    assert "这条现在该填 MIND/TRAITS" in err
-    # The read side still translates the same name — it's only right when both faces hold at once
-    assert _rooms.normalize_room("I/MIND/TRAITS") == "MIND/TRAITS"
 
 
 def test_write_side_takes_no_prefix_the_room_name_must_be_written_in_full():
