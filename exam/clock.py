@@ -51,6 +51,9 @@ _DIRECT_CALLERS = (
 
 _clock_file: Path | None = None
 
+# What install() replaced, so uninstall() can put it back: (object, attribute, original).
+_patched: list[tuple[object, str, object]] = []
+
 
 def read_now() -> _dt.datetime:
     """The fake instant, timezone-aware. Fails loudly if the file is missing or bad:
@@ -92,24 +95,36 @@ def _fake_now_iso() -> str:
     return FakeDatetime.now().isoformat(timespec="seconds")
 
 
+def _patch(obj: object, attr: str, value: object) -> None:
+    _patched.append((obj, attr, getattr(obj, attr)))
+    setattr(obj, attr, value)
+
+
 def install(clock_file: Path) -> None:
-    """Patch the three spellings of "now". Safe to call once per process."""
+    """Patch the three spellings of "now". Installing again only moves the clock file.
+
+    The runner's own process installs it too (seeding a library writes through Loci), so
+    whoever installs in a long-lived process must uninstall() afterwards: pytest runs
+    the exam's tests and Loci's in one process, and a leftover fake clock pointing at a
+    deleted file breaks every later test that asks for the time."""
     global _clock_file
     _clock_file = Path(clock_file)
     read_now()  # fail now, not on the first tool call
+    if _patched:
+        return
 
     import utils
-    utils.now_iso = _fake_now_iso
-    utils.datetime = FakeDatetime
+    _patch(utils, "now_iso", _fake_now_iso)
+    _patch(utils, "datetime", FakeDatetime)
 
     from core import _when
-    _when.now = lambda: read_now().astimezone(_when.LOCAL_TZ)
+    _patch(_when, "now", lambda: read_now().astimezone(_when.LOCAL_TZ))
 
     import importlib
     for name in _DIRECT_CALLERS:
         mod = importlib.import_module(name)
         if getattr(mod, "datetime", None) is _REAL_DATETIME:
-            mod.datetime = FakeDatetime
+            _patch(mod, "datetime", FakeDatetime)
 
     # Modules imported after utils was patched already hold the fake; this catches the
     # ones that were imported earlier by one of the imports above.
@@ -117,6 +132,15 @@ def install(clock_file: Path) -> None:
         if getattr(mod, "now_iso", None) is not None and mod is not utils:
             try:
                 if mod.now_iso.__module__ == "utils":
-                    mod.now_iso = _fake_now_iso
+                    _patch(mod, "now_iso", _fake_now_iso)
             except AttributeError:
                 pass
+
+
+def uninstall() -> None:
+    """Put back every "now" install() replaced, newest first. Safe to call when not installed."""
+    global _clock_file
+    while _patched:
+        obj, attr, original = _patched.pop()
+        setattr(obj, attr, original)
+    _clock_file = None

@@ -449,6 +449,7 @@ async def library(item: dict, keep: bool, tag: str = ""):
         clock.set_now(clock_file, item["start"])
         yield Library(lib, clock_file, env)
     finally:
+        clock.uninstall()
         for k, v in saved_env.items():
             if v is None:
                 os.environ.pop(k, None)
