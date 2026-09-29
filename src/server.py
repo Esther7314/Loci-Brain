@@ -269,6 +269,22 @@ except RuntimeError as _emb_err:
     logger.error(f"[STARTUP FAILED] {_emb_err}")
     raise SystemExit(f"Loci Brain 启动中止：{_emb_err}") from _emb_err
 bucket_mgr = BucketManager(config, embedding_engine=embedding_engine)  # Bucket manager
+
+# Library version: a new, empty library is stamped current; one that is behind is only
+# reported (loud here, red on the health page). Migrating rewrites every file, so it is
+# never started from here: scripts/migrate.py, with the server stopped.
+from core import schema as _schema  # noqa: E402
+try:
+    _schema.stamp_new_library(config["buckets_dir"])
+    _schema_status = _schema.status(config["buckets_dir"])
+    if _schema_status["error"]:
+        logger.warning(f"[schema] cannot read the library version: {_schema_status['error']}")
+    elif _schema_status["behind"]:
+        logger.warning(
+            f"[schema] library is version {_schema_status['version']}, code expects "
+            f"{_schema_status['current']}: stop the server and run scripts/migrate.py")
+except OSError as _schema_err:
+    logger.warning(f"[schema] cannot stamp the library version: {_schema_err}")
 embedding_outbox = EmbeddingOutbox(config, bucket_mgr, embedding_engine)
 bucket_mgr.attach_embedding_outbox(embedding_outbox)
 dehydrator = Dehydrator(config)                      # Dehydrator

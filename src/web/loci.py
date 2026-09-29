@@ -1484,6 +1484,21 @@ async def build_health() -> dict:
             "" if free_gb > 2 else "腾点地方，写不进去就存不了记忆")
     guard("磁盘", sec_disk, f"确认 buckets_dir 存在：{bd or '(没配)'}")
 
+    def sec_schema():
+        from core import schema as _schema
+        st = _schema.status(bd)
+        if st["error"]:
+            add("库的版本", "error", f"读不出库的版本：{st['error']}",
+                "看 buckets/_state/schema.json")
+        elif st["behind"]:
+            add("库的版本", "error",
+                f"库是第 {st['version']} 版，代码要第 {st['current']} 版",
+                "停掉服务，先跑 python scripts/migrate.py 看要改什么，"
+                "再加 --apply（会先备份整个库）")
+        else:
+            add("库的版本", "ok", f"第 {st['version']} 版")
+    guard("库的版本", sec_schema)
+
     # ---- Is it still growing lately ----
     def sec_fresh():
         # An empty store is not "writes are broken": a fresh install should see "nothing yet"
