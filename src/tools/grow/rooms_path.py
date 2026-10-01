@@ -37,6 +37,11 @@ Key behaviour:
   names table, a person's card sits in MIND/TRAITS and a thing's in MIND/VIEWS when
   the table knows which it is, and a name has one live card at a time. trace reads
   cards through here too
+- sources (the host's material an entry was formed from, core/_sources.py) go through
+  check_sources: each record gets a quoted prov line, a bare host id in `from` is linked
+  to the record with that id, the registry refuses withdrawn and deleted sources, and the
+  receipt says when the same delivery is already on another memory. fold, regrow and
+  trace take sources through here too
 - Validation comes first: if any single item is invalid the whole call errors and
   no bucket is created
 
@@ -48,10 +53,11 @@ What this file deliberately does not do:
   to death
 
 Exports: grow_event(items, direction_of_fit, bound, evidential, internally_generated,
-                    weight, from_ids, test_data, cue, exception_of, hold) -> str
+                    weight, from_ids, test_data, cue, exception_of, hold, sources) -> str
          grow_mind(room, text, from_ids, v, a, direction_of_fit, bound, evidential,
-                   internally_generated, weight, test_data, cue, card_of) -> str
+                   internally_generated, weight, test_data, cue, card_of, sources) -> str
          check_card(card_of, room, exclude) · card_room_rule(name, room) · live_card(name)
+         check_sources(sources, prov, exclude)
 ========================================
 """
 
@@ -65,6 +71,7 @@ from .. import _runtime as rt
 from core._bigevent import SPAN_RE, first_line as _F_first_line
 from .._common import check_content_size, resolve_bucket_id, resolve_bucket_ids
 from core._rooms import check_room, is_mind_room
+from core import _sources as _src
 from .. import _subjects as _S
 from .._subjects import normalize_bound, normalize_subjects
 from utils import (PROV_MAX_LINES, PROV_TARGET_MAX, WAS_DERIVED_FROM, WAS_QUOTED_FROM,
@@ -651,18 +658,136 @@ async def backfill_sweep() -> int:
 # ------------------------------------------------------------
 
 async def _check_quoted_source(target: str) -> str:
-    """Whether an id from outside the library may be quoted as a source; returns the
-    refusal, or "" to accept. This is the one place that decides it: the source
-    registry (stage 4.4) plugs its check in here, and every write tool that takes
-    `from` comes through _normalize_from. Until then only the shape is checked — one
-    token, short enough to store whole."""
+    """Whether a target from outside the library may be quoted as a source; returns the
+    refusal, or "" to accept. Every write tool that takes `from` comes through
+    _normalize_from, so this is the one place that decides it. A target is either a
+    source's string form (`lento:home/private:U#m_0142`, `#` marks it), which has to
+    parse and must not be withdrawn or deleted in the registry, or the host's bare id
+    for a line (`m_0931`), whose identity is not known yet: shape only — one token,
+    short enough to store whole."""
     if _re.search(r"\s", target):
         return (f"from 里「{target[:40]}」不像 id（带空格）——填 bucket_id，"
                 "或宿主那句话自己的 id（如 m_0931）。")
     if len(target) > PROV_TARGET_MAX:
         return (f"from 里 {target[:40]}… 有 {len(target)} 字符，超过 {PROV_TARGET_MAX} 上限"
                 "——不截断，换成它的短 id。")
+    if "#" in target:
+        try:
+            sid, _revision = _src.SourceId.parse(target)
+        except _src.SourceRecordError as e:
+            return (f"from 里「{target[:40]}」像来源的全称，但{e.zh}。全称写成 "
+                    "system:instance/container#id（有版本号再加 @版本）。")
+        registry = _registry()
+        if registry is not None:
+            state = registry.state_of(sid)
+            if state in (_src.WITHDRAWN, _src.DELETED):
+                word = "撤回" if state == _src.WITHDRAWN else "删除"
+                return f"来源 {sid} 已经被{word}了，不能再拿它写记忆。本次什么都没写。"
     return ""
+
+
+# ------------------------------------------------------------
+# Outside material: `sources`
+# ------------------------------------------------------------
+# A record names one piece of the host's material (core/_sources.py). Each record on an
+# entry has a wasQuotedFrom line naming it by its string form, so prov and sources say the
+# same thing. A bare host id in `from` (m_0142) is that line before its record is known:
+# when the same call carries a record with that id the line is linked to it; when none
+# does, the line stays as it is and no record is made up. A full string form in `from`
+# with no record of its own gets the record it spells out. Whether a source may be used at
+# all is the registry's call (check_writable): withdrawn and deleted are refused, unreadable
+# is taken with a note, and a grant set by the request layer limits a turn to its own.
+
+def _registry():
+    return getattr(rt.bucket_mgr, "sources", None)
+
+
+def _same(stored, given: dict) -> bool:
+    try:
+        return isinstance(stored, dict) and _src.same_delivery(stored, given)
+    except (KeyError, TypeError):
+        return False
+
+
+async def _already_recorded(records: list[dict], exclude: set) -> list[str]:
+    """One hint per live, current memory that already carries the same delivery (same
+    identity and fingerprint) as one of `records`. A hint only: two memories from one
+    message are often two different things, so nothing is blocked."""
+    if not records:
+        return []
+    hits: dict[str, str] = {}
+    for b in await rt.bucket_mgr.list_all(include_archive=False):
+        meta = b.get("metadata") or {}
+        bid = str(meta.get("id") or b.get("id") or "")
+        if not bid or bid in exclude or meta.get("deleted_at") or meta.get("superseded_by"):
+            continue
+        for stored in meta.get(_src.SOURCES_FIELD) or []:
+            match = next((r for r in records if _same(stored, r)), None)
+            if match is not None:
+                hits.setdefault(bid, _src.record_string(match))
+                break
+    return [f"这条来源已经记过 {bid}，看一眼是不是同一件（{text}）。"
+            for bid, text in hits.items()]
+
+
+async def check_sources(raw, prov: list[dict] | None, exclude=(), *,
+                        from_call: bool = True,
+                        ) -> tuple[list[dict], list[dict] | None, list[str], str]:
+    """The `sources` argument and the provenance lines `from` produced -> (records to
+    store, provenance lines with every record's quoted line, notes for the receipt,
+    refusal). `exclude` are the entries this write replaces or edits, left out of the
+    already-recorded hint. Nothing given and nothing to link: (``[]``, prov, [], "").
+
+    `from_call` says `prov` is this call's own `from`. False (trace appending to an
+    entry) means it is what the entry already has: a string form there is not made into
+    a record again, and a bare id that names several new records stays as it is."""
+    try:
+        records = _src.normalize_sources(_src.coerce_sources_arg(raw))
+    except _src.SourceRecordError as e:
+        return [], prov, [], (f"sources 不对：{e.zh}。每条写 {{system, instance, container, "
+                              "id}，可选 revision / fingerprint / fingerprint_by / span / use。")
+    lines = list(prov or [])
+    strings = [_src.record_string(r) for r in records]
+    for i, line in enumerate(lines):
+        if line["rel"] != WAS_QUOTED_FROM:
+            continue
+        target = line["target"]
+        if "#" in target:
+            if from_call and target not in strings:
+                try:
+                    sid, revision = _src.SourceId.parse(target)
+                except _src.SourceRecordError as e:
+                    return [], prov, [], f"from 里「{target[:40]}」像来源的全称，但{e.zh}。"
+                records.append({"system": sid.system, "instance": sid.instance,
+                                "container": sid.container, "id": sid.id,
+                                "revision": revision, "fingerprint": None,
+                                "fingerprint_by": None, "use": None})
+                strings.append(target)
+            continue
+        named = list(dict.fromkeys(s for r, s in zip(records, strings) if r["id"] == target))
+        if len(named) > 1 and from_call:
+            return [], prov, [], (f"from 里的 {target} 对得上好几条来源（{'、'.join(named)}）"
+                                  "——from 里写那一条的全称。")
+        if len(named) == 1:
+            lines[i] = {"rel": WAS_QUOTED_FROM, "target": named[0]}
+    if not records:
+        return [], prov, [], ""
+    if len(records) > _src.SOURCES_MAX:
+        return [], prov, [], (f"sources 最多 {_src.SOURCES_MAX} 条（收到 {len(records)} 条）"
+                              "——拆开分别存。")
+    registry = _registry()
+    notes: list[str] = []
+    if registry is not None:
+        refusal, notes = registry.check_writable(records, _src.current_grant())
+        if refusal:
+            return [], prov, [], refusal
+    lines += [{"rel": WAS_QUOTED_FROM, "target": s} for s in strings]
+    lines = list({(ln["rel"], ln["target"]): ln for ln in lines}.values())
+    if len(lines) > PROV_MAX_LINES:
+        return [], prov, [], (f"from 加 sources 一共 {len(lines)} 条来源，超过 {PROV_MAX_LINES}"
+                              "——一条记忆挂不了这么多来源，拆开分别存。")
+    notes += await _already_recorded(records, set(exclude))
+    return records, lines, notes, ""
 
 
 async def _normalize_from(from_ids, missing_hint: str = "") -> tuple[list[dict] | None, str]:
@@ -715,7 +840,8 @@ async def _normalize_from(from_ids, missing_hint: str = "") -> tuple[list[dict] 
 async def grow_event(items: list, direction_of_fit: str = "", bound=None,
                      evidential: str = "", internally_generated: bool = False,
                      weight=None, from_ids=None, test_data: bool = False,
-                     cue=None, exception_of: str = "", hold: str = "") -> str:
+                     cue=None, exception_of: str = "", hold: str = "",
+                     sources=None) -> str:
     if not isinstance(items, list) or not items:
         return 'kind="event" 需要 items=[{room, text, when?}, ...]，至少一条。'
     cue_v, cue_err = check_cue(cue)
@@ -746,6 +872,11 @@ async def grow_event(items: list, direction_of_fit: str = "", bound=None,
     prov, from_err = await _normalize_from(from_ids)
     if from_err:
         return from_err
+    # The host's material this came from, checked against the registry; every item of
+    # the call carries the same records, as it carries the same prov.
+    source_records, prov, source_notes, sources_err = await check_sources(sources, prov)
+    if sources_err:
+        return sources_err
 
     # --- Validation first: if any item is invalid, reject everything and create
     # no bucket at all ---
@@ -835,8 +966,8 @@ async def grow_event(items: list, direction_of_fit: str = "", bound=None,
     except Exception:
         pass
 
-    # cue, and the hold's three fields, in the same create() as the body.
-    extra: dict = {"cue": cue_v}
+    # cue, sources, and the hold's three fields, in the same create() as the body.
+    extra: dict = {"cue": cue_v, "sources": source_records}
     if hold_target:
         from core import _when as _w
         extra.update(exception_of=hold_target, hold=hold_level,
@@ -889,6 +1020,8 @@ async def grow_event(items: list, direction_of_fit: str = "", bound=None,
     for bid in hold_ids:
         out += "\n" + _hold_receipt(bid, hold_target, hold_level, cleaned[0]["when"],
                                     extra.get("review_after") or "")
+    if pairs:
+        out += "".join("\n" + note for note in source_notes)
 
     # Overlong entries get a single remark; **whether and how to split is my
     # judgement, made on the spot**.
@@ -922,7 +1055,8 @@ async def grow_mind(room: str, text: str, from_ids, v, a,
                     direction_of_fit: str = "", bound=None, evidential: str = "",
                     internally_generated: bool = False, weight=None,
                     importance=None, meaning: str = "",
-                    test_data: bool = False, cue=None, card_of: str = "") -> str:
+                    test_data: bool = False, cue=None, card_of: str = "",
+                    sources=None) -> str:
     room = str(room or "").strip()
     text = str(text or "")  # stored verbatim: never strip the body
     room_err = check_room(room, "mind")
@@ -960,6 +1094,11 @@ async def grow_mind(room: str, text: str, from_ids, v, a,
         from_ids, missing_hint="填 grow(kind=\"event\") 返回的真 id。")
     if from_err:
         return from_err
+    # A record in `sources` is a source as much as a line in `from` is: a thought formed
+    # straight from what was said names that piece, and its quoted line counts.
+    source_records, prov, source_notes, sources_err = await check_sources(sources, prov)
+    if sources_err:
+        return sources_err
     if not prov:
         return ("from 必填：这条认知是从哪几条记忆看出来的？填真 bucket_id 列表。"
                 "确实凭空想的，就在正文里老实标「凭空想的」，并把来源指到相关的事件上。")
@@ -989,6 +1128,7 @@ async def grow_mind(room: str, text: str, from_ids, v, a,
         test_data=test_data,
         cue=cue_v,
         card_of=card,
+        sources=source_records,
         **v2,
     )
     try:
@@ -1009,4 +1149,5 @@ async def grow_mind(room: str, text: str, from_ids, v, a,
     if card:
         head += f" [名字卡:{card}]"
     out = head + "（标签/摘要后台回填中）"
+    out += "".join("\n" + note for note in source_notes)
     return out + ("\n" + card_note if card_note else "")

@@ -27,20 +27,32 @@ n>=2 (merging after a spell of musing) are unchanged.
    the `room` argument — `room` can be wrong or missing, whereas whether I am
    circling events or thoughts is something the circled entries already know.
 
-Exports: dispatch(text, room, v, a, cover, when, from_, test_data) -> str
+Exports: dispatch(text, room, v, a, cover, when, from_, test_data, sources) -> str
 ========================================
 """
 
 from .. import _runtime as rt
 from core import _fold as F
-from .._common import check_content_size, resolve_bucket_ids
+from core import _sources as _src
+from .._common import check_content_size, resolve_bucket_ids, with_write_key
 from core._rooms import check_room, _rooms_help, is_event_room, is_mind_room
-from ..grow.rooms_path import _normalize_from
+from ..grow.rooms_path import _normalize_from, check_sources
 
 
 async def dispatch(text: str = "", room: str = "", v=-1, a=-1,
                    cover=None, when: str = "", from_=None,
-                   test_data: bool = False) -> str:
+                   test_data: bool = False, sources=None) -> str:
+    # One write call, one write key (core/_sources.SourceRegistry.run_once).
+    return await with_write_key(
+        _src.current_write_key(),
+        lambda: _fold(text=text, room=room, v=v, a=a, cover=cover, when=when,
+                      from_=from_, test_data=test_data, sources=sources),
+        op="fold")
+
+
+async def _fold(text: str = "", room: str = "", v=-1, a=-1,
+                cover=None, when: str = "", from_=None,
+                test_data: bool = False, sources=None) -> str:
     text = str(text or "")          # stored verbatim: never strip the body (constitutional)
     room = str(room or "").strip()
     when = str(when or "").strip()
@@ -106,6 +118,9 @@ async def dispatch(text: str = "", room: str = "", v=-1, a=-1,
     prov, from_err = await _normalize_from(from_)
     if from_err:
         return from_err
+    source_records, prov, source_notes, sources_err = await check_sources(sources, prov)
+    if sources_err:
+        return sources_err
 
     # ---- The folded ids may be the handles breath prints; from here on every
     # gate and every message speaks of the full ids, which are what get stored ----
@@ -192,8 +207,9 @@ async def dispatch(text: str = "", room: str = "", v=-1, a=-1,
     supersedes = ""
 
     new_id, report = await F.save_gist(
-        text, room, v, a, cover, when=when, prov=prov,
+        text, room, v, a, cover, when=when, prov=prov, sources=source_records,
         supersedes=supersedes, test_data=bool(test_data))
+    notes = "".join("\n" + note for note in source_notes)
 
     # ---- Say it plainly. A period and a snapshot get two different sentences,
     # because they really are two different things ----
@@ -205,7 +221,7 @@ async def dispatch(text: str = "", room: str = "", v=-1, a=-1,
                 "补记自动归队、交叉和嵌套天然成立；**一条都没被压住**"
                 "（照旧独立冒头、照旧搜得到）。recall 那段时间时它盖在顶上。）",
                 "（边界想改就 regrow 换 when——边界本来就是糊的。）"]
-        return head + "\n" + "\n".join(tail)
+        return head + "\n" + "\n".join(tail) + notes
 
     n = len(report["cover"])
     head = f"▣gist→{new_id} {room}（盖着 {n} 条"
@@ -217,4 +233,4 @@ async def dispatch(text: str = "", room: str = "", v=-1, a=-1,
         tail.append("（= 换版：旧版留档不浮现，id 直查仍能看）")
     else:
         tail.append("（被盖的不再独立冒头，但 query 照样搜得到、id 直查钻得到）")
-    return head + "\n" + "\n".join(x for x in tail if x)
+    return head + "\n" + "\n".join(x for x in tail if x) + notes

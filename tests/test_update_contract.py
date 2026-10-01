@@ -466,6 +466,24 @@ def test_card_of_reaches_disk(store):
     run(go())
 
 
+def test_sources_reach_disk(store):
+    record = {"system": "lento", "instance": "home", "container": "private:U",
+              "id": "m_0142", "span": {"unit": "utf16", "start": 0, "end": 12}}
+    async def go():
+        bid = await store.create(BODY)
+        assert await store.update(bid, sources=[record, record]) is True
+        # Criterion: the same trap an eighth time. Records dropped here leave a memory
+        # whose quoted lines point at nothing, and the registry's refusals never reach it.
+        [stored] = (await _meta(store, bid))["sources"]
+        assert stored["id"] == "m_0142" and stored["span"]["end"] == 12
+        # A malformed record refuses the whole update instead of landing half-read.
+        assert await store.update(bid, sources=[{"system": "lento"}]) is False
+        assert len((await _meta(store, bid))["sources"]) == 1
+        assert await store.update(bid, sources=[]) is True
+        assert "sources" not in await _meta(store, bid)
+    run(go())
+
+
 def test_none_deletes_a_field_instead_of_writing_the_word_none(store):
     async def go():
         bid = await store.create(BODY)

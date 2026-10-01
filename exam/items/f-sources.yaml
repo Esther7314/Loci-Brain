@@ -27,19 +27,50 @@
 - id: F2
   title: "a deleted source stops its descendants on every road"
   interface: none
-  needs: "a 'this source can no longer be used' signal from the entry; descendants withheld in breath, recall, read by id, dream and tidy material, cards"
+  needs: "the route that carries the signal to the registry (POST /api/v2/source/change; apply_change itself is in); descendants withheld in breath, recall, read by id, dream and tidy material, cards"
 
 - id: F3
   title: "a descendant of two sources is rewritten from the one left"
   interface: none
-  needs: "the delete signal (F2), withholding until rewritten, sources carrying 'where + id'"
+  needs: "the signal's route (F2) and withholding until rewritten; sources carrying 'where + id' and regrow leaving a withdrawn source behind are in"
 
 - id: F4
   title: "a withdrawn source is also cleared from Loci's own derived stores"
   interface: none
-  needs: "the delete signal (F2) reaching embeddings.db, the BM25 index, dream records (night_fall/dreams) and sunk bodies (archive/原文)"
+  needs: "the signal's route (F2) with cleanup steps after apply_change reaching embeddings.db, the BM25 index, dream records (night_fall/dreams) and sunk bodies (archive/原文)"
 
+# The agreed rule: the same delivery (same write key) is one memory; the same source
+# written as two different events stays two, and the second receipt points at the first.
 - id: F5
-  title: "the same source delivered twice is one thing"
-  interface: none
-  needs: "sources carrying 'where + id'; write-time dedup on that, not only on identical text"
+  title: "the same delivery twice is one thing; the same source in two events is two"
+  start: "2026-10-01T10:00:00+08:00"
+  steps:
+    - call: grow
+      write_key: "turn-1001-a#1"
+      args:
+        kind: event
+        sources: [{system: lento, instance: home, container: "private:U", id: m_20261001_0101, fingerprint: "sha256:5ea1", fingerprint_by: adapter}]
+        items: [{room: EVENT/WORLD, text: "小周说周末想去海边看日出。", v: 0.7, a: 0.5}]
+      as: first
+      capture: {first_id: "📝([0-9a-f]{12})"}
+    - call: grow
+      write_key: "turn-1001-a#1"
+      args:
+        kind: event
+        sources: [{system: lento, instance: home, container: "private:U", id: m_20261001_0101, fingerprint: "sha256:5ea1", fingerprint_by: adapter}]
+        items: [{room: EVENT/WORLD, text: "小周说周末想去海边看日出。", v: 0.7, a: 0.5}]
+      as: resend
+    - check: {segment: delivery, desc: "the resend gets the first answer back", output: resend, contains: "📝$first_id"}
+    - check: {segment: delivery, desc: "answered by the key, not by the identical-text check", output: resend, lacks: "♻️"}
+    - check: {segment: delivery, desc: "one delivery is one memory", entry: {body_has: 看日出}, min: 1, max: 1}
+    - check: {segment: record, desc: "the memory carries the source record", field: sources, id: $first_id, contains: m_20261001_0101}
+    - check: {segment: record, desc: "its quoted line names the source by its string form", field: prov, id: $first_id, contains: "lento:home/private:U#m_20261001_0101"}
+    - call: grow
+      write_key: "turn-1001-b#1"
+      args:
+        kind: event
+        sources: [{system: lento, instance: home, container: "private:U", id: m_20261001_0101, fingerprint: "sha256:5ea1", fingerprint_by: adapter}]
+        items: [{room: EVENT/WORLD, text: "小周想看日出，是因为小时候住在海边。", v: 0.6, a: 0.4}]
+      as: second
+    - check: {segment: two events, desc: "a second event from the same message is its own memory", entry: {body_any: [看日出]}, min: 2, max: 2}
+    - check: {segment: hint, desc: "the second receipt points at the first", output: second, contains: "这条来源已经记过 $first_id"}

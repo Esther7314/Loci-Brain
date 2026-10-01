@@ -20,10 +20,12 @@ Exports: dispatch(items=... / kind+text) -> str
 ========================================
 """
 
+import functools
 from typing import Optional
 
+from core import _sources as _src
 from .. import _runtime as rt
-from .._common import check_grow_items_payload
+from .._common import check_grow_items_payload, with_write_key
 from .rooms_path import (grow_event, grow_mind, backfill_sweep,
                          _retired_fields_msg)
 
@@ -33,7 +35,7 @@ from .rooms_path import (grow_event, grow_mind, backfill_sweep,
 _sweep_started = False
 
 
-async def dispatch(
+async def _dispatch(
     items: Optional[list] = None,
     kind: str = "",
     room: str = "",
@@ -52,6 +54,7 @@ async def dispatch(
     exception_of: str = "",
     hold: str = "",
     card_of: str = "",
+    sources=None,
 ) -> str:
     await rt.decay_engine.ensure_started()
 
@@ -114,7 +117,8 @@ async def dispatch(
                                 bound=bound, evidential=evidential,
                                 internally_generated=internally_generated, weight=weight,
                                 from_ids=from_, test_data=test_data,
-                                cue=cue, exception_of=exception_of, hold=hold)
+                                cue=cue, exception_of=exception_of, hold=hold,
+                                sources=sources)
     if kind == "mind":
         if str(exception_of or "").strip() or str(hold or "").strip():
             return ('条子是一条事件：grow(kind="event", exception_of="约定的id", '
@@ -124,7 +128,7 @@ async def dispatch(
                                evidential=evidential,
                                internally_generated=internally_generated,
                                weight=weight, test_data=test_data, cue=cue,
-                               card_of=card_of)
+                               card_of=card_of, sources=sources)
     if kind == "big":
         # ⚰️ `kind="big"` was pulled from the tool face.
         #    Underneath it called fold's own bones (`_F.save_gist`) — it was a
@@ -146,3 +150,11 @@ async def dispatch(
     return ('grow 要说存的是什么：kind="event" + items=[{room, text, v, a, when?}, ...] '
             '存发生了什么（想要的事也是事件，加 direction_of_fit="telic"）；'
             'kind="mind" + room + text + from 存你从中看出的一句。')
+
+
+@functools.wraps(_dispatch)
+async def dispatch(*args, **kwargs) -> str:
+    # One write call, one write key: a resend of the same delivery gets the first reply
+    # back (core/_sources.SourceRegistry.run_once); without a key it simply runs.
+    return await with_write_key(_src.current_write_key(),
+                                lambda: _dispatch(*args, **kwargs), op="grow")

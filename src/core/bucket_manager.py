@@ -257,6 +257,7 @@ from utils import (
     parse_iso_datetime,
 )
 from ._rooms import is_event_room, is_mind_room
+from ._sources import SourceRegistry, normalize_sources, note_written
 from locibrain.storage.media_store import MediaStore
 from locibrain.eventsourcing.ledger_mirror import LedgerMirror
 
@@ -339,9 +340,12 @@ HOLD_LEVELS = frozenset({"defer", "avoid"})
 # card_of = the name this MIND entry is the card of (the names table's key, normalised by
 # the tool that writes it). Only a MIND entry is a card; which MIND room, and one live card
 # per name, are the write tools' checks (tools/grow/rooms_path.check_card).
+# sources = the pieces of the host's material this memory was formed from, one record each
+# (core/_sources.py: identity, revision, fingerprint, span, use). Whether a source may be
+# used is the registry's question, asked by the write tools before they get here.
 V2_FIELDS = ("direction_of_fit", "bound", "evidential", "internally_generated",
              "recurrence", "backfilled", "cue", "exception_of", "hold", "review_after",
-             "card_of")
+             "card_of", "sources")
 _CUE_CONDITION_MAX = 200
 _CUE_PHRASINGS_MAX_ITEMS = 16
 _CUE_PHRASING_MAX = 200
@@ -521,6 +525,8 @@ class BucketManager:
             self.base_dir, "_ledger", "events.jsonl"
         )
         self.ledger_mirror = LedgerMirror(ledger_path)
+        # Each source's own state and the write-key claims (`<buckets>/_sources`).
+        self.sources = SourceRegistry(self.base_dir, store=self)
 
         # The sparse BM25 index (marked dirty after a write, rebuilt lazily on search())
         self._bm25: "_BM25Index | None" = _BM25Index() if _BM25Index is not None else None
@@ -740,6 +746,8 @@ class BucketManager:
             if v and (len(v) > _MAX_SUBJECT_CHARS or "\n" in v):
                 raise ValueError(f"card_of must be one name, got {v[:_MAX_SUBJECT_CHARS + 1]!r}")
             out["card_of"] = v or None
+        if "sources" in given:
+            out["sources"] = normalize_sources(given["sources"]) or None
         return out
 
     @classmethod
@@ -1290,6 +1298,7 @@ class BucketManager:
         hold: str = "",
         review_after: str = "",
         card_of: str = "",
+        sources: Any = None,
     ) -> str:
         """
         Create a new memory bucket, return bucket ID.
@@ -1448,7 +1457,8 @@ class BucketManager:
             direction_of_fit=direction_of_fit, bound=bound, evidential=evidential,
             internally_generated=internally_generated, recurrence=recurrence,
             backfilled=backfilled, cue=cue, exception_of=exception_of, hold=hold,
-            review_after=review_after, card_of=card_of).items() if v is not None})
+            review_after=review_after, card_of=card_of,
+            sources=sources).items() if v is not None})
         if bool(metadata.get("exception_of")) != bool(metadata.get("hold")):
             raise ValueError("exception_of and hold come together: a hold names what it "
                              "is hung on and how far it reaches")
@@ -1594,6 +1604,8 @@ class BucketManager:
         # derived-index await.  This also changes the path index from the
         # precise hand-off above to a normal lazy rebuild for later lookups.
         self._invalidate_bm25()
+        # The file is on disk: a keyed write (core/_sources.run_once) claims this id.
+        note_written(bucket_id)
 
         logger.info(
             f"Created bucket / 创建记忆桶: {bucket_id} ({bucket_name}) → {primary_domain}/"
@@ -2035,6 +2047,8 @@ class BucketManager:
                     "matches": 1,
                     "message": str(exc),
                 }
+            if committed:
+                note_written(bucket_id)
             return {
                 "ok": bool(committed),
                 "error": "" if committed else "update_failed",
@@ -2064,12 +2078,16 @@ class BucketManager:
         activation_count, with the same meaning as touch().
         """
         async with self._bucket_turn(bucket_id):
-            return await self._update_locked(
+            committed = await self._update_locked(
                 bucket_id,
                 allow_embedding_fallback=allow_embedding_fallback,
                 bump_active=bump_active,
                 **kwargs,
             )
+        # What this call wrote, for a keyed write's claim (core/_sources.run_once).
+        if committed:
+            note_written(bucket_id)
+        return committed
 
     async def _update_locked(
         self,
@@ -2637,7 +2655,10 @@ class BucketManager:
         embedding is still cleaned up, to save space.
         """
         async with self._bucket_turn(bucket_id):
-            return await self._delete_locked(bucket_id)
+            deleted = await self._delete_locked(bucket_id)
+        if deleted:
+            note_written(bucket_id)
+        return deleted
 
     async def restore_archived(self, bucket_id: str) -> dict:
         """Restore an archived/tombstoned Markdown bucket to its original channel.

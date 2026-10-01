@@ -16,6 +16,10 @@ write has made it stale. Live Loci rebuilds it in the background and lets that o
 score against the old index; with embeddings off, that would make every item's first
 search see an empty index and match whole-query substrings only.
 
+And a second seam: a call step may carry a write key (`write_key:` in the item), sent in the
+request's _meta and set for that call the way the request layer will set it from the
+host's turn header.
+
 Nothing else differs from a real start: same tools, same argument checks, same output.
 """
 
@@ -54,5 +58,26 @@ async def _search_on_fresh_bm25(self, query, *args, **kwargs):
 
 
 _bm.BucketManager.search = _search_on_fresh_bm25
+
+# A write key per call: the runner sends it in the request's _meta (`loci_write_key`), and
+# it is set for that one call the way the request layer will set it from the host's turn.
+# Without one nothing changes, which is every call that does not ask for it.
+from core import _sources as _src  # noqa: E402
+from mcp.server.fastmcp import FastMCP  # noqa: E402
+
+_call_tool = FastMCP.call_tool
+
+
+async def _call_tool_under_write_key(self, name, arguments):
+    try:
+        meta = self.get_context().request_context.meta
+    except (LookupError, ValueError, AttributeError):
+        meta = None
+    key = getattr(meta, "loci_write_key", None) if meta is not None else None
+    with _src.write_key_scope(key):
+        return await _call_tool(self, name, arguments)
+
+
+FastMCP.call_tool = _call_tool_under_write_key
 
 runpy.run_path(str(ROOT / "src" / "server.py"), run_name="__main__")

@@ -12,7 +12,8 @@ WHAT ONE ITEM DOES
     2. Write the item's `setup` entries straight onto disk (fixed ids, fixed times),
        using Loci's own BucketManager so the files look exactly like real ones.
     3. Start the real MCP server (exam/serve.py) over stdio with the fake clock.
-    4. Walk the `steps`: move the clock, call tools, take snapshots, run checks.
+    4. Walk the `steps`: move the clock, call tools (a call may carry `write_key:`, the
+       key a host would send for that write), take snapshots, run checks.
     5. Each check records pass / fail and one line of evidence read back from disk or
        from the tool's own output.
 
@@ -213,8 +214,11 @@ class Run:
     async def call(self, step: dict) -> None:
         tool = step["call"]
         args = self.sub(step.get("args", {}))
+        # `write_key:` sends the call's write key in _meta; exam/serve.py sets it for the
+        # call the way the request layer will from the host's turn.
+        meta = {"loci_write_key": str(self.sub(step["write_key"]))} if step.get("write_key") else None
         try:
-            res = await self.session.call_tool(tool, args)
+            res = await self.session.call_tool(tool, args, meta=meta)
             text = "\n".join(getattr(c, "text", "") for c in res.content)
             if res.isError:
                 text = "[tool error] " + text
@@ -517,7 +521,9 @@ def seams() -> tuple[str, ...]:
             "random seeded per item", "no model keys",
             embeddings_label(),
             "BM25 rebuilt before a search when stale (exam/serve.py; live Loci rebuilds "
-            "it in the background)")
+            "it in the background)",
+            "a call step's write_key is sent in _meta and set for that call (exam/serve.py; "
+            "the request layer will set it from the host's turn)")
 
 
 def require_search_deps() -> None:

@@ -32,7 +32,7 @@ Exports: trace_core(bucket_id, name, domain, valence, arousal, tags, pinned,
                     delete, status, weight, dont_surface, media_append,
                     media_replace, hard_delete, delete_reason, restore,
                     old_str, new_str, closed_by, mark_asked, direction_of_fit,
-                    bound, cue, card_of) -> str
+                    bound, cue, card_of, sources_append) -> str
 ⚰️ Seven dead parameters were removed: importance / resolved / digested /
    content / why_remembered / meaning_append / meaning_replace (see the epitaph
    at _retired below)
@@ -44,7 +44,7 @@ from contextlib import AsyncExitStack
 from typing import Optional
 
 from locibrain.domain.memory_messages import resolved_hint
-from utils import is_telic, parse_bool
+from utils import PROV_FIELD, is_telic, parse_bool, read_prov
 from .. import _runtime as rt
 from .._pin import pin_note
 from core._rooms import check_room
@@ -201,6 +201,7 @@ async def trace_core(
     bound: Optional[list | str] = None,
     cue: Optional[dict | str] = None,
     card_of: Optional[str] = None,
+    sources_append: Optional[list | dict | str] = None,
 ) -> str:
     bucket_id = "" if bucket_id is None else str(bucket_id)
     if name is None:
@@ -358,6 +359,7 @@ async def trace_core(
         bool(folds_append),
         cue_update is not None,
         card_of is not None,
+        bool(sources_append),
     ))
     if restore and restore_conflicts:
         return (
@@ -666,6 +668,26 @@ async def trace_core(
             if fold_err:
                 return fold_err
             updates["cover"] = new_cover
+        # sources_append: more of the host's material this entry was formed from. Append
+        # only, like folds_append; each record is checked like a write's (the registry,
+        # the grant) and brings its quoted prov line with it.
+        source_notes: list[str] = []
+        if sources_append:
+            from ..grow.rooms_path import check_sources
+            from core import _sources as _src
+            new_sources, prov_lines, source_notes, sources_err = await check_sources(
+                sources_append, read_prov(meta), exclude={bucket_id}, from_call=False)
+            if sources_err:
+                return sources_err
+            if not new_sources:
+                return "sources_append 是空的：要追加的来源写成 [{system, instance, container, id}]。"
+            try:
+                merged = _src.normalize_sources(
+                    list(meta.get(_src.SOURCES_FIELD) or []) + new_sources)
+            except _src.SourceRecordError as e:
+                return f"sources 不对：{e.zh}。"
+            updates[_src.SOURCES_FIELD] = merged
+            updates[PROV_FIELD] = prov_lines
         if final_importance != requested_importance:
             # Unpinning/restoring surfacing can create an ordinary high slot.
             # Persist quota degradation in the same bucket transaction.
@@ -747,7 +769,8 @@ async def trace_core(
 
     _display_updates = {
         k: v for k, v in updates.items()
-        if k not in ("content", "meaning_append", "meaning", "media_append", "media")
+        if k not in ("content", "meaning_append", "meaning", "media_append", "media",
+                     "sources", PROV_FIELD)
     }
     changed = ", ".join(f"{k}={v}" for k, v in _display_updates.items())
     if patch_args_supplied:
@@ -756,6 +779,8 @@ async def trace_core(
         changed += (", " if changed else "") + f"media=已追加{len(updates['media_append'])}项"
     if "media" in updates:
         changed += (", " if changed else "") + f"media=整体替换({len(updates['media'])}项)"
+    if "sources" in updates:
+        changed += (", " if changed else "") + f"sources=现有{len(updates['sources'])}条"
     if updates.get("status") in ("resolved", "abandoned"):
         changed += f" → {resolved_hint(True)}"
     elif updates.get("status") == "active":
@@ -763,6 +788,7 @@ async def trace_core(
     out = f"已修改记忆桶 {bucket_id}: {changed}"
     if card_note:
         out += "\n" + card_note
+    out += "".join("\n" + note for note in source_notes)
     # pin's reminder trails the **success receipt**: it is not an error, the pin
     # is already on disk (see the epitaph in tools/_pin.py)
     if pin_hint:

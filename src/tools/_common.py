@@ -15,6 +15,8 @@ Key behaviour:
   exceeded
 - _keyed_turn / _quota_turn: one writer at a time per key, across event loops
   and processes
+- with_write_key: a resent write call (same write key) gets the first reply back
+  instead of writing again
 - resolve_bucket_id / resolve_bucket_ids: the 6-character handle a read tool
   prints is accepted by every write tool, as a unique prefix over the whole
   store
@@ -25,7 +27,7 @@ What this file deliberately does not do:
 
 Exports: limits_cfg / max_bucket_bytes / max_pinned / check_content_size /
          check_grow_items_payload / count_pinned / check_pinned_quota /
-         resolve_bucket_id / resolve_bucket_ids
+         resolve_bucket_id / resolve_bucket_ids / with_write_key
 ========================================
 """
 
@@ -189,6 +191,17 @@ async def _keyed_turn(key: str):
             previous.add_done_callback(
                 lambda _completed: _complete_content_turn(key, turn)
             )
+
+
+async def with_write_key(key, do, *, op: str = ""):
+    """Run one write tool call under its write key (core/_sources.SourceRegistry.run_once):
+    the same key again returns the first reply and writes nothing. No key — today, until
+    the request layer sets one from the host's turn — or no registry, and `do` just runs.
+    The key's turn is a lease of its own, taken outside any lock the tool takes inside."""
+    registry = getattr(rt.bucket_mgr, "sources", None)
+    if not key or registry is None:
+        return await do()
+    return await registry.run_once(key, do, op=op)
 
 
 @asynccontextmanager

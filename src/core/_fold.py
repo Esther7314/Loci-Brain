@@ -383,6 +383,7 @@ async def span_members(t0: datetime | None, t1: datetime | None) -> list[str]:
 
 async def save_gist(text: str, room: str, v: float, a: float,
                     cover: list[str], *, when: str = "", prov: list[dict] | None = None,
+                    sources: list[dict] | None = None,
                     supersedes: str = "", test_data: bool = False) -> tuple[str, dict]:
     """The moment it actually hits disk. **All three entry points (fold / regrow /
     grow(kind="big")) share this one function.**
@@ -394,6 +395,11 @@ async def save_gist(text: str, room: str, v: float, a: float,
 
     prov: the provenance lines as the entry point built them (`_normalize_from`; regrow
       adds the wasRevisionOf line to the old version itself). Stored as given.
+
+    sources: the source records as the entry point checked them (`check_sources`). When
+      given on a version change they replace the old version's, which regrow has already
+      merged in; None leaves the old version's to come across with the rest of its
+      standing.
 
     supersedes: for n=1 (a version change) pass the old id, and the version chain
       supersedes / superseded_by plus dont_surface gets written, and the old version's
@@ -446,6 +452,8 @@ async def save_gist(text: str, room: str, v: float, a: float,
             carries_profile = True
         tags += [t for t in user_tags(old_meta) if t not in tags]
         carried = carried_state(old_meta, period=bool(when))
+        if sources is not None:
+            carried.pop("sources", None)
         media = carried_media(old_meta)
         protected = bool(old_meta.get("protected"))
     else:
@@ -459,6 +467,7 @@ async def save_gist(text: str, room: str, v: float, a: float,
         arousal=a,
         name=None,
         prov=prov,
+        sources=sources,
         source_tool="fold",
         room=room,
         when=when,                       # the time-circle: the span goes into the existing `when`, there is no second field

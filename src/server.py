@@ -852,6 +852,15 @@ async def grow(
         "a thing's in MIND/VIEWS; one card per name, so a second is refused and the "
         'first is reworded with regrow. e.g. card_of="Detroit", room="MIND/VIEWS".'
     ))] = "",
+    sources: Annotated[Optional[list | dict | str], _PydField(description=(
+        "The host's own material this came from, when the host gave you its address: one "
+        "record per message (or piece of one) — {system, instance, container, id}, plus "
+        "revision / fingerprint / fingerprint_by / span / use when the host gave them. "
+        "Every entry of the call carries them. A withdrawn or deleted source is refused. "
+        "A bare line id in from (m_0142) is linked to the record with that id. e.g. "
+        'sources=[{"system": "lento", "instance": "home", "container": "private:U", '
+        '"id": "m_0142"}].'
+    ))] = None,
 ) -> str:
     """Store what happened, and what you realized from it. Several entries per call.
 
@@ -937,6 +946,7 @@ async def grow(
             weight=(None if weight is None or weight < 0 else weight),
             test_data=bool(test_data), when=when,
             cue=cue, exception_of=exception_of, hold=hold, card_of=card_of,
+            sources=sources,
         ),
         op="grow",
         args={"items": len(items or []),
@@ -945,7 +955,8 @@ async def grow(
               "bound": bound, "evidential": evidential,
               "internally_generated": bool(internally_generated), "weight": weight,
               "when": when, "test_data": bool(test_data), "cue": cue,
-              "exception_of": exception_of, "hold": hold, "card_of": card_of},
+              "exception_of": exception_of, "hold": hold, "card_of": card_of,
+              "sources": len(sources) if isinstance(sources, list) else bool(sources)},
     )
 
 
@@ -1147,6 +1158,10 @@ async def fold(
     test_data: Annotated[bool, _PydField(description=(
         "Marks the entry as test data. Do not pass it in normal use."
     ))] = False,
+    sources: Annotated[Optional[list | dict | str], _PydField(description=(
+        "The host's own material this line came from, as in grow: "
+        "[{system, instance, container, id, …}]."
+    ))] = None,
 ) -> str:
     """Fold entries up under one line you write yourself.
 
@@ -1188,11 +1203,13 @@ async def fold(
            v=0.8, a=0.5)"""
     return await _with_notice(
         _t_fold.dispatch(text=text, room=room, v=v, a=a, cover=folds,
-                         when=when, from_=from_, test_data=bool(test_data)),
+                         when=when, from_=from_, test_data=bool(test_data),
+                         sources=sources),
         op="fold",
         args={"text_len": len(text or ""), "room": room, "v": v, "a": a,
               "folds": folds, "when": when, "from": from_,
-              "test_data": bool(test_data)},
+              "test_data": bool(test_data),
+              "sources": len(sources) if isinstance(sources, list) else bool(sources)},
     )
 
 
@@ -1304,6 +1321,11 @@ async def regrow(
         "old version was wrong; everything that grew out of it is marked as standing on "
         "changed ground. Without it nothing is written."
     ))] = "",
+    sources: Annotated[Optional[list | dict | str], _PydField(description=(
+        "Any new pieces of the host's material this version came from, as in grow. The "
+        "old version's carry over on their own, except one the host has since withdrawn "
+        "or deleted, which is left behind and named in the reply."
+    ))] = None,
 ) -> str:
     """Replace an entry that is wrong, or that is no longer how you see it.
 
@@ -1357,10 +1379,11 @@ async def regrow(
              v=0.8, a=0.5)"""
     return await _with_notice(
         _t_regrow.dispatch(bucket_id=bucket_id, text=text, v=v, a=a, from_=from_,
-                           mode=mode),
+                           mode=mode, sources=sources),
         op="regrow",
         args={"bucket_id": bucket_id, "text_len": len(text or ""), "v": v, "a": a,
-              "from": from_, "mode": mode},
+              "from": from_, "mode": mode,
+              "sources": len(sources) if isinstance(sources, list) else bool(sources)},
     )
 
 
@@ -1457,6 +1480,10 @@ async def trace(
         "way to hand in a replacement list, because forgetting one id would quietly let "
         "that entry surface again."
     ))] = [],
+    sources_append: Annotated[Optional[list | dict | str], _PydField(description=(
+        "Add pieces of the host's material this entry was formed from, as grow's sources "
+        "takes them. Append only; a withdrawn or deleted source is refused."
+    ))] = None,
     weight: Annotated[float, _PydField(description=(
         "Something wanted only: how heavily it sits on you, 0~1."
     ))] = -1,
@@ -1539,6 +1566,10 @@ async def trace(
     Putting more under a gist:
       folds_append=[ids]  the line stays as written; only what it stands for grows.
 
+    Naming more of where it came from:
+      sources_append=[{system, instance, container, id, …}]  more of the host's material
+                         this entry was formed from; append only.
+
     Do not use this tool when:
     · The words themselves are wrong or have moved on. Use regrow, which keeps the old
       version instead of writing over it.
@@ -1556,6 +1587,7 @@ async def trace(
             restore=restore,
             old_str=old_str, new_str=new_str,
             direction_of_fit=direction_of_fit, bound=bound, cue=cue, card_of=card_of,
+            sources_append=sources_append,
         ),
         op="trace",
         args={
@@ -1566,6 +1598,8 @@ async def trace(
             "delete": delete, "status": status,
             "direction_of_fit": direction_of_fit, "bound": bound, "cue": cue,
             "card_of": card_of,
+            "sources_append": (len(sources_append) if isinstance(sources_append, list)
+                               else bool(sources_append)),
             "hard_delete": hard_delete,
             "restore": restore,
             "delete_reason_len": len(str(delete_reason or "")),

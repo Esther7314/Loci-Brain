@@ -122,3 +122,14 @@ def test_up_to_sixteen_subjects_land(store, tmp_path):
     names = [f"name{i}" for i in range(20)]
     bid = run(store.create(BODY, tags=["t"], subjects=names))
     assert _disk(tmp_path, bid)["subjects"] == names[:16]
+
+
+def test_create_writes_sources_and_refuses_a_malformed_one(store, tmp_path):
+    record = {"system": "lento", "instance": "home", "container": "private:U",
+              "id": "m_0142", "revision": 2, "fingerprint": "sha256:9c1e"}
+    bid = run(store.create(BODY, tags=["t"], sources=[record]))
+    [stored] = _disk(tmp_path, bid)["sources"]
+    assert stored["revision"] == "2" and stored["fingerprint"] == "sha256:9c1e"
+    with pytest.raises(ValueError):
+        run(store.create(BODY + " (2)", tags=["t"], sources=[{**record, "id": "m#1"}]))
+    assert len(list(tmp_path.rglob("*.md"))) == 1

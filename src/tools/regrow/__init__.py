@@ -41,19 +41,24 @@ Four things fixed during review:
 - Backfill self-healing: backfill_sweep also recognises source_tool=regrow (that
   change lives over in rooms_path)
 
-Exports: dispatch(bucket_id, text, v, a, from_, mode) -> str · MODES
+The old version's `sources` come across with its standing; new ones (`sources=`) are
+checked like any write's and added. A source withdrawn or deleted since the old version
+was written is left behind, quoted line and all, and the receipt says so.
+
+Exports: dispatch(bucket_id, text, v, a, from_, mode, sources) -> str · MODES
 ========================================
 """
 
 from core import _fold as _F           # fold's bones: regrow is its n=1 case
+from core import _sources as _src
 from .. import _runtime as rt
 from core._bigevent import is_big as _is_big
-from .._common import _keyed_turn, resolve_bucket_id
+from .._common import _keyed_turn, resolve_bucket_id, with_write_key
 # is_mind_room is no longer used to keep events out (that gate was removed; see
 # the epitaph inside regrow below)
 # from core._rooms import is_mind_room
 from utils import PROV_MAX_LINES, WAS_REVISION_OF, now_iso, prov_targets, read_prov
-from ..grow.rooms_path import _normalize_from
+from ..grow.rooms_path import _normalize_from, check_sources
 
 MODES = ("supplement", "overturn")
 _MODE_WORD = {"supplement": "补充", "overturn": "推翻"}
@@ -90,8 +95,40 @@ async def _mark_overturned(old_id: str, new_id: str) -> tuple[list[str], list[st
     return marked, failed
 
 
+def _carry_sources(old_meta: dict) -> tuple[list[dict], list[str]]:
+    """The old version's source records a new version may stand on, and the string forms
+    of those it may not. A source withdrawn or deleted since the old version was written
+    is not carried (nor its quoted line): a new version is a new write, and the registry
+    refuses that material to every write. A record that no longer reads as one is left
+    behind the same way."""
+    registry = getattr(rt.bucket_mgr, "sources", None)
+    kept: list[dict] = []
+    dropped: list[str] = []
+    for raw in old_meta.get(_src.SOURCES_FIELD) or []:
+        try:
+            [rec] = _src.normalize_sources([raw])
+        except (_src.SourceRecordError, ValueError):
+            continue
+        state = registry.state_of(_src.record_id(rec)) if registry is not None else _src.ACTIVE
+        if state in (_src.WITHDRAWN, _src.DELETED):
+            dropped.append(_src.record_string(rec))
+        else:
+            kept.append(rec)
+    return kept, dropped
+
+
 async def dispatch(bucket_id: str = "", text: str = "", v=-1, a=-1, from_=None,
-                   mode: str = "") -> str:
+                   mode: str = "", sources=None) -> str:
+    # One write call, one write key (core/_sources.SourceRegistry.run_once).
+    return await with_write_key(
+        _src.current_write_key(),
+        lambda: _regrow(bucket_id=bucket_id, text=text, v=v, a=a, from_=from_, mode=mode,
+                        sources=sources),
+        op="regrow")
+
+
+async def _regrow(bucket_id: str = "", text: str = "", v=-1, a=-1, from_=None,
+                  mode: str = "", sources=None) -> str:
     bucket_id = str(bucket_id or "").strip()
     text = str(text or "")  # stored verbatim: never strip the body
     mode = str(mode or "").strip().lower()
@@ -121,6 +158,11 @@ async def dispatch(bucket_id: str = "", text: str = "", v=-1, a=-1, from_=None,
     extra, from_err = await _normalize_from(from_)
     if from_err:
         return from_err
+    # New sources are checked like any write's; the old version's come across below.
+    new_sources, extra, source_notes, sources_err = await check_sources(
+        sources, extra, exclude={bucket_id})
+    if sources_err:
+        return sources_err
 
     # ---- check -> create -> write both link directions, all inside a
     # cross-process lock on the old id ----
@@ -182,8 +224,16 @@ async def dispatch(bucket_id: str = "", text: str = "", v=-1, a=-1, from_=None,
         # only the one it replaced. The chain fields (supersedes / superseded_by) are
         # written by save_gist as always; the revision line is the typed record beside
         # them.
+        # The old version's source records come across with their quoted lines, the new
+        # ones after them; a source the registry now refuses stays behind with its line.
+        kept_sources, dropped_sources = _carry_sources(old_meta)
+        try:
+            merged_sources = _src.normalize_sources(kept_sources + list(new_sources))
+        except _src.SourceRecordError as e:
+            return f"sources 不对：{e.zh}。"
         revision = {"rel": WAS_REVISION_OF, "target": bucket_id}
-        carried = [ln for ln in read_prov(old_meta) if ln["rel"] != WAS_REVISION_OF]
+        carried = [ln for ln in read_prov(old_meta)
+                   if ln["rel"] != WAS_REVISION_OF and ln["target"] not in dropped_sources]
         lines = list({(ln["rel"], ln["target"]): ln
                       for ln in carried + list(extra or [])}.values())
         room_left = PROV_MAX_LINES - 1
@@ -230,7 +280,7 @@ async def dispatch(bucket_id: str = "", text: str = "", v=-1, a=-1, from_=None,
                 return span_err
         new_id, report = await _F.save_gist(
             text, room, v, a, cover, when=new_when if is_big else "",
-            prov=prov, supersedes=bucket_id, test_data=is_test)
+            prov=prov, sources=merged_sources, supersedes=bucket_id, test_data=is_test)
 
         # Overturned: whatever grew out of the old version is told so, still under the
         # lock on the old id, so the marks land before anyone else can re-version it.
@@ -268,6 +318,10 @@ async def dispatch(bucket_id: str = "", text: str = "", v=-1, a=-1, from_=None,
                     "**现场数的**，不落盘；时期只起名字，一条都没被压住。）")
     if dropped:
         out += f"\n⚠️ 来源链满：这几个没挂上 {', '.join(dropped)}（继承链优先）"
+    if dropped_sources:
+        out += (f"\n新版没带上这几条来源：{', '.join(dropped_sources)}"
+                "——宿主那边已经撤回或删除了，旧版留档照旧挂着。")
+    out += "".join("\n" + note for note in source_notes)
     if report["链没写全"]:
         out += "\n⚠️ 版本链没写全（supersedes/superseded_by 有一半失败）——把这条报给AI查"
     tail = _F.format_report(report)
