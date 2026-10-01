@@ -205,38 +205,87 @@ RUN = {**REC, "through": "m_0160"}
 RUN_SRC = SRC + "..m_0160"
 
 
-def test_a_run_is_read_by_its_own_identity_then_its_first_line(reg):
+def test_a_run_is_as_bad_as_its_worst_line(reg):
     [run_rec] = S.normalize_sources(RUN)
     assert reg.describe(RUN_SRC) is None and reg.check_writable([run_rec]) == ("", [])
     apply(reg, "c1", "withdrawn", 1)                       # the first line, as the host says it
     assert reg.state_of(RUN_SRC) == "withdrawn"
     refusal, _ = reg.check_writable([run_rec])
     assert RUN_SRC in refusal and "撤回" in refusal
-    # The run's own identity, once the registry knows it, is what counts.
+    # Restoring the run's own identity does not lift a line inside it.
     run(reg.apply_change({"change_id": "c2", "source": RUN_SRC, "kind": "restored",
                           "host_seq": 1}, may_restore=True))
-    assert reg.state_of(RUN_SRC) == "active" and reg.state_of(SRC) == "withdrawn"
-    # A line inside the run, past its first, does not reach it.
-    run(reg.apply_change({"change_id": "c3", "source": "lento:home/private:U#m_0150",
+    assert reg.state_of(RUN_SRC) == "withdrawn" and reg.state_of(SRC) == "withdrawn"
+    # The last line reaches it too, even with the order never handed over.
+    apply(reg, "c3", "restored", 2, may_restore=True)
+    assert reg.state_of(RUN_SRC) == "active"
+    run(reg.apply_change({"change_id": "c4", "source": "lento:home/private:U#m_0160",
                           "kind": "deleted", "host_seq": 1}))
-    assert reg.check_writable([run_rec]) == ("", [])
+    assert reg.state_of(RUN_SRC) == "deleted"
 
 
-def test_a_run_is_granted_by_itself_or_its_first_line(reg):
+def test_a_line_inside_a_run_reaches_it_once_the_order_is_known(reg):
     [run_rec] = S.normalize_sources(RUN)
-    assert reg.check_writable([run_rec], grant=[SRC]) == ("", [])
+    inner = "lento:home/private:U#m_0150"
+    run(reg.apply_change({"change_id": "c1", "source": inner, "kind": "withdrawn",
+                          "host_seq": 1}))
+    assert reg.state_of(RUN_SRC) == "active", "without the order, an inner line is unknown"
+    reg.record_order({"system": "lento", "instance": "home", "container": "private:U"},
+                     [f"m_{i:04d}" for i in range(140, 170)], batch_id="b1")
+    assert reg.members_of(RUN_SRC)[0] == "m_0142" and reg.members_of(RUN_SRC)[-1] == "m_0160"
+    assert reg.state_of(RUN_SRC) == "withdrawn"
+    assert "撤回" in reg.check_writable([run_rec])[0]
+    assert S.SourceRegistry(reg.base_dir).state_of(RUN_SRC) == "withdrawn", "kept on disk"
+    # A run starting past the line is not touched.
+    assert reg.state_of("lento:home/private:U#m_0151..m_0160") == "active"
+
+
+def test_an_inner_lines_use_narrows_the_run(reg):
+    [run_rec] = S.normalize_sources({**RUN, "use": {"venues": ["private", "group"]}})
+    reg.record_order({"system": "lento", "instance": "home", "container": "private:U"},
+                     [f"m_{i:04d}" for i in range(142, 161)])
+    assert reg.uses_of(run_rec) == [{"venues": ["group", "private"]}]
+    run(reg.apply_change({"change_id": "c1", "source": "lento:home/private:U#m_0155",
+                          "kind": "use_changed", "host_seq": 1,
+                          "use": {"venues": ["private"]}}))
+    assert {"venues": ["private"]} in reg.uses_of(run_rec)
+
+
+def test_two_hosts_own_their_change_ids_and_host_seqs(reg):
+    first = run(reg.apply_change(change("c1", "unreadable", 5), host="a"))
+    other = run(reg.apply_change(change("c1", "withdrawn", 1), host="b"))
+    assert first["outcome"] in ("applied", "unknown_source")
+    assert other["outcome"] in ("applied", "unknown_source"), "another host's id and seq"
+    assert reg.state_of(SRC) == "withdrawn"
+    again = run(reg.apply_change(change("c1", "withdrawn", 1), host="b"))
+    assert again["outcome"] == "duplicate"
+    stale = run(reg.apply_change(change("c2", "restored", 3), host="a", may_restore=True))
+    assert stale["outcome"] == "stale", "host a's own order"
+    assert S.SourceRegistry(reg.base_dir).state_of(SRC) == "withdrawn"
+
+
+def test_a_run_is_granted_by_its_container_or_itself_never_by_its_first_line(reg):
+    [run_rec] = S.normalize_sources(RUN)
+    assert "不在这一轮" in reg.check_writable([run_rec], grant=[SRC])[0]
     assert reg.check_writable([run_rec], grant=[RUN_SRC]) == ("", [])
+    whole = {"system": "lento", "instance": "home", "container": "private:U"}
+    assert reg.check_writable([run_rec], grant=[whole]) == ("", [])
     refusal, _ = reg.check_writable([run_rec], grant=["lento:home/private:U#m_0160"])
     assert "不在这一轮" in refusal
 
 
-def test_memories_of_a_line_finds_the_runs_starting_there(tmp_path):
+def test_memories_of_a_line_finds_every_run_holding_it(tmp_path):
     store = BucketManager({"buckets_dir": str(tmp_path)})
     bid = run(store.create("A talk formed from twenty lines.", sources=[RUN]))
     assert run(S.memories_of(store, SRC)) == [bid]
     assert run(S.memories_of(store, RUN_SRC)) == [bid]
     assert run(S.memories_of(store, SRC + "..m_0150")) == []
-    assert run(S.memories_of(store, "lento:home/private:U#m_0160")) == []
+    assert run(S.memories_of(store, "lento:home/private:U#m_0160")) == [bid], "its last line"
+    assert run(S.memories_of(store, "lento:home/private:U#m_0150")) == [], "order unknown"
+    store.sources.record_order({"system": "lento", "instance": "home", "container": "private:U"},
+                               [f"m_{i:04d}" for i in range(142, 161)])
+    assert run(S.memories_of(store, "lento:home/private:U#m_0150")) == [bid]
+    assert run(S.memories_of(store, "lento:home/private:U#m_0170")) == []
 
 
 def test_the_state_machine_alone():

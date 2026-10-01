@@ -871,22 +871,34 @@ def _registry():
     return getattr(rt.bucket_mgr, "sources", None)
 
 
-def _same(stored, given: dict) -> bool:
+def _same(stored, given: dict) -> str:
+    """"delivery" when the two records name the same piece as delivered (identity plus
+    fingerprint, or a named revision); "reference" when they only name the same piece —
+    neither carries a fingerprint or a revision, so nothing can be said of its content;
+    "" otherwise."""
     try:
-        return isinstance(stored, dict) and _src.same_delivery(stored, given)
+        if not isinstance(stored, dict):
+            return ""
+        if _src.same_delivery(stored, given):
+            return "delivery"
+        bare = all(not r.get("fingerprint") and r.get("revision") in (None, "")
+                   for r in (stored, given))
+        return "reference" if bare and _src.same_reference(stored, given) else ""
     except (KeyError, TypeError):
-        return False
+        return ""
 
 
 async def _already_recorded(records: list[dict], exclude: set) -> list[str]:
-    """One hint per live, current memory that already carries the same delivery (same
-    identity and fingerprint) as one of `records`. A hint only: two memories from one
-    message are often two different things, so nothing is blocked. Under a read scope a
-    memory the request may not read is not named."""
+    """One hint per live, current memory that already carries one of `records`: the same
+    delivery (same identity and fingerprint, or the same named revision), or — when
+    neither record has a fingerprint or a revision — the same piece, which says it was
+    referenced and nothing about the content. A hint only: two memories from one message
+    are often two different things, so nothing is blocked. Under a read scope a memory
+    the request may not read is not named."""
     if not records:
         return []
     view = await read_scope()
-    hits: dict[str, str] = {}
+    hits: dict[str, tuple[str, str]] = {}
     for b in await rt.bucket_mgr.list_all(include_archive=False):
         meta = b.get("metadata") or {}
         bid = str(meta.get("id") or b.get("id") or "")
@@ -895,12 +907,14 @@ async def _already_recorded(records: list[dict], exclude: set) -> list[str]:
         if view is not None and not view.permits(meta):
             continue
         for stored in meta.get(_src.SOURCES_FIELD) or []:
-            match = next((r for r in records if _same(stored, r)), None)
-            if match is not None:
-                hits.setdefault(bid, _src.record_string(match))
+            found = next(((r, how) for r in records if (how := _same(stored, r))), None)
+            if found is not None:
+                hits.setdefault(bid, (_src.record_string(found[0]), found[1]))
                 break
-    return [f"这条来源已经记过 {bid}，看一眼是不是同一件（{text}）。"
-            for bid, text in hits.items()]
+    return [(f"这条来源已经记过 {bid}，看一眼是不是同一件（{text}）。" if how == "delivery"
+             else f"{bid} 也引过同一条来源（{text}）；没有指纹也没有版本号，"
+                  "只知道引的是同一条，内容一不一样说不准。")
+            for bid, (text, how) in hits.items()]
 
 
 async def check_sources(raw, prov: list[dict] | None, exclude=(), *,
@@ -1310,9 +1324,9 @@ async def grow_mind(room: str, text: str, from_ids, v, a,
         **v2,
     )
     try:
-        await rt.bucket_mgr.touch_many(source_ids)  # distilling a thought = remembering its sources
-    except Exception:
-        pass
+        await rt.bucket_mgr.touch_many(source_ids, road="grow")  # distilling a thought = remembering its sources
+    except Exception as e:  # noqa: BLE001 - the thought is written; a failed touch only logs
+        rt.logger.warning(f"grow mind: touching its sources failed: {e}")
 
     # A mind backfill only fills in aliases/gist/name (no scene extraction, and
     # v/a is never touched)

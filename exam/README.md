@@ -53,7 +53,17 @@ and become the request the call carries (exam/serve.py, a declared seam).
 
 Steps: `at` · `call` (+ `args`, `as`, `capture: {var: regex}`) · `wait: seconds` (for
 background work such as the backfill) · `snapshot` (+ `as`) · `newest: <id>` (+ `as`:
-follow `superseded_by` to the latest version) · `check`.
+follow `superseded_by` to the latest version) · `check` · `source_change: {body}` (+
+`host:`, `as`; what POST /api/v2/source/change runs, in the runner's process on the same
+library — a second entry point, a declared seam; the reply is JSON text) · `changes:
+{since, limit?}` (+ `host:`, `as`, `capture`; what GET /api/v2/changes runs) ·
+`concurrent: {calls: [call steps], processes: N, each: M, text}` (the calls at once, with
+N writer processes creating M entries each through BucketManager). `$var` takes a
+captured value; `${var:6}` its first six characters, the handle tools print.
+
+Setup extras: an entry's `sink: true` sinks it after its fields (it needs a summary); an
+item's `dreams: [{id, text, ingredients}]` are saved as woven dream records and its
+`dehydration_cache: [{text, summary}]` cached by Loci's own dehydrator.
 
 An item may carry `side_model: {phrase: answer}`: the backfill's side-model call is answered
 with the answer whose phrase appears in the entry's body (a seam, listed in the report).
@@ -62,10 +72,15 @@ Checks, each tagged with the paper's segment (store / find / think / source / in
 
 | check | passes when |
 |---|---|
-| `field: k, id: x` (+ `equals` / `contains` / `absent: true`) | the entry's frontmatter says so |
+| `field: k, id: x` (+ `equals` / `contains` / `lacks` / `absent: true`) | the entry's frontmatter says so |
 | `body_contains` / `body_lacks` (+ `id`) | the entry's body says so |
 | `output: name` + `contains` / `lacks` (+ `section: 提醒`) | a tool's output (or one breath block) says so |
 | `unchanged: x, since: snapshot, keys: [...]` | those fields did not move |
+| `output: name` + `in_order: [a, b, ...]` | each appears, the first of each after the one before |
+| `usage: {kind, id, road?}` | the usage log has a line of that kind naming the id (road prefix) |
+| `lib_lacks: text` | no file under the library holds it, byte for byte (its `.logs` aside) |
+| `vector: id` (+ `absent: true`) | embeddings.db holds (or no longer holds) its row |
+| `ledger: {unique_seq: true, type_count: {Type: n}}` | the ledger's numbers are distinct and gapless; n lines of that type |
 | `var: name, equals: v` | a captured value matches |
 
 `interface: none` + `needs:` marks an item the current version has nothing to call for.

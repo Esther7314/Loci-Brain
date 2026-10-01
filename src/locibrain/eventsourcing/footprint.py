@@ -77,20 +77,25 @@ def _event_label(event: dict[str, Any]) -> str:
         return "删除到档案"
     if event_type == "TraceHardDeleted":
         return "测试痕迹清理"
+    if event_type == "TraceCleared":
+        return "来源撤回，正文已清"
     if event_type != "TraceUpdated":
         return ""  # TraceTouched and unknown technical events do not spend breath tokens.
 
     fields = {str(item) for item in payload.get("changed_fields") or []}
+    # A line carries the four booleans under `flags`; a line written before that rule
+    # carries them among the whole metadata.
+    flags = payload.get("flags") if isinstance(payload.get("flags"), dict) else payload
     if "last_merged_by" in fields:
         return "事件补充"
     if "dont_surface" in fields:
-        return "主动淡忘" if payload.get("dont_surface") else "重新浮现"
+        return "主动淡忘" if flags.get("dont_surface") else "重新浮现"
     if "pinned" in fields:
-        return "钉为核心" if payload.get("pinned") else "解除核心"
+        return "钉为核心" if flags.get("pinned") else "解除核心"
     if "anchor" in fields:
-        return "设为地标" if payload.get("anchor") else "解除地标"
+        return "设为地标" if flags.get("anchor") else "解除地标"
     if "resolved" in fields:
-        return "已经放下" if payload.get("resolved") else "重新激活"
+        return "已经放下" if flags.get("resolved") else "重新激活"
     if "content" in fields:
         return "正文重构"
     return "更新"

@@ -469,3 +469,12 @@ def test_both_routes_want_the_hook_key_when_the_panel_is_locked(store, monkeypat
     assert call("GET", key="wrong")[0] == 401
     assert call("POST", body(), key="s3cret")[0] == 200
     assert call("GET", key="s3cret")[1]["pending"] == 3
+
+
+def test_the_hosts_order_of_a_batch_outlives_its_slices(store, tmp_path):
+    take(store, stub(THREE))
+    run_ = "lento:home/private:U#m_0002..m_0006"
+    assert store.sources.members_of(run_) == IDS[1:6]
+    fresh = BucketManager({"buckets_dir": str(tmp_path)})
+    assert fresh.sources.members_of(run_) == IDS[1:6], "kept on disk, ids only"
+    assert "Slept" not in (tmp_path / "_sources" / "line_orders.jsonl").read_text(encoding="utf-8")

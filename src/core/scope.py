@@ -49,12 +49,18 @@ A memory under a scope (the three conditions)
 ------------------------------------------------------------
 Every source record standing behind it must pass all three:
   1. its `use` (the host's latest use_changed for the source, else the record's own)
-     allows this venue and every person in this audience — an absent use is no rule of its
-     own (the material's authorisation stands, i.e. the grant); a use the gate cannot read
-     lets nothing through;
-  2. a place in the grant covers it (`_sources.Place.covers`);
-  3. its state (`SourceRegistry.read_state`) is active, or unreadable (the text is out of
-     reach for now; what was understood from it stays readable).
+     allows this venue and every person in this audience — and for a run, so does each
+     line's use_changed inside it (`SourceRegistry.uses_of`). An absent side does not
+     narrow; an empty list allows nothing; a side with a rule needs the turn to say it (a
+     turn with no audience never passes an audience rule — the empty set is not taken as
+     a subset); `use: null` is no rule of its own (the material's authorisation stands,
+     i.e. the grant); a use the gate cannot read lets nothing through;
+  2. the grant covers it (`SourceRegistry.granted`): a piece by a place over it, a run
+     only when every line in it is granted — a place at its container or wider, or places
+     naming each of its lines when the host's order of them is known;
+  3. its state (`SourceRegistry.read_state`, a run judged by every line it holds) is
+     active, or unreadable (the text is out of reach for now; what was understood from it
+     stays readable).
 "Standing behind it" is the entry's own `sources` and, for anything derived, every root:
 the walk follows `read_from_ids` (derived-from and primary source, the same edges
 recall's root lines follow; a revision's previous version is not a source) to the entries
@@ -433,22 +439,26 @@ class ScopeView:
 
     def _judge_record(self, rec: dict, sid) -> bool:
         scope = self.request.scope
-        if not any(p.covers(sid) for p in scope.grant):
-            return False
         reg = self.registry
+        granted = (reg.granted(scope.grant, sid) if reg is not None
+                   else _src.places_cover(scope.grant, sid))
+        if not granted:
+            return False
         state = reg.read_state(rec) if reg is not None else _src.ACTIVE
         if state not in (_src.ACTIVE, _src.UNREADABLE):
             return False
-        use = reg.use_of(rec) if reg is not None else rec.get("use")
-        if use is None:
-            return True
-        rule = _src.parse_use(use)
-        if rule is None:
-            return False
-        if rule["venues"] is not None and scope.venue not in rule["venues"]:
-            return False
-        if rule["audience"] is not None and not scope.audience <= rule["audience"]:
-            return False
+        uses = reg.uses_of(rec) if reg is not None else [u for u in [rec.get("use")]
+                                                          if u is not None]
+        for use in uses:
+            rule = _src.parse_use(use)
+            if rule is None:
+                return False
+            if rule["venues"] is not None and (not scope.venue
+                                               or scope.venue not in rule["venues"]):
+                return False
+            if rule["audience"] is not None and (not scope.audience
+                                                 or not scope.audience <= rule["audience"]):
+                return False
         return True
 
     def _walk(self, bid: str, meta: dict, path: frozenset) -> Optional[bool]:

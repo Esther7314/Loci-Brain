@@ -53,6 +53,14 @@ The roads
 
 Every road but `read` shows live entries only.
 
+A source withdrawn or deleted closes every road but `invalidation` — `read` included —
+to what stood on it: the entries naming the source carry an open `source_gone`
+invalidation record from the moment the change is applied, and so does everything derived
+from them (core/_source_change.py). Under a read scope the registry says the same thing
+again (core/scope.py reads each source's state on every request); without one this record
+is how the gate knows. `invalidation` lists such an entry by id and status only, never its
+text (core/_invalidation.py).
+
 later today: an open entry whose `when` names a clock time later today (`waits_for_clock`)
 stays off until that time has passed — 「今晚回来说面试结果」 written in the morning is not
 talked about over lunch. From that moment it is due today like anything else. Only a
@@ -125,8 +133,8 @@ built once by the caller and passed in, and a caller that already knows whether 
 is covered passes that too.
 
 Exports: SURFACE · LOOKUP · LIVE · ARCHIVED · DELETED · the road names · Verdict ·
-         state_of() · clock_moment() · waits_for_clock() · visible_for() · timeline_kind() ·
-         on_timeline()
+         state_of() · source_gone() · clock_moment() · waits_for_clock() · visible_for() ·
+         timeline_kind() · on_timeline()
 ========================================
 """
 
@@ -161,6 +169,7 @@ HELD = "held"
 HOLD_ENTRY = "hold_entry"
 LATER_TODAY = "later_today"
 OUT_OF_SCOPE = "out_of_scope"
+SOURCE_GONE = "source_gone"
 
 PROSPECTIVE = "prospective"
 RECENT = "recent"
@@ -261,6 +270,22 @@ def _superseded(m: dict) -> bool:
     return bool(str(m.get("superseded_by") or "").strip())
 
 
+# The invalidation record a withdrawn or deleted source leaves on what stood on it
+# (core/_invalidation.SOURCE_GONE; spelled here because that module imports this one).
+_SOURCE_GONE_KIND = "source_gone"
+
+
+def source_gone(meta) -> bool:
+    """Does the entry carry an open record that a source standing behind it was withdrawn
+    or deleted? Written when the host's change is applied, on the entries naming the
+    source and on everything derived from them (core/_source_change.py)."""
+    raw = _meta_of(meta).get("invalidation") or []
+    if not isinstance(raw, list):
+        return False
+    return any(isinstance(r, dict) and r.get("kind") == _SOURCE_GONE_KIND
+               and not str(r.get("confirmed_at") or "").strip() for r in raw)
+
+
 def _faded(m: dict) -> bool:
     """A deliberate dont_surface: on an old version it is the chain's, read as superseded."""
     return parse_bool(m.get("dont_surface"), default=False) and not _superseded(m)
@@ -315,6 +340,8 @@ def visible_for(meta, scope=None, *, road: str,
     if scope is not None and not scope.permits(m):
         return Verdict(shown=False, state=state, reasons=(OUT_OF_SCOPE,))
     reasons: list[str] = []
+    if road != INVALIDATION and source_gone(m):
+        reasons.append(SOURCE_GONE)
     if state not in r.states:
         reasons.append(state)
     if r.superseded and _superseded(m):

@@ -28,10 +28,13 @@ into the text the model reads, and `GET /api/v2/breath` hands the same object ou
 the contract sources (core/profile.py, core/_invalidation.py, the gate in
 core/visibility.py); this file only assembles and words them.
 
-Handing breath out has one write: a question asked once is stamped (`stamp_asked`).
+Handing breath out has two writes: a question asked once is stamped (`stamp_asked`), and
+what each block put in front of the model goes into the usage log as `shown`, block by
+block (`record_shown`; core/_usage.py) — ids only, and only those the handed-out text
+actually shows.
 
 Exports: build_breath() -> dict · render_breath(breath) -> str · stamp_asked(breath) ·
-         surface_awaken() -> str
+         block_ids(breath) · record_shown(breath, text) · surface_awaken() -> str
 ========================================
 """
 
@@ -42,6 +45,7 @@ from .. import _runtime as rt
 from .. import _slices
 from .._common import read_scope
 from core import _invalidation as _I
+from core import _usage
 from core import visibility as _V      # the gate's `recent` road for 近三天
 from core import _when as _w         # "today" as the user lives it (local timezone)
 from core.profile import (_PROFILE_TAG, breath_settings, door_note, involuntary,
@@ -393,8 +397,37 @@ async def stamp_asked(b: dict) -> None:
             rt.logger.warning(f"breath: could not stamp last_asked on {bid}: {e}")
 
 
+def block_ids(b: dict) -> dict[str, list[str]]:
+    """The ids each block of the object names, block by block."""
+    core, plan = b["core"], b["prospective"]
+    out = {
+        "core": ([core["facts"]["id"]] if core.get("facts") else [])
+        + [r["id"] for r in core.get("rules") or []],
+        "prospective": [it["id"] for it in plan.get("items") or []]
+        + [it["hold"]["id"] for it in plan.get("items") or [] if it.get("hold")]
+        + [q["id"] for q in plan.get("questions") or []],
+        "recent": [it["id"] for it in b["recent"].get("items") or []],
+        "involuntary": [it["id"] for it in b["involuntary"].get("items") or []],
+        "invalidation": [it["id"] for it in b["invalidation"].get("items") or []],
+    }
+    return {k: [str(i) for i in v if i] for k, v in out.items()}
+
+
+def record_shown(b: dict, text: str | None = None) -> None:
+    """The usage log's `shown` lines for one breath handed out: per block, the ids the
+    text shows (`text`), or every id the object holds when the object itself was handed
+    out (text None)."""
+    usage = getattr(rt.bucket_mgr, "usage", None)
+    if usage is None:
+        return
+    for block, ids in block_ids(b).items():
+        shown = ids if text is None else _usage.ids_in(ids, text)
+        usage.record(_usage.SHOWN, shown, f"breath.{block}")
+
+
 async def surface_awaken() -> str:
     b = await build_breath()
     text = render_breath(b)
     await stamp_asked(b)
+    record_shown(b, text)
     return text

@@ -1,5 +1,5 @@
-# Paper sections 辛 (dream), 癸 (usage records): nothing in 1.4.0 to call. (庚, scope, is
-# exam/items/g-scope.yaml.)
+# Paper section 辛 (dream): nothing in 1.4.0 to call. (庚, scope, is exam/items/g-scope.yaml;
+# 癸, usage records, is exam/items/j-usage.yaml.)
 # Dreams are woven by a background hook and a web route, not by an MCP tool, so even
 # the parts of 辛 that 1.4.0 does have are out of reach from the tool layer: those are
 # BLOCKED (the harness cannot reach them), not NO INTERFACE (the version lacks them).
@@ -16,16 +16,3 @@
   title: "'don't touch' keeps an entry out of dreams; 'don't nag' does not"
   interface: none
   needs: "dream weaving from the harness. The two hold levels exist (4.2) and the dream pools honour them (unit-tested)"
-
-- id: J1
-  title: "shown, searched and derived-from are recorded by code"
-  interface: none
-  needs: "usage records"
-- id: J2
-  title: "the three whys each live in their own place"
-  interface: none
-  needs: "signposts carrying their reason; cards carrying theirs in the turn input record"
-- id: J3
-  title: "changes since number N"
-  interface: none
-  needs: "a read-only 'changes since seq N' over _ledger/events.jsonl (the ledger itself exists)"

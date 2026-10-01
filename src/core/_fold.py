@@ -583,7 +583,7 @@ async def save_gist(text: str, room: str, v: float, a: float,
     # The covered entries have in effect "been recalled once more" (the same reasoning
     # behind regrow touching its sources)
     try:
-        await rt.bucket_mgr.touch_many(prov_targets(prov or []))
+        await rt.bucket_mgr.touch_many(prov_targets(prov or []), road="fold")
     except Exception:
         pass
 

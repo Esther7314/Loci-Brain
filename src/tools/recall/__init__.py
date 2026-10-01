@@ -39,6 +39,8 @@ Exports: dispatch(when, room, tag, query, slices, view) -> str
 ========================================
 """
 
+from core import _usage
+from .. import _runtime as rt
 from .core import recall_core
 
 
@@ -57,11 +59,14 @@ async def dispatch(
     kwargs = {}
     if 1 <= slices <= 20:
         kwargs["max_cells"] = slices
-    return await recall_core(
-        when=str(when or ""),
-        room=str(room or ""),
-        tag=str(tag or ""),
-        query=str(query or ""),
-        view=str(view or ""),
-        **kwargs,
-    )
+    gates = {"when": str(when or ""), "room": str(room or ""), "tag": str(tag or ""),
+             "view": str(view or "")}
+    with _usage.offering() as offered:
+        text = await recall_core(query=str(query or ""), **gates, **kwargs)
+    # The usage log keeps what this lookup handed back: the ids its text shows, and the
+    # query as typed (for the owner's review; core/_usage.py).
+    usage = getattr(rt.bucket_mgr, "usage", None)
+    if usage is not None and offered["road"]:
+        usage.record(_usage.FOUND, _usage.ids_in(offered["ids"], text), offered["road"],
+                     query=str(query or ""), gates=gates)
+    return text

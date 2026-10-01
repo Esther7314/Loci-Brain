@@ -41,6 +41,12 @@ has grown. An append-only log rather than a file per batch: every change is one 
 line flushed to disk (a torn last line is skipped on read), and the file is the history
 of who handled what.
 
+The host's order of a batch's lines is also handed to the source registry
+(`SourceRegistry.record_order`, ids only): long after its slices are handled, that order is
+how a run cut from those lines is known to hold the lines between its ends. When a host
+withdraws or deletes a line, every slice over it loses its gist and, still open, is
+dropped (`withdraw_lines`, core/_source_change.py).
+
 Nothing here knows which host it is or where the lines came from; an import (7.1) hands
 its lines to the same take_batch.
 
@@ -48,7 +54,8 @@ Exports: SLICER_PROMPT_VERSION · SLICER_PROMPT · GIST_MAX · Slice · SlicerEr
          BatchError · SliceError · slice_lines · parse_slices · side_model ·
          read_batch · batch_id_of · fingerprint_of · slice_fingerprint · FINGERPRINT_BY ·
          guess_covering · take_batch · PendingSlices (record_batch · get · record_for ·
-         run_length · close · recut · open_batches · pending_count · rebuild_index)
+         run_length · close · recut · withdraw_lines · open_batches · pending_count ·
+         rebuild_index)
 ========================================
 """
 
@@ -435,6 +442,12 @@ async def take_batch(store, body, *, model: ModelCall,
         slices=[{"first": s.first, "last": s.last, "gist": s.gist, "guesses": g}
                 for s, g in zip(slices, guesses)],
         model=str(getattr(model, "model_name", "") or ""))
+    # The host's order of these lines outlives the batch: it is how a run cut from them
+    # is known to hold the lines between its ends (core/_sources.SourceRegistry.lines_of).
+    registry = getattr(store, "sources", None)
+    if registry is not None:
+        registry.record_order(batch["source"], [ln["id"] for ln in batch["lines"]],
+                              batch_id=batch["batch_id"])
     covered = sum(s.count for s in slices)
     return {"batch_id": row["batch_id"], "day": row["day"], "source": dict(row["source"]),
             "slices": [store.slices.get(s["slice_id"], public=True) for s in row["slices"]],
@@ -690,6 +703,58 @@ class PendingSlices:
                     raise why
                 return self._append({"kind": "close", "slice_id": str(slice_id).strip(),
                                      "how": how, "by": list(dict.fromkeys(by))})
+
+    async def withdraw_lines(self, where: dict, line_ids: list[str]) -> tuple[list[str], int]:
+        """Lines of `where` ({system, instance, container}) may no longer be used: every
+        slice whose span holds one of them loses its gist (the side model's words about
+        those lines) and, still open, is closed as dropped — nothing could be written from
+        it. The file is rewritten whole under its lease (a temporary file renamed over
+        it). Returns (the slices it touched, how many lines of the file changed)."""
+        wanted = {str(i) for i in line_ids}
+        source = {k: str(where.get(k)) for k in ("system", "instance", "container")}
+        async with self._turn():
+            self._fresh()
+            with self._guard:
+                hit: list[str] = []
+                for sid, st in self._slices.items():
+                    b = self._batches.get(st["batch_id"])
+                    if b is None or b["source"] != source:
+                        continue
+                    a, z = self._span(st)
+                    if wanted & {lid for lid, _fp in b["lines"][a:z + 1]}:
+                        hit.append(sid)
+                for sid in hit:
+                    if self._slices[sid]["state"] == OPEN:
+                        self._append({"kind": "close", "slice_id": sid, "how": "drop",
+                                      "by": []})
+                changed = self._blank_gists(set(hit))
+                self.rebuild_index()
+                return hit, changed
+
+    def _blank_gists(self, slice_ids: set) -> int:
+        from locibrain.eventsourcing.ledger_mirror import file_lease
+
+        if not slice_ids or not self.path.exists():
+            return 0
+        with file_lease(self.path.with_name(self.path.name + ".lock")):
+            rows = _src._read_lines(self.path)
+            changed = 0
+            for row in rows:
+                if row.get("kind") != "batch":
+                    continue
+                for s in row.get("slices") or []:
+                    if str(s.get("slice_id") or "") in slice_ids and s.get("gist"):
+                        s["gist"] = ""
+                        changed += 1
+            if not changed:
+                return 0
+            tmp = self.path.with_name(self.path.name + ".rewrite")
+            with tmp.open("w", encoding="utf-8", newline="\n") as f:
+                for row in rows:
+                    f.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+                f.flush()
+            tmp.replace(self.path)
+            return changed
 
     async def recut(self, slice_id: str, first: str, last: str) -> dict:
         """Move an open slice's span to first..last, both ids of its batch, in order. The

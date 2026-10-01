@@ -291,7 +291,7 @@ async def _regrow(bucket_id: str = "", text: str = "", v=-1, a=-1, from_=None,
             marked, unmarked = await _mark_overturned(bucket_id, new_id)
 
     try:
-        await rt.bucket_mgr.touch_many(prov_targets(prov))  # a new version = remembering its sources again
+        await rt.bucket_mgr.touch_many(prov_targets(prov), road="regrow")  # a new version = remembering its sources again
     except Exception:
         pass
 

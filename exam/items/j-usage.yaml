@@ -1,0 +1,102 @@
+# Paper section 癸: what was used, recorded by code; the three whys each in its own place;
+# the changes since number N. The usage log is core/_usage.py (buckets/_usage/usage.jsonl),
+# the changes are core/_ledger.changes_since (GET /api/v2/changes, the `changes:` step).
+
+- id: J1
+  title: "shown, searched and derived-from are recorded by code"
+  start: "2026-10-01T10:00:00+08:00"
+  setup:
+    - id: a10001000000
+      at: "2026-09-30T19:00:00+08:00"
+      room: EVENT/WORLD
+      text: "小周说下个月想去学游泳。"
+  steps:
+    - call: breath
+      as: breath
+    - check: {segment: use, desc: "it went into breath", output: breath, contains: a10001}
+    - check: {segment: use, desc: "shown: a line by code", usage: {kind: shown, id: a10001000000, road: breath.}}
+    - call: recall
+      args: {query: 学游泳}
+      as: search
+    - check: {segment: use, desc: "found: a line by code", usage: {kind: found, id: a10001000000, road: recall.search}}
+    - call: grow
+      args: {kind: mind, room: MIND/VIEWS, text: "小周想学新东西的时候总是先定好时间。", from: [a10001000000], v: 0.6, a: 0.4}
+      as: mind
+    - check: {segment: use, desc: "a thought grew from it", output: mind, contains: "🧠mind→"}
+    - check: {segment: use, desc: "used as a source: a line by code", usage: {kind: source, id: a10001000000, road: grow}}
+
+- id: J2
+  title: "the three whys each live in their own place"
+  start: "2026-10-01T10:00:00+08:00"
+  setup:
+    - id: a20001000000
+      at: "2026-09-30T19:00:00+08:00"
+      room: EVENT/WORLD
+      text: "小周说她坚果过敏，吃一点就起疹子。"
+    - id: a20002000000
+      at: "2026-09-30T20:00:00+08:00"
+      room: MIND/TRAITS
+      text: "给小周做吃的之前要先想想有没有坚果。"
+      from: [a20001000000]
+  steps:
+    - check: {segment: from, desc: "where the material came from: in from", field: prov, id: a20002000000, contains: a20001000000}
+    - call: trace
+      args: {bucket_id: a20001000000, cue: {condition: "下次一起做甜点的时候"}}
+    - check: {segment: signpost, desc: "why the signpost stays: on the signpost itself", field: cue, id: a20001000000, contains: "下次一起做甜点"}
+    - snapshot: a20001000000
+      as: before
+    - call: breath
+    - call: recall
+      args: {query: 坚果}
+    - check: {segment: turn, desc: "why this turn picked it is not written back to the memory", unchanged: a20001000000, since: before, keys: [last_active, activation_count, tags, meaning, why_remembered, invalidation, last_asked, cue]}
+    - check: {segment: turn, desc: "it goes with the turn: the road it went out on, in the usage log", usage: {kind: shown, id: a20001000000, road: breath.}}
+
+- id: J3
+  title: "changes since number N"
+  start: "2026-10-01T10:00:00+08:00"
+  hosts:
+    legacy: {token: t-life, scope_mode: open, may_restore: true}
+  setup:
+    - id: a30001000000
+      at: "2026-09-29T19:00:00+08:00"
+      room: EVENT/WORLD
+      text: "小周发来一张海边的照片。"
+      sources: [{system: lento, instance: home, container: "private:U", id: m_20260929_0300}]
+    - id: a30002000000
+      at: "2026-09-29T20:00:00+08:00"
+      room: EVENT/WORLD
+      text: "晚饭吃的是番茄炒蛋。"
+  steps:
+    # A first write starts the background backfill of what was there; let it settle so the
+    # numbers after N are this item's own.
+    - call: grow
+      args: {kind: event, items: [{room: EVENT/WORLD, text: "早上下了一点雨。", v: 0.5, a: 0.3}]}
+    - wait: 2
+    - changes: {since: 0}
+      host: t-life
+      as: start
+      capture: {n: '"next": (\d+)'}
+    - call: grow
+      args: {kind: event, items: [{room: EVENT/WORLD, text: "周四要交实验报告。", v: 0.5, a: 0.4}]}
+      as: made
+      capture: {made: "📝([0-9a-f]{12})"}
+    - wait: 1
+    - call: trace
+      args: {bucket_id: $made, name: "周四交报告"}
+    - call: trace
+      args: {bucket_id: $made, delete: true}
+    - source_change: {change_id: c-j3-1, host_seq: 1, change: deleted,
+                      source: "lento:home/private:U#m_20260929_0300"}
+      host: t-life
+    - call: grow
+      args: {kind: mind, room: MIND/TRAITS, text: "番茄炒蛋是家里最常做的菜。", from: [a30002000000], v: 0.5, a: 0.3}
+    - call: grow
+      args: {kind: mind, room: MIND/TRAITS, text: "简单的菜吃得最安心。", from: [a30002000000], v: 0.5, a: 0.3}
+    - changes: {since: $n}
+      host: t-life
+      as: since
+    - check: {segment: changes, desc: "new, edit, archive, delete — in that order", output: since, in_order: ['"TraceCreated"', '"TraceUpdated"', '"TraceDeletedToArchive"', '"SourceChanged"']}
+    - check: {segment: changes, desc: "nothing from before N", output: since, lacks: '"seq": $n,'}
+    - check: {segment: changes, desc: "nothing about what was there before", output: since, lacks: a30002000000}
+    - check: {segment: changes, desc: "was merely touched is left out", output: since, lacks: TraceTouched}
+    - check: {segment: changes, desc: "no text comes out", output: since, lacks: 实验报告}

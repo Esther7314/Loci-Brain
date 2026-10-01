@@ -1,0 +1,20 @@
+# Several windows write at once: five tool calls reach the server together while five other
+# processes write through Loci's BucketManager on the same library. Every write is one
+# memory, and the ledger gives every line its own number, with no gaps.
+
+- id: W1
+  title: "several windows write at once: no number twice, no line lost"
+  start: "2026-10-01T10:00:00+08:00"
+  steps:
+    - concurrent:
+        processes: 5
+        each: 1
+        text: 并发写入
+        calls:
+          - {call: grow, as: w1, args: {kind: event, items: [{room: EVENT/WORLD, text: "并发写入：第一扇窗说周一开会。", v: 0.5, a: 0.3}]}}
+          - {call: grow, as: w2, args: {kind: event, items: [{room: EVENT/WORLD, text: "并发写入：第二扇窗说周二买菜。", v: 0.5, a: 0.3}]}}
+          - {call: grow, as: w3, args: {kind: event, items: [{room: EVENT/WORLD, text: "并发写入：第三扇窗说周三游泳。", v: 0.5, a: 0.3}]}}
+          - {call: grow, as: w4, args: {kind: event, items: [{room: EVENT/WORLD, text: "并发写入：第四扇窗说周四交报告。", v: 0.5, a: 0.3}]}}
+          - {call: grow, as: w5, args: {kind: event, items: [{room: EVENT/WORLD, text: "并发写入：第五扇窗说周五看电影。", v: 0.5, a: 0.3}]}}
+    - check: {segment: store, desc: "every write is one memory", entry: {body_has: 并发写入}, min: 10, max: 10}
+    - check: {segment: store, desc: "each line has its own number, none skipped", ledger: {unique_seq: true, type_count: {TraceCreated: 10}}}

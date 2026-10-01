@@ -32,22 +32,30 @@ What puts a memory in the block:
              next. Looking at a grandchild before its parent is settled would be judging it
              on ground that may still move.
   sources    a source the registry (core/_sources.SourceRegistry) now reports withdrawn or
-             deleted, or revised past the revision this memory recorded (and not confirmed
-             at that revision).
+             deleted (a run: any line inside it), or revised past the revision this memory
+             recorded (and not confirmed at that revision).
+  gone       an open `{kind: source_gone, of, by, at, change, cleared?}` record: written
+             when the host's withdrawn / deleted change is applied (core/_source_change.py)
+             on every memory naming the source — `cleared: true` there, its body was
+             cleared — and on everything derived from those, which stays readable to
+             nobody until it is rewritten or put away. A memory whose body was cleared
+             keeps its record even if the source is restored later (the text does not come
+             back); a derived one's record is closed by the restore.
 
 🔴 The body of a memory standing on a withdrawn or deleted source is **never handed back**
    here: only its id, each failed basis and its state, and the sources that are still
    good. With some left, it can be rewritten from those; with none, it can only be put
    away. Asking the model to review it must not put the material it may no longer use back
-   in front of it. "Keep as is" is refused for such a memory for the same reason. (The read
-   gate that withholds these memories on the other roads is stages 5.2 / 5.7.)
+   in front of it. "Keep as is" is refused for such a memory for the same reason. The read
+   gate withholds these memories on every other road (core/visibility.py, `source_gone`).
 
 Which memories the block may show at all is the gate's: the `edited` road for panel
 corrections, the `invalidation` road for the rest (core/visibility.py).
 
-Exports: FIELD · OVERTURN · SOURCE_REVISED · EDITED · CONFIRMED · CONFIRMED_AT · records ·
-         is_open · open_records · edit_confirmed · SourceFindings · source_findings ·
-         waiting_on_overturn · state_word · confirm · block
+Exports: FIELD · OVERTURN · SOURCE_REVISED · EDITED · CONFIRMED · CONFIRMED_AT ·
+         SOURCE_GONE · CLEARED · records · is_open · open_records · gone_records ·
+         edit_confirmed · SourceFindings · source_findings · waiting_on_overturn ·
+         state_word · confirm · block
 ========================================
 """
 
@@ -66,8 +74,10 @@ SOURCE_REVISED = "source_revised"
 EDITED = "edited"
 CONFIRMED = "confirmed"          # the one value trace's `invalidation=` takes
 CONFIRMED_AT = "confirmed_at"
+SOURCE_GONE = "source_gone"
+CLEARED = "cleared"              # a source_gone record's word once the body was cleared
 
-_STATE_WORD = {_src.WITHDRAWN: "已撤回", _src.DELETED: "已删除"}
+_STATE_WORD = {_src.WITHDRAWN: "已撤回", _src.DELETED: "已删除", CLEARED: "正文已清"}
 
 
 def records(meta) -> list[dict]:
@@ -129,10 +139,23 @@ def _newer_revision(rec: dict, registry) -> str:
     return ""
 
 
+def gone_records(meta) -> list[dict]:
+    """The open `source_gone` records: a source behind this memory was withdrawn or
+    deleted, written on it when the host's change was applied."""
+    return open_records(meta, SOURCE_GONE)
+
+
 def source_findings(meta, registry) -> SourceFindings:
-    """Each of the memory's source records, read against the registry. A record that no
-    longer reads as one is skipped (it names nothing the registry could answer for)."""
+    """Each of the memory's source records, read against the registry (a run by every
+    line it holds), and every open `source_gone` record (a source behind a memory it
+    stands on, or one whose body was cleared). A record that no longer reads as one is
+    skipped (it names nothing the registry could answer for)."""
     out = SourceFindings()
+    gone = gone_records(meta)
+    for r in gone:
+        state = str(r.get("by") or "")
+        out.failed.append((str(r.get("of") or ""), CLEARED if r.get("cleared") else state))
+    failed_keys = {str(r.get("of") or "") for r in gone}
     if registry is None:
         return out
     for raw in (meta or {}).get(_src.SOURCES_FIELD) or []:
@@ -141,9 +164,10 @@ def source_findings(meta, registry) -> SourceFindings:
         except (_src.SourceRecordError, ValueError):
             continue
         text = _src.record_string(rec)
-        state = registry.state_of(_src.record_id(rec))
+        state = registry.read_state(rec)
         if state in (_src.WITHDRAWN, _src.DELETED):
-            out.failed.append((text, state))
+            if str(_src.record_id(rec)) not in failed_keys:
+                out.failed.append((text, state))
             continue
         out.remaining.append(text)
         newer = _newer_revision(rec, registry)
@@ -221,7 +245,7 @@ def block(all_buckets: list, registry, *, scope=None) -> list[dict]:
              b.get("metadata") or {}, str(b.get("content") or "")) for b in all_buckets]
     waiting = {bid for bid, meta, _c in rows if bid and waiting_on_overturn(meta)}
     for bid, meta, content in rows:
-        if (not bid or not _V.on_timeline(meta, scope)
+        if (not bid or not _V.timeline_kind(meta)
                 or not _V.visible_for(meta, scope, road=_V.INVALIDATION)):
             continue
         overturned = open_records(meta, OVERTURN)

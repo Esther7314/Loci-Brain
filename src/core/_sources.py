@@ -31,15 +31,22 @@ One message can support several memories and several messages one memory; the so
 side never records which memory it belongs to (that is `memories_of`, a reverse lookup).
 A `wasQuotedFrom` prov line names a source by its string form.
 
-The host announces changes per piece, never per run. A run is looked up in the registry
-by its own identity first and, when the registry has never heard of it, by its first
-line's (`describe`); `memories_of` a single line likewise finds the runs starting there.
-A change to a line inside a run, past its first, does not reach the run.
+The host announces changes per piece, never per run, and a change to any line inside a
+run reaches the run: its state is the worst of its own identity and every line it holds
+(`state_of`), and each line's `use_changed` narrows it (`uses_of`), so a memory standing
+on the run is blocked whole until it is rewritten — nothing trims a run automatically.
+What a run holds is the host's order of its lines, kept when the host hands a stretch of
+lines over for slicing (`record_order`, `<buckets>/_sources/line_orders.jsonl`: the ids in
+order, never their text, kept after the slices themselves are handled). A run whose order
+was never handed over is known only by its first and last line (`lines_of`).
+`memories_of` a single line finds every run holding it.
 
 The registry holds each source's own state, which cannot be read back from the md
 files: active / unreadable / withdrawn / deleted, the revisions the host announced,
 and `host_seq`, the host's per-source change counter. Newer and older are judged by
-host_seq alone, never by arrival order or revision. Its truth is the append-only
+host_seq alone, never by arrival order or revision; a change_id and the host_seq order
+belong to the host that sent them (two hosts never collide or stale each other). Its
+truth is the append-only
 `<buckets>/_sources/changes.jsonl`, one applied change per line, numbered by `seq`
 (the line the host reconciles against, `applied_seq`). The index is an in-memory dict
 rebuilt from that file on first use and whenever another process has appended to it;
@@ -60,21 +67,28 @@ parameters; nothing here reads a header.
 
 A grant is a list of places (`Place`): a prefix of a source's identity, system →
 instance → container → id. A place covers every source under it; a place naming an id
-covers that piece and a run starting at it (a run is announced, granted and looked up by
-its first line). The read gate (core/scope.py) and the write-time check both match with
-`Place.covers`, so what a turn may read and what it may write from are the same set.
+covers that one piece, never a run starting at it. A run passes a grant only when every
+line in it is granted (`SourceRegistry.granted`): a place at its container or wider
+covers it, and so do places naming each of its lines, when the host's order of them is
+known; with the order unknown, only the container or wider will do. The read gate
+(core/scope.py), the write-time check and `/changes` all ask the same question, so what a
+turn may read and what it may write from are the same set.
 
 `use` on a record is the host's rule for where the piece may be used: an object
 `{venues: [...], audience: [...]}` — the venues it may be used in and the people allowed
-to see it, each list optional (an absent list does not narrow), compared literally with
-the turn's `venue` and `audience`. Text that is not such an object is kept as given and
-read by the gate as a rule it cannot understand: under a scope it lets nothing through.
+to see it, compared literally with the turn's `venue` and `audience`. An absent list does
+not narrow that side; an empty list allows nothing on it; `use: null` is no rule of the
+piece's own (the grant, the host's ceiling and the source's state still decide). Text that
+is not such an object, an unknown key or a name that is not text is kept as given and read
+by the gate as a rule it cannot understand: under a scope it lets nothing through.
 
 Exports: SOURCES_FIELD · SOURCES_MAX · SourceId · SourceRecordError · normalize_sources ·
-         coerce_sources_arg · record_id · record_string · same_delivery · Place ·
-         places_of · parse_use · STATES · CHANGE_KINDS · OUTCOMES · next_state ·
-         SourceRegistry (apply_change · state_of · read_state · use_of · revisions_of ·
-         describe · rebuild_index · check_writable · claimed · run_once) ·
+         coerce_sources_arg · record_id · record_string · same_delivery · same_reference ·
+         Place · places_of · places_cover · parse_use · STATES · CHANGE_KINDS · OUTCOMES ·
+         next_state · SourceRegistry (apply_change · prior_change · state_of · read_state ·
+         granted · use_of · uses_of · revisions_of · describe · record_order · members_of ·
+         lines_of ·
+         rebuild_index · check_writable · claimed · run_once) ·
          memories_of · write_key · current_write_key · write_key_scope · current_grant ·
          grant_scope · note_written · collect_written
 ========================================
@@ -143,6 +157,14 @@ class SourceId:
     def first(self) -> "SourceId":
         """The identity of the first piece (itself when it is not a run)."""
         return SourceId(self.system, self.instance, self.container, self.id)
+
+    def last(self) -> "SourceId":
+        """The identity of the last piece (itself when it is not a run)."""
+        return SourceId(self.system, self.instance, self.container, self.through or self.id)
+
+    def piece(self, piece_id: str) -> "SourceId":
+        """Another piece of the same container."""
+        return SourceId(self.system, self.instance, self.container, str(piece_id))
 
     @classmethod
     def parse(cls, text: str) -> tuple["SourceId", Optional[str]]:
@@ -269,8 +291,10 @@ def _use_field(raw, where: str):
 
 def parse_use(stored) -> Optional[dict]:
     """A stored `use` read as a rule: {"venues": set | None, "audience": set | None}, or
-    None when it cannot be read as one (text that is not the object form). Call it only
-    on a use that is present; an absent use is no rule of its own."""
+    None when it cannot be read as one (text that is not the object form, an unknown key,
+    a list that is not a list of names). None for a side = that side is not narrowed; an
+    empty set = nothing is allowed on it. Call it only on a use that is present; an absent
+    use is no rule of its own."""
     if isinstance(stored, str):
         try:
             stored = _use_field(stored, where="")
@@ -286,7 +310,9 @@ def parse_use(stored) -> Optional[dict]:
         names = stored[k]
         if not isinstance(names, (list, tuple)):
             return None
-        out[k] = frozenset(str(n).strip() for n in names)
+        if any(not isinstance(n, str) or not n.strip() for n in names):
+            return None
+        out[k] = frozenset(n.strip() for n in names)
     return out
 
 
@@ -362,13 +388,21 @@ def record_string(record: dict) -> str:
 
 def same_delivery(a: dict, b: dict) -> bool:
     """Do two records name the same piece as delivered: same identity and same
-    fingerprint, or — with no fingerprint on either side — the same revision."""
+    fingerprint, or — with no fingerprint on either side — the same revision, which then
+    has to be named. Two records with neither a fingerprint nor a revision say nothing
+    about their content (`same_reference` is all that can be said of them)."""
     if record_id(a) != record_id(b):
         return False
     fa, fb = a.get("fingerprint"), b.get("fingerprint")
     if fa or fb:
         return fa == fb
-    return a.get("revision") == b.get("revision")
+    ra, rb = a.get("revision"), b.get("revision")
+    return ra not in (None, "") and ra == rb
+
+
+def same_reference(a: dict, b: dict) -> bool:
+    """Do two records name the same piece, whatever its content was when each was made."""
+    return record_id(a) == record_id(b)
 
 
 _PLACE_LEVELS = ("system", "instance", "container", "id")
@@ -379,7 +413,7 @@ PLACE_KEYS = _PLACE_LEVELS
 class Place:
     """A prefix of source identity: a system, an instance of it, a container in it, or
     one piece (`id`). `through` is set only on a place made from a run's own string form,
-    which then names exactly that run."""
+    which then names exactly that run (a host's grant never carries one)."""
     system: str
     instance: Optional[str] = None
     container: Optional[str] = None
@@ -421,8 +455,10 @@ class Place:
         return cls.coerce(SourceId.parse(str(value))[0])
 
     def covers(self, record) -> bool:
-        """Does this place cover a source (a record or a SourceId)? A place naming an id
-        covers that piece and a run starting at it."""
+        """Does this place cover a source (a record or a SourceId) on its own? A place
+        naming an id covers that one piece and no run starting at it; one naming a run
+        covers exactly that run. Whether several places cover a run line by line is
+        `SourceRegistry.granted`'s."""
         sid = record if isinstance(record, SourceId) else record_id(record)
         if sid.system != self.system:
             return False
@@ -432,9 +468,7 @@ class Place:
                 return False
         if self.id is None:
             return True
-        if sid.id != self.id:
-            return False
-        return self.through is None or sid.through == self.through
+        return sid.id == self.id and sid.through == self.through
 
     def within(self, outer: "Place") -> bool:
         """Is everything this place covers covered by `outer`?"""
@@ -452,6 +486,19 @@ class Place:
         if self.id is None:
             return head
         return f"{head}#{self.id}" + (f"{_RANGE_MARK}{self.through}" if self.through else "")
+
+
+def places_cover(places: Iterable, identity, members: Optional[list] = None) -> bool:
+    """Do these places grant this source? A piece: one place covers it. A run: one place
+    covers it whole (its container or wider, or the run itself), or — with `members`, the
+    ids it holds in the host's order — every one of its lines is covered."""
+    sid = _identity(identity)
+    places = tuple(places)
+    if any(p.covers(sid) for p in places):
+        return True
+    if sid.through and members:
+        return all(any(p.covers(sid.piece(m)) for p in places) for m in members)
+    return False
 
 
 def places_of(grant: Optional[Iterable]) -> Optional[tuple]:
@@ -475,11 +522,12 @@ def _identity_key(identity) -> str:
 
 
 async def memories_of(store, identity) -> list[str]:
-    """The memories (archive included) whose `sources` name this identity, by scanning
-    the library; a single piece also finds the runs that start at it (the registry reads
-    a run by its first line when it knows nothing of the run). The source side never
-    stores this; an index of it is stage 5's."""
+    """The memories (archive included) whose `sources` name this identity or contain it,
+    by scanning the library. A single piece is found in every run holding it: a run
+    whose lines the registry knows (`SourceRegistry.lines_of`) by any of them, one it
+    does not by its first or last line. The source side never stores this."""
     want = _identity(identity)
+    registry = getattr(store, "sources", None)
     out: list[str] = []
     for b in await store.list_all(include_archive=True):
         meta = b.get("metadata") or {}
@@ -490,7 +538,9 @@ async def memories_of(store, identity) -> list[str]:
                 have = record_id(rec)
             except KeyError:
                 continue
-            if have == want or (want.through is None and have.first() == want):
+            if have == want or (want.through is None and have.through is not None and (
+                    want in (registry.lines_of(have) if registry is not None
+                             else (have.first(), have.last())))):
                 out.append(str(meta.get("id") or b.get("id") or ""))
                 break
     return [i for i in dict.fromkeys(out) if i]
@@ -590,6 +640,9 @@ OUTCOMES = (APPLIED, DUPLICATE, CONFLICT, STALE, FORBIDDEN, UNKNOWN_SOURCE)
 SOURCES_DIR = "_sources"
 CHANGES_FILE = "changes.jsonl"
 WRITE_KEYS_FILE = "write_keys.jsonl"
+LINE_ORDERS_FILE = "line_orders.jsonl"
+# The worse state wins when a run is judged by its lines.
+_STATE_RANK = {ACTIVE: 0, UNREADABLE: 1, WITHDRAWN: 2, DELETED: 3}
 _CHANGE_ID_MAX = 128
 # The fields that make two sends of one change_id the same change.
 _CHANGE_CONTENT = ("source", "kind", "host_seq", "revision", "fingerprint", "fingerprint_by",
@@ -603,18 +656,22 @@ def _now() -> str:
 def _append_line(path: Path, row: dict) -> None:
     """One JSON line, appended whole: the file is started on a fresh line if a crash
     left the last one torn (a torn line is skipped on read), and the write is flushed
-    to disk before it counts."""
+    to disk before it counts. The append holds the file's own lease (`<file>.lock`), so
+    two processes appending at once cannot interleave whatever lock their callers hold."""
+    from locibrain.eventsourcing.ledger_mirror import file_lease
+
     path.parent.mkdir(parents=True, exist_ok=True)
     data = (json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
-    with path.open("ab") as f:
-        if f.tell() > 0:
-            with path.open("rb") as r:
-                r.seek(-1, os.SEEK_END)
-                if r.read(1) != b"\n":
-                    data = b"\n" + data
-        f.write(data)
-        f.flush()
-        os.fsync(f.fileno())
+    with file_lease(path.with_name(path.name + ".lock")):
+        with path.open("ab") as f:
+            if f.tell() > 0:
+                with path.open("rb") as r:
+                    r.seek(-1, os.SEEK_END)
+                    if r.read(1) != b"\n":
+                        data = b"\n" + data
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
 
 
 def _read_lines(path: Path) -> list[dict]:
@@ -717,20 +774,26 @@ class SourceRegistry:
         self.dir = Path(base_dir) / SOURCES_DIR
         self.changes_path = self.dir / CHANGES_FILE
         self.keys_path = self.dir / WRITE_KEYS_FILE
+        self.orders_path = self.dir / LINE_ORDERS_FILE
         self.store = store
         self._guard = threading.RLock()
         self._changes_size = -1
         self._keys_size = -1
+        self._orders_size = -1
         self._seq = 0
         self._by_source: dict[str, dict] = {}
         self._by_change: dict[str, dict] = {}
         self._claims: dict[str, dict] = {}
+        # (system, instance, container) -> [(ids in the host's order, {id: position})],
+        # newest first
+        self._orders: dict[tuple, list] = {}
 
     # ---------- the index ----------
 
     def rebuild_index(self) -> None:
-        """Read changes.jsonl again from the top. Each line carries the state it left,
-        so the index is the last line per source, not a replay of the machine."""
+        """Read changes.jsonl again from the top. Only applied changes are written, in the
+        order they were applied, and each line carries the state it left: the index is the
+        last line per source, not a replay of the machine."""
         with self._guard:
             size = _size(self.changes_path)
             self._seq = 0
@@ -740,6 +803,11 @@ class SourceRegistry:
                 self._index(row)
             self._changes_size = size
 
+    @staticmethod
+    def change_key(host: str, change_id: str) -> str:
+        """A change is named by its host and its change_id: two hosts may use one id."""
+        return f"{host or ''}\x00{change_id}"
+
     def _index(self, row: dict) -> None:
         try:
             seq = int(row.get("seq") or 0)
@@ -747,64 +815,165 @@ class SourceRegistry:
             host_seq = int(row["host_seq"])
         except (KeyError, TypeError, ValueError):
             return
+        host = str(row.get("host") or "")
+        key = self.change_key(host, str(row.get("change_id") or ""))
         self._seq = max(self._seq, seq)
-        self._by_change[str(row.get("change_id") or "")] = row
+        self._by_change[key] = row
         entry = self._by_source.setdefault(source, {
             "state": ACTIVE, "host_seq": -1, "use": None, "use_changed": False,
-            "revisions": [], "seqs": {}})
-        entry["seqs"][host_seq] = str(row.get("change_id") or "")
-        if host_seq >= entry["host_seq"]:
-            entry["host_seq"] = host_seq
-            entry["state"] = str(row.get("state") or entry["state"])
-            if row.get("kind") == "use_changed":
-                entry["use"] = row.get("use")
-                entry["use_changed"] = True
+            "revisions": [], "hosts": {}})
+        mine = entry["hosts"].setdefault(host, {"host_seq": -1, "seqs": {}})
+        mine["seqs"][host_seq] = key
+        mine["host_seq"] = max(mine["host_seq"], host_seq)
+        entry["host_seq"] = host_seq
+        entry["state"] = str(row.get("state") or entry["state"])
+        if row.get("kind") == "use_changed":
+            entry["use"] = row.get("use")
+            entry["use_changed"] = True
         if row.get("kind") == "revised":
             entry["revisions"].append({k: row.get(k) for k in (
                 "revision", "fingerprint", "fingerprint_by", "host_seq", "seq")})
-            entry["revisions"].sort(key=lambda r: int(r.get("host_seq") or 0))
 
     def _fresh(self) -> None:
         with self._guard:
             if _size(self.changes_path) != self._changes_size:
                 self.rebuild_index()
 
+    # ---------- the host's order of lines (what a run holds) ----------
+
+    def _fresh_orders(self) -> None:
+        with self._guard:
+            size = _size(self.orders_path)
+            if size == self._orders_size:
+                return
+            orders: dict[tuple, list] = {}
+            for row in _read_lines(self.orders_path):
+                try:
+                    where = (str(row["system"]), str(row["instance"]), str(row["container"]))
+                    ids = [str(i) for i in row["ids"]]
+                except (KeyError, TypeError):
+                    continue
+                if ids:
+                    orders.setdefault(where, []).insert(
+                        0, (ids, {i: n for n, i in enumerate(ids)}))
+            self._orders = orders
+            self._orders_size = size
+
+    def record_order(self, source: dict, ids: list[str], batch_id: str = "") -> None:
+        """Keep the host's order of a stretch of lines (a batch handed over for slicing):
+        ids only, never their text. It is how a run `first..last` is known to hold the
+        lines between, after the batch itself is gone."""
+        ids = [str(i) for i in ids if str(i or "").strip()]
+        if not ids:
+            return
+        where = (str(source.get("system")), str(source.get("instance")),
+                 str(source.get("container")))
+        self._fresh_orders()
+        with self._guard:
+            for known, _pos in self._orders.get(where, []):
+                if known == ids:
+                    return
+            _append_line(self.orders_path, {
+                "system": where[0], "instance": where[1], "container": where[2],
+                "ids": ids, "batch": str(batch_id or ""), "recorded_at": _now()})
+            self._orders_size = -1
+
+    def members_of(self, identity) -> Optional[list[str]]:
+        """The ids a run holds, first to last, when a recorded order of its container has
+        both its ends in order; None when none does (or for a single piece)."""
+        sid = _identity(identity)
+        if not sid.through:
+            return None
+        self._fresh_orders()
+        with self._guard:
+            for ids, pos in self._orders.get((sid.system, sid.instance, sid.container), []):
+                a, z = pos.get(sid.id), pos.get(sid.through)
+                if a is not None and z is not None and a <= z:
+                    return ids[a:z + 1]
+        return None
+
+    def lines_of(self, identity) -> list[SourceId]:
+        """The single pieces a record stands on: itself for a piece; for a run, every line
+        it holds when its order is known (`members_of`), else its first and last line —
+        all that can be told of a run the host never handed over in order."""
+        sid = _identity(identity)
+        if not sid.through:
+            return [sid]
+        members = self.members_of(sid)
+        if members is None:
+            return [sid.first(), sid.last()]
+        return [sid.piece(i) for i in members]
+
     # ---------- reading ----------
 
-    def describe(self, identity) -> Optional[dict]:
-        """What the registry knows of a source: {state, host_seq, use, revisions}, or
-        None when it has never heard of it. A run it has never heard of is read by its
-        first line, which is what the host announces changes for."""
-        sid = _identity(identity)
+    def _entry(self, key: str) -> Optional[dict]:
         self._fresh()
         with self._guard:
-            entry = self._by_source.get(sid.to_string())
-            if entry is None and sid.through:
-                entry = self._by_source.get(sid.first().to_string())
-            if entry is None:
-                return None
+            return self._by_source.get(key)
+
+    def describe(self, identity) -> Optional[dict]:
+        """What the registry knows of a source under its own identity: {state, host_seq,
+        use, use_changed, revisions}, or None when it has never heard of it. A run it has
+        never heard of is described by its first line. A run's state is `state_of`'s, which
+        reads every line of it."""
+        sid = _identity(identity)
+        entry = self._entry(sid.to_string())
+        if entry is None and sid.through:
+            entry = self._entry(sid.first().to_string())
+        if entry is None:
+            return None
+        with self._guard:
             return {"state": entry["state"], "host_seq": entry["host_seq"],
                     "use": entry["use"], "use_changed": entry["use_changed"],
-                    "revisions": [dict(r) for r in entry["revisions"]]}
+                    "revisions": sorted((dict(r) for r in entry["revisions"]),
+                                        key=lambda r: int(r.get("host_seq") or 0))}
 
     def state_of(self, identity) -> str:
-        """The source's state; one the registry has never heard of is active."""
-        found = self.describe(identity)
-        return found["state"] if found else ACTIVE
+        """The source's state; one the registry has never heard of is active. A run is as
+        bad as the worst of its own identity and every line it holds (`lines_of`): a line
+        withdrawn inside it withdraws the whole run."""
+        sid = _identity(identity)
+        keys = [sid.to_string()] + ([x.to_string() for x in self.lines_of(sid)]
+                                    if sid.through else [])
+        worst = ACTIVE
+        for key in dict.fromkeys(keys):
+            entry = self._entry(key)
+            if entry is not None and _STATE_RANK.get(entry["state"], 0) > _STATE_RANK[worst]:
+                worst = entry["state"]
+        return worst
 
     def read_state(self, record) -> str:
-        """The state the read gate judges a memory's source record by. The one lookup the
-        gate makes: a run is read as `describe` reads it today (its own identity, else its
-        first line); judging a run by every line inside it extends this function."""
+        """The state the read gate judges a memory's source record by (`state_of`: a run
+        by every line inside it)."""
         return self.state_of(record_id(record) if isinstance(record, dict) else record)
 
     def use_of(self, record: dict):
-        """The `use` in force for a source record: the host's latest `use_changed` for the
-        source when there was one, else the record's own."""
+        """The `use` in force for a source record as a whole: the host's latest
+        `use_changed` for its identity when there was one, else the record's own."""
         found = self.describe(record_id(record))
         if found and found.get("use_changed"):
             return found.get("use")
         return record.get("use")
+
+    def granted(self, places, identity) -> bool:
+        """Do these places grant this source (`places_cover`, with the run's lines when
+        the host's order of them is known)?"""
+        sid = _identity(identity)
+        return places_cover(places_of(places) or (), sid,
+                            self.members_of(sid) if sid.through else None)
+
+    def uses_of(self, record: dict) -> list:
+        """Every `use` a record has to satisfy: its own (`use_of`) and, for a run, the
+        `use_changed` of each line inside it — a line narrowed narrows the run. An absent
+        use is left out (it is no rule of its own)."""
+        out = [self.use_of(record)]
+        sid = record_id(record)
+        if sid.through:
+            for line in self.lines_of(sid):
+                entry = self._entry(line.to_string())
+                if entry is not None and entry["use_changed"]:
+                    out.append(entry["use"])
+        return [u for u in out if u is not None]
 
     def revisions_of(self, identity) -> list[dict]:
         """The revisions the host announced (`revised`), oldest first by host_seq."""
@@ -813,7 +982,8 @@ class SourceRegistry:
 
     # ---------- applying a change ----------
 
-    async def apply_change(self, record: dict, *, may_restore: bool = False) -> dict:
+    async def apply_change(self, record: dict, *, may_restore: bool = False,
+                           host: str = "") -> dict:
         """Apply one change the host sent. Returns the outcome:
 
             {outcome, change_id, source, kind, state, previous, host_seq, applied_seq,
@@ -822,27 +992,37 @@ class SourceRegistry:
         outcome is one of OUTCOMES. Only `applied` and `unknown_source` write a line;
         `unknown_source` is an applied change for a source no memory names yet, recorded
         all the same so a later delivery from it meets its real state. `memories` lists
-        the memories naming the source, which is what a cleanup step acts on. A malformed
-        record raises ValueError."""
+        the memories naming the source or holding it in a run, which is what a cleanup
+        step acts on. `host` names the sender: a change_id and the order of host_seq are
+        the sending host's own, so two hosts never collide or stale each other. A
+        malformed record raises ValueError."""
         from .bucket_manager import _filesystem_turn      # lazy: bucket_manager imports this module
 
         change = _change_from(record)
         memories = await memories_of(self.store, change["source"]) if self.store else None
         async with _filesystem_turn(self.base_dir, "source-registry"):
-            return self._apply_locked(change, may_restore, memories)
+            return self._apply_locked(change, may_restore, memories, str(host or ""))
+
+    def prior_change(self, host: str, change_id: str) -> Optional[dict]:
+        """The applied line of this host's change_id, or None."""
+        self._fresh()
+        with self._guard:
+            row = self._by_change.get(self.change_key(host, str(change_id)))
+            return dict(row) if row else None
 
     def _apply_locked(self, change: dict, may_restore: bool,
-                      memories: Optional[list[str]]) -> dict:
+                      memories: Optional[list[str]], host: str = "") -> dict:
         self._fresh()
         with self._guard:
             source = change["source"]
             entry = self._by_source.get(source)
             current = entry["state"] if entry else ACTIVE
+            mine = (entry or {}).get("hosts", {}).get(host)
             base = {"change_id": change["change_id"], "source": source, "kind": change["kind"],
                     "state": current, "previous": current,
-                    "host_seq": entry["host_seq"] if entry else None,
+                    "host_seq": mine["host_seq"] if mine else None,
                     "applied_seq": None, "memories": list(memories or [])}
-            prior = self._by_change.get(change["change_id"])
+            prior = self._by_change.get(self.change_key(host, change["change_id"]))
             if prior is not None:
                 if all(prior.get(k) == change.get(k) for k in _CHANGE_CONTENT):
                     return {**base, "outcome": DUPLICATE, "result": prior.get("outcome"),
@@ -850,13 +1030,13 @@ class SourceRegistry:
                             "applied_seq": prior.get("seq")}
                 return {**base, "outcome": CONFLICT, "conflict_with": dict(prior),
                         "note": "change_id_reused"}
-            if entry is not None:
-                other = entry["seqs"].get(change["host_seq"])
+            if mine is not None:
+                other = mine["seqs"].get(change["host_seq"])
                 if other is not None:
                     return {**base, "outcome": CONFLICT,
                             "conflict_with": dict(self._by_change.get(other) or {}),
                             "note": "host_seq_reused"}
-                if change["host_seq"] < entry["host_seq"]:
+                if change["host_seq"] < mine["host_seq"]:
                     return {**base, "outcome": STALE}
             state, note = next_state(current, change["kind"], may_restore)
             if state is None:
@@ -864,6 +1044,8 @@ class SourceRegistry:
             outcome = UNKNOWN_SOURCE if memories == [] else APPLIED
             row = {**change, "seq": self._seq + 1, "state": state, "previous": current,
                    "outcome": outcome, "recorded_at": _now()}
+            if host:
+                row["host"] = host
             if note:
                 row["note"] = note
             _append_line(self.changes_path, row)
@@ -884,14 +1066,15 @@ class SourceRegistry:
         one is given (places, mappings or string forms; None = not enforced), and not
         withdrawn or deleted. An unreadable source is taken (the host just handed its text
         over) with a note; one the registry has never seen is simply active. A run is
-        granted when it or its first line is (`Place.covers`), and its state is read as
-        `describe` reads it."""
+        granted only when every line in it is (`granted`), and its state is the worst of
+        its lines (`state_of`). Writing never changes a source's state: only the host's
+        change notices do."""
         granted = places_of(grant)
         notes: list[str] = []
         for rec in sources or []:
             sid = record_id(rec)
             key = sid.to_string()
-            if granted is not None and not any(p.covers(sid) for p in granted):
+            if granted is not None and not self.granted(granted, sid):
                 return (f"来源 {key} 不在这一轮宿主交过来的材料里——只能用这一轮给的来源写。"
                         "本次什么都没写。"), []
             state = self.state_of(sid)

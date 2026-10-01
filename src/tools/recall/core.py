@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from core import _bigevent as _big    # a big event: one sentence laid over a stretch of time
 from core import _fold as _F          # fold / gist: what is covered no longer surfaces on its own
 from core import _sources as _src     # outside material: source records and their registry state
+from core import _usage               # the usage log: what a lookup handed back
 from core import visibility as _V     # the one gate: what may be put in front of the model
 from .. import _runtime as rt
 from .._common import read_scope, resolve_bucket_id
@@ -76,9 +77,11 @@ def _source_mark(target: str) -> str:
     except _src.SourceRecordError:
         return ""
     known = registry.describe(sid)
-    if not known:
+    state = registry.state_of(sid)          # a run: the worst of its lines
+    if not known and state == _src.ACTIVE:
         return ""
-    marks = [_SOURCE_STATE_WORD[known["state"]]] if known["state"] in _SOURCE_STATE_WORD else []
+    known = known or {"revisions": []}
+    marks = [_SOURCE_STATE_WORD[state]] if state in _SOURCE_STATE_WORD else []
     latest = (known["revisions"] or [{}])[-1].get("revision")
     if latest and latest != revision:
         marks.append(f"（宿主那边已改到 @{latest}，这条是按 @{revision or '原版'} 记的）")
@@ -1663,6 +1666,8 @@ async def _linked(bucket_id: str, scope_view=None) -> tuple[dict | None, str, st
         return None, "", ""
     meta = b.get("metadata", {}) or {}
     verdict = _V.visible_for(meta, scope_view, road=_V.READ)
+    if _V.SOURCE_GONE in verdict.reasons:
+        return b, "", "  （依据的来源被撤回或删除了，正文不给）"
     if not verdict:
         return b, "", "  （不在这次能看的范围里）"
     hint = re.sub(r"^[\d\- :]+", "",
@@ -1822,6 +1827,7 @@ async def recall_core(when: str, room: str, tag: str, query: str,
         # counted.
         scope_view = await read_scope()
         b = await rt.bucket_mgr.get_including_archive(q)
+        _usage.offer([q], "recall.read")
         if not b:
             return f"查无此桶：{q}（id 形状但不存在——可能已物理删除或打错，不做语义联想）。"
         if b:
@@ -1831,6 +1837,9 @@ async def recall_core(when: str, room: str, tag: str, query: str,
             verdict = _V.visible_for(meta, scope_view, road=_V.READ)
             if verdict.out_of_scope:
                 return f"查无此桶：{q}（id 形状但不存在——可能已物理删除或打错，不做语义联想）。"
+            if _V.SOURCE_GONE in verdict.reasons:
+                return (f"{q} 依据的来源被撤回或删除了，正文不给。它在开口前「依据变了的」里："
+                        "只凭还剩的来源重写（regrow），或者收起来（trace delete=True）。")
             if not verdict:
                 return f"{q} 不在这次能看的范围里。"
 
@@ -1994,6 +2003,7 @@ async def recall_core(when: str, room: str, tag: str, query: str,
         when, room, tag, query, all_buckets)
     if err:
         return err
+    _usage.offer([e["id"] for e in entries], "recall.search" if query.strip() else "recall.browse")
     if not entries:
         gates = "，".join(x for x in [when and f"when={when}", room and f"room={room}",
                                      tag and f"tag={tag}", query and f"query={query}"] if x)

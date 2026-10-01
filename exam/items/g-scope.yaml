@@ -369,3 +369,32 @@
       as: touch
     - check: {segment: store, desc: "a write cannot reach it either: like an id that does not exist", output: touch, contains: "查无此桶"}
     - check: {segment: store, desc: "and it was not touched", field: status, id: a01003000000, absent: true}
+
+# The other team's 10-01 ruling: a grant naming one line is a grant of that line; a run
+# passes only when every line in it is granted (its container, or each line with the
+# host's order of them known).
+- id: G6
+  title: "a grant naming the first line of a run does not grant the run"
+  start: "2026-10-01T10:00:00+08:00"
+  hosts:
+    book-bot: {token: book-bot-key, max_grant: [{system: telegram, instance: bot-a}]}
+  setup:
+    - id: a06001000000
+      at: "2026-09-30T20:00:00+08:00"
+      room: EVENT/WORLD
+      text: "群里聊了半天下周的露营，最后定在湖边。"
+      sources: [{system: telegram, instance: bot-a, container: "group:G", id: "m_201", through: "m_205"}]
+  steps:
+    - call: recall
+      args: {query: 露营}
+      host: book-bot-key
+      scope: {v: 1, entry: {system: telegram, instance: bot-a, container: "group:G"}, venue: group, audience: ["user:U"], grant: [{system: telegram, instance: bot-a, container: "group:G", id: "m_201"}]}
+      as: first_line
+    - check: {segment: find, desc: "only the first line granted: the run is refused", output: first_line, lacks: a06001}
+    - check: {segment: find, desc: "nor a word of it", output: first_line, lacks: 湖边}
+    - call: recall
+      args: {query: 露营}
+      host: book-bot-key
+      scope: {v: 1, entry: {system: telegram, instance: bot-a, container: "group:G"}, venue: group, audience: ["user:U"], grant: [{system: telegram, instance: bot-a, container: "group:G"}]}
+      as: whole
+    - check: {segment: find, desc: "control: the container granted, the run is read", output: whole, contains: a06001}

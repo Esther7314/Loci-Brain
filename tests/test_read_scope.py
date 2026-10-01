@@ -172,7 +172,10 @@ def test_a_place_covers_what_is_under_it():
     sid = S.SourceId("telegram", "bot-a", "group:G", "m_1")
     run_ = S.SourceId("telegram", "bot-a", "group:G", "m_1", through="m_9")
     assert S.Place("telegram").covers(sid) and S.Place("telegram", "bot-a").covers(sid)
-    assert S.Place("telegram", "bot-a", "group:G", "m_1").covers(run_)
+    assert S.Place("telegram", "bot-a", "group:G").covers(run_)
+    assert not S.Place("telegram", "bot-a", "group:G", "m_1").covers(run_), \
+        "a place naming the first line is not a grant of the run"
+    assert S.Place.coerce(run_).covers(run_)
     assert not S.Place("telegram", "bot-a", "group:G", "m_2").covers(sid)
     assert not S.Place("telegram", "bot-b").covers(sid)
     assert S.Place("telegram", "bot-a", "group:G").within(S.Place("telegram", "bot-a"))
@@ -185,6 +188,78 @@ def test_the_write_check_and_the_read_gate_match_the_same_way(tmp_path):
     assert reg.check_writable(records, [GROUP]) == ("", [])
     refusal, _ = reg.check_writable(records, [{**GROUP, "container": "group:H"}])
     assert "不在这一轮" in refusal
+
+
+RUN = {**GROUP, "id": "m_1", "through": "m_9"}
+
+
+def test_only_the_first_line_granted_refuses_the_whole_run(tmp_path):
+    reg = S.SourceRegistry(tmp_path)
+    e = _entry("a", [RUN])
+    first_only = scope_json(grant=({**GROUP, "id": "m_1"},))
+    assert not _view([e], first_only, reg).permits(e)
+    [record] = S.normalize_sources([RUN])
+    assert "不在这一轮" in reg.check_writable([record], [{**GROUP, "id": "m_1"}])[0]
+    assert _view([e], scope_json(), reg).permits(e), "the container grants it whole"
+
+
+def test_a_run_granted_line_by_line_needs_every_line_and_the_order(tmp_path):
+    reg = S.SourceRegistry(tmp_path)
+    e = _entry("a", [RUN])
+    every = tuple({**GROUP, "id": f"m_{i}"} for i in range(1, 10))
+    assert not _view([e], scope_json(grant=every), reg).permits(e), "order unknown"
+    reg.record_order(GROUP, [f"m_{i}" for i in range(1, 12)])
+    assert _view([e], scope_json(grant=every), reg).permits(e)
+    assert not _view([e], scope_json(grant=every[:-1]), reg).permits(e), "one line short"
+    [record] = S.normalize_sources([RUN])
+    assert reg.check_writable([record], list(every)) == ("", [])
+
+
+def test_a_line_inside_a_granted_run_still_has_its_state_and_use(tmp_path):
+    reg = S.SourceRegistry(tmp_path)
+    reg.record_order(GROUP, [f"m_{i}" for i in range(1, 12)])
+    e = _entry("a", [RUN])
+    run(reg.apply_change({"change_id": "u", "source": "telegram:bot-a/group:G#m_5",
+                          "kind": "use_changed", "host_seq": 1, "use": {"venues": ["private"]}}))
+    assert not _view([e], scope_json(), reg).permits(e), "an inner line's use narrows the run"
+    assert _view([e], scope_json(venue="private", audience=("user:U",)), reg).permits(e)
+    run(reg.apply_change({"change_id": "w", "source": "telegram:bot-a/group:G#m_7",
+                          "kind": "withdrawn", "host_seq": 1}))
+    assert not _view([e], scope_json(venue="private", audience=("user:U",)), reg).permits(e)
+
+
+@pytest.mark.parametrize("use, venue, audience, passes", [
+    ({"venues": ["group"]}, "group", ("user:U",), True),        # audience omitted: unrestricted
+    ({"audience": ["user:U", "user:X"]}, "anywhere", ("user:U",), True),  # venues omitted
+    ({"venues": []}, "group", ("user:U",), False),              # empty list: nothing allowed
+    ({"audience": []}, "group", ("user:U",), False),
+    ({"audience": []}, "group", (), False),                     # empty against empty: no
+    ({"audience": ["user:U"]}, "group", (), False),             # no audience told: no
+    ({}, "group", (), True),                                    # no side narrowed
+    ({"venues": "group"}, "group", ("user:U",), False),         # wrong type: unreadable
+    ({"venues": [{"name": "group"}]}, "group", ("user:U",), False),
+    ({"venues": [1]}, "group", ("user:U",), False),
+    ({"venues": ["group"], "places": ["x"]}, "group", ("user:U",), False),  # unknown key
+])
+def test_the_edges_of_use(use, venue, audience, passes):
+    e = _entry("a", [{**rec("m_1"), "use": use}])
+    assert _view([e], scope_json(venue=venue, audience=audience)).permits(e) is passes
+
+
+def test_use_null_is_no_rule_but_grant_and_state_still_decide(tmp_path):
+    reg = S.SourceRegistry(tmp_path)
+    e = _entry("a", [{**rec("m_1"), "use": None}])
+    assert _view([e], scope_json(audience=()), reg).permits(e)
+    elsewhere = scope_json(grant=({**GROUP, "container": "group:H"},))
+    assert not _view([e], elsewhere, reg).permits(e)
+    run(reg.apply_change({"change_id": "w", "source": "telegram:bot-a/group:G#m_1",
+                          "kind": "deleted", "host_seq": 1}))
+    assert not _view([e], scope_json(audience=()), reg).permits(e)
+
+
+def test_a_scope_without_a_venue_is_refused():
+    req = SC.RequestScope.resolve(BOT, scope_json(venue=""))
+    assert req.refusal == SC.MALFORMED and "venue" in req.first_line()
 
 
 def test_use_is_kept_as_an_object_and_read_as_a_rule():

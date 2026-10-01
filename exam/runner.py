@@ -19,7 +19,10 @@ WHAT ONE ITEM DOES
        its request: `host:` its credential, `scope:` its Loci-Scope, `turn:` / `write_key:`
        its Loci-Turn; an item's `hosts:` is the deployment's hosts table), wait
        (`wait: seconds`, for background work such as the backfill), take snapshots, run
-       checks.
+       checks. Two host routes that are not tools run in this process against the same
+       library, as a second entry point does: `source_change:` (what POST
+       /api/v2/source/change runs) and `changes:` (GET /api/v2/changes). `concurrent:`
+       runs tool calls at once with writer processes beside them.
     5. Each check records pass / fail and one line of evidence read back from disk or
        from the tool's own output.
 
@@ -161,9 +164,13 @@ def read_entry(lib: Path, bucket_id: str) -> tuple[dict, str] | None:
 
 
 async def seed(lib: Path, clock_file: Path, entries: list[dict],
-               batch: dict | None = None) -> None:
-    """Write setup entries with Loci's own BucketManager, each at its own fake time; then
-    hand `batch` (an item's `slices:`) to the slicing intake."""
+               batch: dict | None = None, extra: dict | None = None) -> None:
+    """Write setup entries with Loci's own BucketManager, each at its own fake time (an
+    entry with `sink: true` is sunk after its fields are written, its original going to
+    archive/原文); then hand `batch` (an item's `slices:`) to the slicing intake. `extra`
+    holds the item's `dreams:` ([{id, text, ingredients}], saved as woven dream records)
+    and `dehydration_cache:` ([{text, summary}], cached under the text by Loci's own
+    dehydrator)."""
     from utils import WAS_DERIVED_FROM, load_config
     from core.bucket_manager import BucketManager
     from core.embedding_engine import EmbeddingEngine
@@ -194,13 +201,34 @@ async def seed(lib: Path, clock_file: Path, entries: list[dict],
         )
         if bid != e["id"]:
             raise RuntimeError(f"setup wanted id {e['id']}, got {bid}")
-        extra = e.get("fields") or {}
-        if extra:
-            ok = await bm.update(bid, **extra)
+        fields = e.get("fields") or {}
+        if fields:
+            ok = await bm.update(bid, **fields)
             if not ok:
-                raise RuntimeError(f"setup could not write fields {extra} on {bid}")
+                raise RuntimeError(f"setup could not write fields {fields} on {bid}")
+        if e.get("sink") and not await bm.sink_bucket(bid):
+            raise RuntimeError(f"setup could not sink {bid} (it needs a summary)")
     if batch:
         await seed_slices(bm, batch)
+    extra = extra or {}
+    if extra.get("dreams"):
+        from core import _dream
+        for d in extra["dreams"]:
+            _dream.save_record({"id": d["id"], "织于": d.get("at", ""), "起算点": d.get("at", ""),
+                                "回想次数": 0, "轮次": 0, "碎片": d["text"][:20],
+                                "完整": d["text"], "完整字数": len(d["text"]),
+                                "v": 0.5, "a": 0.3, "nightmare": False,
+                                "素材": {"压在心头": list(d.get("ingredients") or []),
+                                       "想不明白": [], "几个词": []}},
+                               str(lib))
+    if extra.get("dehydration_cache"):
+        from core.dehydrator import Dehydrator
+        dh = Dehydrator(config)
+        try:
+            for row in extra["dehydration_cache"]:
+                dh._set_cached_summary(row["text"], row["summary"])
+        finally:
+            dh.close()
 
 
 async def seed_slices(bm, batch: dict) -> None:
@@ -228,11 +256,30 @@ def breath_section(text: str, title: str) -> str:
 
 # ───────────────────────── steps ─────────────────────────
 
+# One writer process of a `concurrent:` step: another entry point creating entries
+# through Loci's own BucketManager on the same library.
+_WRITER = """
+import asyncio, sys
+sys.path.insert(0, {src!r})
+from utils import load_config
+from core.bucket_manager import BucketManager
+
+async def main():
+    bm = BucketManager(load_config())
+    for i in range({each}):
+        await bm.create("{text}（进程 {k} 第 %d 条）" % i, room="EVENT/WORLD")
+
+asyncio.run(main())
+"""
+
 class Run:
-    def __init__(self, lib: Path, clock_file: Path, session):
+    def __init__(self, lib: Path, clock_file: Path, session, hosts: dict | None = None,
+                 server_env: dict | None = None):
         self.lib = lib
         self.clock_file = clock_file
         self.session = session
+        self.hosts = hosts or {}
+        self.server_env = server_env or {}
         self.vars: dict[str, str] = {}
         self.outputs: dict[str, str] = {}
         self.snapshots: dict[str, dict] = {}
@@ -240,8 +287,12 @@ class Run:
         self.setup_ids: set[str] = set()    # the item's own fixtures, for `new: true`
 
     def sub(self, value: Any) -> Any:
-        """Replace $name with a captured value, anywhere in strings, lists and dicts."""
+        """Replace $name with a captured value, anywhere in strings, lists and dicts;
+        ${name:6} is its first six characters (the handle tools print)."""
         if isinstance(value, str):
+            value = re.sub(r"\$\{(\w+):(\d+)\}",
+                           lambda m: (self.vars[m.group(1)][:int(m.group(2))]
+                                      if m.group(1) in self.vars else m.group(0)), value)
             return re.sub(r"\$(\w+)", lambda m: self.vars.get(m.group(1), m.group(0)), value)
         if isinstance(value, list):
             return [self.sub(v) for v in value]
@@ -279,12 +330,73 @@ class Run:
         except Exception as exc:  # a rejected call is a result, not a crash
             text = f"[call failed] {type(exc).__name__}: {exc}"
         await asyncio.sleep(SETTLE_SECONDS)
-        name = step.get("as") or tool
+        self._keep(step, step.get("as") or tool, text)
+
+    def _keep(self, step: dict, name: str, text: str) -> None:
         self.outputs[name] = text
         for var, pattern in (step.get("capture") or {}).items():
             m = re.search(pattern, text)
             if m:
                 self.vars[var] = m.group(1)
+
+    def _host(self, token: str):
+        """The host a credential names, read from the item's hosts table the way the
+        server reads it (core/scope.load_hosts); the legacy open host when the item has
+        no table."""
+        from core import scope as _scope
+        table, env = hosts_config(self.hosts) if self.hosts else ({}, {})
+        hs = _scope.load_hosts({"hosts": table} if table else {}, env, legacy_token=token)
+        return hs.by_token(token) if token else hs.default
+
+    def _store(self):
+        from utils import load_config
+        from core.bucket_manager import BucketManager
+        return BucketManager(load_config())
+
+    async def source_change(self, step: dict) -> None:
+        """What POST /api/v2/source/change runs (core/_source_change.handle), in this
+        process, on the same library: the reply as JSON text under `as`."""
+        from utils import load_config
+        from core import _source_change
+        from core.dehydrator import Dehydrator
+        body = self.sub(step["source_change"])
+        host = self._host(str(self.sub(step.get("host") or "")))
+        # The route hands the server's dehydrator over (its cache keys); this is the same.
+        dehydrator = Dehydrator(load_config())
+        try:
+            status, out = await _source_change.handle(self._store(), body, host,
+                                                      dehydrator=dehydrator)
+        finally:
+            dehydrator.close()
+        self._keep(step, step.get("as") or "source_change",
+                   json.dumps({"http": status, **out}, ensure_ascii=False))
+        await asyncio.sleep(SETTLE_SECONDS + 1.0)   # the server notices changed files
+
+    async def changes(self, step: dict) -> None:
+        """What GET /api/v2/changes runs (core/_ledger.changes_since): JSON text."""
+        from core import _ledger
+        spec = self.sub(step["changes"]) or {}
+        host = self._host(str(self.sub(step.get("host") or "")))
+        out = await _ledger.changes_since(self._store(), host, int(spec.get("since", 0)),
+                                          int(spec.get("limit", _ledger.CHANGES_LIMIT)))
+        self._keep(step, step.get("as") or "changes", json.dumps(out, ensure_ascii=False))
+
+    async def concurrent(self, step: dict) -> None:
+        """Several windows writing at once: the `calls` go to the server together, and
+        `processes` writer processes each create `each` entries straight through Loci's
+        BucketManager on the same library at the same moment."""
+        spec = step["concurrent"]
+        procs = []
+        n, each = int(spec.get("processes", 0)), int(spec.get("each", 1))
+        for k in range(n):
+            code = _WRITER.format(src=str(ROOT / "src"), each=each, k=k,
+                                  text=str(spec.get("text", "并发写入")))
+            procs.append(await asyncio.create_subprocess_exec(
+                sys.executable, "-c", code, env=self.server_env))
+        await asyncio.gather(*(self.call(c) for c in spec.get("calls") or []))
+        for p in procs:
+            if await p.wait() != 0:
+                raise RuntimeError("a writer process failed")
 
     def snapshot(self, step: dict) -> None:
         bid = self.sub(step["snapshot"])
@@ -329,6 +441,8 @@ class Run:
                 return present and str(val) == str(self.sub(c["equals"])), shown
             if "contains" in c:
                 return present and str(self.sub(c["contains"])) in str(val), shown
+            if "lacks" in c:
+                return str(self.sub(c["lacks"])) not in str(val), shown
             if c.get("absent"):
                 return not present, shown
             return present, shown
@@ -371,12 +485,75 @@ class Run:
                 if bad:
                     return False, f"{c['output']}: a line with {needle!r} lacks {want!r}: {bad[0][:120]}"
                 return True, f"{c['output']}: {len(hits)} line(s) with {needle!r}, each has {want!r}"
+            if "in_order" in c:
+                # Each needle appears, the first of each after the first of the one before.
+                needles = [self.sub(n) for n in c["in_order"]]
+                at = [text.find(n) for n in needles]
+                ok = all(a >= 0 for a in at) and at == sorted(at)
+                return ok, f"{c['output']}: " + ", ".join(f"{n}@{a}" for n, a in zip(needles, at))
             if c.get("ok"):
                 bad = text.startswith("[tool error]") or text.startswith("[call failed]")
                 return not bad, first
             if c.get("rejected"):
                 bad = text.startswith("[tool error]") or text.startswith("[call failed]")
                 return bad, first
+        if "usage" in c:
+            # The usage log (core/_usage.py): a line of this kind naming the id (and, when
+            # given, on a road starting with `road`).
+            spec = self.sub(c["usage"])
+            from core._usage import UsageLog
+            rows = UsageLog(self.lib).read()
+            hits = [r for r in rows if r.get("kind") == spec["kind"]
+                    and spec["id"] in (r.get("ids") or [])
+                    and str(r.get("road", "")).startswith(spec.get("road", ""))]
+            return bool(hits), (f"{len(hits)} {spec['kind']} line(s) for {spec['id']}: "
+                                + "; ".join(r.get("road", "") for r in hits[:4]))
+        if "lib_lacks" in c:
+            # Grep-level: no file under the library holds the text (the server's own log
+            # directory aside: logs are not a store).
+            needle = self.sub(c["lib_lacks"]).encode("utf-8")
+            hits = []
+            for p in self.lib.rglob("*"):
+                if p.is_file() and ".logs" not in p.relative_to(self.lib).parts:
+                    if needle in p.read_bytes():
+                        hits.append(str(p.relative_to(self.lib)))
+            return not hits, ("no file holds it" if not hits else "held by: " + ", ".join(hits))
+        if "vector" in c:
+            bid = self.sub(c["vector"])
+            db = self.lib / "embeddings.db"
+            have = False
+            if db.exists():
+                import sqlite3
+                with sqlite3.connect(db) as conn:
+                    try:
+                        have = conn.execute("SELECT 1 FROM embeddings WHERE bucket_id = ?",
+                                            (bid,)).fetchone() is not None
+                    except sqlite3.OperationalError:
+                        have = False
+            want = not c.get("absent")
+            return have == want, f"{bid} vector {'present' if have else 'absent'}"
+        if "ledger" in c:
+            # The ledger itself: its numbers distinct and gapless, and how many lines of a type.
+            spec = c["ledger"]
+            events = []
+            path = self.lib / "_ledger" / "events.jsonl"
+            if path.exists():
+                for line in path.read_text(encoding="utf-8").splitlines():
+                    if line.strip():
+                        events.append(json.loads(line))
+            seqs = [int(e.get("seq") or 0) for e in events]
+            notes = [f"{len(events)} lines, seq {min(seqs, default=0)}..{max(seqs, default=0)}"]
+            ok = True
+            if spec.get("unique_seq"):
+                dup = len(seqs) - len(set(seqs))
+                gap = sorted(seqs) != list(range(1, len(seqs) + 1))
+                ok = ok and not dup and not gap
+                notes.append(f"{dup} repeated, {'gaps' if gap else 'no gaps'}")
+            for etype, want in (spec.get("type_count") or {}).items():
+                got = sum(1 for e in events if e.get("event_type") == etype)
+                ok = ok and got == int(want)
+                notes.append(f"{etype} {got} (want {want})")
+            return ok, "; ".join(notes)
         if "var" in c:
             val = self.vars.get(c["var"], "")
             want = str(self.sub(c["equals"]))
@@ -524,7 +701,8 @@ async def library(item: dict, keep: bool, tag: str = ""):
         os.environ["LOCI_CONFIG_PATH"] = str(config_file)
         clock.set_now(clock_file, item["start"])
         clock.install(clock_file)
-        await seed(lib, clock_file, item.get("setup", []), item.get("slices"))
+        await seed(lib, clock_file, item.get("setup", []), item.get("slices"),
+                   {k: item.get(k) for k in ("dreams", "dehydration_cache")})
         clock.set_now(clock_file, item["start"])
         yield Library(lib, clock_file, env)
     finally:
@@ -561,13 +739,20 @@ async def run_item(item: dict, keep: bool) -> ItemResult:
                 async with stdio_client(params, errlog=errlog) as (r, w):
                     async with ClientSession(r, w) as session:
                         await session.initialize()
-                        run = Run(L.lib, L.clock_file, session)
+                        run = Run(L.lib, L.clock_file, session, item.get("hosts"),
+                                  L.server_env)
                         run.setup_ids = {e["id"] for e in item.get("setup", [])}
                         for step in item.get("steps", []):
                             if "at" in step:
                                 L.set_clock(step["at"])
                             elif "call" in step:
                                 await run.call(step)
+                            elif "source_change" in step:
+                                await run.source_change(step)
+                            elif "changes" in step:
+                                await run.changes(step)
+                            elif "concurrent" in step:
+                                await run.concurrent(step)
                             elif "wait" in step:
                                 await asyncio.sleep(float(step["wait"]))
                             elif "snapshot" in step:
@@ -606,7 +791,13 @@ def seams() -> tuple[str, ...]:
             "an item's slices: batch goes through Loci's intake in setup, its cut standing in "
             "for the side model (exam/runner.py seed_slices)",
             "an item's side_model: answers the backfill's side-model call, picked by a phrase "
-            "in the body (exam/serve.py; no item without one is affected)")
+            "in the body (exam/serve.py; no item without one is affected)",
+            "source_change: and changes: steps run what POST /api/v2/source/change and GET "
+            "/api/v2/changes run (core/_source_change.handle, core/_ledger.changes_since) in "
+            "the runner's process on the same library, a second entry point beside the "
+            "server; the HTTP layer and the hook guard are tests/test_source_change.py's",
+            "an item's dreams: and dehydration_cache: are written in setup through Loci's own "
+            "_dream.save_record and Dehydrator cache")
 
 
 def require_search_deps() -> None:

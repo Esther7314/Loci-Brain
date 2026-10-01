@@ -29,8 +29,12 @@ produces data; all rendering lives in frontend/loci.html.
                                          the same text the tool returns, or `?format=json` for
                                          its structured form (hook key). Like the tool, it
                                          stamps a question it hands out as asked
+    GET  /api/v2/changes              -> the ledger from seq N on (`?since=N&limit=`): ids, kinds,
+                                         source identities and hashes, never text; without
+                                         "was merely touched"; only what the host's credential
+                                         reaches (hook key; core/_ledger.py)
 
-🔴 THE WRITE SURFACE — eight POST routes, and every one of them writes something.
+🔴 THE WRITE SURFACE — nine POST routes, and every one of them writes something.
 
     POST /api/loci/similar/action     -> a human verdict on a suspected duplicate: keep
                                          both, or sink one (trace delete=True — a soft
@@ -45,6 +49,10 @@ produces data; all rendering lives in frontend/loci.html.
     POST /api/v2/slices               -> the host hands over a day's raw lines; a side model
                                          slices them and the slices are stored as pending
                                          (hook key; the raw text is not kept)
+    POST /api/v2/source/change        -> a host's change to one piece of its material: the
+                                         source registry, the block on what stood on it, and
+                                         for withdrawn / deleted the clearing of every place
+                                         its text reached (host credential; core/_source_change.py)
 
 ⚠️ This header used to say the file was "read-only, with a single write endpoint", and
    listed two of the seven. That was true when it was written and then five routes were
@@ -2442,7 +2450,7 @@ def register(mcp) -> None:
         first line, the object's `scope`; a refused request gets the refusal and nothing
         else."""
         from starlette.responses import JSONResponse, PlainTextResponse
-        from tools.breath.awaken import build_breath, render_breath, stamp_asked
+        from tools.breath.awaken import build_breath, record_shown, render_breath, stamp_asked
         fmt = str(request.query_params.get("format") or "text").strip().lower()
         if fmt not in ("text", "json"):
             return JSONResponse({"error": "format is text or json"}, status_code=400)
@@ -2453,6 +2461,7 @@ def register(mcp) -> None:
             b = await build_breath()
             text = render_breath(b)
             await stamp_asked(b)
+            record_shown(b, None if fmt == "json" else text)
         except Exception as e:
             logger.warning(f"[loci] breath failed: {e}")
             return JSONResponse({"error": str(e)}, status_code=500)
@@ -2461,6 +2470,60 @@ def register(mcp) -> None:
         if fmt == "json":
             return JSONResponse({**b, "scope": line} if line else b)
         return PlainTextResponse(f"{line}\n{text}" if line else text)
+
+    # ---------------------------------------------------------
+    # A host's source change, and the ledger read back by seq (core/_source_change.py,
+    # core/_ledger.py)
+    # ---------------------------------------------------------
+    @mcp.custom_route("/api/v2/source/change", methods=["POST"])
+    async def api_v2_source_change(request: Request) -> Response:
+        """{change_id, source, host_seq, change, revision?, use?} from a host. 200 with
+        `status` for every outcome of a well-formed change (applied, duplicate, conflict,
+        stale, forbidden, unknown_source); 400 for a malformed one; 403 when the caller is
+        the panel rather than a host. Resending the same change_id carries on a cleanup
+        left pending."""
+        from starlette.responses import JSONResponse
+        from core import _source_change as _sc
+        try:
+            body = await sh._read_json_object(request)
+        except (ValueError, json.JSONDecodeError) as e:
+            return JSONResponse({"error": f"body: {e}"}, status_code=400)
+        req = _request_of(request)
+        host = req.host if req is not None else None
+        try:
+            status, out = await _sc.handle(sh.bucket_mgr, body, host,
+                                           dehydrator=sh.dehydrator)
+        except Exception as e:
+            logger.warning(f"[loci] source change failed: {e}")
+            return JSONResponse({"error": str(e)}, status_code=500)
+        return JSONResponse(out, status_code=status)
+
+    @mcp.custom_route("/api/v2/changes", methods=["GET"])
+    async def api_v2_changes(request: Request) -> Response:
+        """The ledger past seq `since` (default 0), at most `limit` lines (default 1000,
+        at most 5000): {since, next, more, changes}. A host with a ceiling sees only what
+        its credential reaches; the panel and an open host see every line. Ask again from
+        `next` while `more`."""
+        from starlette.responses import JSONResponse
+        from core import _ledger
+        from core import scope as _scope
+        try:
+            since = int(request.query_params.get("since") or 0)
+            limit = int(request.query_params.get("limit") or _ledger.CHANGES_LIMIT)
+        except ValueError:
+            return JSONResponse({"error": "since and limit are integers"}, status_code=400)
+        if since < 0 or limit < 1:
+            return JSONResponse({"error": "since >= 0 and limit >= 1"}, status_code=400)
+        req = _request_of(request)
+        host = req.host if req is not None else None
+        if req is not None and req.host is None and req.mode == _scope.OPEN:
+            host = _scope.Host("panel", scope_mode=_scope.OPEN)
+        try:
+            out = await _ledger.changes_since(sh.bucket_mgr, host, since, limit)
+        except Exception as e:
+            logger.warning(f"[loci] changes failed: {e}")
+            return JSONResponse({"error": str(e)}, status_code=500)
+        return JSONResponse(out)
 
     # ---------------------------------------------------------
     # "Is it time to muse?" — the endpoint the host's wake-up leg asks

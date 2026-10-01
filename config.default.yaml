@@ -124,6 +124,13 @@ slices:
   max_lines_per_batch: 2000       # a bigger batch is refused: send the day in parts / 一批最多几行，多了分批发
   guess_threshold: 0.65           # cosine for "a memory written that day may already cover it" (recall's semantic line) / 猜「当天已经记过」的相似度线
 
+# --- Usage log / 用过的账 ---
+# What breath showed, what recall found (with the query, for the owner's review), and what a
+# write stood on, in buckets/_usage/usage.jsonl. Never handed to a host.
+# breath 摆了什么、recall 搜到什么（带搜的词，给面板回看）、写的时候拿谁当来源。不给宿主看。
+usage:
+  retain_days: 30                 # older lines are dropped / 超过这些天的行删掉
+
 # --- Decay parameters / 记忆衰减参数 ---
 # Simulates Ebbinghaus forgetting curve, auto-archives inactive memories
 # 模拟艾宾浩斯遗忘曲线，自动归档不活跃的记忆

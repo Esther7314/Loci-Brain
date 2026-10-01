@@ -24,20 +24,137 @@
       as: child
     - check: {segment: source, desc: "the descendant can still reach its source", output: child, contains: f10001}
 
+# The host's signal arrives through POST /api/v2/source/change (the `source_change:` step
+# runs what that route runs). Dream weaving and strong-reminder cards are out of the tool
+# layer's reach (H items; stage 5.5): the dream record itself is checked in F4.
 - id: F2
   title: "a deleted source stops its descendants on every road"
-  interface: none
-  needs: "the route that carries the signal to the registry (POST /api/v2/source/change; apply_change itself is in); descendants withheld in breath, recall, read by id, dream and tidy material, cards"
+  start: "2026-10-01T10:00:00+08:00"
+  hosts:
+    legacy: {token: t-life, scope_mode: open, may_restore: true}
+  setup:
+    - id: f20001000000
+      at: "2026-09-30T20:00:00+08:00"
+      room: EVENT/WORLD
+      text: "小周说她下周三要去复查牙齿，约在下午三点。"
+      sources: [{system: lento, instance: home, container: "private:U", id: m_20260930_0042}]
+    - id: f20002000000
+      at: "2026-09-30T21:00:00+08:00"
+      room: MIND/TRAITS
+      text: "小周对看牙一直很紧张，复查前要多陪陪她。"
+      from: [f20001000000]
+    - id: f20003000000
+      at: "2026-09-30T21:30:00+08:00"
+      room: EVENT/WORLD
+      text: "晚上一起包了饺子，她包的那几个都露馅了。"
+      sources: [{system: lento, instance: home, container: "private:U", id: m_20260930_0050}]
+  steps:
+    - source_change: {change_id: c-f2-1, host_seq: 1, change: deleted,
+                      source: {system: lento, instance: home, container: "private:U", id: m_20260930_0042}}
+      host: t-life
+      as: change
+    - check: {segment: store, desc: "the change is applied", output: change, contains: '"status": "applied"'}
+    - check: {segment: store, desc: "it blocks what stood on it", output: change, contains: '"blocked": true'}
+    - check: {segment: store, desc: "the thought grown from it is held for review", output: change, contains: f20002000000}
+    - check: {segment: store, desc: "the event's body is gone", id: f20001000000, body_lacks: "复查牙齿"}
+    - call: breath
+      as: after
+    - check: {segment: think, desc: "breath: the thought's words are nowhere", output: after, lacks: "多陪陪她"}
+    - check: {segment: think, desc: "breath: not in the last three days", output: after, section: 近三天, lacks: f20002}
+    - check: {segment: think, desc: "breath: nor suddenly remembered", output: after, section: 忽然想起, lacks: f20002}
+    - check: {segment: think, desc: "breath: an untouched memory still shows", output: after, contains: f20003}
+    - check: {segment: think, desc: "breath: a card asks to rewrite or put it away", output: after, section: 依据变了的, contains: f20002}
+    - check: {segment: think, desc: "the card carries no body", output: after, section: 依据变了的, contains: "正文不给"}
+    - call: recall
+      args: {query: 看牙 紧张 复查}
+      as: search
+    - check: {segment: find, desc: "recall does not find the thought", output: search, lacks: f20002}
+    - call: recall
+      args: {query: f20002000000}
+      as: byid
+    - check: {segment: find, desc: "read by id gives no body", output: byid, lacks: "多陪陪她"}
+    - check: {segment: find, desc: "read by id says why", output: byid, contains: "正文不给"}
+    - call: muse
+      as: tidy
+    - check: {segment: think, desc: "tidying does not draw it", output: tidy, lacks: f20002}
 
 - id: F3
   title: "a descendant of two sources is rewritten from the one left"
-  interface: none
-  needs: "the signal's route (F2) and withholding until rewritten; sources carrying 'where + id' and regrow leaving a withdrawn source behind are in"
+  start: "2026-10-01T10:00:00+08:00"
+  hosts:
+    legacy: {token: t-life, scope_mode: open, may_restore: true}
+  setup:
+    - id: f30001000000
+      at: "2026-09-30T20:00:00+08:00"
+      room: MIND/TRAITS
+      text: "小周和我定的暗号是青柠；她周末想去爬山。"
+      sources:
+        - {system: lento, instance: home, container: "private:U", id: m_20260930_0101}
+        - {system: lento, instance: home, container: "private:U", id: m_20260930_0102}
+  steps:
+    - source_change: {change_id: c-f3-1, host_seq: 1, change: withdrawn,
+                      source: "lento:home/private:U#m_20260930_0101"}
+      host: t-life
+      as: change
+    - check: {segment: store, desc: "the change is applied", output: change, contains: '"status": "applied"'}
+    - call: breath
+      as: held
+    - check: {segment: think, desc: "before the rewrite: nowhere in breath but the card", output: held, section: 近三天, lacks: f30001}
+    - check: {segment: think, desc: "the card names the source left to rewrite from", output: held, section: 依据变了的, contains: "m_20260930_0102"}
+    - check: {segment: think, desc: "and not the words", output: held, lacks: 青柠}
+    - call: recall
+      args: {query: 爬山}
+      as: search_held
+    - check: {segment: find, desc: "before the rewrite: recall does not find it", output: search_held, lacks: f30001}
+    - call: regrow
+      args: {bucket_id: f30001000000, mode: supplement, text: "小周周末想去爬山。", v: 0.6, a: 0.4}
+      as: rewrite
+    - newest: f30001000000
+      as: new
+    - check: {segment: store, desc: "a new version exists", field: supersedes, id: $new, equals: f30001000000}
+    - check: {segment: store, desc: "it stands on the source left", field: sources, id: $new, contains: m_20260930_0102}
+    - check: {segment: store, desc: "not on the withdrawn one", field: sources, id: $new, lacks: m_20260930_0101}
+    - check: {segment: store, desc: "its body has no 青柠", id: $new, body_lacks: 青柠}
+    - call: recall
+      args: {query: 爬山}
+      as: search_new
+    - check: {segment: find, desc: "the rewrite is found as usual", output: search_new, contains: "${new:6}"}
 
 - id: F4
   title: "a withdrawn source is also cleared from Loci's own derived stores"
-  interface: none
-  needs: "the signal's route (F2) with cleanup steps after apply_change reaching embeddings.db, the BM25 index, dream records (night_fall/dreams) and sunk bodies (archive/原文)"
+  start: "2026-10-01T10:00:00+08:00"
+  hosts:
+    legacy: {token: t-life, scope_mode: open, may_restore: true}
+  setup:
+    - id: f40001000000
+      at: "2026-09-29T20:00:00+08:00"
+      room: EVENT/WORLD
+      text: "小周悄悄告诉我，她给新来的猫起名叫蓝莓气泡。"
+      sources: [{system: lento, instance: home, container: "private:U", id: m_20260929_0007}]
+      fields: {summary: "小周给新来的猫起名叫蓝莓气泡"}
+      sink: true
+  dreams:
+    - {id: f4d000000001, text: "梦里那只叫蓝莓气泡的猫在屋顶上跑。", ingredients: [f40001000000]}
+  dehydration_cache:
+    - {text: "小周悄悄告诉我，她给新来的猫起名叫蓝莓气泡。", summary: '{"summary": "猫叫蓝莓气泡"}'}
+  steps:
+    - source_change: {change_id: c-f4-1, host_seq: 1, change: withdrawn,
+                      source: "lento:home/private:U#m_20260929_0007"}
+      host: t-life
+      as: change
+    - check: {segment: store, desc: "the change is applied", output: change, contains: '"status": "applied"'}
+    - check: {segment: store, desc: "the dream record is cleared", output: change, contains: '"dream_records": "done"'}
+    - check: {segment: store, desc: "the sunk original is cleared", output: change, contains: '"sunk_text": "done"'}
+    - check: {segment: store, desc: "the dehydration cache is cleared", output: change, contains: '"dehydration_cache": "done"'}
+    - check: {segment: find, desc: "no file in the library holds the words", lib_lacks: 蓝莓气泡}
+    - check: {segment: find, desc: "no vector is left for it", vector: f40001000000, absent: true}
+    - call: recall
+      args: {query: 蓝莓气泡}
+      as: search
+    - check: {segment: find, desc: "recall finds nothing of it", output: search, lacks: f40001}
+    - call: muse
+      as: tidy
+    - check: {segment: think, desc: "tidying does not draw it", output: tidy, lacks: f40001}
 
 # The agreed rule: the same delivery (same write key) is one memory; the same source
 # written as two different events stays two, and the second receipt points at the first.
