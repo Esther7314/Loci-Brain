@@ -496,9 +496,14 @@ def test_the_route_serves_the_same_text_and_the_json_keys_behind_the_hook_key(st
     call = _route(monkeypatch, store, locked=True)
     assert call().status_code == 401
     text = call(key="s3cret")
-    assert text.status_code == 200 and text.body.decode("utf-8") == run(A.surface_awaken())
+    # Like every read, the route opens with the request's scope (core/scope.py): the
+    # legacy host with no Loci-Scope reads the whole library.
+    assert text.status_code == 200 and text.body.decode("utf-8") == (
+        "〔范围：全库（open）〕\n" + run(A.surface_awaken()))
     data = json.loads(call(b"format=json", key="s3cret").body)
-    assert list(data) == ["core", "prospective", "recent", "involuntary", "invalidation", "earliest"]
+    assert list(data) == ["core", "prospective", "recent", "involuntary", "invalidation", "earliest",
+                          "scope"]
+    assert data["scope"] == "〔范围：全库（open）〕"
     [it] = data["prospective"]["items"]
     assert {"id", "short", "text", "reason"} <= set(it) and it["reason"]["kind"] == "undated"
     assert call(b"format=xml", key="s3cret").status_code == 400

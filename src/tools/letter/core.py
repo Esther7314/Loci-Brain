@@ -28,7 +28,7 @@ from typing import Optional
 
 from core import visibility as _V
 from .. import _runtime as rt
-from .._common import check_content_size, check_metadata_size, check_query_size
+from .._common import check_content_size, check_metadata_size, check_query_size, read_scope
 from utils import strip_wikilinks, get_ai_name
 
 
@@ -149,8 +149,10 @@ async def letter_read(
         return f"读取信件失败: {e}"
     # Reading letters is a lookup (core/visibility.py, the `letter` road): dont_surface
     # hides nothing, and a letter that is not live is never read out as if it were.
+    # Under a read scope a letter is read like any memory: one with no sources is not.
+    view = await read_scope()
     letters = [b for b in all_b if b["metadata"].get("type") == "letter"
-               and _V.visible_for(b, road=_V.LETTER)]
+               and _V.visible_for(b, view, road=_V.LETTER)]
     af = author.strip()
     if af:
         ai = get_ai_name()

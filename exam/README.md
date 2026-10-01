@@ -45,6 +45,12 @@ Needs no keys; nothing leaves the machine.
     - check: {segment: think, desc: "...", output: afternoon, lacks: b20001}
 ```
 
+A call may carry what a host puts on its request: `host:` its credential, `scope:` its
+Loci-Scope (an object; a string is sent as it is), `turn:` / `write_key:` its Loci-Turn
+(`<turn>#<ordinal>`). An item's `hosts:` ({name: {token, scope_mode?, max_grant?,
+may_restore?}}) is the deployment's hosts table. Over stdio they ride in the call's _meta
+and become the request the call carries (exam/serve.py, a declared seam).
+
 Steps: `at` · `call` (+ `args`, `as`, `capture: {var: regex}`) · `wait: seconds` (for
 background work such as the backfill) · `snapshot` (+ `as`) · `newest: <id>` (+ `as`:
 follow `superseded_by` to the latest version) · `check`.

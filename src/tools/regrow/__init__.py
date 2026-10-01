@@ -53,7 +53,7 @@ from core import _fold as _F           # fold's bones: regrow is its n=1 case
 from core import _sources as _src
 from .. import _runtime as rt
 from core._bigevent import is_big as _is_big
-from .._common import _keyed_turn, resolve_bucket_id, with_write_key
+from .._common import _keyed_turn, read_scope, resolve_bucket_id, with_write_key
 # is_mind_room is no longer used to keep events out (that gate was removed; see
 # the epitaph inside regrow below)
 # from core._rooms import is_mind_room
@@ -295,6 +295,12 @@ async def _regrow(bucket_id: str = "", text: str = "", v=-1, a=-1, from_=None,
     except Exception:
         pass
 
+    # Every descendant is marked; the receipt names and counts only those the request may
+    # read (a read scope, core/scope.py).
+    view = await read_scope()
+    if view is not None:
+        marked = [m for m in marked if view.permits_id(m)]
+        unmarked = [m for m in unmarked if view.permits_id(m)]
     mark = "◈时期" if is_big else "🌱regrow"
     span = f" {new_when}" if is_big and new_when else ""
     out = (f"{mark}·{_MODE_WORD[mode]} {bucket_id} → {new_id}  {room}{span}"
@@ -314,7 +320,9 @@ async def _regrow(bucket_id: str = "", text: str = "", v=-1, a=-1, from_=None,
         # sense of scale.
         _t0, _t1, _e = _F.check_span(new_when)
         if not _e:
-            out += (f"\n（范围内现在有 {len(await _F.span_members(_t0, _t1))} 条——"
+            members = [m for m in await _F.span_members(_t0, _t1)
+                       if view is None or view.permits_id(m)]
+            out += (f"\n（范围内现在有 {len(members)} 条——"
                     "**现场数的**，不落盘；时期只起名字，一条都没被压住。）")
     if dropped:
         out += f"\n⚠️ 来源链满：这几个没挂上 {', '.join(dropped)}（继承链优先）"

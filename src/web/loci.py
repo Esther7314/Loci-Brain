@@ -1705,6 +1705,39 @@ def _parse_ok(v) -> bool:
 # Routes
 # ============================================================
 
+def _request_of(request: Request):
+    """The hook request as the guard resolved it (web/__init__ `_Gated`, core/scope.py);
+    None outside the guard (a route called directly)."""
+    return getattr(request.state, "loci_request", None)
+
+
+def _scope_refusal(request: Request):
+    """A refused request (no scope from a restricted host, a scope past its host's
+    ceiling, one that cannot be read): the response saying so, else None. Nothing is read."""
+    from starlette.responses import JSONResponse
+    from core import scope as _scope
+    req = _request_of(request)
+    if req is None or not req.refused:
+        return None
+    line = req.first_line()
+    return JSONResponse({"error": line, "scope": line},
+                        status_code=400 if req.refusal == _scope.MALFORMED else 403)
+
+
+def _scope_withholds(request: Request, what: str):
+    """A road this version cannot filter by scope gives nothing to a scoped request, and
+    says so: the response, else None (a refused request gets its refusal)."""
+    from starlette.responses import JSONResponse
+    from core import scope as _scope
+    refused = _scope_refusal(request)
+    if refused is not None:
+        return refused
+    req = _request_of(request)
+    if req is None or req.whole_library:
+        return None
+    return JSONResponse({"scope": _scope.unsupported_line(what)})
+
+
 def _slices_config() -> tuple[int, float]:
     """`slices:` in config -> (max lines per batch, guess threshold)."""
     from core import _slicer as _sl
@@ -2346,10 +2379,25 @@ def register(mcp) -> None:
         same batch again."""
         from starlette.responses import JSONResponse
         from core import _slicer as _sl
+        from core import _sources as _src
         try:
             body = await sh._read_json_object(request)
         except (ValueError, json.JSONDecodeError) as e:
             return JSONResponse({"error": f"body: {e}"}, status_code=400)
+        # A host delivers only material its credential reaches (`max_grant`); past it the
+        # batch is refused whole, saying where.
+        req = _request_of(request)
+        top = req.host.max_grant if (req is not None and req.host is not None) else None
+        if top is not None:
+            src = body.get("source") if isinstance(body.get("source"), dict) else {}
+            try:
+                place = _src.Place.from_mapping(
+                    {k: src.get(k) for k in ("system", "instance", "container")})
+            except _src.SourceRecordError as e:
+                return JSONResponse({"error": f"source: {e}"}, status_code=400)
+            if not any(place.within(t) for t in top):
+                return JSONResponse({"error": f"source {place.label()} is past this host's "
+                                     "max_grant; nothing was stored"}, status_code=403)
         max_lines, threshold = _slices_config()
         try:
             out = await _sl.take_batch(sh.bucket_mgr, body,
@@ -2366,10 +2414,19 @@ def register(mcp) -> None:
     @mcp.custom_route("/api/v2/slices", methods=["GET"])
     async def api_v2_slices_pending(request: Request) -> Response:
         """The pending slices, newest batch first, for the host's own prompt-building:
-        {pending, batches: [{batch_id, source, day, revision, slices: [...]}]}."""
+        {pending, batches: [{batch_id, source, day, revision, slices: [...]}], scope}.
+        A scoped request sees the batches of containers its grant covers whole, and
+        only the guesses it may read (tools/_slices.visible_batches)."""
         from starlette.responses import JSONResponse
-        store = sh.bucket_mgr.slices
-        return JSONResponse({"pending": store.pending_count(), "batches": store.open_batches()})
+        from tools import _slices
+        refused = _scope_refusal(request)
+        if refused is not None:
+            return refused
+        batches = await _slices.visible_batches()
+        req = _request_of(request)
+        return JSONResponse({"pending": await _slices.pending_seen(),
+                             "batches": batches,
+                             "scope": req.first_line() if req is not None else ""})
 
     # ---------------------------------------------------------
     # breath for a host's hook (tools/breath/awaken.py)
@@ -2381,12 +2438,17 @@ def register(mcp) -> None:
         `?format=json` gives the object both are made from, under stable keys
         {core, prospective, recent, involuntary, invalidation, earliest}. Either way it is
         handed to a model, so a question in it counts as asked (stamp_asked), as it does
-        through the tool."""
+        through the tool. Like every read, it opens with the request's scope: the text's
+        first line, the object's `scope`; a refused request gets the refusal and nothing
+        else."""
         from starlette.responses import JSONResponse, PlainTextResponse
         from tools.breath.awaken import build_breath, render_breath, stamp_asked
         fmt = str(request.query_params.get("format") or "text").strip().lower()
         if fmt not in ("text", "json"):
             return JSONResponse({"error": "format is text or json"}, status_code=400)
+        refused = _scope_refusal(request)
+        if refused is not None:
+            return refused
         try:
             b = await build_breath()
             text = render_breath(b)
@@ -2394,9 +2456,11 @@ def register(mcp) -> None:
         except Exception as e:
             logger.warning(f"[loci] breath failed: {e}")
             return JSONResponse({"error": str(e)}, status_code=500)
+        req = _request_of(request)
+        line = req.first_line() if req is not None else ""
         if fmt == "json":
-            return JSONResponse(b)
-        return PlainTextResponse(text)
+            return JSONResponse({**b, "scope": line} if line else b)
+        return PlainTextResponse(f"{line}\n{text}" if line else text)
 
     # ---------------------------------------------------------
     # "Is it time to muse?" — the endpoint the host's wake-up leg asks
@@ -2412,6 +2476,10 @@ def register(mcp) -> None:
          false. This opens no new hole; it simply does not add a gate.)
         """
         from starlette.responses import JSONResponse
+        # Counts of the whole library: under a scope a count is a leak, so nothing.
+        withheld = _scope_withholds(request, "发呆")
+        if withheld is not None:
+            return withheld
         try:
             return JSONResponse(await build_muse_pending())
         except Exception as e:
@@ -2608,6 +2676,9 @@ def register(mcp) -> None:
         passed straight through to `recall_data()`.
         """
         from starlette.responses import JSONResponse
+        withheld = _scope_withholds(request, "梦和发呆")
+        if withheld is not None:
+            return withheld
         q = request.query_params
         query = q.get("query") or ""
         when = q.get("when") or ""
@@ -2651,6 +2722,9 @@ def register(mcp) -> None:
         read nor validated; this endpoint takes no parameters.
         """
         from starlette.responses import JSONResponse
+        withheld = _scope_withholds(request, "梦")
+        if withheld is not None:
+            return withheld
         try:
             from core import _dream as _D
             degraded = _D.degrade_on_wake()
@@ -2694,6 +2768,11 @@ def register(mcp) -> None:
         port `/mcp` itself is already reachable without a token.
         """
         from starlette.responses import JSONResponse
+        # A dream is woven from the whole library for the life line: a scoped request gets
+        # none, and is told so (the agreed fourth first line).
+        withheld = _scope_withholds(request, "梦")
+        if withheld is not None:
+            return withheld
         try:
             from core import _dream as _D
             got = await _D.current_dream()

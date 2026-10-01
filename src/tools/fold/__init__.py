@@ -34,7 +34,7 @@ Exports: dispatch(text, room, v, a, cover, when, from_, test_data, sources) -> s
 from .. import _runtime as rt
 from core import _fold as F
 from core import _sources as _src
-from .._common import check_content_size, resolve_bucket_ids, with_write_key
+from .._common import check_content_size, read_scope, resolve_bucket_ids, with_write_key
 from core._rooms import check_room, _rooms_help, is_event_room, is_mind_room
 from ..grow.rooms_path import _normalize_from, check_sources
 
@@ -147,7 +147,10 @@ async def _fold(text: str = "", room: str = "", v=-1, a=-1,
         _t0, _t1, span_err = F.check_span(when)
         if span_err:
             return span_err
-        members_now = len(await F.span_members(_t0, _t1))
+        # Counted as the request may count them (a read scope, core/scope.py).
+        view = await read_scope()
+        members_now = len([m for m in await F.span_members(_t0, _t1)
+                           if view is None or view.permits_id(m)])
 
     # ---- Circles ①②: check each given id exists; archived ones cannot be
     # covered (update will not write an archived bucket, so forcing it would

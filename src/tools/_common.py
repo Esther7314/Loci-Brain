@@ -25,15 +25,19 @@ What this file deliberately does not do:
 - Holds no global objects; every dependency comes from _runtime
 - Wraps no side effects beyond log formatting; the caller decides whether to await
 
+- read_scope: the request's read scope as the view core's gate takes
+  (core/scope.ScopeView), loaded once per request
+
 Exports: limits_cfg / max_bucket_bytes / max_pinned / check_content_size /
          check_grow_items_payload / count_pinned / check_pinned_quota /
-         resolve_bucket_id / resolve_bucket_ids / with_write_key
+         read_scope / not_found / resolve_bucket_id / resolve_bucket_ids / with_write_key
 ========================================
 """
 
 import asyncio
 from concurrent.futures import Future, InvalidStateError
 from contextlib import asynccontextmanager
+import contextvars
 import math
 import os
 from pathlib import Path
@@ -42,6 +46,7 @@ import threading
 import time
 import uuid
 
+from core import scope as _scope
 from core.visibility import LIVE, state_of
 from utils import parse_bool
 
@@ -232,6 +237,44 @@ async def _quota_turn(name: str):
 
 _SHORT_ID_RE = re.compile(r"[0-9a-f]{6,11}")   # shorter than a 12-hex id, longer than noise
 _SHORT_ID_CANDIDATES_SHOWN = 8                  # a collision lists this many, then stops
+_FULL_ID_RE = re.compile(r"[0-9a-f]{12}|feel_\d{12}_V\d{3}(_\d+)?")   # what a full id looks like
+
+
+# ============================================================
+# The request's read scope, as tools hand it to core
+# ------------------------------------------------------------
+# The request layer sets the resolved request for the call (core/scope.request_scope);
+# tools read it here and pass the view to core as an argument. One view per request: the
+# library's metadata (archive included, for the walk to roots) is loaded once.
+# ============================================================
+
+_VIEW: contextvars.ContextVar = contextvars.ContextVar("loci_scope_view", default=None)
+
+
+async def read_scope():
+    """This call's `ScopeView`, or None when nothing is filtered (an open host that sent
+    no scope, no request at all)."""
+    req = _scope.current_request()
+    if req is None or req.whole_library:
+        return None
+    cached = _VIEW.get()
+    if cached is not None and cached[0] is req:
+        return cached[1]
+    metas: dict = {}
+    if not req.refused:
+        for b in await rt.bucket_mgr.list_all(include_archive=True):
+            meta = b.get("metadata") or {}
+            bid = str(meta.get("id") or b.get("id") or "")
+            if bid:
+                metas[bid] = meta
+    view = _scope.ScopeView(req, metas, getattr(rt.bucket_mgr, "sources", None))
+    _VIEW.set((req, view))
+    return view
+
+
+def not_found(q: str) -> str:
+    """What every id-taking tool says of an id that names nothing it may see."""
+    return f"查无此桶：{q}（id 形状但没匹配——可能已物理删除或打错）。"
 
 
 async def resolve_bucket_id(bucket_id) -> tuple[str, str]:
@@ -243,8 +286,15 @@ async def resolve_bucket_id(bucket_id) -> tuple[str, str]:
     The archive is searched too: an archived entry has to resolve so the caller
     can say "it is in the archive" rather than "no such bucket". On a collision
     nothing is chosen and the candidates are listed; the caller writes nothing.
+
+    Under a read scope only what the request may read resolves, a full id included:
+    an id out of scope gets the same answer as an id that names nothing, and a
+    collision lists only candidates in scope.
     """
     q = str(bucket_id or "").strip()
+    view = await read_scope()
+    if view is not None and _FULL_ID_RE.fullmatch(q):
+        return (q, "") if view.permits_id(q) else (q, not_found(q))
     if not _SHORT_ID_RE.fullmatch(q):
         return q, ""
     allb = await rt.bucket_mgr.list_all(include_archive=True)
@@ -252,14 +302,14 @@ async def resolve_bucket_id(bucket_id) -> tuple[str, str]:
         cid for cid in (
             str((b.get("metadata") or {}).get("id") or b.get("id") or "") for b in allb
         )
-        if cid.startswith(q)
+        if cid.startswith(q) and (view is None or view.permits_id(cid))
     })
     if len(cand) == 1:
         return cand[0], ""
     if cand:
         return q, ("半截 id 撞了 " + str(len(cand)) + " 个："
                    + " / ".join(cand[:_SHORT_ID_CANDIDATES_SHOWN]) + "。给完整的。")
-    return q, f"查无此桶：{q}（id 形状但没匹配——可能已物理删除或打错）。"
+    return q, not_found(q)
 
 
 async def resolve_bucket_ids(ids: list, label: str) -> tuple[list[str], str]:

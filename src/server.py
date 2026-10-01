@@ -536,17 +536,111 @@ def _log_op_err(op: str, exc: BaseException) -> None:
     logger.exception(f"op={op} phase=err err={type(exc).__name__}:{exc}")
 
 
+# =============================================================
+# Who is calling: the request's host, read scope and write key (core/scope.py)
+# -------------------------------------------------------------
+# Under streamable-http the tools run in the session's own task, so nothing set in the
+# ASGI middleware reaches them; the request that carried this call does (FastMCP's
+# request context). The middleware leaves the host it recognised in the ASGI scope
+# (server_app.MCPAuthMiddleware); `Loci-Scope` and `Loci-Turn` are read from the same
+# request here, once per call, and set for the call inside `_with_notice`. Under stdio
+# there is no request: `LOCI_SCOPE` and `LOCI_HOST_TOKEN` are read once, at start.
+# =============================================================
+from core import scope as _scope_mod
+from core import _sources as _src_mod
+
+_READ_OPS = frozenset({"breath", "recall", "muse", "letter_read"})
+_WRITE_OPS = frozenset({"grow", "fold", "regrow", "trace", "letter_write"})
+_STDIO_SCOPE = os.environ.get(_scope_mod.SCOPE_ENV)
+_STDIO_HOST_TOKEN = str(os.environ.get(_scope_mod.HOST_TOKEN_ENV) or "").strip()
+
+
+def _hosts():
+    from web import panel_auth as _pa
+    return _pa.hosts()
+
+
+def _call_request():
+    """The HTTP request carrying this tool call: a Starlette Request, None under stdio,
+    or False outside any MCP call (a direct call: nothing is resolved)."""
+    try:
+        return mcp.get_context().request_context.request
+    except (LookupError, ValueError, AttributeError):
+        return False
+
+
+def _resolve_call() -> tuple["_scope_mod.RequestScope | None", str | None, str]:
+    """(the request resolved, the write key, why the write key cannot be read)."""
+    request = _call_request()
+    if request is False:
+        return None, None, ""
+    hosts = _hosts()
+    if request is None:
+        host = hosts.by_token(_STDIO_HOST_TOKEN) if _STDIO_HOST_TOKEN else hosts.default
+        req = _scope_mod.RequestScope.resolve(
+            host, _STDIO_SCOPE,
+            no_host=(f"{_scope_mod.HOST_TOKEN_ENV} 对不上 hosts 表里任何一个宿主"
+                     if _STDIO_HOST_TOKEN else "没带宿主凭据，部署里也没有 legacy 宿主"))
+        return req, None, ""
+    headers = request.headers
+    rs = getattr(request, "scope", {}) or {}
+    if "loci.host" in rs:
+        host = hosts.get(rs["loci.host"]) if rs["loci.host"] else None
+    else:
+        host = hosts.default
+    req = _scope_mod.RequestScope.resolve(host, headers.get(_scope_mod.SCOPE_HEADER))
+    turn = headers.get(_scope_mod.TURN_HEADER)
+    if turn is None or not str(turn).strip():
+        return req, None, ""
+    try:
+        t, n = _scope_mod.parse_turn(turn)
+    except _scope_mod.ScopeError as e:
+        return req, None, e.zh
+    return req, _src_mod.write_key(t, n, host.name if host is not None else ""), ""
+
+
 async def _with_notice(coro: Awaitable[str], op: str = "", args: dict | None = None) -> str:
     """The wrapper around every MCP tool call.
 
     Responsibilities, per the unified error convention:
-    1. On entry: begin_warnings() initializes this call's W/I channel.
-    2. On exit: the concatenation order is [deletion notice] + [tool output] + [the W/I
-       notices this call produced].
+    1. On entry: begin_warnings() initializes this call's W/I channel, and the request
+       is resolved (who is calling, what it may read, its write key) and set for the call.
+    2. On exit: the concatenation order is [scope line, on a read] + [deletion notice] +
+       [tool output] + [the W/I notices this call produced].
     3. On exception: catch it, record OB-E004, and return the standard format (including
        the last 15 log lines), so the MCP protocol layer never sees a bare exception string.
     4. When op is non-empty, emit the structured log at all three points.
+
+    A refused request (a restricted host without a scope, a scope past its host's
+    ceiling or unreadable, no host at all) runs nothing: a read gets the refusal line, a
+    write the same line and that nothing was written. A Loci-Turn that cannot be read
+    refuses a write the same way: a write the host meant to key is never run unkeyed.
     """
+    try:
+        req, key, turn_err = _resolve_call()
+    except Exception as e:                      # noqa: BLE001 — never run a call unresolved
+        coro.close()
+        logger.exception(f"op={op} phase=refused err=resolve:{type(e).__name__}:{e}")
+        return f"❌ 这次请求认不出是谁、能读什么（{type(e).__name__}），什么都没做。"
+    if req is not None and op in (_READ_OPS | _WRITE_OPS):
+        refusal = ""
+        if req.refused:
+            refusal = req.first_line() + ("\n这次什么都没写。" if op in _WRITE_OPS else "")
+        elif turn_err and op in _WRITE_OPS:
+            refusal = f"{turn_err}。这次什么都没写。"
+        if refusal:
+            coro.close()
+            if op:
+                logger.info(f"op={op} phase=refused scope={req.refusal or 'turn'}")
+            return refusal
+    if req is None:
+        return await _run_with_notice(coro, op, args)
+    with _scope_mod.request_scope(req), _src_mod.write_key_scope(key):
+        body = await _run_with_notice(coro, op, args)
+    return f"{req.first_line()}\n{body}" if op in _READ_OPS else body
+
+
+async def _run_with_notice(coro: Awaitable[str], op: str = "", args: dict | None = None) -> str:
     if op:
         _log_op_entry(op, args or {})
     begin_warnings()
@@ -687,8 +781,16 @@ async def breath() -> str:
     # With the parameters gone, breath is always bare, so the condition is always true —
     # and `query` became an undefined name, meaning **every single call would NameError right
     # here**. An import check cannot see that; it only explodes at runtime.
-    # It runs unconditionally now.
-    asyncio.create_task(_dream_upkeep())
+    # It runs on every breath that reads the whole library: dreams are the life line's,
+    # woven from everything, so a host waking under a read scope (or refused) does not
+    # drive them.
+    try:
+        req = _resolve_call()[0]
+        whole = req is None or req.whole_library
+    except Exception:                           # noqa: BLE001 — upkeep is never worth a failed breath
+        whole = False
+    if whole:
+        asyncio.create_task(_dream_upkeep())
     return result
 
 
@@ -1999,6 +2101,7 @@ if __name__ == "__main__":
             settings=_http_settings,
             token_validator=_mcp_token_validator,
             lifecycle=_runtime_lifecycle,
+            host_resolver=_hosts,
         )
         # (The tool count is not reported here. The line above, about folding N secondary
         #  tools into the primary instance for M exposed in total, reports the real number.

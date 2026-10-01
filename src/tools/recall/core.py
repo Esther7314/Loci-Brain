@@ -18,7 +18,7 @@ from core import _fold as _F          # fold / gist: what is covered no longer s
 from core import _sources as _src     # outside material: source records and their registry state
 from core import visibility as _V     # the one gate: what may be put in front of the model
 from .. import _runtime as rt
-from .._common import resolve_bucket_id
+from .._common import read_scope, resolve_bucket_id
 from core import _when as _w          # "today" as the user lives it (local timezone) — never call datetime.now() directly
 from core._rooms import (ALL_ROOMS, check_gate, is_mind_room, normalize_room,
                       room_matches)
@@ -150,6 +150,8 @@ _SYS_TAG_PREFIXES = ("__", "aspect:", "疑似同件:", "相似认知:")
 # The criterion is the same one as `is_scene_word()` in tools/_muse.py; do not
 # write a second version of it here.
 _MACHINE_TAG_RE = re.compile(r"^[^:：]{1,12}[:：]")
+# A machine tag whose value is another entry's handle.
+_HANDLE_TAG_RE = re.compile(r"^[^:：]{1,12}[:：]([0-9a-f]{6,12})$")
 
 
 def is_human_tag(tag: str) -> bool:
@@ -494,9 +496,10 @@ async def _collect(when, room, tag, query, all_buckets=None) -> tuple[list[dict]
 
     out = []
     browsing = not query.strip()
+    scope_view = await read_scope()
     for b in pool:
         meta = b.get("metadata", {}) or {}
-        if not _V.on_timeline(meta):
+        if not _V.on_timeline(meta, scope_view):
             continue
         # Faded or sunk entries **do not turn up while browsing** ("it surfaces on
         # its own even when I am not looking for it" belongs to what is still
@@ -567,11 +570,13 @@ async def _find_roots(entries: list[dict]) -> dict[str, dict | None]:
         e["id"]: {"id": e["id"], "metadata": e["meta"], "content": e["content"]} for e in entries}
 
     get = getattr(rt.bucket_mgr, "get_including_archive", None) or rt.bucket_mgr.get
+    scope_view = await read_scope()
 
     async def fetch(bid: str) -> dict | None:
         if bid not in cache:
             b = await get(bid)
-            cache[bid] = b if b and _V.visible_for(b.get("metadata") or {}, road=_V.READ) else None
+            cache[bid] = (b if b and _V.visible_for(b.get("metadata") or {}, scope_view,
+                                                    road=_V.READ) else None)
         return cache[bid]
 
     async def newest(bid: str) -> str:
@@ -1152,7 +1157,7 @@ def _big_lines(all_buckets: list, t0, t1, seen: set[str]) -> list[str]:
     return out
 
 
-async def _gist_lines(entries: list[dict], skip: set[str] | None = None) -> list[str]:
+async def _gist_lines(entries: list[dict], skip: set[str] | None = None, scope_view=None) -> list[str]:
     """Which gists cover the covered entries in this cell -> one title line per
     gist.
 
@@ -1172,7 +1177,7 @@ async def _gist_lines(entries: list[dict], skip: set[str] | None = None) -> list
         # Crossing: one entry can be covered by two threads at once -> both gist
         # titles count it
         for gid in _F.covers_of(e["meta"]):
-            if gid and gid not in (skip or set()):
+            if gid and gid not in (skip or set()) and (scope_view is None or scope_view.permits_id(gid)):
                 covered[gid] = covered.get(gid, 0) + 1
     out: list[str] = []
     for gid, n in sorted(covered.items(), key=lambda kv: -kv[1]):
@@ -1221,6 +1226,10 @@ async def _render_browse(entries, gates, room, tag, all_buckets=None) -> str:
         except Exception as e:
             rt.logger.warning(f"时期那半的库没捞到，这次浏览不盖时期: {e}")
             span_buckets = []
+    # A period the request may not read is not named (a read scope, core/scope.py).
+    scope_view = await read_scope()
+    if scope_view is not None:
+        span_buckets = [b for b in span_buckets if scope_view.permits(b)]
     dn = today - timedelta(days=_BROWSE_NEAR_DAYS - 1)   # 今天 / 昨天 / 前天
     tomorrow = today + timedelta(days=1)
 
@@ -1640,17 +1649,20 @@ _STATE_LOUD = {
 }
 
 
-async def _linked(bucket_id: str) -> tuple[dict | None, str, str]:
+async def _linked(bucket_id: str, scope_view=None) -> tuple[dict | None, str, str] | None:
     """One entry a read by id links to — a source, what it covers, a period's member, who
     cites it — as its line shows it: (bucket or None, hint, mark).
 
     The gate's `read` road decides: a linked entry is always a line (its gist), never
-    expanded into its body, and one that is not live carries its state out loud."""
+    expanded into its body, and one that is not live carries its state out loud. One the
+    request's read scope (`scope_view`) does not reach is None: no line at all, not even its id."""
+    if scope_view is not None and not scope_view.permits_id(bucket_id):
+        return None
     b = await rt.bucket_mgr.get_including_archive(bucket_id)
     if not b:
         return None, "", ""
     meta = b.get("metadata", {}) or {}
-    verdict = _V.visible_for(meta, road=_V.READ)
+    verdict = _V.visible_for(meta, scope_view, road=_V.READ)
     if not verdict:
         return b, "", "  （不在这次能看的范围里）"
     hint = re.sub(r"^[\d\- :]+", "",
@@ -1681,7 +1693,8 @@ async def recall_text_and_data(when: str, room: str, tag: str, query: str,
     collection = await _collect(when, room, tag, query)
     entries, err, ledger = collection
     if road:
-        entries = [e for e in entries if _V.visible_for(e["meta"], road=road)]
+        scope_view = await read_scope()
+        entries = [e for e in entries if _V.visible_for(e["meta"], scope_view, road=road)]
     data = await recall_data(when, room, tag, query, floor=floor, view=view,
                              collected=(list(entries), err, dict(ledger)))
     if data.get("ok") and data.get("total"):
@@ -1781,7 +1794,7 @@ async def recall_core(when: str, room: str, tag: str, query: str,
             return ('view="slices" 单独用：它列的是宿主交来、还没认领的切片，不在库里，'
                     "when / room / tag / query 管不到它。")
         from .. import _slices
-        return _slices.render_pending()
+        return await _slices.render_pending()
     if view and view != "scene":
         return (f'view 无效：{view}。只有两种："scene"'
                 "（按共享场景词聚成簇，看这件事怎么一路过来的）；"
@@ -1803,6 +1816,11 @@ async def recall_core(when: str, room: str, tag: str, query: str,
     if id_err:
         return id_err
     if re.fullmatch(r"[0-9a-f]{12}", q) or re.fullmatch(r"feel_\d{12}_V\d{3}(_\d+)?", q):
+        # Under a read scope (`scope_view`) everything this read names is asked of it: an entry
+        # out of scope reads like one that does not exist (resolve_bucket_id already said
+        # so for the entry itself), and a linked one is left out — no line, no id, not
+        # counted.
+        scope_view = await read_scope()
         b = await rt.bucket_mgr.get_including_archive(q)
         if not b:
             return f"查无此桶：{q}（id 形状但不存在——可能已物理删除或打错，不做语义联想）。"
@@ -1810,9 +1828,14 @@ async def recall_core(when: str, room: str, tag: str, query: str,
             meta = b.get("metadata", {}) or {}
             # A read by id is a lookup: dont_surface hides nothing, and an entry that is
             # not live still comes out whole — with its state said before anything else.
-            verdict = _V.visible_for(meta, road=_V.READ)
+            verdict = _V.visible_for(meta, scope_view, road=_V.READ)
+            if verdict.out_of_scope:
+                return f"查无此桶：{q}（id 形状但不存在——可能已物理删除或打错，不做语义联想）。"
             if not verdict:
                 return f"{q} 不在这次能看的范围里。"
+
+            def seen(bid) -> bool:
+                return scope_view is None or scope_view.permits_id(str(bid or ""))
             lines = [f"═ {q} · {str(meta.get('name') or '')}"]
             if verdict.mark:
                 lines.append(_STATE_LOUD[verdict.state])
@@ -1822,7 +1845,11 @@ async def recall_core(when: str, room: str, tag: str, query: str,
                 v = meta.get(k)
                 if v not in (None, ""):
                     info.append(f"{label}:{v}")
-            tags_ = [str(t) for t in (meta.get("tags") or []) if not str(t).startswith("__")]
+            # A tag that points at another entry by its handle (「疑似同件:abc123」) names
+            # it: under a read scope only when the request may read it.
+            tags_ = [str(t) for t in (meta.get("tags") or []) if not str(t).startswith("__")
+                     and (scope_view is None or not (m := _HANDLE_TAG_RE.match(str(t)))
+                          or scope_view.permits_handle(m.group(1)))]
             if tags_:
                 info.append("标签:" + ",".join(tags_[:6]))
             if str(meta.get("card_of") or "").strip():
@@ -1845,7 +1872,10 @@ async def recall_core(when: str, room: str, tag: str, query: str,
                     continue
                 # A source that sank or was deleted still explains the thought, but
                 # reading it as current would be wrong: it carries its mark.
-                src, hint, mark = await _linked(fid)
+                got = await _linked(fid, scope_view)
+                if got is None:
+                    continue
+                src, hint, mark = got
                 if src:
                     src_lines.append(f"  ← {fid}  [{word}] {hint}{mark}")
                 else:
@@ -1854,16 +1884,16 @@ async def recall_core(when: str, room: str, tag: str, query: str,
                 if text not in quoted:
                     src_lines.append(f"  ← {_source_label(text)}  [来源记录] "
                                      "（宿主的材料，不在库里）" + _source_mark(text))
-            if meta.get("supersedes"):
+            if meta.get("supersedes") and seen(meta["supersedes"]):
                 info.append(f"换掉了:{meta['supersedes']}")
-            if meta.get("superseded_by"):
+            if meta.get("superseded_by") and seen(meta["superseded_by"]):
                 info.append(f"⚠️已被换版:{meta['superseded_by']}（这是旧版）")
             # The other end of drilling down: **who covers this** (possibly
             # several — entries can cross).
             # The re-versioning case (n=1) is already stated by the superseded_by
             # line above and is not repeated here.
             _sup = str(meta.get("superseded_by") or "")
-            _cbs = [c for c in _F.covers_of(meta) if c != _sup]
+            _cbs = [c for c in _F.covers_of(meta) if c != _sup and seen(c)]
             if _cbs:
                 info.append(f"⚠️被 {'、'.join(_cbs)} 盖着（不再独立冒头；搜索和这儿照样看得见）")
             lines.append(" · ".join(info))
@@ -1873,6 +1903,8 @@ async def recall_core(when: str, room: str, tag: str, query: str,
             # (core/_invalidation.py, `confirmed_at`) is no longer a warning, only a note.
             for rec in (meta.get("invalidation") or []):
                 if not isinstance(rec, dict) or rec.get("kind") != "overturn":
+                    continue
+                if not (seen(rec.get("of")) and seen(rec.get("by"))):
                     continue
                 confirmed = str(rec.get("confirmed_at") or "")
                 if confirmed:
@@ -1896,19 +1928,19 @@ async def recall_core(when: str, room: str, tag: str, query: str,
             if _big.is_big(meta) and str(meta.get("when") or ""):
                 _t0, _t1, _serr = _F.check_span(str(meta.get("when")))
                 if not _serr:
-                    mem = await _F.span_members(_t0, _t1)
+                    mem = [m for m in await _F.span_members(_t0, _t1) if seen(m)]
                     lines.append(f"范围内现在有 {len(mem)} 条（**现场算的**，没记账；"
                                  f"下钻：拿下面的 id 再搜）:")
                     for mid in mem[:30]:
-                        _mb, mhint, mmark = await _linked(mid)
+                        _mb, mhint, mmark = await _linked(mid, scope_view) or (None, "", "")
                         lines.append(f"  ◈ {mid}  {mhint}{mmark}")
                     if len(mem) > 30:
                         lines.append(f"  …… 还有 {len(mem) - 30} 条")
-            cov = _F.cover_ids(meta)
+            cov = [c for c in _F.cover_ids(meta) if seen(c)]
             if cov:
                 lines.append(f"盖着 {len(cov)} 条（下钻：拿下面的 id 再搜）:")
                 for cid in cov[:30]:
-                    cb, chint, cmark = await _linked(cid)
+                    cb, chint, cmark = await _linked(cid, scope_view) or (None, "", "")
                     cmeta = (cb or {}).get("metadata", {}) or {}
                     if not cb:
                         chint = "（查无此桶——可能被硬删过）"
@@ -1925,13 +1957,13 @@ async def recall_core(when: str, room: str, tag: str, query: str,
             # being one of another entry's sources is direct evidence of how far
             # something has been digested
             try:
-                refs = await rt.bucket_mgr.referenced_by(q)
+                refs = [r for r in await rt.bucket_mgr.referenced_by(q) if seen(r)]
             except Exception:
                 refs = []
             if refs:
                 lines.append("被引用（有东西从这条长出来过）:")
                 for rid in refs[:6]:
-                    _rb, rhint, rmark = await _linked(rid)
+                    _rb, rhint, rmark = await _linked(rid, scope_view) or (None, "", "")
                     lines.append(f"  → {rid}  {rhint}{rmark}")
             # The body, verbatim and never cut; one that is not live says where it
             # comes from on the rule above it as well.
@@ -1993,9 +2025,12 @@ async def recall_core(when: str, room: str, tag: str, query: str,
         # replaced by the gist title line above.
         # **The count is still len(es)** (nothing was lost); only lines were
         # saved — which is where the "information may only grow" rule lands.
-        lines.extend(await _gist_lines(es))
+        scope_view = await read_scope()
+        lines.extend(await _gist_lines(es, scope_view=scope_view))
         for e in sorted(es, key=_hm, reverse=True):
-            if _F.is_covered(e["meta"]):
+            # Covered by a gist the request may read: that gist's line stands for it.
+            if _F.is_covered(e["meta"]) and (scope_view is None or any(
+                    scope_view.permits_id(g) for g in _F.covers_of(e["meta"]))):
                 continue
             lines.append(f"{_hm(e).strftime('%H:%M')}  {kind_badge(e['meta'])}{_label_of(e)}  "
                          f"({_short_id(e['id'])})")

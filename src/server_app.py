@@ -186,8 +186,52 @@ def _extract_bearer_token(value: str) -> str:
     return parts[1].strip()
 
 
+HOST_SCOPE_KEY = "loci.host"
+HOST_CREDENTIAL_HEADER = b"x-loci-hook-token"
+
+
+def identify_host(headers: Mapping[bytes, bytes], hosts: Any) -> tuple[str, Any]:
+    """Which host a request is, from its credential (core/scope.Hosts):
+
+        ("host", Host)      a host's credential: `x-loci-hook-token`, or a bearer /
+                            `loci-mcp-token` that is one
+        ("unknown", None)   `x-loci-hook-token` carries a credential no host has, and a
+                            `hosts:` table is written: refused, never taken for open
+        ("none", None)      no host credential: the caller is the deployment's default
+                            host (`legacy`) once MCP auth has let it in
+
+    Without a table a key matching nothing is "none": the one legacy host is all there
+    is, as the hook routes have always treated a stale key on an unlocked panel."""
+    if hosts is None:
+        return "none", None
+    hook = _header_text(headers, HOST_CREDENTIAL_HEADER)
+    if hook:
+        host = hosts.by_token(hook)
+        if host is not None:
+            return "host", host
+        if not hosts.implicit:
+            return "unknown", None
+    for token in (
+        _extract_bearer_token(_header_text(headers, b"authorization")),
+        _header_text(headers, b"loci-mcp-token"),
+    ):
+        if token:
+            host = hosts.by_token(token)
+            if host is not None:
+                return "host", host
+    return "none", None
+
+
 class MCPAuthMiddleware:
-    """Require a bearer token for every endpoint of the selected MCP transport."""
+    """Require a bearer token for every endpoint of the selected MCP transport, and say
+    which host is calling.
+
+    A host's credential (`hosts:` in config, core/scope.py) admits its holder to the MCP
+    endpoint in either auth mode. Anyone else passes the MCP auth as before and is the
+    deployment's default host. The host's name goes down in the ASGI scope
+    (`scope["loci.host"]`, "" for none): the tools read it from the request in their own
+    call (src/server.py `_with_notice`) — a contextvar set here would not reach them, since
+    a stateful session runs its tools in the session's own task."""
 
     def __init__(
         self,
@@ -199,6 +243,7 @@ class MCPAuthMiddleware:
         path_matcher: Callable[[object], bool] = is_mcp_endpoint_path,
         resource_path: str = "/mcp",
         public_origin: str = "",
+        host_resolver: Callable[[], Any] | None = None,
     ) -> None:
         self.app = app
         self.auth_required = bool(auth_required)
@@ -207,15 +252,47 @@ class MCPAuthMiddleware:
         self.path_matcher = path_matcher
         self.resource_path = "/" + str(resource_path or "mcp").strip("/")
         self.public_origin = normalize_public_origin(public_origin)
+        self.host_resolver = host_resolver
+
+    async def _refuse_unknown_host(self, send: Any) -> None:
+        body = json.dumps({
+            "error": "Unknown host credential",
+            "detail": "x-loci-hook-token matches no host in the hosts: table "
+                      "(check that host's token_env on the Loci side)",
+        }).encode()
+        await send({
+            "type": "http.response.start",
+            "status": 401,
+            "headers": [
+                [b"content-type", b"application/json"],
+                [b"content-length", str(len(body)).encode()],
+            ],
+        })
+        await send({"type": "http.response.body", "body": body, "more_body": False})
 
     async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
         path = str(scope.get("path", ""))
-        if (
+        on_endpoint = (
             scope.get("type") == "http"
             and str(scope.get("method", "")).upper() != "OPTIONS"
-            and self.auth_required
             and self.path_matcher(path)
-        ):
+        )
+        host = None
+        if on_endpoint:
+            headers = {key.lower(): value for key, value in scope.get("headers", [])}
+            hosts = self.host_resolver() if self.host_resolver is not None else None
+            kind, host = identify_host(headers, hosts)
+            if kind == "unknown":
+                await self._refuse_unknown_host(send)
+                return
+            if hosts is not None:
+                if host is None:
+                    host = hosts.default
+                scope[HOST_SCOPE_KEY] = host.name if host is not None else ""
+            if kind == "host":
+                await self.app(scope, receive, send)
+                return
+        if on_endpoint and self.auth_required:
             headers = {key.lower(): value for key, value in scope.get("headers", [])}
             auth = headers.get(b"authorization", b"").decode("latin-1")
             base = _canonical_mcp_base(scope, headers, self.public_origin)
@@ -667,6 +744,7 @@ def build_http_app(
     settings: HTTPRuntimeSettings,
     token_validator: TokenValidator,
     lifecycle: RuntimeLifecycle,
+    host_resolver: Callable[[], Any] | None = None,
 ) -> Any:
     """Build the HTTP/SSE ASGI app with one consistent middleware stack."""
 
@@ -706,6 +784,7 @@ def build_http_app(
         path_matcher=mcp_path_matcher,
         resource_path="/mcp",
         public_origin=settings.public_origin,
+        host_resolver=host_resolver,
     )
     # Starlette wraps middleware in reverse registration order.  CORS must be
     # outside MCP auth so browser preflights never receive a bare 401 and auth

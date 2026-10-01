@@ -19,7 +19,10 @@ like any write's (the registry, the grant). It is closed only on what the write 
 put on disk carrying that record, so a refused or deduplicated write leaves it open.
 One slice is handled at a time (a lease on its id), and a closed one is refused by name.
 
-Exports: render_pending · write_from_slice · with_records · trace_slice
+Under a read scope (core/scope.py) a request sees, counts and handles only the slices of
+containers its grant covers whole; any other slice reads like one that does not exist.
+
+Exports: visible_batches · render_pending · write_from_slice · with_records · trace_slice
 ========================================
 """
 
@@ -31,6 +34,7 @@ from typing import Awaitable, Callable
 from core import _sources as _src
 from core._slicer import SliceError
 from . import _runtime as rt
+from ._common import read_scope
 
 _LIST_MAX = 40          # slices shown by recall(view="slices"); the rest are counted
 
@@ -49,10 +53,53 @@ def _span_text(span: dict) -> str:
 # Reading
 # ------------------------------------------------------------
 
-def render_pending() -> str:
-    """recall(view="slices"): the pending slices, newest batch first."""
+async def visible_batches() -> list[dict]:
+    """The open batches this request may see, newest first. Under a read scope: the
+    batches of containers the grant covers whole (a slice is a run of the host's lines, so
+    a grant of single pieces does not reach it), each slice's guesses cut to the memories
+    the request may read."""
     store = _store()
     batches = store.open_batches() if store is not None else []
+    view = await read_scope()
+    if view is None:
+        return batches
+    out = []
+    for b in batches:
+        if not view.covers_container(b.get("source") or {}):
+            continue
+        slices = [{**s, "guesses": [g for g in s.get("guesses") or []
+                                    if view.permits_id(str(g.get("id") or ""))]}
+                  for s in b["slices"]]
+        out.append({**b, "slices": slices})
+    return out
+
+
+async def pending_seen() -> int:
+    """How many slices wait, as this request may count them (the store's own count when
+    nothing is filtered)."""
+    store = _store()
+    if store is None:
+        return 0
+    if await read_scope() is None:
+        return store.pending_count()
+    return sum(len(b["slices"]) for b in await visible_batches())
+
+
+async def _out_of_reach(store, sid: str) -> str:
+    """A slice the request's read scope does not reach is answered like one that does not
+    exist ("" when it is in reach, or unknown and left to the store's own refusal)."""
+    view = await read_scope()
+    if view is None or store.get(sid) is None:
+        return ""
+    if view.covers_container(store.record_for(sid)):
+        return ""
+    return f"没有这片切片：{sid}。recall(view=\"slices\") 看还有哪些待认领。"
+
+
+async def render_pending() -> str:
+    """recall(view="slices"): the pending slices this request may see, newest batch
+    first."""
+    batches = await visible_batches()
     if not batches:
         return "没有待认领的切片。"
     total = sum(len(b["slices"]) for b in batches)
@@ -124,6 +171,9 @@ async def write_from_slice(slice_id: str, how: str,
     if store is None:
         return "这个库没有切片。"
     async with _filesystem_turn(store.base_dir, f"slice-{sid}"):
+        hidden = await _out_of_reach(store, sid)
+        if hidden:
+            return hidden + "本次什么都没写。"
         why = store.refusal(sid)
         if why:
             return why.zh + "本次什么都没写。"
@@ -139,7 +189,7 @@ async def write_from_slice(slice_id: str, how: str,
         except SliceError as e:
             return f"{out}\n{e.zh}"
         return (f"{out}\n切片 {sid} 挂上了 → {'、'.join(carried)}，"
-                f"{_span_text(info['span'])}。还有 {store.pending_count()} 片待认领。")
+                f"{_span_text(info['span'])}。还有 {await pending_seen()} 片待认领。")
 
 
 def _edits_given(kwargs: dict, trace_core) -> list[str]:
@@ -165,6 +215,9 @@ async def trace_slice(slice_id: str, *, drop: bool, span: str, kwargs: dict,
     span = str(span or "").strip()
     if store is None:
         return "这个库没有切片。"
+    hidden = await _out_of_reach(store, sid)
+    if hidden:
+        return hidden + "本次什么都没改。"
     if drop and span:
         return "drop_slice 和 slice_span 二选一：丢掉，或者改切。本次什么都没改。"
     if drop or span:
@@ -178,7 +231,7 @@ async def trace_slice(slice_id: str, *, drop: bool, span: str, kwargs: dict,
                 return e.zh + "本次什么都没改。"
             info = store.get(sid)
             return (f"切片 {sid} 丢掉了：{_span_text(info['span'])}，不挂到任何记忆上。"
-                    f"还有 {store.pending_count()} 片待认领。")
+                    f"还有 {await pending_seen()} 片待认领。")
         first, dots, last = span.partition("..")
         first, last = first.strip(), (last.strip() if dots else first.strip())
         if not first or not last:

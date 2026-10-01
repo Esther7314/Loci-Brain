@@ -278,3 +278,27 @@ tools:
 #    不是所有人的情况。要关，你得亲手来关一次。
 # 📌 还没设过密码的时候这道门不生效（锁一个没有钥匙的门只会把你自己关在外面）。
 panel_auth: true
+
+# ============================================================
+# 宿主：谁在调、最多能碰哪些来源（core/scope.py；接头样例修订 2 第一、二节）
+# ============================================================
+# 不写这一节 = 只有一个宿主 legacy：钥匙是 LOCI_HOOK_TOKEN（或上面的 hook_token），
+# 全库（open）。不带宿主钥匙来的（老的 MCP 鉴权进来的客户端、面板没上锁时的桥）都算它。
+# 写了这一节就只认表上的：legacy 要留着就自己写进来，不写就没有「不带钥匙也能进」的人。
+#
+# 宿主钥匙放在请求头 x-loci-hook-token（/mcp 上也认 Bearer）；stdio 起的进程用环境变量
+# LOCI_HOST_TOKEN，读取范围用 LOCI_SCOPE（起的时候读一次）。HTTP 每个请求带 Loci-Scope 头；
+# 写入键是 Loci-Turn 头，写成 <这一轮的编号>#<这一轮里第几次写>。
+# 只有写明 scope_mode: open 的宿主能不带 Loci-Scope 读全库；别的宿主不带就什么都不给，
+# 带的范围超出 max_grant、或者读不懂，整个拒绝。
+#
+# hosts:
+#   legacy:
+#     token_env: LOCI_HOOK_TOKEN          # 真值放环境变量，这里只写名字
+#     scope_mode: open
+#   entry-side-a:
+#     token_env: LOCI_HOST_TOKEN_ENTRY_A
+#     max_grant:
+#       - {system: telegram, instance: bot-a}
+#       - {system: lento, instance: home, container: "private:U"}
+#     may_restore: false                  # scope_mode 不写就是 restricted

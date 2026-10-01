@@ -80,20 +80,27 @@ class _Gated:
         if panel_auth.is_public(path):
             return inner
 
-        # The four bridge-facing routes: no cookie required (the bridge has none), but a
-        # key is required whenever the gate is locked. The reasoning and the epitaph are
-        # both written above panel_auth.HOOK_PATHS.
+        # The bridge-facing routes: no cookie required (the bridge has none), but a key is
+        # required whenever the gate is locked. The reasoning and the epitaph are both
+        # written above panel_auth.HOOK_PATHS. Who is calling (a host, or the panel) and
+        # what that request may read is resolved here once and set for the call
+        # (core/scope.request_scope); each route decides what a refused or scoped request
+        # gets.
         if panel_auth.is_hook(path):
             def hook_deco(fn):
                 import functools
                 from starlette.responses import JSONResponse
+                from core import scope as _scope
 
                 @functools.wraps(fn)
                 async def hook_guarded(request):
-                    ok, why = panel_auth.hook_ok(request)
+                    ok, why, caller = panel_auth.hook_caller(request)
                     if not ok:
                         return JSONResponse({"error": why}, status_code=401)
-                    return await fn(request)
+                    req = panel_auth.request_scope_of(request, caller)
+                    request.state.loci_request = req
+                    with _scope.request_scope(req):
+                        return await fn(request)
 
                 return inner(hook_guarded)
 

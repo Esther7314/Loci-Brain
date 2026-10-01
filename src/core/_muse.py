@@ -1131,7 +1131,7 @@ def clear_view_cache() -> None:
     _view_cache["值"] = None
 
 
-async def both_sides(force: bool = False) -> tuple[list, int, int, dict, dict]:
+async def both_sides(force: bool = False, scope=None) -> tuple[list, int, int, dict, dict]:
     """A full pass of both the mind and event sides, **with the view cache**. Returns
     (clusters, scattered, default-coordinate count, gestures, stats).
 
@@ -1140,11 +1140,19 @@ async def both_sides(force: bool = False) -> tuple[list, int, int, dict, dict]:
     the age).
     **They must never compute their own.** A page saying "3 clusters have piled up" while
     muse() sees 4 is two different brains.
+
+    Under a read scope (`scope`, a core.scope.ScopeView) both sides work only on what the
+    gate's `muse` road lets the request see — the clusters, the gestures and every count
+    among them — and nothing is cached: the cache holds the whole library's view.
     """
-    key = view_cache_key()
+    key = view_cache_key() if scope is None else None
     if not force and key is not None and _view_cache["钥匙"] == key:
         return _view_cache["值"]
     loaded = await load_records()
+    if scope is not None:
+        recs, digested = loaded
+        loaded = ([(m, t) for m, t in recs if _V.visible_for(m, scope, road=_V.MUSE)],
+                  digested)
     clusters, scattered, default_coords, s1 = await propose_mind(loaded=loaded)
     fingers, s2 = await propose_gist(loaded=loaded)
     out = (clusters, scattered, default_coords, fingers, {"mind": s1, "event": s2})

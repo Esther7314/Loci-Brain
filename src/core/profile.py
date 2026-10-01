@@ -195,7 +195,7 @@ def _held_loudness(held: int) -> str:
     return "now" if held >= 60 else "soon" if held >= 30 else "near" if held >= 7 else "far"
 
 
-def event_pool(all_buckets: list, now: datetime | None = None) -> list[dict]:
+def event_pool(all_buckets: list, now: datetime | None = None, *, scope=None) -> list[dict]:
     """The pool behind "something suddenly comes back": events that are visible, live in
     an EVENT room, have **not been covered**, are not held (a hold entry, or an entry
     with a hold live on it at `now`, local today when omitted), and were not put out of
@@ -225,7 +225,7 @@ def event_pool(all_buckets: list, now: datetime | None = None) -> list[dict]:
         meta = b.get("metadata", {}) or {}
         if not _V.timeline_kind(meta) or not is_event_room(meta.get("room")):
             continue
-        if not _V.visible_for(meta, road=_V.SUDDEN, now=now, holds=holds):
+        if not _V.visible_for(meta, scope, road=_V.SUDDEN, now=now, holds=holds):
             continue
         bid = str(meta.get("id") or b.get("id") or "")
         if not bid:
@@ -234,7 +234,7 @@ def event_pool(all_buckets: list, now: datetime | None = None) -> list[dict]:
     return pool
 
 
-def door_note(all_buckets: list, now: datetime) -> dict:
+def door_note(all_buckets: list, now: datetime, *, scope=None) -> dict:
     """Name + rules + ⏰ reminders + 🫀 what is weighing on me + the list of periods —
     **one pass over the store, one set of rules.**
 
@@ -266,7 +266,7 @@ def door_note(all_buckets: list, now: datetime) -> dict:
             #    would go on showing the old text with nothing to say it is old. Only a
             #    page nothing covers is the door. The covered ones come back separately,
             #    so that an empty cell can say which page went and what replaced it.
-            page = _V.visible_for(meta, road=_V.DOOR)
+            page = _V.visible_for(meta, scope, road=_V.DOOR)
             if page:
                 facts.append({"id": bid, "created": str(meta.get("created") or ""),
                               "content": content})
@@ -287,7 +287,8 @@ def door_note(all_buckets: list, now: datetime) -> dict:
         _status = str(meta.get("status") or "")
         _telic = is_telic(meta)
         _remindable = (not is_closed(meta)  # only `status` marks an ending; the old booleans stay read-only for compatibility
-                       and _V.visible_for(meta, road=_V.REMIND, now=now, holds=holds).shown)
+                       and _V.visible_for(meta, scope, road=_V.REMIND, now=now,
+                                          holds=holds).shown)
         w = str(meta.get("when") or "") if _remindable else ""
         m = re.match(r"(\d{4}-\d{2}-\d{2})", w)
         _reminded = False
@@ -339,7 +340,7 @@ def door_note(all_buckets: list, now: datetime) -> dict:
                           "clock": _clock, "clock_note": _note,
                           "last_asked": _asked})
 
-        if not _V.on_timeline(meta):
+        if not _V.on_timeline(meta, scope):
             continue
         # A rule is **something pinned**. That is the whole test.
         #
@@ -359,7 +360,7 @@ def door_note(all_buckets: list, now: datetime) -> dict:
         # 🔴 **A superseded or covered version is not a rule**: an old version is off the
         #    timeline already, and a covered one is kept off by the `door` road —
         #    otherwise the door would display a rule I have already changed my mind about.
-        if meta.get("pinned") and _V.visible_for(meta, road=_V.DOOR):
+        if meta.get("pinned") and _V.visible_for(meta, scope, road=_V.DOOR):
             rules.append({"id": bid, "meta": meta, "content": content})
         entries.append({"id": bid, "meta": meta, "content": content})
 
@@ -378,7 +379,7 @@ def door_note(all_buckets: list, now: datetime) -> dict:
             "heavy_question_id": heavy_question_id}
 
 
-def edited_by_user(all_buckets: list) -> list[dict]:
+def edited_by_user(all_buckets: list, *, scope=None) -> list[dict]:
     """The notification pool for "a fact was edited from the panel": events carrying the
     `_EDITED_BY_USER_TAG` tag that have **not been folded away**.
 
@@ -398,7 +399,7 @@ def edited_by_user(all_buckets: list) -> list[dict]:
         tags = [str(t) for t in (meta.get("tags") or [])]
         if _EDITED_BY_USER_TAG not in tags or _I.edit_confirmed(meta):
             continue
-        if not _V.on_timeline(meta) or not _V.visible_for(meta, road=_V.EDITED):
+        if not _V.on_timeline(meta, scope) or not _V.visible_for(meta, scope, road=_V.EDITED):
             continue
         bid = str(meta.get("id") or b.get("id") or "")
         if not bid:
@@ -655,7 +656,8 @@ def _current(by_id: dict, bid: str) -> dict | None:
     return None
 
 
-def _review_line(hold: dict, content: str, by_id: dict, holds, now: datetime) -> dict | None:
+def _review_line(hold: dict, content: str, by_id: dict, holds, now: datetime,
+                 scope=None) -> dict | None:
     """A `defer` hold whose review day has come and that has not been asked about since:
     one line, the question with the original and the hold together. Answering is the
     model's (it closes the hold or gives it a date); asked once is the hold's `last_asked`,
@@ -675,8 +677,8 @@ def _review_line(hold: dict, content: str, by_id: dict, holds, now: datetime) ->
     tmeta = target.get("metadata") or {}
     if is_closed(tmeta):
         return None
-    if not (_V.visible_for(hold, road=_V.REVIEW, now=now, holds=holds)
-            and _V.visible_for(tmeta, road=_V.REVIEW, now=now, holds=holds)):
+    if not (_V.visible_for(hold, scope, road=_V.REVIEW, now=now, holds=holds)
+            and _V.visible_for(tmeta, scope, road=_V.REVIEW, now=now, holds=holds)):
         return None
     tid = str(tmeta.get("id") or target.get("id") or "")
     hid = str(hold.get("id") or "")
@@ -691,7 +693,7 @@ def _review_line(hold: dict, content: str, by_id: dict, holds, now: datetime) ->
 
 
 def prospective(all_buckets: list, now: datetime, *, settings: BreathSettings | None = None,
-                delivered_at=None) -> dict:
+                delivered_at=None, scope=None) -> dict:
     """惦记的事: {"items": the lines shown, in order; "more": how many did not fit;
     "questions": the 「像是答应过的」 questions under them}.
 
@@ -717,11 +719,12 @@ def prospective(all_buckets: list, now: datetime, *, settings: BreathSettings | 
         if not bid or not _V.timeline_kind(meta):
             continue
         if _H.is_hold(meta):
-            line = _review_line(meta, content, by_id, holds, now)
+            line = _review_line(meta, content, by_id, holds, now, scope)
             if line:
                 dated.append(line)
             continue
-        if is_closed(meta) or not _V.visible_for(meta, road=_V.PROSPECTIVE, now=now, holds=holds):
+        if is_closed(meta) or not _V.visible_for(meta, scope, road=_V.PROSPECTIVE, now=now,
+                                                 holds=holds):
             continue
         telic = is_telic(meta)
         _wt = meta.get("weight")
@@ -791,7 +794,7 @@ def _link_words(meta: dict, skip: set[str]) -> list[str]:
 
 
 def involuntary(all_buckets: list, now: datetime, *, settings: BreathSettings | None = None,
-                rng=None) -> list[dict]:
+                rng=None, scope=None) -> list[dict]:
     """忽然想起: [{id, short, text, how: "linked" | "random", via: the shared word or None,
     why: 「因为最近提到…」 / 「随手翻到的」}].
 
@@ -809,10 +812,10 @@ def involuntary(all_buckets: list, now: datetime, *, settings: BreathSettings | 
     for b in all_buckets:
         meta = b.get("metadata", {}) or {}
         c = created(meta)
-        if c is not None and c >= cut and _V.on_timeline(meta):
+        if c is not None and c >= cut and _V.on_timeline(meta, scope):
             recent.extend(_link_words(meta, skip))
     recent_words = list(dict.fromkeys(recent))
-    pool = [e for e in event_pool(all_buckets, now)
+    pool = [e for e in event_pool(all_buckets, now, scope=scope)
             if not is_telic(e["meta"]) and (created(e["meta"]) or now) < cut]
 
     def line(e: dict, via: str | None) -> dict:

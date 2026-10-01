@@ -107,14 +107,18 @@ Callers still to come, and the road each will ask:
 - 5.5's strong-reminder cards and name cards: surfacing on breath, same.
 
 ------------------------------------------------------------
-Read scope (5.2)
+Read scope
 ------------------------------------------------------------
-`scope` / `mode` are the per-request read scope 5.2 adds. `scope=None, mode="open"` is
-today's behaviour and the only one accepted until then — anything else is refused rather
-than ignored, so a caller cannot believe it is scoped when it is not. 5.2's scope carries
-what the request is for (`use`), what it was granted (`grant`), the states of the host's
-sources, and a way to read an entry's roots: a derived entry is visible only if all its
-roots are. "Not permitted" will hide on both kinds.
+`scope` is the request's read scope as a `core.scope.ScopeView` — the host's grant, the
+turn's venue and audience, the source registry, and the library for walking to an
+entry's roots — or None: the whole library (an open host that sent no scope, a background
+job, a direct call). What may be read under a scope is `ScopeView.permits` (the three
+conditions, every root of a derived entry, nothing for a memory without sources); this
+gate asks it first, on every road and both kinds, and an entry it refuses is `OUT_OF_SCOPE`
+— on the `read` road too, where it is not shown with a mark but not shown at all: a lookup
+of something out of scope must read like a lookup of something that does not exist.
+Anything else is refused as a scope rather than ignored, so a caller cannot believe it is
+scoped when it is not.
 
 The gate is cheap on purpose — breath runs it over the whole store: the hold index is
 built once by the caller and passed in, and a caller that already knows whether an entry
@@ -156,6 +160,7 @@ COVERED = "covered"
 HELD = "held"
 HOLD_ENTRY = "hold_entry"
 LATER_TODAY = "later_today"
+OUT_OF_SCOPE = "out_of_scope"
 
 PROSPECTIVE = "prospective"
 RECENT = "recent"
@@ -228,6 +233,11 @@ class Verdict:
     def mark(self) -> str:
         return STATE_MARK.get(self.state, "")
 
+    @property
+    def out_of_scope(self) -> bool:
+        """The request may not read it at all: say nothing of it, not even that it exists."""
+        return OUT_OF_SCOPE in self.reasons
+
 
 def _meta_of(row) -> dict:
     """Accept a store bucket ({"metadata": …}) or a bare meta."""
@@ -279,13 +289,14 @@ def waits_for_clock(meta, now: datetime) -> bool:
     return moment.date() == local_now.date() and moment > local_now
 
 
-def visible_for(meta, scope=None, mode: str = "open", *, road: str,
+def visible_for(meta, scope=None, *, road: str,
                 now: datetime | None = None, holds: "_H.HoldIndex | None" = None,
                 covered: bool | None = None) -> Verdict:
     """May `road` put this entry in front of the model?
 
     meta     the entry's metadata, or the store bucket carrying it.
-    scope / mode   5.2's read scope; only `None` / `"open"` (today's behaviour) until then.
+    scope    the request's read scope (a `core.scope.ScopeView`), or None for the whole
+             library.
     road     one of `ROADS`; its kind (surfacing or lookup) comes with it.
     now      the moment holds and clock times are read against (local now when omitted).
     holds    the hold index (`_holds.hold_index`) over the store — required on a road that
@@ -293,14 +304,16 @@ def visible_for(meta, scope=None, mode: str = "open", *, road: str,
     covered  whether the entry is covered, when the caller already knows (muse's Items
              carry it); computed otherwise, and only on a road that counts covers.
     """
-    if scope is not None or mode != "open":
-        raise ValueError("read scope arrives with 5.2: until then only scope=None, mode='open'")
+    if scope is not None and not callable(getattr(scope, "permits", None)):
+        raise ValueError(f"scope must be a core.scope.ScopeView or None, got {type(scope).__name__}")
     try:
         r = ROADS[road]
     except KeyError:
         raise ValueError(f"no such road: {road!r} (roads: {', '.join(ROADS)})") from None
     m = _meta_of(meta)
     state = state_of(m)
+    if scope is not None and not scope.permits(m):
+        return Verdict(shown=False, state=state, reasons=(OUT_OF_SCOPE,))
     reasons: list[str] = []
     if state not in r.states:
         reasons.append(state)
@@ -338,8 +351,9 @@ def timeline_kind(meta) -> bool:
     return "__档案事实__" not in tags and "__大event__" not in tags
 
 
-def on_timeline(meta) -> bool:
-    """What recall lists and counts: a timeline kind, shown on the `list` road.
+def on_timeline(meta, scope=None) -> bool:
+    """What recall lists and counts: a timeline kind, shown on the `list` road (under the
+    request's read scope, when there is one).
 
     🔴 **A version superseded by regrow does not count towards the number of entries**
        (and therefore does not appear in the browse view). Re-versioning an event = "I
@@ -353,4 +367,4 @@ def on_timeline(meta) -> bool:
        ⚠️ **Entries folded away by fold still count** (several real memories collected
        together, not earlier versions of one entry) — a cover is not a `list` rule.
     """
-    return timeline_kind(meta) and visible_for(meta, road=LIST).shown
+    return timeline_kind(meta) and visible_for(meta, scope, road=LIST).shown

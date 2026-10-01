@@ -190,7 +190,7 @@ def confirm(meta, registry, *, edited: bool, today: str) -> tuple[list[dict], st
     return (out if changed else []), ""
 
 
-def block(all_buckets: list, registry) -> list[dict]:
+def block(all_buckets: list, registry, *, scope=None) -> list[dict]:
     """依据变了的, in order: panel corrections (oldest first), then the rest in store
     order. One item per memory, every reason it is here on it:
 
@@ -198,7 +198,11 @@ def block(all_buckets: list, registry) -> list[dict]:
          revised: [{source, revision}], remaining: [source]}
 
     `text` is None for a memory standing on a withdrawn or deleted source; `remaining` is
-    filled in only then (the sources a rewrite may stand on)."""
+    filled in only then (the sources a rewrite may stand on).
+
+    Under a read scope (`scope`, a core.scope.ScopeView) the gate leaves out what the
+    request may not read, and an overturn is told only when the request may read the
+    version that overturned it: its id is not named otherwise."""
     from .profile import edited_by_user, entry_label, short_id  # lazy: profile imports this module
 
     items: dict[str, dict] = {}
@@ -210,16 +214,21 @@ def block(all_buckets: list, registry) -> list[dict]:
                           "remaining": []}
         return items[bid]
 
-    for e in edited_by_user(all_buckets):
+    for e in edited_by_user(all_buckets, scope=scope):
         item(e["id"], e["meta"], e["content"])["edited"] = True
 
     rows = [(str((b.get("metadata") or {}).get("id") or b.get("id") or ""),
              b.get("metadata") or {}, str(b.get("content") or "")) for b in all_buckets]
     waiting = {bid for bid, meta, _c in rows if bid and waiting_on_overturn(meta)}
     for bid, meta, content in rows:
-        if not bid or not _V.on_timeline(meta) or not _V.visible_for(meta, road=_V.INVALIDATION):
+        if (not bid or not _V.on_timeline(meta, scope)
+                or not _V.visible_for(meta, scope, road=_V.INVALIDATION)):
             continue
         overturned = open_records(meta, OVERTURN)
+        if scope is not None:
+            overturned = [r for r in overturned
+                          if scope.permits_id(str(r.get("by") or ""))
+                          and scope.permits_id(str(r.get("of") or ""))]
         if overturned and any(src in waiting for src in read_from_ids(meta)):
             overturned = []          # what it stands on is still waiting: that comes first
         found = source_findings(meta, registry)

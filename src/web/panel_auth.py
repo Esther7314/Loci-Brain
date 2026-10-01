@@ -31,7 +31,12 @@ The switch is `panel_auth` in config.yaml, default **true** — the build that s
 be the locked one. A deployment that really is confined to a trusted LAN can set it to
 false explicitly; the reasoning has not changed, it just only applies inside that network.
 
-Public surface: register(mcp) · has_session(request) · gate_needed() · PUBLIC_PATHS
+The bridge-facing routes are where hosts come in (core/scope.py): `hook_caller` says which
+host a request is — its credential in the key header, or the legacy host where today's
+callers come without one — and `request_scope_of` resolves what that request may read.
+
+Public surface: register(mcp) · has_session(request) · gate_needed() · PUBLIC_PATHS ·
+                hosts() · hook_caller(request) · hook_ok(request) · request_scope_of()
 ========================================
 """
 
@@ -224,8 +229,69 @@ def hook_token() -> str:
         return ""
 
 
+def hosts():
+    """The deployment's hosts (core/scope.load_hosts): `hosts:` in config, or the one
+    legacy host whose key is `hook_token()`. Read per request, like the key itself."""
+    import os
+    from core import scope as _scope
+    return _scope.load_hosts(sh.config, os.environ, legacy_token=hook_token())
+
+
+# Who a hook request is when it is not a host: a logged-in browser, the panel itself.
+# The panel is the owner looking at their own library, not a host; it reads everything.
+PANEL = "panel"
+
+
+def hook_caller(request: Request):
+    """Whether to let this bridge request through, and who is calling.
+    Returns (allowed, why not, caller): caller is a `core.scope.Host`, or PANEL.
+
+    Ways in, in this order:
+      1. A host's credential in the key header -> that host, locked gate or not. A key
+         that matches no host is ignored only when there is no `hosts:` table (the one
+         legacy host; an unlocked gate has nothing to protect). With a table it is
+         refused: a restricted host whose credential went wrong must never be taken for
+         the open one.
+      2. An already-logged-in browser -> the panel.
+      3. **The gate is unlocked** -> the legacy host (who calls today, with no key).
+      4. Otherwise refused, saying what to fix."""
+    hs = hosts()
+    got = str(request.headers.get(HOOK_HEADER) or "")
+    if got.strip():
+        host = hs.by_token(got)
+        if host is not None:
+            return True, "", host
+        if not hs.implicit:
+            return False, (f"请求头 `{HOOK_HEADER}` 里的凭据对不上 hosts 表里任何一个宿主"
+                           "（看看 Loci 这边那个宿主的 token_env 环境变量设了没有、值对不对）。"), None
+    if has_session(request):
+        return True, "", PANEL
+    if not gate_needed():
+        if hs.default is None:
+            return False, (f"没带宿主凭据（请求头 `{HOOK_HEADER}`），而 hosts 表里没有 legacy 宿主，"
+                           "认不出是谁。"), None
+        return True, "", hs.default
+    ok, why = _key_check(got)
+    if ok:
+        # The hook key without a legacy host to be: a `hosts:` table that left it out.
+        why = f"请求头 `{HOOK_HEADER}` 里的凭据对不上 hosts 表里任何一个宿主。"
+    return False, why, None
+
+
+def _key_check(got: str) -> tuple[bool, str]:
+    want = hook_token()
+    if not want:
+        return False, ("面板锁着，而这条路由要一把给桥用的钥匙，但还没配。"
+                       f"设一个 `LOCI_HOOK_TOKEN`（或 config.yaml 里的 `hook_token`），"
+                       f"再让桥在请求头 `{HOOK_HEADER}` 里带上它。")
+    if got and hmac.compare_digest(got, want):
+        return True, ""
+    return False, f"这条路由要钥匙：请求头 `{HOOK_HEADER}` 没带或者不对。"
+
+
 def hook_ok(request: Request) -> tuple[bool, str]:
-    """Whether to let this bridge request through. Returns (allowed, why not).
+    """Whether to let this bridge request through. Returns (allowed, why not); who is
+    calling is `hook_caller`'s.
 
     Three ways in:
       1. **The gate is unlocked** (panel password disabled, or none set yet) -> allow.
@@ -241,19 +307,17 @@ def hook_ok(request: Request) -> tuple[bool, str]:
           below. Silent malfunction is far worse than an error. (Three separate instances
           of that same failure mode turned up while writing this.)
     """
-    if not gate_needed():
-        return True, ""
-    if has_session(request):
-        return True, ""
-    want = hook_token()
-    if not want:
-        return False, ("面板锁着，而这条路由要一把给桥用的钥匙，但还没配。"
-                       f"设一个 `LOCI_HOOK_TOKEN`（或 config.yaml 里的 `hook_token`），"
-                       f"再让桥在请求头 `{HOOK_HEADER}` 里带上它。")
-    got = str(request.headers.get(HOOK_HEADER) or "")
-    if got and hmac.compare_digest(got, want):
-        return True, ""
-    return False, f"这条路由要钥匙：请求头 `{HOOK_HEADER}` 没带或者不对。"
+    ok, why, _caller = hook_caller(request)
+    return ok, why
+
+
+def request_scope_of(request: Request, caller):
+    """The hook request resolved (core/scope.RequestScope): the panel reads everything;
+    a host reads by its mode and the request's Loci-Scope."""
+    from core import scope as _scope
+    if caller == PANEL:
+        return _scope.RequestScope(None, _scope.OPEN)
+    return _scope.RequestScope.resolve(caller, request.headers.get(_scope.SCOPE_HEADER))
 
 
 def _set_cookie(resp: Response, value: str, max_age: int) -> Response:

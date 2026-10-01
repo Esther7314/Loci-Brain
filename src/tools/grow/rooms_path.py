@@ -76,7 +76,7 @@ from core.dehydrator import (BACKFILL_MAX_TOKENS, BackfillAnswer, backfill_kinds
                              backfill_request, parse_backfill)
 from .. import _runtime as rt
 from core._bigevent import SPAN_RE, first_line as _F_first_line
-from .._common import check_content_size, resolve_bucket_id, resolve_bucket_ids
+from .._common import check_content_size, read_scope, resolve_bucket_id, resolve_bucket_ids
 from core._rooms import check_room, is_mind_room
 from core import _sources as _src
 from .. import _subjects as _S
@@ -881,14 +881,18 @@ def _same(stored, given: dict) -> bool:
 async def _already_recorded(records: list[dict], exclude: set) -> list[str]:
     """One hint per live, current memory that already carries the same delivery (same
     identity and fingerprint) as one of `records`. A hint only: two memories from one
-    message are often two different things, so nothing is blocked."""
+    message are often two different things, so nothing is blocked. Under a read scope a
+    memory the request may not read is not named."""
     if not records:
         return []
+    view = await read_scope()
     hits: dict[str, str] = {}
     for b in await rt.bucket_mgr.list_all(include_archive=False):
         meta = b.get("metadata") or {}
         bid = str(meta.get("id") or b.get("id") or "")
         if not bid or bid in exclude or meta.get("deleted_at") or meta.get("superseded_by"):
+            continue
+        if view is not None and not view.permits(meta):
             continue
         for stored in meta.get(_src.SOURCES_FIELD) or []:
             match = next((r for r in records if _same(stored, r)), None)
@@ -1128,11 +1132,14 @@ async def grow_event(items: list, direction_of_fit: str = "", bound=None,
     # ⚠️ Query the whole batch once through the parse cache (find_exact_content
     # scans the entire library per item, roughly 3s each over a bind mount, which
     # is what once dragged a batch of five out to 16 seconds).
+    # Under a read scope an entry the request may not read is not a duplicate it can be
+    # told about: its id would be named, so the write goes ahead.
     existing_by_content: dict[str, str] = {}
+    _view = await read_scope()
     try:
         for _b in await rt.bucket_mgr.list_all(include_archive=False):
             _m = _b.get("metadata", {}) or {}
-            if not _m.get("deleted_at"):
+            if not _m.get("deleted_at") and (_view is None or _view.permits(_m)):
                 existing_by_content.setdefault(str(_b.get("content") or ""), str(_m.get("id") or ""))
     except Exception:
         pass

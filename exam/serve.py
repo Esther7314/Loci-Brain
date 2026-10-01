@@ -17,9 +17,16 @@ that one search score without BM25; with embeddings off, that would make every i
 first search match whole-query substrings only. After that the exam runs what live Loci
 runs: a write leaves BM25 dirty and the next search brings it level before scoring.
 
-And a second seam: a call step may carry a write key (`write_key:` in the item), sent in the
-request's _meta and set for that call the way the request layer will set it from the
-host's turn header.
+And a second seam, the transport: a call step may carry what a host puts on its HTTP
+request — its credential (`host:`), its read scope (`scope:`), its turn (`turn:` or
+`write_key:`). Over stdio there is no HTTP request, so the runner sends those headers in
+the call's _meta (`loci_headers`) and this file makes them the request the call carries,
+exactly where FastMCP puts an HTTP request (`request_context.request`). Which host the
+credential names is decided by the function the HTTP middleware runs
+(server_app.identify_host). From there on the call takes the real path: src/server.py
+resolves host, scope and write key from that request, as it does under streamable-http.
+What the exam does not run is the HTTP transport and MCPAuthMiddleware around it
+(tests/test_read_scope.py drives those through an ASGI client).
 
 And a third: an item's `side_model:` ({phrase: answer}, handed over in EXAM_SIDE_MODEL_FILE)
 answers the side model's chat — the backfill's one call — with the answer whose phrase
@@ -63,26 +70,46 @@ async def _search_on_fresh_bm25(self, query, *args, **kwargs):
 
 _bm.BucketManager.search = _search_on_fresh_bm25
 
-# A write key per call: the runner sends it in the request's _meta (`loci_write_key`), and
-# it is set for that one call the way the request layer will set it from the host's turn.
-# Without one nothing changes, which is every call that does not ask for it.
-from core import _sources as _src  # noqa: E402
+# The headers a host would send, carried in _meta (`loci_headers`), become the request
+# this call carries. Without them nothing changes: the call is a stdio call, which is
+# every call that does not ask for it.
+import dataclasses  # noqa: E402
+
 from mcp.server.fastmcp import FastMCP  # noqa: E402
+from mcp.server.lowlevel.server import request_ctx  # noqa: E402
+from starlette.requests import Request  # noqa: E402
 
 _call_tool = FastMCP.call_tool
 
 
-async def _call_tool_under_write_key(self, name, arguments):
-    try:
-        meta = self.get_context().request_context.meta
-    except (LookupError, ValueError, AttributeError):
-        meta = None
-    key = getattr(meta, "loci_write_key", None) if meta is not None else None
-    with _src.write_key_scope(key):
+def _request_from(headers: dict) -> Request:
+    from server_app import HOST_SCOPE_KEY, identify_host
+    from web import panel_auth
+
+    raw = [(str(k).lower().encode("latin-1"), str(v).encode("utf-8"))
+           for k, v in headers.items()]
+    hosts = panel_auth.hosts()
+    kind, host = identify_host(dict(raw), hosts)
+    if kind == "unknown":
+        raise PermissionError("401 Unknown host credential (as MCPAuthMiddleware answers)")
+    host = host if host is not None else hosts.default
+    return Request({"type": "http", "method": "POST", "path": "/mcp", "headers": raw,
+                    HOST_SCOPE_KEY: host.name if host is not None else ""})
+
+
+async def _call_tool_as_request(self, name, arguments):
+    rc = request_ctx.get()
+    headers = getattr(rc.meta, "loci_headers", None) if rc.meta is not None else None
+    if not headers:
         return await _call_tool(self, name, arguments)
+    token = request_ctx.set(dataclasses.replace(rc, request=_request_from(headers)))
+    try:
+        return await _call_tool(self, name, arguments)
+    finally:
+        request_ctx.reset(token)
 
 
-FastMCP.call_tool = _call_tool_under_write_key
+FastMCP.call_tool = _call_tool_as_request
 
 _side_model_file = os.environ.get("EXAM_SIDE_MODEL_FILE", "").strip()
 if _side_model_file:

@@ -58,10 +58,23 @@ What reaches this module from a request (the turn's write key, the grant of sour
 whether the credential may restore) arrives through contextvars and explicit
 parameters; nothing here reads a header.
 
+A grant is a list of places (`Place`): a prefix of a source's identity, system →
+instance → container → id. A place covers every source under it; a place naming an id
+covers that piece and a run starting at it (a run is announced, granted and looked up by
+its first line). The read gate (core/scope.py) and the write-time check both match with
+`Place.covers`, so what a turn may read and what it may write from are the same set.
+
+`use` on a record is the host's rule for where the piece may be used: an object
+`{venues: [...], audience: [...]}` — the venues it may be used in and the people allowed
+to see it, each list optional (an absent list does not narrow), compared literally with
+the turn's `venue` and `audience`. Text that is not such an object is kept as given and
+read by the gate as a rule it cannot understand: under a scope it lets nothing through.
+
 Exports: SOURCES_FIELD · SOURCES_MAX · SourceId · SourceRecordError · normalize_sources ·
-         coerce_sources_arg · record_id · record_string · same_delivery · STATES ·
-         CHANGE_KINDS · OUTCOMES · next_state · SourceRegistry (apply_change · state_of ·
-         revisions_of · describe · rebuild_index · check_writable · claimed · run_once) ·
+         coerce_sources_arg · record_id · record_string · same_delivery · Place ·
+         places_of · parse_use · STATES · CHANGE_KINDS · OUTCOMES · next_state ·
+         SourceRegistry (apply_change · state_of · read_state · use_of · revisions_of ·
+         describe · rebuild_index · check_writable · claimed · run_once) ·
          memories_of · write_key · current_write_key · write_key_scope · current_grant ·
          grant_scope · note_written · collect_written
 ========================================
@@ -206,6 +219,77 @@ def _span(raw, where: str) -> Optional[dict]:
     return {"unit": unit, "start": start, "end": end}
 
 
+USE_KEYS = ("venues", "audience")
+USE_LIST_MAX = 64               # names per list in a `use`
+USE_NAME_MAX = 128              # one venue or one person
+
+
+def _use_names(raw, key: str, where: str) -> list[str]:
+    if not isinstance(raw, (list, tuple)):
+        raise SourceRecordError(f"source{where} use.{key} must be a list of names",
+                                f"来源{where}的 use.{key} 要是一列名字")
+    out: list[str] = []
+    for item in raw:
+        if isinstance(item, bool) or not isinstance(item, (str, int)) or not str(item).strip():
+            raise SourceRecordError(f"source{where} use.{key} holds something that is not a "
+                                    "name", f"来源{where}的 use.{key} 里有一项不是名字")
+        name = str(item).strip()
+        if len(name) > USE_NAME_MAX or "\n" in name or "\r" in name:
+            raise SourceRecordError(f"source{where} use.{key} name is over {USE_NAME_MAX} "
+                                    "characters or more than one line",
+                                    f"来源{where}的 use.{key} 里有一项太长或不止一行")
+        out.append(name)
+    if len(out) > USE_LIST_MAX:
+        raise SourceRecordError(f"source{where} use.{key} holds more than {USE_LIST_MAX} names",
+                                f"来源{where}的 use.{key} 最多 {USE_LIST_MAX} 个")
+    return sorted(set(out))
+
+
+def _use_field(raw, where: str):
+    """A record's `use` as stored: None, the object form {venues?, audience?} with sorted
+    unique names, or text kept as given (a JSON object written as text is read as the
+    object form)."""
+    if isinstance(raw, str):
+        text = raw.strip()
+        if text.startswith("{"):
+            try:
+                raw = json.loads(text)
+            except ValueError:
+                pass
+    if isinstance(raw, dict):
+        extra = sorted(set(map(str, raw)) - set(USE_KEYS))
+        if extra:
+            raise SourceRecordError(f"source{where} use has unknown keys {extra} (known: "
+                                    f"{', '.join(USE_KEYS)})",
+                                    f"来源{where}的 use 不认识 {', '.join(extra)}"
+                                    f"（只认 {' / '.join(USE_KEYS)}）")
+        return {k: _use_names(raw[k], k, where) for k in USE_KEYS if k in raw}
+    return _text_field({"use": raw}, "use", where, required=False)
+
+
+def parse_use(stored) -> Optional[dict]:
+    """A stored `use` read as a rule: {"venues": set | None, "audience": set | None}, or
+    None when it cannot be read as one (text that is not the object form). Call it only
+    on a use that is present; an absent use is no rule of its own."""
+    if isinstance(stored, str):
+        try:
+            stored = _use_field(stored, where="")
+        except SourceRecordError:
+            return None
+    if not isinstance(stored, dict) or set(map(str, stored)) - set(USE_KEYS):
+        return None
+    out: dict = {}
+    for k in USE_KEYS:
+        if k not in stored:
+            out[k] = None
+            continue
+        names = stored[k]
+        if not isinstance(names, (list, tuple)):
+            return None
+        out[k] = frozenset(str(n).strip() for n in names)
+    return out
+
+
 def _normalize_record(raw, where: str) -> dict:
     if not isinstance(raw, dict):
         raise SourceRecordError(f"source{where} must be a record, got {type(raw).__name__}",
@@ -228,7 +312,7 @@ def _normalize_record(raw, where: str) -> dict:
                                 "through 是连着的好几条")
     if span:
         out["span"] = span
-    out["use"] = _text_field(raw, "use", where, required=False)
+    out["use"] = _use_field(raw.get("use"), where)
     text = record_string(out)
     if len(text) > STRING_MAX:
         raise SourceRecordError(f"source{where} string form is {len(text)} characters, over "
@@ -287,6 +371,96 @@ def same_delivery(a: dict, b: dict) -> bool:
     return a.get("revision") == b.get("revision")
 
 
+_PLACE_LEVELS = ("system", "instance", "container", "id")
+PLACE_KEYS = _PLACE_LEVELS
+
+
+@dataclass(frozen=True)
+class Place:
+    """A prefix of source identity: a system, an instance of it, a container in it, or
+    one piece (`id`). `through` is set only on a place made from a run's own string form,
+    which then names exactly that run."""
+    system: str
+    instance: Optional[str] = None
+    container: Optional[str] = None
+    id: Optional[str] = None
+    through: Optional[str] = None
+
+    @classmethod
+    def from_mapping(cls, raw, where: str = "") -> "Place":
+        """{system, instance?, container?, id?} -> Place. Every level named needs the ones
+        above it. Raises SourceRecordError on anything else."""
+        if not isinstance(raw, dict):
+            raise SourceRecordError(f"place{where} must be an object {{system, instance?, "
+                                    "container?, id?}", f"{where}要写成 {{system, instance?, "
+                                    "container?, id?}")
+        extra = sorted(set(map(str, raw)) - set(_PLACE_LEVELS))
+        if extra:
+            raise SourceRecordError(f"place{where} has unknown keys {extra}",
+                                    f"{where}不认识 {', '.join(extra)}（只认 system / instance / "
+                                    "container / id）")
+        values = [_text_field(raw, k, where, required=(k == "system")) for k in _PLACE_LEVELS]
+        for upper, lower, value in zip(_PLACE_LEVELS, _PLACE_LEVELS[1:], values[1:]):
+            if value is not None and values[_PLACE_LEVELS.index(upper)] is None:
+                raise SourceRecordError(f"place{where} names {lower} without {upper}",
+                                        f"{where}写了 {lower} 却没写 {upper}——要从上往下写全")
+        return cls(*values)
+
+    @classmethod
+    def coerce(cls, value) -> "Place":
+        """A Place, a mapping, a SourceId, or a source string form (a revision on it is
+        dropped: a grant is about identity)."""
+        if isinstance(value, Place):
+            return value
+        if isinstance(value, SourceId):
+            return cls(value.system, value.instance, value.container, value.id, value.through)
+        if isinstance(value, dict):
+            if "through" in value or "revision" in value:
+                return cls.coerce(_identity(value))
+            return cls.from_mapping(value)
+        return cls.coerce(SourceId.parse(str(value))[0])
+
+    def covers(self, record) -> bool:
+        """Does this place cover a source (a record or a SourceId)? A place naming an id
+        covers that piece and a run starting at it."""
+        sid = record if isinstance(record, SourceId) else record_id(record)
+        if sid.system != self.system:
+            return False
+        for level in ("instance", "container"):
+            want = getattr(self, level)
+            if want is not None and getattr(sid, level) != want:
+                return False
+        if self.id is None:
+            return True
+        if sid.id != self.id:
+            return False
+        return self.through is None or sid.through == self.through
+
+    def within(self, outer: "Place") -> bool:
+        """Is everything this place covers covered by `outer`?"""
+        for level in _PLACE_LEVELS:
+            want = getattr(outer, level)
+            if want is not None and getattr(self, level) != want:
+                return False
+        if outer.through is not None:
+            return self.through == outer.through
+        return True
+
+    def label(self) -> str:
+        """How a reply names it: the levels joined with `/`, the piece after `#`."""
+        head = "/".join(x for x in (self.system, self.instance, self.container) if x)
+        if self.id is None:
+            return head
+        return f"{head}#{self.id}" + (f"{_RANGE_MARK}{self.through}" if self.through else "")
+
+
+def places_of(grant: Optional[Iterable]) -> Optional[tuple]:
+    """A grant as places (None stays None: not enforced)."""
+    if grant is None:
+        return None
+    return tuple(Place.coerce(g) for g in grant)
+
+
 def _identity(identity) -> SourceId:
     """Accept a SourceId, a record, or a string form (a revision on it is dropped)."""
     if isinstance(identity, SourceId):
@@ -328,7 +502,7 @@ async def memories_of(store, identity) -> list[str]:
 
 _WRITE_KEY: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
     "loci_write_key", default=None)
-_GRANT: contextvars.ContextVar[Optional[frozenset]] = contextvars.ContextVar(
+_GRANT: contextvars.ContextVar[Optional[tuple]] = contextvars.ContextVar(
     "loci_source_grant", default=None)
 # The ids written under the keyed run in progress; None outside one.
 _WRITTEN: contextvars.ContextVar[Optional[list]] = contextvars.ContextVar(
@@ -336,9 +510,12 @@ _WRITTEN: contextvars.ContextVar[Optional[list]] = contextvars.ContextVar(
 WRITE_KEY_MAX = 256
 
 
-def write_key(turn: str, ordinal: int) -> str:
-    """The key of one write call: the host's turn plus the call's ordinal in it."""
-    return f"{str(turn).strip()}#{int(ordinal)}"
+def write_key(turn: str, ordinal: int, host: str = "") -> str:
+    """The key of one write call: the host's turn plus the call's ordinal in it, under
+    the host that sent it (two hosts sending the same turn and ordinal are two writes).
+    A host name holds no `:`, so the first `:` ends it."""
+    key = f"{str(turn).strip()}#{int(ordinal)}"
+    return f"{host}:{key}" if host else key
 
 
 def current_write_key() -> Optional[str]:
@@ -358,15 +535,16 @@ def write_key_scope(key: Optional[str]):
         _WRITE_KEY.reset(token)
 
 
-def current_grant() -> Optional[frozenset]:
-    """The identities this turn's host handed over, as string forms; None = not enforced."""
+def current_grant() -> Optional[tuple]:
+    """The places this turn's host granted (`Place`); None = not enforced."""
     return _GRANT.get()
 
 
 @contextmanager
 def grant_scope(grant: Optional[Iterable]):
-    """Run a block under a grant of sources (None lifts it)."""
-    token = _GRANT.set(None if grant is None else frozenset(_identity_key(g) for g in grant))
+    """Run a block under a grant of sources: places, mappings or string forms (None lifts
+    it)."""
+    token = _GRANT.set(places_of(grant))
     try:
         yield
     finally:
@@ -572,13 +750,15 @@ class SourceRegistry:
         self._seq = max(self._seq, seq)
         self._by_change[str(row.get("change_id") or "")] = row
         entry = self._by_source.setdefault(source, {
-            "state": ACTIVE, "host_seq": -1, "use": None, "revisions": [], "seqs": {}})
+            "state": ACTIVE, "host_seq": -1, "use": None, "use_changed": False,
+            "revisions": [], "seqs": {}})
         entry["seqs"][host_seq] = str(row.get("change_id") or "")
         if host_seq >= entry["host_seq"]:
             entry["host_seq"] = host_seq
             entry["state"] = str(row.get("state") or entry["state"])
             if row.get("kind") == "use_changed":
                 entry["use"] = row.get("use")
+                entry["use_changed"] = True
         if row.get("kind") == "revised":
             entry["revisions"].append({k: row.get(k) for k in (
                 "revision", "fingerprint", "fingerprint_by", "host_seq", "seq")})
@@ -604,12 +784,27 @@ class SourceRegistry:
             if entry is None:
                 return None
             return {"state": entry["state"], "host_seq": entry["host_seq"],
-                    "use": entry["use"], "revisions": [dict(r) for r in entry["revisions"]]}
+                    "use": entry["use"], "use_changed": entry["use_changed"],
+                    "revisions": [dict(r) for r in entry["revisions"]]}
 
     def state_of(self, identity) -> str:
         """The source's state; one the registry has never heard of is active."""
         found = self.describe(identity)
         return found["state"] if found else ACTIVE
+
+    def read_state(self, record) -> str:
+        """The state the read gate judges a memory's source record by. The one lookup the
+        gate makes: a run is read as `describe` reads it today (its own identity, else its
+        first line); judging a run by every line inside it extends this function."""
+        return self.state_of(record_id(record) if isinstance(record, dict) else record)
+
+    def use_of(self, record: dict):
+        """The `use` in force for a source record: the host's latest `use_changed` for the
+        source when there was one, else the record's own."""
+        found = self.describe(record_id(record))
+        if found and found.get("use_changed"):
+            return found.get("use")
+        return record.get("use")
 
     def revisions_of(self, identity) -> list[dict]:
         """The revisions the host announced (`revised`), oldest first by host_seq."""
@@ -685,17 +880,18 @@ class SourceRegistry:
     def check_writable(self, sources: list[dict],
                        grant: Optional[Iterable] = None) -> tuple[str, list[str]]:
         """May a memory be written from these (normalised) records? Returns (refusal,
-        notes for the receipt). Each source has to be in the turn's grant when one is
-        given (None = not enforced), and not withdrawn or deleted. An unreadable source
-        is taken (the host just handed its text over) with a note; one the registry has
-        never seen is simply active. A run is granted when it or its first line is, and
-        its state is read as `describe` reads it."""
-        granted = None if grant is None else {_identity_key(g) for g in grant}
+        notes for the receipt). Each source has to be covered by the turn's grant when
+        one is given (places, mappings or string forms; None = not enforced), and not
+        withdrawn or deleted. An unreadable source is taken (the host just handed its text
+        over) with a note; one the registry has never seen is simply active. A run is
+        granted when it or its first line is (`Place.covers`), and its state is read as
+        `describe` reads it."""
+        granted = places_of(grant)
         notes: list[str] = []
         for rec in sources or []:
             sid = record_id(rec)
             key = sid.to_string()
-            if granted is not None and not {key, sid.first().to_string()} & granted:
+            if granted is not None and not any(p.covers(sid) for p in granted):
                 return (f"来源 {key} 不在这一轮宿主交过来的材料里——只能用这一轮给的来源写。"
                         "本次什么都没写。"), []
             state = self.state_of(sid)

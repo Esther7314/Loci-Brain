@@ -1,0 +1,371 @@
+# Paper section 庚 (scope, Loci's gate). Contract: 接头样例修订 2 sections 一 and 二.
+# A host's credential (`host:` on a call; the item's `hosts:` is the deployment's table),
+# the turn's Loci-Scope (`scope:`), and the three conditions on every source behind a
+# memory: its `use` (venues, audience), the grant, the source's state. A derived memory
+# needs every root to pass. A memory with no sources is read only without a scope.
+#
+# One library for 庚1/庚2/庚3/庚5: three entries from the same group chat, two that may be
+# used in the group, one only in private; plus an old entry from before sources existed.
+# Venues are the occasion's kind ("group" / "private"); people are `user:…`.
+
+- id: G1
+  title: "scope sits on each entry"
+  start: "2026-10-01T10:00:00+08:00"
+  hosts:
+    legacy: {token: life-line-key, scope_mode: open}
+    book-bot: {token: book-bot-key, max_grant: [{system: telegram, instance: bot-a}]}
+  setup: &book_club
+    - id: a01001000000
+      at: "2026-09-30T20:00:00+08:00"
+      room: EVENT/WORLD
+      text: "周六读书会在南厅，答应了带那本《城南旧事》去。"
+      sources: [{system: telegram, instance: bot-a, container: "group:G", id: "m_101", use: {venues: [group, private]}}]
+      fields: {summary: "周六读书会在南厅，答应带书", direction_of_fit: telic, bound: [我]}
+    - id: a01002000000
+      at: "2026-09-30T20:05:00+08:00"
+      room: EVENT/WORLD
+      text: "周六读书会之后大家想一起去吃面。"
+      sources: [{system: telegram, instance: bot-a, container: "group:G", id: "m_102", use: {venues: [group, private]}}]
+      fields: {summary: "周六读书会后一起吃面"}
+    - id: a01003000000
+      at: "2026-09-30T20:10:00+08:00"
+      room: EVENT/WORLD
+      text: "她在群里私下跟我说，周六上午其实约了咨询，答应了替她保密。"
+      sources: [{system: telegram, instance: bot-a, container: "group:G", id: "m_103", use: {venues: [private]}}]
+      fields: {summary: "周六上午的咨询预约，替她保密", direction_of_fit: telic, bound: [我]}
+    - id: a01004000000
+      at: "2026-09-30T20:15:00+08:00"
+      room: EVENT/WORLD
+      text: "周六要早起，前一晚别熬夜。"
+      fields: {summary: "周六要早起"}
+  steps:
+    - call: recall
+      args: {query: 周六}
+      host: book-bot-key
+      scope: &group_scope
+        v: 1
+        entry: {system: telegram, instance: bot-a, container: "group:G"}
+        venue: group
+        audience: ["user:U", "user:X"]
+        grant: [{system: telegram, instance: bot-a, container: "group:G"}]
+      as: in_group
+    - check: {segment: find, desc: "the first line states the scope", output: in_group, contains: "〔范围：受限 · 入口 telegram/bot-a/group:G · 场合 group · 许读 1 处〕"}
+    - check: {segment: find, desc: "the group may use the reading-club entry", output: in_group, contains: a01001}
+    - check: {segment: find, desc: "and the noodles after it", output: in_group, contains: a01002}
+    - check: {segment: find, desc: "the private-only entry from the same chat is not there", output: in_group, lacks: a01003}
+    - check: {segment: find, desc: "nor a word of it", output: in_group, lacks: 咨询}
+    - check: {segment: find, desc: "an entry with no sources is not read under a scope", output: in_group, lacks: a01004}
+    - call: recall
+      args: {query: 周六}
+      host: book-bot-key
+      scope:
+        v: 1
+        entry: {system: telegram, instance: bot-a, container: "private:U"}
+        venue: private
+        audience: ["user:U"]
+        grant: [{system: telegram, instance: bot-a, container: "group:G"}]
+      as: in_private
+    - check: {segment: find, desc: "control: in private the private-only entry is found", output: in_private, contains: a01003}
+    - check: {segment: find, desc: "control: the group entries may be used in private too", output: in_private, contains: a01001}
+    - check: {segment: find, desc: "the old entry stays out under any scope", output: in_private, lacks: a01004}
+
+- id: G2
+  title: "a restricted caller that forgets the scope gets nothing"
+  start: "2026-10-01T10:00:00+08:00"
+  hosts:
+    legacy: {token: life-line-key, scope_mode: open}
+    book-bot: {token: book-bot-key, max_grant: [{system: telegram, instance: bot-a}]}
+  setup: *book_club
+  steps:
+    - call: recall
+      args: {query: 周六}
+      host: book-bot-key
+      as: no_scope
+    - check: {segment: find, desc: "says why, and that the host has to send Loci-Scope", output: no_scope, contains: "〔范围：受限 · 没收到范围，什么都不给。宿主要在请求上带 Loci-Scope〕"}
+    - check:
+        segment: find
+        desc: "nothing at all, not the whole library"
+        all_of:
+          - {output: no_scope, lacks: a01001}
+          - {output: no_scope, lacks: a01003}
+          - {output: no_scope, lacks: a01004}
+    - call: breath
+      host: book-bot-key
+      as: breath_no_scope
+    - check: {segment: find, desc: "breath without a scope: nothing either", output: breath_no_scope, lacks: a01001}
+    - check: {segment: find, desc: "breath says the same reason", output: breath_no_scope, contains: "没收到范围，什么都不给"}
+    - call: recall
+      args: {query: 周六}
+      host: book-bot-key
+      scope: "{v: 1, venue: group}"
+      as: malformed
+    - check: {segment: find, desc: "a scope that cannot be read is refused, saying so", output: malformed, contains: "〔范围：受限 · 拒绝：Loci-Scope 读不懂（不是合法的 JSON），这次什么都没读〕"}
+    - check: {segment: find, desc: "and nothing is read", output: malformed, lacks: a01001}
+    - call: grow
+      host: book-bot-key
+      turn: "t-g2#1"
+      args:
+        kind: event
+        sources: [{system: telegram, instance: bot-a, container: "group:G", id: "m_104"}]
+        items: [{room: EVENT/WORLD, text: "读书会改到周日了。", v: 0.5, a: 0.3}]
+      as: write_no_scope
+    - check: {segment: store, desc: "a write without a scope writes nothing", output: write_no_scope, contains: "这次什么都没写"}
+    - check: {segment: store, desc: "no memory came of it", no_entry: {body_has: 改到周日}}
+
+- id: G3
+  title: "whole-library mode has to be asked for"
+  start: "2026-10-01T10:00:00+08:00"
+  hosts:
+    legacy: {token: life-line-key, scope_mode: open}
+    book-bot: {token: book-bot-key, max_grant: [{system: telegram, instance: bot-a, container: "group:G"}]}
+  setup: *book_club
+  steps:
+    # a: the host written down as open (the life line), saying nothing more
+    - call: recall
+      args: {query: 周六}
+      host: life-line-key
+      as: whole
+    - check: {segment: find, desc: "the open host's read says so on its first line", output: whole, contains: "〔范围：全库（open）〕"}
+    - check:
+        segment: find
+        desc: "and it gets everything, the old entry included"
+        all_of:
+          - {output: whole, contains: a01001}
+          - {output: whole, contains: a01003}
+          - {output: whole, contains: a01004}
+    # b: the group's host asks for more than its credential reaches: the whole system
+    - call: recall
+      args: {query: 周六}
+      host: book-bot-key
+      scope:
+        v: 1
+        entry: {system: telegram, instance: bot-a, container: "group:G"}
+        venue: group
+        audience: ["user:U", "user:X"]
+        grant: [{system: telegram}]
+      as: past_ceiling
+    - check: {segment: find, desc: "refused whole, naming where it reaches past the credential", output: past_ceiling, contains: "〔范围：受限 · 拒绝：范围超出这个宿主凭据（telegram），这次什么都没读〕"}
+    - check:
+        segment: find
+        desc: "no whole library, not even the part it may read"
+        all_of:
+          - {output: past_ceiling, lacks: a01003}
+          - {output: past_ceiling, lacks: a01004}
+          - {output: past_ceiling, lacks: a01001}
+    # b': the group's host writes "full" into its scope
+    - call: recall
+      args: {query: 周六}
+      host: book-bot-key
+      scope:
+        v: 1
+        entry: {system: telegram, instance: bot-a, container: "group:G"}
+        venue: group
+        audience: ["user:U", "user:X"]
+        grant: [{system: telegram, instance: bot-a, container: "group:G"}]
+        mode: full
+      as: says_full
+    - check: {segment: find, desc: "'full' is not a field anyone may send: refused, saying which", output: says_full, contains: "不认识的字段 mode"}
+    - check: {segment: find, desc: "and it widens nothing", output: says_full, lacks: a01003}
+    # the same host with its own scope still reads what it may
+    - call: recall
+      args: {query: 周六}
+      host: book-bot-key
+      scope: *group_scope
+      as: own_scope
+    - check: {segment: find, desc: "control: its own scope reads the group's entries", output: own_scope, contains: a01001}
+    - check: {segment: find, desc: "control: and not the private one", output: own_scope, lacks: a01003}
+
+# 庚4: every source behind a derived memory must allow the occasion. All the material is
+# from one private chat (lento/home/private:U), each piece with its own `use`; the group
+# scopes are granted that chat, so only `use` and the roots decide.
+- id: G4
+  title: "a derivation from mixed scopes takes the strictest"
+  start: "2026-10-01T10:00:00+08:00"
+  hosts:
+    bridge: {token: bridge-key, max_grant: [{system: lento, instance: home}]}
+  setup:
+    # a: one root private only, one root also in group X
+    - id: b41001000000
+      at: "2026-09-29T20:00:00+08:00"
+      room: EVENT/SELF
+      text: "她私下说最近睡不好，是因为在换工作。"
+      sources: [{system: lento, instance: home, container: "private:U", id: "m_401", use: {venues: [private], audience: ["user:U"]}}]
+      fields: {summary: "她换工作，睡不好"}
+    - id: b41002000000
+      at: "2026-09-29T20:05:00+08:00"
+      room: EVENT/WORLD
+      text: "群里聊到最近大家都睡得晚。"
+      sources: [{system: lento, instance: home, container: "private:U", id: "m_402", use: {venues: [group, private], audience: ["user:U", "user:X"]}}]
+      fields: {summary: "大家都睡得晚"}
+    - id: b41003000000
+      at: "2026-09-29T21:00:00+08:00"
+      room: MIND/TRAITS
+      text: "她晚睡不只是习惯，背后是换工作的压力。"
+      from: [b41001000000, b41002000000]
+      fields: {summary: "晚睡背后是换工作的压力"}
+    # b: two roots no one can rank: group X + private, group Y + private
+    - id: b42001000000
+      at: "2026-09-29T20:10:00+08:00"
+      room: EVENT/WORLD
+      text: "X 群里定了下个月去爬山。"
+      sources: [{system: lento, instance: home, container: "private:U", id: "m_411", use: {venues: [group, private], audience: ["user:U", "user:X"]}}]
+      fields: {summary: "下个月去爬山"}
+    - id: b42002000000
+      at: "2026-09-29T20:15:00+08:00"
+      room: EVENT/WORLD
+      text: "Y 群里说下个月要加班。"
+      sources: [{system: lento, instance: home, container: "private:U", id: "m_412", use: {venues: [group, private], audience: ["user:U", "user:Y"]}}]
+      fields: {summary: "下个月要加班"}
+    - id: b42003000000
+      at: "2026-09-29T21:05:00+08:00"
+      room: MIND/VIEWS
+      text: "下个月爬山和加班撞在一起，她得二选一。"
+      from: [b42001000000, b42002000000]
+      fields: {summary: "爬山和加班撞了"}
+    # empty: group X only, group Y only, neither private
+    - id: b43001000000
+      at: "2026-09-29T20:20:00+08:00"
+      room: EVENT/WORLD
+      text: "X 群的人想换个地方聚。"
+      sources: [{system: lento, instance: home, container: "private:U", id: "m_421", use: {venues: [group], audience: ["user:U", "user:X"]}}]
+      fields: {summary: "X 群想换地方聚"}
+    - id: b43002000000
+      at: "2026-09-29T20:25:00+08:00"
+      room: EVENT/WORLD
+      text: "Y 群的人也想换个地方聚。"
+      sources: [{system: lento, instance: home, container: "private:U", id: "m_422", use: {venues: [group], audience: ["user:U", "user:Y"]}}]
+      fields: {summary: "Y 群也想换地方聚"}
+    - id: b43003000000
+      at: "2026-09-29T21:10:00+08:00"
+      room: MIND/VIEWS
+      text: "两个群都想换地方聚，可以凑成一次。"
+      from: [b43001000000, b43002000000]
+      fields: {summary: "两个群可以一起聚"}
+  steps:
+    # a
+    - call: recall
+      args: {query: b41003000000}
+      host: bridge-key
+      scope: &group_x {v: 1, entry: {system: lento, instance: home, container: "group:X"}, venue: group, audience: ["user:U", "user:X"], grant: [{system: lento, instance: home, container: "private:U"}]}
+      as: a_in_x
+    - check: {segment: find, desc: "a, group X: F is not there (one root is private only)", output: a_in_x, contains: "查无此桶"}
+    - check: {segment: find, desc: "a, group X: not a word of it", output: a_in_x, lacks: 换工作的压力}
+    - call: recall
+      args: {query: b41003000000}
+      host: bridge-key
+      scope: &private_p {v: 1, entry: {system: lento, instance: home, container: "private:U"}, venue: private, audience: ["user:U"], grant: [{system: lento, instance: home, container: "private:U"}]}
+      as: a_in_p
+    - check: {segment: find, desc: "a, private P: F reads (both roots allow P)", output: a_in_p, contains: 换工作的压力}
+    - call: recall
+      args: {query: 睡}
+      host: bridge-key
+      scope: *group_x
+      as: a_search_x
+    - check: {segment: find, desc: "a, group X: the root group X may use is found", output: a_search_x, contains: b41002}
+    - check: {segment: find, desc: "a, group X: search does not bring F up either", output: a_search_x, lacks: b41003}
+    - check: {segment: find, desc: "a, group X: nor its private root", output: a_search_x, lacks: b41001}
+    # b
+    - call: recall
+      args: {query: b42003000000}
+      host: bridge-key
+      scope: *group_x
+      as: b_in_x
+    - check: {segment: find, desc: "b, group X: G is not there", output: b_in_x, contains: "查无此桶"}
+    - call: recall
+      args: {query: b42003000000}
+      host: bridge-key
+      scope: {v: 1, entry: {system: lento, instance: home, container: "group:Y"}, venue: group, audience: ["user:U", "user:Y"], grant: [{system: lento, instance: home, container: "private:U"}]}
+      as: b_in_y
+    - check: {segment: find, desc: "b, group Y: G is not there either (no root is 'the strictest')", output: b_in_y, contains: "查无此桶"}
+    - call: recall
+      args: {query: b42003000000}
+      host: bridge-key
+      scope: *private_p
+      as: b_in_p
+    - check: {segment: find, desc: "b, private P: G reads", output: b_in_p, contains: 二选一}
+    # empty intersection
+    - call: recall
+      args: {query: b43003000000}
+      host: bridge-key
+      scope: *group_x
+      as: e_in_x
+    - check: {segment: find, desc: "empty: group X cannot read H", output: e_in_x, contains: "查无此桶"}
+    - call: recall
+      args: {query: b43003000000}
+      host: bridge-key
+      scope: *private_p
+      as: e_in_p
+    - check: {segment: find, desc: "empty: private is no fallback", output: e_in_p, contains: "查无此桶"}
+    - check: {segment: find, desc: "empty: not a word of it", output: e_in_p, lacks: 凑成一次}
+
+# 庚5: the same library and the same scope through every read this layer can call —
+# search, read by id, breath, muse — all agree. Dream material has no tool to call: under
+# a scope a dream is withheld whole, said with the agreed fourth first line (unit-tested
+# on the hook routes).
+- id: G5
+  title: "every read goes through the same gate"
+  start: "2026-10-01T10:00:00+08:00"
+  hosts:
+    legacy: {token: life-line-key, scope_mode: open}
+    book-bot: {token: book-bot-key, max_grant: [{system: telegram, instance: bot-a}]}
+  setup: *book_club
+  steps:
+    - call: breath
+      host: life-line-key
+      as: breath_open
+    - check: {segment: think, desc: "control: open, both promises are on my mind", output: breath_open, section: 惦记的事, contains: a01003}
+    - call: breath
+      host: book-bot-key
+      scope: *group_scope
+      as: breath_group
+    - check: {segment: think, desc: "breath opens with the scope", output: breath_group, contains: "〔范围：受限 · 入口 telegram/bot-a/group:G"}
+    - check: {segment: think, desc: "breath: the group's promise is on my mind", output: breath_group, section: 惦记的事, contains: a01001}
+    - check: {segment: think, desc: "breath: the last three days show the group's two", output: breath_group, section: 近三天, contains: a01002}
+    - check: {segment: think, desc: "breath: the private one is not, on any block", output: breath_group, lacks: a01003}
+    - check: {segment: think, desc: "breath: not a word of it", output: breath_group, lacks: 咨询}
+    - check: {segment: think, desc: "breath: the old entry is not either", output: breath_group, lacks: a01004}
+    - call: recall
+      args: {query: 周六}
+      host: book-bot-key
+      scope: *group_scope
+      as: search
+    - check: {segment: find, desc: "search: the same", output: search, lacks: a01003}
+    - check: {segment: find, desc: "search: and the group's entry", output: search, contains: a01001}
+    - call: recall
+      args: {query: a01003000000}
+      host: book-bot-key
+      scope: *group_scope
+      as: by_id
+    - check: {segment: find, desc: "read by id: like an id that does not exist", output: by_id, contains: "查无此桶"}
+    - check: {segment: find, desc: "read by id: not a word of it", output: by_id, lacks: 咨询}
+    - call: recall
+      args: {query: a01003}
+      host: book-bot-key
+      scope: *group_scope
+      as: by_handle
+    - check: {segment: find, desc: "read by the short handle: the same", output: by_handle, contains: "查无此桶"}
+    - call: recall
+      args: {query: a01001000000}
+      host: book-bot-key
+      scope: *group_scope
+      as: by_id_ok
+    - check: {segment: find, desc: "read by id: the group's entry comes out whole", output: by_id_ok, contains: 城南旧事}
+    - call: recall
+      args: {when: "7d"}
+      host: book-bot-key
+      scope: *group_scope
+      as: browse
+    - check: {segment: find, desc: "browsing a week: the private one is not counted in", output: browse, lacks: a01003}
+    - call: muse
+      host: book-bot-key
+      scope: *group_scope
+      as: muse
+    - check: {segment: tidy, desc: "muse opens with the scope", output: muse, contains: "〔范围：受限 · 入口 telegram/bot-a/group:G"}
+    - check: {segment: tidy, desc: "muse: the private one is not material", output: muse, lacks: a01003}
+    - call: trace
+      args: {bucket_id: a01003000000, status: resolved}
+      host: book-bot-key
+      scope: *group_scope
+      as: touch
+    - check: {segment: store, desc: "a write cannot reach it either: like an id that does not exist", output: touch, contains: "查无此桶"}
+    - check: {segment: store, desc: "and it was not touched", field: status, id: a01003000000, absent: true}

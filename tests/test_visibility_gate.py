@@ -238,12 +238,14 @@ def test_each_place_does_what_the_table_says(store, place, feed, expected):
 
 # ── the gate itself ─────────────────────────────────────────────────────────
 
-def test_a_read_scope_is_refused_until_it_exists():
-    # Criterion: a caller passing a scope must not believe it was applied.
+def test_a_scope_that_is_not_a_scope_view_is_refused():
+    # Criterion: a caller passing a scope must not believe it was applied. The gate takes
+    # a core.scope.ScopeView (tests/test_read_scope.py); anything else is an error, not
+    # the whole library.
     with pytest.raises(ValueError):
         V.visible_for({}, scope={"use": "chat"}, road=V.READ)
     with pytest.raises(ValueError):
-        V.visible_for({}, mode="scoped", road=V.READ)
+        V.visible_for({}, scope="scoped", road=V.READ)
 
 
 def test_a_road_that_counts_holds_needs_the_index():

@@ -52,6 +52,7 @@ no second implementation.)
 
 from core import _muse as M
 from .. import _runtime as rt
+from .._common import read_scope
 from core import _when as _w
 
 FINGER_ORDER = ("词爆发", "成分漂移", "空白记账")
@@ -99,7 +100,7 @@ async def _both_sides() -> tuple[list, int, int, dict, dict]:
     the whole library twice. Invalidation follows bucket writes, and **erring
     towards invalidating too often is the right side to err on**.
     """
-    return await M.both_sides()
+    return await M.both_sides(scope=await read_scope())
 
 
 async def dispatch(cluster: int = 0, not_same=None) -> str:
@@ -119,7 +120,9 @@ async def dispatch(cluster: int = 0, not_same=None) -> str:
         if len(ids) < 2:
             return ("not_same 至少要两条——一条谈不上「不是一回事」。\n"
                     "把 muse(cluster=N) 里列出来的那一组 id 原样填进来。")
-        missing = [i for i in ids if not await rt.bucket_mgr.get_including_archive(i)]
+        view = await read_scope()
+        missing = [i for i in ids if not await rt.bucket_mgr.get_including_archive(i)
+                   or (view is not None and not view.permits_id(i))]
         if missing:
             return f"这些 id 不存在：{'、'.join(missing)}。填真 bucket_id。"
         buckets_dir = str((rt.config or {}).get("buckets_dir") or "")

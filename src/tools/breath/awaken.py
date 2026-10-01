@@ -39,6 +39,8 @@ import random
 import re
 
 from .. import _runtime as rt
+from .. import _slices
+from .._common import read_scope
 from core import _invalidation as _I
 from core import visibility as _V      # the gate's `recent` road for 近三天
 from core import _when as _w         # "today" as the user lives it (local timezone)
@@ -111,17 +113,19 @@ def _core(door: dict) -> dict:
 async def build_breath() -> dict:
     """The waking screen as one object: {core, prospective, recent, involuntary,
     invalidation, earliest}. Every item carries its id and short id; see each builder for
-    the rest of its shape."""
+    the rest of its shape. Under the request's read scope every block asks the gate with
+    it, and the counts (more, rules_more, slices waiting) count only what the request may
+    read."""
     mgr = rt.bucket_mgr
     all_buckets = await mgr.list_all(include_archive=False)
     now = _w.now()      # local timezone: the container runs UTC, so a 2 a.m. "today" looks like yesterday to it
     settings = breath_settings(rt.config)
+    scope = await read_scope()
 
-    door = door_note(all_buckets, now)          # <- the name page, the rules, the timeline entries
+    door = door_note(all_buckets, now, scope=scope)  # <- the name page, the rules, the timeline entries
 
-    slices = getattr(mgr, "slices", None)
-    plan = prospective(all_buckets, now, settings=settings)
-    plan["slices_pending"] = slices.pending_count() if slices is not None else 0
+    plan = prospective(all_buckets, now, settings=settings, scope=scope)
+    plan["slices_pending"] = await _slices.pending_seen()
 
     mid = await recall_text_and_data(when="3d", room="", tag="", query="", max_cells=1,
                                      road=_V.RECENT)
@@ -129,7 +133,7 @@ async def build_breath() -> dict:
               "items": [{"id": e["id"], "short": e["short"], "text": e["label"],
                          "date": e["date"]} for e in (mid.get("entries") or [])]}
 
-    changed = _I.block(all_buckets, getattr(mgr, "sources", None))
+    changed = _I.block(all_buckets, getattr(mgr, "sources", None), scope=scope)
     cap = settings.invalidation_lines
 
     # Same definition as recall: _ts_of(meta) = when first, created as fallback. Computed
@@ -139,7 +143,8 @@ async def build_breath() -> dict:
         "core": _core(door),
         "prospective": plan,
         "recent": recent,
-        "involuntary": {"items": involuntary(all_buckets, now, settings=settings, rng=random)},
+        "involuntary": {"items": involuntary(all_buckets, now, settings=settings, rng=random,
+                                             scope=scope)},
         "invalidation": {"items": changed[:cap], "more": max(0, len(changed) - cap)},
         "earliest": min(ts_pool).date().isoformat() if ts_pool else None,
     }

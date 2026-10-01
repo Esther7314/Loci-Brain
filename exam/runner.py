@@ -15,9 +15,11 @@ WHAT ONE ITEM DOES
        own intake, with the slicing written in the item standing in for the side model.
     3. Start the real MCP server (exam/serve.py) over stdio with the fake clock. An item's
        `side_model:` ({phrase in the body: answer}) answers for the backfill's side model.
-    4. Walk the `steps`: move the clock, call tools (a call may carry `write_key:`, the
-       key a host would send for that write), wait (`wait: seconds`, for background work
-       such as the backfill), take snapshots, run checks.
+    4. Walk the `steps`: move the clock, call tools (a call may carry what a host puts on
+       its request: `host:` its credential, `scope:` its Loci-Scope, `turn:` / `write_key:`
+       its Loci-Turn; an item's `hosts:` is the deployment's hosts table), wait
+       (`wait: seconds`, for background work such as the backfill), take snapshots, run
+       checks.
     5. Each check records pass / fail and one line of evidence read back from disk or
        from the tool's own output.
 
@@ -95,6 +97,18 @@ def exam_config() -> dict:
             "timeout_seconds": 60,
         }
     return cfg
+
+
+def hosts_config(hosts: dict) -> tuple[dict, dict]:
+    """An item's `hosts:` ({name: {token, scope_mode?, max_grant?, may_restore?}}) as the
+    deployment writes it: the config names an environment variable per host, and the
+    server's environment holds the credential."""
+    table, env = {}, {}
+    for name, spec in hosts.items():
+        var = "EXAM_HOST_TOKEN_" + re.sub(r"[^A-Za-z0-9]", "_", str(name)).upper()
+        env[var] = str(spec["token"])
+        table[name] = {"token_env": var, **{k: v for k, v in spec.items() if k != "token"}}
+    return table, env
 
 
 def embeddings_label() -> str:
@@ -176,6 +190,7 @@ async def seed(lib: Path, clock_file: Path, entries: list[dict],
             subjects=e.get("subjects"),
             bucket_id_override=e["id"],
             pinned=e.get("pinned", False),
+            sources=e.get("sources"),
         )
         if bid != e["id"]:
             raise RuntimeError(f"setup wanted id {e['id']}, got {bid}")
@@ -234,12 +249,28 @@ class Run:
             return {k: self.sub(v) for k, v in value.items()}
         return value
 
+    def headers(self, step: dict) -> dict:
+        """What a host would put on this call's HTTP request: `host:` its credential
+        (x-loci-hook-token), `scope:` its Loci-Scope (an object, sent as JSON; a string is
+        sent as it is, for a malformed one), `turn:` or `write_key:` its Loci-Turn."""
+        out = {}
+        if step.get("host"):
+            out["x-loci-hook-token"] = str(self.sub(step["host"]))
+        if "scope" in step:
+            scope = self.sub(step["scope"])
+            out["Loci-Scope"] = (scope if isinstance(scope, str)
+                                 else json.dumps(scope, ensure_ascii=False))
+        turn = step.get("turn") or step.get("write_key")
+        if turn:
+            out["Loci-Turn"] = str(self.sub(turn))
+        return out
+
     async def call(self, step: dict) -> None:
         tool = step["call"]
         args = self.sub(step.get("args", {}))
-        # `write_key:` sends the call's write key in _meta; exam/serve.py sets it for the
-        # call the way the request layer will from the host's turn.
-        meta = {"loci_write_key": str(self.sub(step["write_key"]))} if step.get("write_key") else None
+        # The headers ride in _meta; exam/serve.py makes them the request the call carries.
+        headers = self.headers(step)
+        meta = {"loci_headers": headers} if headers else None
         try:
             res = await self.session.call_tool(tool, args, meta=meta)
             text = "\n".join(getattr(c, "text", "") for c in res.content)
@@ -463,9 +494,13 @@ async def library(item: dict, keep: bool, tag: str = ""):
     lib = Path(tempfile.mkdtemp(prefix=f"loci-exam-{item['id']}{tag}-"))
     clock_file = lib.parent / f"{lib.name}.clock"
     config_file = lib.parent / f"{lib.name}.config.yaml"
-    config_file.write_text(yaml.safe_dump(exam_config()), encoding="utf-8")
+    config, host_env = exam_config(), {}
+    if item.get("hosts"):
+        config["hosts"], host_env = hosts_config(item["hosts"])
+    config_file.write_text(yaml.safe_dump(config, allow_unicode=True), encoding="utf-8")
     side_model_file = lib.parent / f"{lib.name}.side_model.json"
     env = dict(os.environ)
+    env.update(host_env)
     env.update({
         "LOCI_BUCKETS_DIR": str(lib),
         "LOCI_CONFIG_PATH": str(config_file),
@@ -564,8 +599,10 @@ def seams() -> tuple[str, ...]:
             embeddings_label(),
             "first BM25 build before the first search (exam/serve.py; live Loci builds "
             "it in the background)",
-            "a call step's write_key is sent in _meta and set for that call (exam/serve.py; "
-            "the request layer will set it from the host's turn)",
+            "stdio, not HTTP: a call step's host credential, Loci-Scope and Loci-Turn ride in "
+            "_meta and become the request the call carries, its host named by the "
+            "middleware's own identify_host (exam/serve.py); the HTTP transport and "
+            "MCPAuthMiddleware are not run here",
             "an item's slices: batch goes through Loci's intake in setup, its cut standing in "
             "for the side model (exam/runner.py seed_slices)",
             "an item's side_model: answers the backfill's side-model call, picked by a phrase "
