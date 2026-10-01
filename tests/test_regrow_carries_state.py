@@ -165,6 +165,69 @@ def test_a_chain_that_began_as_an_ordinary_memory_drops_the_tag_it_was_given(sto
     run(go())
 
 
+def test_why_it_was_kept_and_what_it_has_meant_come_across(store):
+    async def go():
+        old = await store.create(BODY, room="EVENT/SELF", why_remembered="the first time it worked",
+                                 meaning="felt like a door opening")
+        assert await store.update(old, meaning_append="and again a month later")
+        await regrow(bucket_id=old, text=NEW_BODY, v=0.6, a=0.4, mode="supplement")
+        new = await _newest(store, old)
+        assert new["why_remembered"] == "the first time it worked"
+        # Criterion: meaning is the record of every moment this memory was touched; a
+        # rewording is not a reason to lose it. (update(meaning=...) regenerates its
+        # vector under the new id on its own.)
+        assert new["meaning"] == ["felt like a door opening", "and again a month later"]
+    run(go())
+
+
+def test_attachments_are_copied_under_the_new_version(store, tmp_path):
+    async def go():
+        picture = tmp_path / "incoming.png"
+        picture.write_bytes(b"\x89PNG not really but bytes enough")
+        old = await store.create(BODY, room="EVENT/SELF")
+        assert await store.update(old, media=[{"path": str(picture), "title": "the hill"}])
+        [kept] = (await store.get(old))["metadata"]["media"]
+        await regrow(bucket_id=old, text=NEW_BODY, v=0.6, a=0.4, mode="supplement")
+        new = await _newest(store, old)
+        [copied] = new["media"]
+        # Criterion: the attachment belongs to the memory, not to the wording. It is
+        # persisted again under the new id, so removing either version cannot take the
+        # file from the other.
+        assert copied["sha256"] == kept["sha256"] and copied["title"] == "the hill"
+        assert copied["path"] != kept["path"] and new["id"] in copied["path"]
+        assert (tmp_path / copied["path"]).is_file()
+    run(go())
+
+
+def test_a_protected_entry_stays_protected(store):
+    async def go():
+        old = await store.create(BODY, room="MIND/VIEWS", protected=True)
+        await regrow(bucket_id=old, text=NEW_BODY, v=0.6, a=0.4, mode="supplement")
+        new = await _newest(store, old)
+        # update() has no opening for protected, so it has to go in at creation; it
+        # locks importance the way the pin does.
+        assert new["protected"] is True
+        assert new["importance"] == 10
+    run(go())
+
+
+def test_the_anchor_moves_like_the_pin_even_at_the_cap(store):
+    async def go():
+        store.ANCHOR_LIMIT = 1
+        old = await store.create(BODY, room="MIND/VIEWS", source_tool="grow")
+        assert (await store.set_anchor(old, True))["ok"]
+        out = await regrow(bucket_id=old, text=NEW_BODY, v=0.6, a=0.4, mode="supplement")
+        new = await _newest(store, old)
+        # Criterion: the slot is scarce and the old version held it. A copy would be
+        # refused at the cap; a move frees the slot first, and the receipt says so.
+        assert new["anchor"] is True and new["source_tool"] == "anchor"
+        old_meta = (await store.get(old))["metadata"]
+        assert not old_meta.get("anchor") and old_meta["source_tool"] == "grow"
+        assert await store.count_anchors() == 1
+        assert "接着当" in out
+    run(go())
+
+
 def test_a_pin_still_moves_with_the_version(store):
     async def go():
         old = await store.create(BODY, room="MIND/VIEWS", pinned=True)

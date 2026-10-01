@@ -117,6 +117,7 @@ Exports: GIST_TAG · SPAN_HELP · is_covered() · covers_of() · cover_ids() · 
 
 import asyncio
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from tools import _runtime as rt
 from utils import is_closed
@@ -141,11 +142,15 @@ _MACHINE_TAG_PREFIXES = ("__", "aspect:", "疑似同件:", "相似认知:")
 
 # What a new version inherits from the one it replaces: everything that says where the
 # entry stands in the world — its time, whether it is wanted and by whom, how heavily,
-# whether it is closed, who it is about, when it was last asked about or dreamt of.
-# What describes the text itself (name, summary, the backfill's tags, the vector) is
-# computed again from the new body, and the version chain (cover / covered_by /
-# supersedes / superseded_by / dont_surface) is written fresh by save_gist.
-_CARRIED_FIELDS = ("when", "status", "weight", "subjects",
+# whether it is closed, who it is about, when it was last asked about or dreamt of, why
+# it was worth keeping and what it has meant since (`meaning`, whose own vector update()
+# regenerates for the new id). What describes the text itself (name, summary, the
+# backfill's tags, the vector) is computed again from the new body, and the version chain
+# (cover / covered_by / supersedes / superseded_by / dont_surface) is written fresh by
+# save_gist. Attachments (`media`) come across separately: they are files to copy under
+# the new id, not a field to repeat. What the old version held **exclusively** — the pin,
+# the anchor — moves rather than copies, after the chain (see below).
+_CARRIED_FIELDS = ("when", "status", "weight", "subjects", "why_remembered", "meaning",
                    "last_asked", "closed_by", "last_dreamt", *V2_FIELDS)
 
 
@@ -248,6 +253,33 @@ def carried_state(old_meta: dict, *, period: bool = False) -> dict:
         out[k] = v
     if "status" not in out and is_closed(old_meta):
         out["status"] = "resolved"
+    return out
+
+
+def carried_media(old_meta: dict) -> list[dict]:
+    """The old version's attachments, as `update(media=...)` wants them: it persists each
+    item again under the new id (a copy of the bytes, so neither version can lose the
+    file when the other is removed). Stored paths are relative to the vault, so they are
+    made absolute here; an item whose file is gone is left out rather than failing the
+    whole carry."""
+    items = (old_meta or {}).get("media") or []
+    if not isinstance(items, list):
+        return []
+    vault = getattr(getattr(rt.bucket_mgr, "media_store", None), "vault_dir", None)
+    out: list[dict] = []
+    for item in items:
+        if not isinstance(item, dict) or not str(item.get("path") or "").strip():
+            continue
+        path = Path(str(item["path"]))
+        if not path.is_absolute() and vault is not None:
+            path = Path(vault) / path
+        if not path.is_file():
+            continue
+        entry = {"path": str(path)}
+        for key in ("title", "type", "note"):
+            if item.get(key):
+                entry[key] = item[key]
+        out.append(entry)
     return out
 
 
@@ -393,8 +425,12 @@ async def save_gist(text: str, room: str, v: float, a: float,
     # · The gist tag only when the chain began as a gist. A re-version of an ordinary
     #   memory is that memory, not machinery.
     # · The user's tags; the machinery's own are left behind (`user_tags`).
+    # · `protected` goes in at creation too: update() has no opening for it (it is set
+    #   once, at birth), and it locks importance the way the pin does.
     carries_profile = False
     carried: dict = {}
+    media: list[dict] = []
+    protected = False
     if supersedes:
         from .profile import _PROFILE_TAG      # lazy: core.profile imports this module
         old_page = await rt.bucket_mgr.get(supersedes)
@@ -407,6 +443,8 @@ async def save_gist(text: str, room: str, v: float, a: float,
             carries_profile = True
         tags += [t for t in user_tags(old_meta) if t not in tags]
         carried = carried_state(old_meta, period=bool(when))
+        media = carried_media(old_meta)
+        protected = bool(old_meta.get("protected"))
     else:
         tags.insert(0, GIST_TAG)
     new_id = await rt.bucket_mgr.create(
@@ -421,17 +459,30 @@ async def save_gist(text: str, room: str, v: float, a: float,
         source_tool="fold",
         room=room,
         when=when,                       # the time-circle: the span goes into the existing `when`, there is no second field
+        protected=protected,
         test_data=test_data,
     )
 
     report: dict = {"cover": cover, "叠盖": [], "没写上": [], "链没写全": False,
-                    "接着当门口": carries_profile, "状态没带过去": False}
+                    "接着当门口": carries_profile, "状态没带过去": False, "附件没带过去": False}
 
     # The old version's standing, before the chain: a new version that is wanted, dated
     # or closed has to be so from the moment it takes over. A failure here is the silent
     # kind (the body landed, the fields did not), so it is reported, never swallowed.
     if carried and not await rt.bucket_mgr.update(new_id, **carried):
         report["状态没带过去"] = True
+    # Attachments are a write of their own: persisting them can raise (a file gone, a
+    # size cap), and that must not take the standing above down with it.
+    if media:
+        try:
+            if not await rt.bucket_mgr.update(new_id, media=media):
+                report["附件没带过去"] = True
+        except Exception as e:
+            report["附件没带过去"] = True
+            try:
+                rt.logger.warning(f"regrow carry-media failed {supersedes}->{new_id}: {e}")
+            except Exception:
+                pass
 
     # ---- write both ends ----
     # 🔴 **A version chain does not count as bookkeeping**: when a period changes version
@@ -491,6 +542,28 @@ async def save_gist(text: str, room: str, v: float, a: float,
                 rt.logger.warning(f"regrow carry-pin failed {supersedes}->{new_id}: {e}")
             except Exception:
                 pass
+        # ---- the anchor moves the same way, through set_anchor (it also swaps
+        # source_tool, and keeps the original for the release) ----
+        # The cap is counted inside the write and the old version still holds its slot,
+        # so here the order is the reverse of the pin's: release the old first, then
+        # anchor the new. If the second step fails, the old is anchored again — an anchor
+        # is a mark that keeps something down, and a moment with neither is harmless
+        # where a moment with neither pin is the door going empty.
+        try:
+            old_b = await rt.bucket_mgr.get(supersedes)
+            old_meta = (old_b or {}).get("metadata", {}) or {}
+            if old_meta.get("anchor") and hasattr(rt.bucket_mgr, "set_anchor"):
+                await rt.bucket_mgr.set_anchor(supersedes, False)
+                moved = await rt.bucket_mgr.set_anchor(new_id, True)
+                report["接着锚"] = bool(moved.get("ok"))
+                if not moved.get("ok"):
+                    await rt.bucket_mgr.set_anchor(supersedes, True)
+        except Exception as e:
+            report["接着锚"] = False
+            try:
+                rt.logger.warning(f"regrow carry-anchor failed {supersedes}->{new_id}: {e}")
+            except Exception:
+                pass
     elif not ok_cover:
         report["链没写全"] = True
 
@@ -534,4 +607,10 @@ def format_report(report: dict) -> str:
     if report.get("状态没带过去"):
         out.append("⚠️ 旧版的 when / 状态 / 重量 / 主体没带到新版——新版正文落了盘，但它现在不知道自己"
                    "是什么时候的、是不是还想做的。把这条报给AI查。")
+    if report.get("附件没带过去"):
+        out.append("⚠️ 旧版的附件（media）没带到新版——旧版 id 直查还看得到它们。把这条报给AI查。")
+    if report.get("接着锚") is True:
+        out.append("⚓ 旧版是坐标系（anchor），新版**接着当**，旧版已松开。")
+    elif report.get("接着锚") is False:
+        out.append("🔴 旧版是坐标系（anchor），但没挪到新版上——旧版还锚着，新版没锚。把这条报给AI查。")
     return "\n".join(out)

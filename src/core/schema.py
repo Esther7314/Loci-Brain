@@ -37,7 +37,7 @@ import frontmatter
 
 from utils import atomic_write_text, now_iso, sanitize_name
 
-CURRENT_VERSION = 3
+CURRENT_VERSION = 4
 
 STATE_FILE = Path("_state") / "schema.json"
 BACKUP_DIR = "_backups"
@@ -213,11 +213,56 @@ def _v2_to_v3(meta: dict, rel: PurePosixPath) -> tuple[list[str], str | None]:
     return changed, new_rel
 
 
+# 3 -> 4: `__gist__` means "a fold's product" and nothing else. Every new version regrow
+# wrote before stage 3 of v2 carried the tag too, which kept plain re-versions of ordinary
+# memories out of the muse and dream pools and out of a period's members, as if they were
+# machinery. Whether a chain is a gist is decided by its first version: a tagged memory
+# whose root (walking `supersedes`) does not carry the tag loses it. Periods keep theirs
+# (their root carries it), and so does every version of a fold's gist.
+_V3_GIST_TAG = "__gist__"
+
+
+class _V3ToV4:
+    """A step that needs the whole library in view: the root of a version chain is
+    another file. `prepare` indexes id -> (tags, supersedes) once per run; the step itself
+    then judges one file at a time like the others."""
+
+    def __init__(self):
+        self._index: dict[str, tuple[set[str], str]] = {}
+
+    def prepare(self, buckets_dir: str | Path) -> None:
+        self._index = {}
+        for path in _memory_files(buckets_dir):
+            meta = frontmatter.load(path).metadata
+            bid = str(meta.get("id") or "").strip()
+            if bid:
+                self._index[bid] = ({str(t) for t in (meta.get("tags") or [])},
+                                    str(meta.get("supersedes") or "").strip())
+
+    def _root_has_tag(self, meta: dict) -> bool:
+        tags = {str(t) for t in (meta.get("tags") or [])}
+        prev = str(meta.get("supersedes") or "").strip()
+        seen: set[str] = {str(meta.get("id") or "")}
+        while prev and prev not in seen and prev in self._index and len(seen) < 64:
+            seen.add(prev)
+            tags, prev = self._index[prev]
+        return _V3_GIST_TAG in tags
+
+    def __call__(self, meta: dict, rel: PurePosixPath) -> tuple[list[str], str | None]:
+        tags = [str(t) for t in (meta.get("tags") or [])]
+        if _V3_GIST_TAG not in tags or self._root_has_tag(meta):
+            return [], None
+        meta["tags"] = [t for t in tags if t != _V3_GIST_TAG]
+        return ["gist_tag"], None
+
+
 # version it upgrades FROM -> what it does to one file: (fields changed, where the file
-# moves to relative to the library, or None to stay)
+# moves to relative to the library, or None to stay). A step with a `prepare(buckets_dir)`
+# is given the library once before its first file.
 STEPS: dict[int, Callable[[dict, PurePosixPath], tuple[list[str], str | None]]] = {
     1: _v1_to_v2,
     2: _v2_to_v3,
+    3: _V3ToV4(),
 }
 
 
@@ -251,6 +296,9 @@ def migrate(buckets_dir: str | Path, *, apply: bool = False) -> dict:
     state = _read_state(buckets_dir) or {"schema_version": version, "history": []}
     for v in range(version, CURRENT_VERSION):
         step = STEPS[v]
+        prepare = getattr(step, "prepare", None)
+        if callable(prepare):
+            prepare(buckets_dir)      # after the earlier steps wrote, so it sees their shape
         files = moved = 0
         fields: dict[str, int] = {}
         for path in list(_memory_files(buckets_dir)):
