@@ -1637,6 +1637,13 @@ async def recall_core(when: str, room: str, tag: str, query: str,
                     or meta.get("deleted_at")):
                 info.append("⚠️在归档区")
             lines.append(" · ".join(info))
+            # A basis this memory grew out of was overturned (regrow's overturn marks
+            # every descendant). The entry still counts; whoever reads it has to know
+            # which ground moved, and to what.
+            for rec in (meta.get("invalidation") or []):
+                if isinstance(rec, dict) and rec.get("kind") == "overturn":
+                    lines.append(f"⚠️依据变了：{rec.get('of')} 被 {rec.get('by')} 推翻了"
+                                 f"（{str(rec.get('at') or '')[:10]}）——这条站在它上面，看的时候记着。")
             if src_lines:
                 lines.append("来源:")
                 lines.extend(src_lines)

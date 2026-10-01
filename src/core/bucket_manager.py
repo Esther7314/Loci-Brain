@@ -368,6 +368,16 @@ _MEDIA_TITLE_MAX = 200
 _MEDIA_TYPE_MAX = 32
 _MEDIA_NOTE_MAX = 500
 
+# --- invalidation: marks that a basis of this memory changed under it (W3C PROV) ---
+# A list of records {kind, of, by, at}, appended by regrow(mode="overturn") on every
+# descendant of the overturned version; later kinds (a withdrawn source) append too. The
+# memory keeps surfacing; the mark is shown wherever it is read by id. Capped so a basis
+# overturned again and again cannot grow the frontmatter without bound: the newest stay.
+_INVALIDATION_MAX_ITEMS = 32
+_INVALIDATION_KIND_MAX = 32
+_INVALIDATION_ID_MAX = 64
+_INVALIDATION_AT_MAX = 32
+
 _METADATA_TEXT_LIMITS = {
     "status": 32,
     "type": 32,
@@ -733,6 +743,31 @@ class BucketManager:
             if len(normalized) >= _MEANING_LIST_MAX_ITEMS:
                 break
         return normalized
+
+    @classmethod
+    def _normalize_invalidation(cls, records) -> list[dict]:
+        """Keep each record to its four short text fields; a record with no `kind` says
+        nothing and is dropped. Order is kept, the newest `_INVALIDATION_MAX_ITEMS` win."""
+        if not records:
+            return []
+        if isinstance(records, dict):
+            records = [records]
+        if not isinstance(records, (list, tuple)):
+            return []
+        out: list[dict] = []
+        for rec in records:
+            if not isinstance(rec, dict):
+                continue
+            kind = cls._sanitize_text(str(rec.get("kind") or "")).strip()[:_INVALIDATION_KIND_MAX]
+            if not kind:
+                continue
+            out.append({
+                "kind": kind,
+                "of": cls._sanitize_text(str(rec.get("of") or "")).strip()[:_INVALIDATION_ID_MAX],
+                "by": cls._sanitize_text(str(rec.get("by") or "")).strip()[:_INVALIDATION_ID_MAX],
+                "at": cls._sanitize_text(str(rec.get("at") or "")).strip()[:_INVALIDATION_AT_MAX],
+            })
+        return out[-_INVALIDATION_MAX_ITEMS:]
 
     @classmethod
     def _normalize_media(cls, media) -> list[dict]:
@@ -1995,6 +2030,9 @@ class BucketManager:
         if "meaning_append" in kwargs:
             # meaning_append appends one new meaning (trace's meaning_append, and every hold call).
             kwargs["meaning_append"] = self._normalize_meaning_item(kwargs["meaning_append"])
+        if "invalidation" in kwargs:
+            # The whole list is written each time; the caller appends to what it read.
+            kwargs["invalidation"] = self._normalize_invalidation(kwargs["invalidation"])
 
         try:
             post = frontmatter.load(file_path)
@@ -2247,11 +2285,20 @@ class BucketManager:
                   #    it is not remembering, it is the assertion that the stamp really
                   #    reached disk.
                   "name_source", "summary_source",
+                  # invalidation: the records saying a basis of this memory changed under
+                  # it (regrow's overturn writes them on every descendant). Normalised
+                  # above; an empty list removes the field.
+                  "invalidation",
                   # v2 write-layer fields, already normalised just above this loop.
                   *V2_FIELDS):
             if k in kwargs:
                 if k == "weight" and kwargs[k] is not None:
                     post[k] = _clamp01(kwargs[k], _DEFAULT_VALENCE)
+                elif k == "invalidation":
+                    if kwargs[k]:
+                        post[k] = kwargs[k]
+                    else:
+                        post.metadata.pop(k, None)
                 elif k == "room":
                     post[k] = self._sanitize_text(str(kwargs[k])).strip()[:_ROOM_MAX]
                 elif k == "summary":

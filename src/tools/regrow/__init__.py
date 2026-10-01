@@ -20,6 +20,16 @@ The boundary with the other two acts (never mix them):
 - trace: correct or delete. ⚠️ Its content parameter **overwrites the body
   directly** — never use it for a version change
 
+🔴 **The caller says what kind of change it is** (`mode`, required; nothing is written
+without it):
+- `supplement`: the old version was right as far as it went. Whatever grew out of it
+  (`from` pointing at it) still stands and is not touched.
+- `overturn`: the old version was wrong. Everything that grew out of it, and out of
+  that, gets an `invalidation` record (`{kind: "overturn", of: old id, by: new id, at}`)
+  appended — the walk follows `referenced_by` layer by layer. The descendants keep
+  surfacing as before; the mark is shown wherever one is read by id, and breath's
+  「依据变了的」 block reads it.
+
 Four things fixed during review:
 - The whole flow is wrapped in a _keyed_turn on the old id (a cross-process
   lock): two concurrent regrows of the same entry can no longer fork it
@@ -30,7 +40,7 @@ Four things fixed during review:
 - Backfill self-healing: backfill_sweep also recognises source_tool=regrow (that
   change lives over in rooms_path)
 
-Exports: dispatch(bucket_id, text, v, a, from_) -> str
+Exports: dispatch(bucket_id, text, v, a, from_, mode) -> str · MODES
 ========================================
 """
 
@@ -41,19 +51,57 @@ from .._common import _keyed_turn
 # is_mind_room is no longer used to keep events out (that gate was removed; see
 # the epitaph inside regrow below)
 # from core._rooms import is_mind_room
-from utils import read_from_ids
+from utils import now_iso, read_from_ids
 from ..grow.rooms_path import _normalize_from
 
 _CHAIN_LIMIT = 64  # the underlying ceiling on from
 
+MODES = ("supplement", "overturn")
+_MODE_WORD = {"supplement": "补充", "overturn": "推翻"}
+_MODE_HELP = ('mode 必填：这次换版是补充还是推翻？mode="supplement"——旧版没说错，只是说少了'
+              '，从它长出来的东西照旧；mode="overturn"——旧版说错了，从它长出来的东西依据'
+              '变了，会被逐条标上。没说清楚之前什么都不写。')
 
-async def dispatch(bucket_id: str = "", text: str = "", v=-1, a=-1, from_=None) -> str:
+
+async def _mark_overturned(old_id: str, new_id: str) -> tuple[list[str], list[str]]:
+    """Append one `invalidation` record to every memory that grew out of `old_id`,
+    and out of those, layer by layer (`referenced_by`, the reverse of `from`).
+    Returns (marked, could not write). The walk never enters the new version or a
+    memory it has already seen, so a `from` loop ends."""
+    record = {"kind": "overturn", "of": old_id, "by": new_id, "at": now_iso()}
+    seen = {old_id, new_id}
+    frontier = [old_id]
+    marked: list[str] = []
+    failed: list[str] = []
+    while frontier:
+        next_layer: list[str] = []
+        for parent in frontier:
+            for cid in await rt.bucket_mgr.referenced_by(parent):
+                if not cid or cid in seen:
+                    continue
+                seen.add(cid)
+                next_layer.append(cid)
+                child = await rt.bucket_mgr.get(cid)
+                existing = list(((child or {}).get("metadata") or {}).get("invalidation") or [])
+                if await rt.bucket_mgr.update(cid, invalidation=existing + [record]):
+                    marked.append(cid)
+                else:
+                    failed.append(cid)
+        frontier = next_layer
+    return marked, failed
+
+
+async def dispatch(bucket_id: str = "", text: str = "", v=-1, a=-1, from_=None,
+                   mode: str = "") -> str:
     bucket_id = str(bucket_id or "").strip()
     text = str(text or "")  # stored verbatim: never strip the body
+    mode = str(mode or "").strip().lower()
     if not bucket_id:
         return "regrow 要换谁的版本？传旧版的 bucket_id。"
     if not text.strip():
         return "text 不能为空——新版的完整正文（不是补丁，是整条重写后的样子）。"
+    if mode not in MODES:
+        return _MODE_HELP if not mode else f"mode 只认 supplement / overturn（收到 {mode!r}）。{_MODE_HELP}"
 
     # v/a follows the same rule as mind: I set them myself, never outsourced
     try:
@@ -143,11 +191,14 @@ async def dispatch(bucket_id: str = "", text: str = "", v=-1, a=-1, from_=None) 
 
         # Re-versioning a period: the marker and the span both have to come
         # along, or the new version stops being a period — **the span is copied
-        # verbatim from the old one**.
-        # Time is inherited from the old version, and there is no opening here
-        # either: `when` is "where this hangs in time", metadata rather than
-        # content — changing a period's span or filling in an event's date both
-        # go through trace(bucket_id=..., when=...).
+        # verbatim from the old one**, and it goes in at creation because save_gist
+        # reads a `when` as "this is a period".
+        # An event's or a want's `when` is inherited too, but by save_gist itself,
+        # together with the rest of the old version's standing (status, weight,
+        # subjects, tags…) — passing it here would turn the event into a period.
+        # There is no opening to change time here either: `when` is "where this
+        # hangs in time", metadata rather than content — changing a period's span
+        # or filling in an event's date both go through trace(bucket_id=..., when=...).
         # 📌 Periods used to be the exception here ("the span is half its body, so
         #    it counts as content"). That exception was dropped too: a point and a
         #    span are the same kind of thing, both "where it hangs". A period's
@@ -180,6 +231,14 @@ async def dispatch(bucket_id: str = "", text: str = "", v=-1, a=-1, from_=None) 
             text, room, v, a, cover, when=new_when if is_big else "",
             from_ids=sources, supersedes=bucket_id, test_data=is_test)
 
+        # Overturned: whatever grew out of the old version is told so, still under the
+        # lock on the old id, so the marks land before anyone else can re-version it.
+        # A supplement touches nothing downstream.
+        marked: list[str] = []
+        unmarked: list[str] = []
+        if mode == "overturn":
+            marked, unmarked = await _mark_overturned(bucket_id, new_id)
+
     try:
         await rt.bucket_mgr.touch_many(sources)  # a new version = remembering its sources again
     except Exception:
@@ -187,7 +246,17 @@ async def dispatch(bucket_id: str = "", text: str = "", v=-1, a=-1, from_=None) 
 
     mark = "◈时期" if is_big else "🌱regrow"
     span = f" {new_when}" if is_big and new_when else ""
-    out = f"{mark} {bucket_id} → {new_id}  {room}{span}（旧版留档不浮现，id 直查仍能看）"
+    out = (f"{mark}·{_MODE_WORD[mode]} {bucket_id} → {new_id}  {room}{span}"
+           "（旧版留档不浮现，id 直查仍能看）")
+    if mode == "overturn":
+        if marked:
+            out += (f"\n依据变了的：从旧版长出来的 {len(marked)} 条已标上"
+                    f"（{', '.join(marked[:6])}{'…' if len(marked) > 6 else ''}）"
+                    "——它们照常冒头，id 直查能看见这行记号。")
+        else:
+            out += "\n（没有东西从旧版长出来过，不用标。）"
+        if unmarked:
+            out += f"\n⚠️ 这几条的记号没写上：{', '.join(unmarked[:6])}——把这条报给AI查。"
     if is_big and new_when:
         # A period only changes its name and its edges — no member list moves
         # with it. Count who falls inside the span right now, purely to give a

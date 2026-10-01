@@ -386,6 +386,25 @@ def test_last_dreamt_reaches_disk(store):
     run(go())
 
 
+def test_invalidation_reaches_disk(store):
+    async def go():
+        bid = await store.create(BODY)
+        first = {"kind": "overturn", "of": "aaaaaaaaaaaa", "by": "bbbbbbbbbbbb",
+                 "at": "2026-10-01T02:00:00"}
+        assert await store.update(bid, invalidation=[first]) is True
+        # Criterion: the same trap a fourth time. regrow's overturn marks every
+        # descendant through this field; dropped here, an overturned basis leaves no
+        # trace anywhere and every descendant reads as standing on solid ground.
+        assert (await _meta(store, bid))["invalidation"] == [first]
+        second = dict(first, by="cccccccccccc", at="2026-10-02T02:00:00")
+        assert await store.update(bid, invalidation=[first, second]) is True
+        assert (await _meta(store, bid))["invalidation"] == [first, second]
+        # A record without a kind says nothing; an empty list clears the field.
+        assert await store.update(bid, invalidation=[{"of": "x"}]) is True
+        assert "invalidation" not in await _meta(store, bid)
+    run(go())
+
+
 def test_none_deletes_a_field_instead_of_writing_the_word_none(store):
     async def go():
         bid = await store.create(BODY)

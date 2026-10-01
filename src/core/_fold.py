@@ -108,7 +108,8 @@ NOT excluded from: recall search (a query still hits them; they are not dead) ·
    lost nothing.**
 
 Exports: GIST_TAG · SPAN_HELP · is_covered() · covers_of() · cover_ids() · is_gist()
-         check_span() · span_members() · save_gist() · format_report()
+         user_tags() · carried_state() · check_span() · span_members() · save_gist()
+         format_report()
 🔪 `resolve_span_ids()` is **retired** (a period keeps no books). Its read-side half
    lives on under the name `span_members()` — **computed on the spot, never persisted.**
 ========================================
@@ -118,12 +119,34 @@ import asyncio
 from datetime import datetime, timedelta
 
 from tools import _runtime as rt
+from utils import is_closed
 from ._bigevent import BIGEVENT_TAG, SPAN_RE
+from .bucket_manager import V2_FIELDS
 
-# The system tag for a gist. The ones produced by the time-circle carry `__大event__`
-# **as well**, so none of the existing big-event machinery (laid over a recalled stretch
-# of time, kept out of the timeline, versioned with regrow) needs a single line changed.
+# The system tag for a gist: what fold (n >= 2) produces. The ones produced by the
+# time-circle carry `__大event__` **as well**, so none of the existing big-event machinery
+# (laid over a recalled stretch of time, kept out of the timeline, versioned with regrow)
+# needs a single line changed.
+# 🔴 A new version of one memory (regrow, n=1) is **not** a gist: it is the same memory
+#    in new words, and the pools that keep gists out (muse, dreams, a period's members)
+#    must keep seeing it. Only a chain that **began** as a gist keeps the tag across
+#    versions (`_began_as_gist`).
 GIST_TAG = "__gist__"
+
+# Tags the machinery writes for itself: what kind of record this is (`__…__`), or what the
+# backfill noticed (`aspect:` · `疑似同件:` · `相似认知:`). None of them says what the
+# memory is about, so a new version does not inherit them — its kind is decided afresh in
+# save_gist and the backfill looks at the new body again.
+_MACHINE_TAG_PREFIXES = ("__", "aspect:", "疑似同件:", "相似认知:")
+
+# What a new version inherits from the one it replaces: everything that says where the
+# entry stands in the world — its time, whether it is wanted and by whom, how heavily,
+# whether it is closed, who it is about, when it was last asked about or dreamt of.
+# What describes the text itself (name, summary, the backfill's tags, the vector) is
+# computed again from the new body, and the version chain (cover / covered_by /
+# supersedes / superseded_by / dont_surface) is written fresh by save_gist.
+_CARRIED_FIELDS = ("when", "status", "weight", "subjects",
+                   "last_asked", "closed_by", "last_dreamt", *V2_FIELDS)
 
 
 def _is_live(bucket_id: str) -> bool:
@@ -192,6 +215,60 @@ def cover_ids(meta: dict) -> list[str]:
 def is_gist(meta: dict) -> bool:
     tags = [str(t) for t in (meta.get("tags") or [])]
     return GIST_TAG in tags or BIGEVENT_TAG in tags
+
+
+def user_tags(meta: dict) -> list[str]:
+    """The tags a person or the model put on this memory, with the machinery's own left
+    out (`_MACHINE_TAG_PREFIXES`, and the mark the panel writes when a person corrected
+    an entry — that mark names one edit, not the memory)."""
+    from .profile import _EDITED_BY_USER_TAG      # lazy: core.profile imports this module
+
+    out: list[str] = []
+    for raw in (meta or {}).get("tags") or []:
+        t = str(raw).strip()
+        if not t or t.startswith(_MACHINE_TAG_PREFIXES) or t == _EDITED_BY_USER_TAG:
+            continue
+        if t not in out:
+            out.append(t)
+    return out
+
+
+def carried_state(old_meta: dict, *, period: bool = False) -> dict:
+    """What `update()` has to write on a new version so that it stands where the old one
+    stood (`_CARRIED_FIELDS`, those that are set). A period's `when` is left out: the span
+    went in at creation. An entry closed only by the older `resolved` boolean comes across
+    as `status="resolved"`, the field every write path uses now."""
+    out: dict = {}
+    for k in _CARRIED_FIELDS:
+        if k == "when" and period:
+            continue
+        v = (old_meta or {}).get(k)
+        if v is None or v == "" or v == []:
+            continue
+        out[k] = v
+    if "status" not in out and is_closed(old_meta):
+        out["status"] = "resolved"
+    return out
+
+
+async def _began_as_gist(meta: dict) -> bool:
+    """Whether this version chain started life as a gist (fold's product), read off its
+    first version. The tag alone cannot say: every new version written before this rule
+    carries it, including plain re-versions of ordinary memories. The walk follows
+    `supersedes` and stops at a missing or archived predecessor, judging the last
+    version it could read."""
+    cur = meta or {}
+    seen: set[str] = set()
+    while True:
+        prev = str(cur.get("supersedes") or "").strip()
+        if not prev or prev in seen or len(seen) >= 64:
+            break
+        seen.add(prev)
+        b = await rt.bucket_mgr.get(prev)
+        if not b:
+            break
+        cur = (b.get("metadata") or {})
+    return GIST_TAG in [str(t) for t in (cur.get("tags") or [])]
 
 
 SPAN_HELP = ('when 要写成起止："2026-07-31..2026-08-05"；还在进行中就把止留空：'
@@ -284,7 +361,9 @@ async def save_gist(text: str, room: str, v: float, a: float,
     and a name; that is derived metadata, not the body.
 
     supersedes: for n=1 (a version change) pass the old id, and the version chain
-      supersedes / superseded_by plus dont_surface gets written.
+      supersedes / superseded_by plus dont_surface gets written, and the old version's
+      standing (`_CARRIED_FIELDS`, its user tags, its pin, the profile page's job) comes
+      across onto the new one.
       Why only at n=1: a version chain means "the previous version of this same entry",
       and at n>=2 there is no such thing as "the previous version".
       regrow's externally visible behaviour depends on this staying exactly as it is.
@@ -303,20 +382,33 @@ async def save_gist(text: str, room: str, v: float, a: float,
     cover = [str(x).strip() for x in (cover or []) if str(x).strip()]
     if when:
         cover = []          # a period is a pure naming layer; this line is its foundation, do not remove it
-    tags = [GIST_TAG] + ([BIGEVENT_TAG] if when else [])
-    # ---- 🔴 a version change keeps the profile page's job at the door ----
-    # The door finds its page by the tag alone and skips a superseded page, so a new
-    # version created without the tag leaves the door's cell empty.
-    # The pin is carried further down with an update; the tag goes on at creation
-    # instead, because backfill merges into whatever tags exist at that moment.
+    tags = [BIGEVENT_TAG] if when else []
+    # ---- 🔴 a version change (n=1) carries the old version's standing across ----
+    # Tags go on at creation, because backfill merges into whatever tags exist at that
+    # moment; the fields follow right after creation with one update (`carried_state`),
+    # and the pin further down, after the chain.
+    # · The profile page's job: the door finds its page by the tag alone and skips a
+    #   superseded page, so a new version created without the tag leaves the door's cell
+    #   empty.
+    # · The gist tag only when the chain began as a gist. A re-version of an ordinary
+    #   memory is that memory, not machinery.
+    # · The user's tags; the machinery's own are left behind (`user_tags`).
     carries_profile = False
+    carried: dict = {}
     if supersedes:
         from .profile import _PROFILE_TAG      # lazy: core.profile imports this module
         old_page = await rt.bucket_mgr.get(supersedes)
-        old_tags = [str(t) for t in (((old_page or {}).get("metadata") or {}).get("tags") or [])]
+        old_meta = (old_page or {}).get("metadata") or {}
+        old_tags = [str(t) for t in (old_meta.get("tags") or [])]
+        if GIST_TAG in old_tags and await _began_as_gist(old_meta):
+            tags.insert(0, GIST_TAG)
         if _PROFILE_TAG in old_tags:
             tags.append(_PROFILE_TAG)
             carries_profile = True
+        tags += [t for t in user_tags(old_meta) if t not in tags]
+        carried = carried_state(old_meta, period=bool(when))
+    else:
+        tags.insert(0, GIST_TAG)
     new_id = await rt.bucket_mgr.create(
         content=text,
         tags=tags,                       # set at create time: backfill merges and never replaces, so this cannot be washed off
@@ -333,7 +425,13 @@ async def save_gist(text: str, room: str, v: float, a: float,
     )
 
     report: dict = {"cover": cover, "叠盖": [], "没写上": [], "链没写全": False,
-                    "接着当门口": carries_profile}
+                    "接着当门口": carries_profile, "状态没带过去": False}
+
+    # The old version's standing, before the chain: a new version that is wanted, dated
+    # or closed has to be so from the moment it takes over. A failure here is the silent
+    # kind (the body landed, the fields did not), so it is reported, never swallowed.
+    if carried and not await rt.bucket_mgr.update(new_id, **carried):
+        report["状态没带过去"] = True
 
     # ---- write both ends ----
     # 🔴 **A version chain does not count as bookkeeping**: when a period changes version
@@ -433,4 +531,7 @@ def format_report(report: dict) -> str:
                    "手动 trace(bucket_id=新版id, pinned=1) 补上。")
     if report.get("接着当门口"):
         out.append("📇 旧版是门口那张纸（名字页），新版**接着当**——下次 breath 门口显示的就是新版。")
+    if report.get("状态没带过去"):
+        out.append("⚠️ 旧版的 when / 状态 / 重量 / 主体没带到新版——新版正文落了盘，但它现在不知道自己"
+                   "是什么时候的、是不是还想做的。把这条报给AI查。")
     return "\n".join(out)

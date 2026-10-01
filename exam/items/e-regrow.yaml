@@ -1,9 +1,8 @@
-# Paper section 戊: regrow as a supplement vs a correction.
-# 1.4.0's regrow takes no "supplement / correction" argument and never touches
-# descendants. The checks below read the marks the next version has to show
-# (「待复核」 on a descendant whose basis was corrected) from recall's own output.
-# Where the card goes is not designed yet; these items assume a breath block titled
-# 待复核 and change with the design if it lands elsewhere.
+# Paper section 戊: regrow as a supplement vs an overturn.
+# regrow takes mode="supplement" | "overturn" and refuses without it. An overturn
+# appends an `invalidation` record to every descendant, layer by layer; recall's read by
+# id shows it as 「依据变了」. The breath block that cards them is titled 「依据变了的」
+# and is stage 5 work: until it lands, the breath checks below stay red on purpose.
 
 - id: E1
   title: "a supplement leaves descendants alone"
@@ -22,7 +21,7 @@
     - snapshot: e10002000000
       as: child_before
     - call: regrow
-      args: {bucket_id: e10001000000, text: "周六和她去爬山，爬到一半下雨了，她说淋雨也挺开心。", v: 0.7, a: 0.5}
+      args: {bucket_id: e10001000000, mode: supplement, text: "周六和她去爬山，爬到一半下雨了，她说淋雨也挺开心。", v: 0.7, a: 0.5}
     - newest: e10001000000
       as: new
     - check: {segment: store, desc: "the source has a new version", field: supersedes, id: $new, equals: e10001000000}
@@ -31,7 +30,7 @@
     - call: recall
       args: {query: e10002000000}
       as: child
-    - check: {segment: find, desc: "the descendant is not marked for review", output: child, lacks: 待复核}
+    - check: {segment: find, desc: "the descendant is not marked", output: child, lacks: 依据变了}
 
 - id: E2
   title: "a correction cards the descendant and marks it for review"
@@ -48,16 +47,16 @@
       from: [e20001000000]
   steps:
     - call: regrow
-      args: {bucket_id: e20001000000, text: "记错了：那天没去成，是在家看了一天电影。", v: 0.5, a: 0.3}
+      args: {bucket_id: e20001000000, mode: overturn, text: "记错了：那天没去成，是在家看了一天电影。", v: 0.5, a: 0.3}
     - call: recall
       args: {query: e20002000000}
       as: child
-    - check: {segment: find, desc: "read by id: the descendant carries 待复核", output: child, contains: 待复核}
+    - check: {segment: find, desc: "read by id: the descendant carries 依据变了", output: child, contains: 依据变了}
     - call: breath
-    - check: {segment: think, desc: "the model got a card about the corrected basis", output: breath, section: 待复核, contains: e20002}
+    - check: {segment: think, desc: "the model got a card about the overturned basis", output: breath, section: 依据变了的, contains: e20002}
 
 - id: E3
-  title: "regrow without saying supplement or correction is refused"
+  title: "regrow without saying supplement or overturn is refused"
   start: "2026-10-01T10:00:00+08:00"
   setup:
     - id: e30001000000
@@ -96,18 +95,18 @@
       from: [e50002000000]
   steps:
     - call: regrow
-      args: {bucket_id: e50001000000, text: "记错了：那天没去成，在家看电影。", v: 0.5, a: 0.3}
+      args: {bucket_id: e50001000000, mode: overturn, text: "记错了：那天没去成，在家看电影。", v: 0.5, a: 0.3}
     - call: recall
       args: {query: e50002000000}
       as: child
     - call: recall
       args: {query: e50003000000}
       as: grandchild
-    - check: {segment: find, desc: "stop trusting at once: the child is marked", output: child, contains: 待复核}
-    - check: {segment: find, desc: "stop trusting at once: the grandchild is marked too", output: grandchild, contains: 待复核}
+    - check: {segment: find, desc: "stop trusting at once: the child is marked", output: child, contains: 依据变了}
+    - check: {segment: find, desc: "stop trusting at once: the grandchild is marked too", output: grandchild, contains: 依据变了}
     - call: breath
-    - check: {segment: think, desc: "layer by layer: the child gets the card first", output: breath, section: 待复核, contains: e50002}
-    - check: {segment: think, desc: "layer by layer: no card for the grandchild yet", output: breath, section: 待复核, lacks: e50003}
+    - check: {segment: think, desc: "layer by layer: the child gets the card first", output: breath, section: 依据变了的, contains: e50002}
+    - check: {segment: think, desc: "layer by layer: no card for the grandchild yet", output: breath, section: 依据变了的, lacks: e50003}
 
 - id: E6
   title: "fixing a typo keeps no version and cards nobody"

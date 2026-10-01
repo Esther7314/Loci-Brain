@@ -1,5 +1,6 @@
 # Paper item 乙4: regrowing a promised future item keeps its state.
-# Known to fail on 1.4.0 (regrow writes a fresh bucket that drops the want fields).
+# The new version carries the old one's standing (time, telic, weight, subjects, the
+# user's tags); mode is required, and a rewording is a supplement.
 id: B4
 title: regrow keeps a promised item's state
 start: "2026-10-01T10:00:00+08:00"
@@ -17,7 +18,7 @@ steps:
     as: before
   - at: "2026-10-01T12:00:00+08:00"
   - call: regrow
-    args: {bucket_id: b40001000000, text: "答应今晚回来跟她说二面怎么样。", v: 0.6, a: 0.4}
+    args: {bucket_id: b40001000000, mode: supplement, text: "答应今晚回来跟她说二面怎么样。", v: 0.6, a: 0.4}
   - newest: b40001000000
     as: new
   - check: {segment: store, desc: "a new version exists", field: supersedes, id: $new, equals: b40001000000}
