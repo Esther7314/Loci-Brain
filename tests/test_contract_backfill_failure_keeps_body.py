@@ -288,11 +288,7 @@ class NeighbourStore(FakeStore):
         return b
 
 
-@pytest.mark.parametrize("kind, hint", [
-    ("event", "疑似同件:neighb"),
-    ("mind", "相似认知:neighb"),
-])
-def test_a_similarity_hint_goes_on_top_of_the_tags_already_there(runtime, kind, hint):
+def test_a_similarity_hint_goes_on_top_of_the_tags_already_there(runtime):
     # Criterion: the model gave nothing this round, so the similarity hint is the only tag
     # being written. A regrown entry is always close to the version it replaced, so this
     # path runs on nearly every regrow — and a hint written on its own replaces the list,
@@ -300,8 +296,18 @@ def test_a_similarity_hint_goes_on_top_of_the_tags_already_there(runtime, kind, 
     d = FakeDehydrator(answers=[{"summary": "s"}])
     store = NeighbourStore(existing_tags=["__gist__", "__档案事实__"])
     runtime(d, store)
-    run(R._backfill_one("b1", BODY, kind))
-    assert store.updates[0]["tags"] == ["__gist__", "__档案事实__", hint]
+    run(R._backfill_one("b1", BODY, "event"))
+    assert store.updates[0]["tags"] == ["__gist__", "__档案事实__", "疑似同件:neighb"]
+
+
+def test_a_thought_close_to_an_old_view_gets_no_tag(runtime):
+    # Criterion: a thought running into an old view is said in the write's own return
+    # (core/_reconsolidation.py), not tagged in the background where nothing reads it.
+    d = FakeDehydrator(answers=[{"summary": "s"}])
+    store = NeighbourStore(existing_tags=["__gist__"])
+    runtime(d, store)
+    run(R._backfill_one("b1", BODY, "mind"))
+    assert "tags" not in store.updates[0]
 
 
 class UnreadableStore(FakeStore):

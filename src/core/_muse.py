@@ -332,10 +332,18 @@ def item_of(meta: dict, text: str) -> Item | None:
 
 
 def _is_utility_record(meta: dict) -> bool:
-    """gists, big events, the note at the door — these are machinery, not memories that
-    anything can be proposed about."""
+    """Periods and the note at the door are machinery, not memories anything can be
+    proposed about.
+
+    A gist is not machinery: it is a sentence I wrote over what it folds, and two gists
+    saying the same thing are exactly what muse should put side by side (the merge is a
+    new fold covering both). It stays out only while a higher layer covers it — then the
+    one on top speaks for it, the same rule that keeps any covered entry from surfacing
+    on its own (`_fold.is_covered`)."""
     tags = [str(t) for t in (meta.get("tags") or [])]
-    return GIST_TAG in tags or BIGEVENT_TAG in tags or "__档案事实__" in tags
+    if BIGEVENT_TAG in tags or "__档案事实__" in tags:
+        return True
+    return GIST_TAG in tags and is_covered(meta)
 
 
 def in_pool(meta: dict, item: Item, kind: str, cfg: dict, now: datetime,

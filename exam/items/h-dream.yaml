@@ -1,0 +1,131 @@
+# Paper section 辛 (dream), the tool-layer items. (庚, scope, is exam/items/g-scope.yaml;
+# 癸, usage records, is exam/items/j-usage.yaml; 辛3 is whole-turn, exam/turns/c-f-h.yaml.)
+# Dreams have no MCP tool: breath's upkeep sweeps them and weaves one when the pressure is
+# over the line. An item's `dreams:` are seeded records; its `weaver:` answers the one model
+# call weaving makes (a declared seam, exam/serve.py). The `dream:` check reads the records.
+
+- id: H1
+  title: "what a dream wrote is marked automatically and keeps the mark through fold"
+  start: "2026-10-02T09:00:00+08:00"
+  setup:
+    - id: h10001000000
+      at: "2026-10-02T08:00:00+08:00"
+      room: EVENT/SELF
+      text: "早上去海边走了一圈，风很大，鞋里进了沙子。"
+      v: 0.6
+      a: 0.5
+      fields: {summary: "早上去海边走了一圈"}
+  dreams:
+    - id: h1d000000001
+      at: "2026-10-02T03:00:00+08:00"
+      text: "我站在一条很长的走廊里，门的数量一直在变。墙上挂着一串钥匙，钥匙在滴水。走到尽头是海，海在屋子里面，浪拍着书架。"
+    # Woken at seven: by nine it is past its hour and the next breath sweeps it.
+    - id: h1d000000002
+      at: "2026-10-02T07:00:00+08:00"
+      degraded: true
+      text: "灯。九秒一次。"
+  steps:
+    # The model writes the dream down and does not say it is a dream.
+    - call: grow
+      args:
+        kind: event
+        items:
+          - {room: EVENT/SELF, v: 0.4, a: 0.6, text: "昨晚梦见一条很长的走廊，门的数量一直在变，墙上挂着一串钥匙，钥匙在滴水，走到尽头是海。"}
+      capture: {note: "📝([0-9a-f]{12})"}
+    - check: {segment: store, desc: "the dream note is marked by the system, not by the model remembering", field: internally_generated, id: $note, equals: "True"}
+    - call: fold
+      args: {when: "2026-10-02..2026-10-02", room: EVENT/SELF, text: "去海边的那天", v: 0.6, a: 0.4}
+    - check: {segment: store, desc: "circled into a day: the note keeps its mark", field: internally_generated, id: $note, equals: "True"}
+    - call: grow
+      args: {kind: mind, room: MIND/VIEWS, text: "门的数量一直在变，像是拿不准该进哪一扇。", from: [$note], v: 0.4, a: 0.5}
+      capture: {thought: "🧠mind→([0-9a-f]{12})"}
+    - call: grow
+      args: {kind: mind, room: MIND/VIEWS, text: "海边的风让人想把话说完。", from: [h10001000000], v: 0.6, a: 0.4}
+      capture: {thought2: "🧠mind→([0-9a-f]{12})"}
+    - call: fold
+      args: {folds: [$thought, $thought2], room: MIND/VIEWS, text: "那天我一直在想该进哪扇门。", v: 0.5, a: 0.4}
+      capture: {gist: "▣gist→([0-9a-f]{12})"}
+    - call: recall
+      args: {query: $gist}
+      as: gist_read
+    - check: {segment: store, desc: "merged into a gist: read by id, it still says part of it came from a dream", output: gist_read, contains: "💭梦或想象：依据里有梦或想象"}
+    - call: recall
+      args: {query: $note}
+      as: note_read
+    - check: {segment: store, desc: "the note itself says so when read", output: note_read, contains: "💭梦或想象（内部生成"}
+    # A dream past its hour is swept on the next breath, leaving a trace.
+    - call: breath
+    - wait: 1.5
+    - check:
+        segment: store
+        desc: "the trace a fading dream leaves is marked too"
+        entry: {body_has: "做了个梦，没记下来", fields: {internally_generated: "True"}}
+
+- id: H2
+  title: "being dreamt does not warm an entry"
+  start: "2026-10-02T03:00:00+08:00"
+  weaver: {完整: "一扇门开着，门外是另一扇门。钥匙在口袋里发烫，可我一直摸不到它。", 碎片: "门外是门。发烫的钥匙。", v: 0.4, a: 0.6}
+  setup:
+    # Unbound and undated: asleep, so breath does not list it and nothing else touches it.
+    - id: h20001000000
+      at: "2026-10-01T20:00:00+08:00"
+      room: EVENT/SELF
+      text: "想把那封没寄出去的信重写一遍。"
+      fields: {direction_of_fit: telic, weight: 0.9, summary: "想重写那封没寄出去的信"}
+    - id: h20002000000
+      at: "2026-10-01T21:00:00+08:00"
+      room: EVENT/SELF
+      text: "晚上吵了一架，最后谁也没说话，灯一直开着。"
+      v: 0.1
+      a: 0.9
+      fields: {summary: "晚上吵了一架"}
+  steps:
+    - snapshot: h20001000000
+      as: want_before
+    - snapshot: h20002000000
+      as: event_before
+    - call: breath
+    - wait: 2
+    - check: {segment: store, desc: "a dream was woven, and it drew the want", dream: {count: 1, has: h20001000000}}
+    - check: {segment: store, desc: "and the never-worked-out event", dream: {has: h20002000000}}
+    - check: {segment: store, desc: "the want: state and warmth as before", unchanged: h20001000000, since: want_before, keys: [weight, status, direction_of_fit, valence, arousal, importance, activation_count, last_active, decay_stage]}
+    - check: {segment: store, desc: "the event: state and warmth as before", unchanged: h20002000000, since: event_before, keys: [status, valence, arousal, importance, activation_count, last_active, decay_stage, last_dreamt]}
+    - check: {segment: store, desc: "the want is only noted as dreamt (so the same dream does not recur)", field: last_dreamt, id: h20001000000}
+
+- id: H4
+  title: "'don't touch' keeps an entry out of dreams; 'don't nag' does not"
+  start: "2026-10-02T03:00:00+08:00"
+  weaver: {完整: "楼梯一直往下，下到海里。有人在水下打电话，声音是干的。", 碎片: "往下的楼梯。干的声音。", v: 0.4, a: 0.6}
+  setup:
+    - id: h40001000000
+      at: "2026-10-01T20:00:00+08:00"
+      room: EVENT/SELF
+      text: "想问她那次住院的事到底是怎么回事。"
+      fields: {direction_of_fit: telic, weight: 0.9, summary: "想问住院的事"}
+    - id: h40002000000
+      at: "2026-10-01T20:30:00+08:00"
+      room: EVENT/SELF
+      text: "想陪她把健身坚持下来。"
+      fields: {direction_of_fit: telic, weight: 0.85, summary: "想陪她坚持健身"}
+    - id: h40003000000
+      at: "2026-10-01T21:00:00+08:00"
+      room: EVENT/SELF
+      text: "她说住院的事别再碰了。"
+      fields: {direction_of_fit: telic, exception_of: h40001000000, hold: avoid}
+    - id: h40004000000
+      at: "2026-10-01T21:10:00+08:00"
+      room: EVENT/SELF
+      text: "她说这周别催她去健身。"
+      fields: {direction_of_fit: telic, exception_of: h40002000000, hold: defer}
+  steps:
+    - call: breath
+    - wait: 2
+    - check: {segment: store, desc: "a dream was woven", dream: {count: 1}}
+    - check: {segment: store, desc: "'don't nag': still dreamt about", dream: {has: h40002000000}}
+    - check: {segment: store, desc: "'don't touch': not in the dream", dream: {lacks: h40001000000}}
+    - check:
+        segment: store
+        desc: "a hold is not dream material of its own"
+        all_of:
+          - {dream: {lacks: h40003000000}}
+          - {dream: {lacks: h40004000000}}

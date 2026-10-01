@@ -215,6 +215,61 @@ _READS = {"negated": "（原话是否定的，事情不一定发生了）",
           "question": "（原话是在问）"}
 
 
+# The message type and the normaliser, for the other places that match words the same way:
+# the write tools' look-back (core/_reconsolidation.py) and scene question
+# (core/_case_recall.py).
+Message = _Message
+norm = _norm
+
+
+def table_spellings(extra: tuple = ()) -> list[tuple[str, str, int]]:
+    """(name, spelling, least CJK length) for every spelling of the names table that stands
+    for one name only — a key needs _MIN_CJK_KEY characters, an alias _MIN_CJK_ALIAS — then
+    each name in `extra` that the table does not know, spelled as itself."""
+    from tools import _subjects as _S
+
+    records = _S.load_names_table()
+    flat = _S.load_alias_table()
+    out: list[tuple[str, str, int]] = []
+    for name, rec in records.items():
+        for spelling, min_cjk in [(name, _MIN_CJK_KEY)] + [(a, _MIN_CJK_ALIAS) for a in rec.aliases]:
+            if flat.get(str(spelling).strip().lower()) != name:
+                continue            # shared by two names: stands for neither
+            out.append((name, str(spelling), min_cjk))
+    known = {n.lower() for n in records}
+    out += [(n, n, _MIN_CJK_KEY) for n in dict.fromkeys(extra)
+            if n and n.lower() not in known and not flat.get(n.lower())]
+    return out
+
+
+def pick_names(msg: _Message, spellings: list[tuple[str, str, int]]) -> dict[str, str]:
+    """{name: the spelling that fired} for each name the message mentions. The longest
+    spelling wins a stretch of text; a shorter one inside it does not fire again."""
+    hits: list[tuple[int, int, str, str]] = []
+    for name, spelling, min_cjk in spellings:
+        span = msg.find(spelling, min_cjk=min_cjk, edges=True)
+        if span:
+            hits.append((span[0], span[1], name, spelling))
+    hits.sort(key=lambda h: (-(h[1] - h[0]), h[0]))
+    taken: list[tuple[int, int]] = []
+    picked: dict[str, str] = {}
+    for a, b, name, spelling in hits:
+        if any(a < y and x < b for x, y in taken) or name in picked:
+            continue
+        taken.append((a, b))
+        picked[name] = spelling
+    return picked
+
+
+def own_names() -> set[str]:
+    """The AI's and the owner's names, normalised, with the table's name for each: a card
+    or a look-back on them would fire on nearly every message."""
+    from tools import _subjects as _S
+
+    own = {_norm(n) for n in (get_ai_name(), get_owner_name()) if n}
+    return own | {_norm(_S.canonical(n)) for n in own if n}
+
+
 def _quoted(msg: _Message, span: tuple[int, int], matched: str) -> str:
     clause, reads = msg.clause(span)
     quote = f"：「{clause}」" if clause and _norm(clause) != _norm(matched) else ""
@@ -529,25 +584,8 @@ class _Library:
         records = _S.load_names_table()
         if not records:
             return []
-        flat = _S.load_alias_table()
-        own = {_norm(n) for n in (get_ai_name(), get_owner_name()) if n}
-        own |= {_norm(_S.canonical(n)) for n in own if n}
-        hits: list[tuple[int, int, str, str]] = []
-        for name, rec in records.items():
-            for spelling, min_cjk in [(name, _MIN_CJK_KEY)] + [(a, _MIN_CJK_ALIAS) for a in rec.aliases]:
-                if flat.get(str(spelling).strip().lower()) != name:
-                    continue            # shared by two names: stands for neither
-                span = msg.find(spelling, min_cjk=min_cjk, edges=True)
-                if span:
-                    hits.append((span[0], span[1], name, str(spelling)))
-        hits.sort(key=lambda h: (-(h[1] - h[0]), h[0]))
-        taken: list[tuple[int, int]] = []
-        picked: dict[str, str] = {}
-        for a, b, name, spelling in hits:
-            if any(a < y and x < b for x, y in taken) or name in picked:
-                continue
-            taken.append((a, b))
-            picked[name] = spelling
+        own = own_names()
+        picked = pick_names(msg, table_spellings())
         out = []
         for name, spelling in picked.items():
             rec = records[name]

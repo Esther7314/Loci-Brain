@@ -17,8 +17,8 @@ THE TABLE
              roads do not count dont_surface (the rules by the door, 依据变了的, muse)
              — a choice, written down here so it is visible
 
-    Two rows have no place to feed yet and are skipped with the stage that adds them:
-    write tools' returns (stage 6) and strong-reminder / name cards (5.5).
+    One row has no place to feed yet and is skipped with the stage that adds it:
+    strong-reminder / name cards (5.5).
 
     Hole 4 — what a read by id does with an entry that is not live, and with the entries
     it links to — has tests of its own below the table.
@@ -185,6 +185,38 @@ def dream_handed_out(state, store):
     return "shown" if run(go()) else "hidden"
 
 
+# A word per state: every state is fed into the same store, one after the other.
+_WORD = {"archived": "harbour", "deleted": "orchard", "dont_surface": "quarry"}
+
+
+def write_return_view(state, store):
+    """回望: a card the new body names, in the state."""
+    from core import _reconsolidation as RC
+
+    async def go():
+        name = _WORD[state].title()
+        card = await store.create(f"{name} keeps every promise.", room="MIND/TRAITS", card_of=name)
+        await put_in_state(store, card, state)
+        return await RC.look_back(store, await store.list_all(),
+                                  [("n" * 12, f"{name} was late again.")], now=NOW)
+    return "shown" if run(go()) else "hidden"
+
+
+def write_return_scene(state, store):
+    """场景常来: five days of a scene, one of them in the state."""
+    from core import _case_recall as CR
+
+    async def go():
+        word = _WORD[state]
+        ids = [await store.create(f"Walked to the {word}.", tags=[word], room="EVENT/SELF",
+                                  when=(NOW - timedelta(days=k)).strftime("%Y-%m-%d"))
+               for k in range(1, CR.MIN_DAYS + 1)]
+        await put_in_state(store, ids[0], state)
+        return CR.ask(await store.list_all(), [f"The {word} again."],
+                      buckets_dir=str(store.base_dir), now=NOW)
+    return "shown" if run(go()) else "hidden"
+
+
 def a_dream(*ingredients) -> dict:
     stamp = W.now().isoformat(timespec="seconds")
     return {"id": "d0000000feed", "织于": stamp, "起算点": stamp, "回想次数": 0, "轮次": 0,
@@ -212,8 +244,8 @@ PLACES = [
     ("5 dream · wants", dream_wants, ("hidden", "hidden", "hidden")),
     ("5 dream · undigested (leak closed)", dream_undigested, ("hidden", "hidden", "hidden")),
     ("6 dream · handed out", dream_handed_out, ("hidden", "hidden", "hidden")),
-    pytest.param("7 write tools' returns", None, None,
-                 marks=NOT_YET(reason="stage 6 adds 回望 / 场景常来; they ask the gate")),
+    ("7 write tools' returns · 回望", write_return_view, ("hidden", "hidden", "hidden")),
+    ("7 write tools' returns · 场景常来's count", write_return_scene, ("hidden", "hidden", "hidden")),
     pytest.param("8 strong-reminder and name cards", None, None,
                  marks=NOT_YET(reason="5.5 adds them; they ask the gate")),
 ]

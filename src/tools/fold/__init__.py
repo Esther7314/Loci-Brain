@@ -27,6 +27,15 @@ n>=2 (merging after a spell of musing) are unchanged.
    the `room` argument — `room` can be wrong or missing, whereas whether I am
    circling events or thoughts is something the circled entries already know.
 
+------------------------------------------------------------
+Two gists saying the same thing can merge
+------------------------------------------------------------
+After a mind fold lands, its text is compared with the existing uncovered gists
+(`_merge_question`); one at cosine >= 0.80 makes the return ask whether to merge.
+A merge is no new gesture: it is one more fold whose `folds` are the gists
+themselves (rule 3 of `_fold`: covering what already covers is allowed), so both
+stop surfacing alone and the new one speaks for them.
+
 Exports: dispatch(text, room, v, a, cover, when, from_, test_data, sources) -> str
 ========================================
 """
@@ -34,6 +43,9 @@ Exports: dispatch(text, room, v, a, cover, when, from_, test_data, sources) -> s
 from .. import _runtime as rt
 from core import _fold as F
 from core import _sources as _src
+from core import _holds as _H
+from core import visibility as _V
+from core._bigevent import BIGEVENT_TAG
 from .._common import check_content_size, read_scope, resolve_bucket_ids, with_write_key
 from core._rooms import check_room, _rooms_help, is_event_room, is_mind_room
 from ..grow.rooms_path import _normalize_from, check_sources
@@ -236,4 +248,69 @@ async def _fold(text: str = "", room: str = "", v=-1, a=-1,
         tail.append("（= 换版：旧版留档不浮现，id 直查仍能看）")
     else:
         tail.append("（被盖的不再独立冒头，但 query 照样搜得到、id 直查钻得到）")
+    tail.append(await _merge_question(new_id, text, room, report["cover"]))
     return head + "\n" + "\n".join(x for x in tail if x) + notes
+
+
+# The line above which two gists are taken to say the same thing: the same 0.80 the
+# backfill uses for "possibly the same thing" and for a thought surfacing again.
+_MERGE_COS_THRESHOLD = 0.80
+# At most this many gists are named in one question; more is a list nobody reads.
+_MERGE_MAX_SHOWN = 2
+
+
+async def _merge_question(new_id: str, text: str, room: str, folded: list[str]) -> str:
+    """Ask whether the gist just written should merge with an existing one that says the
+    same thing. Empty when there is nothing to ask.
+
+    Candidates are the gists a merge could take: live, not periods, in a MIND room (fold
+    gathers thoughts only), not covered by a higher layer (a covered one is already
+    spoken for by the gist on top), not among what this fold just folded, and visible on
+    the look-back road under the caller's read scope (the question puts an old entry's
+    words into a write's return, so holds and dont_surface are honoured as they are there). A merge is one more fold over both, so the question
+    names the call.
+
+    Nothing here may fail the fold: the gist is already on disk. Without an embedding
+    engine, or when it errs, there is simply no question."""
+    try:
+        ee = getattr(rt.bucket_mgr, "embedding_engine", None)
+        if not ee or not getattr(ee, "enabled", False):
+            return ""
+        view = await read_scope()
+        skip = {new_id, *folded}
+        bodies: dict[str, str] = {}
+        library = await rt.bucket_mgr.list_all(include_archive=False)
+        holds = _H.hold_index(library)
+        for b in library:
+            meta = b.get("metadata", {}) or {}
+            bid = str(meta.get("id") or b.get("id") or "")
+            tags = [str(t) for t in (meta.get("tags") or [])]
+            if not bid or bid in skip or F.GIST_TAG not in tags or BIGEVENT_TAG in tags:
+                continue
+            if not is_mind_room(meta.get("room")) or F.is_covered(meta):
+                continue
+            if not _V.visible_for(meta, view, road=_V.RECONSOLIDATION, holds=holds):
+                continue
+            bodies[bid] = str(b.get("content") or "")
+        if not bodies:
+            return ""
+        sims = await ee.search_similar(text, top_k=len(bodies), among=list(bodies))
+        close = sorted(((str(sid), float(s)) for sid, s in sims
+                        if str(sid) in bodies and float(s) >= _MERGE_COS_THRESHOLD),
+                       key=lambda x: -x[1])[:_MERGE_MAX_SHOWN]
+        if not close:
+            return ""
+        lines = ["🔀 这条跟已有的 gist 意思很像："]
+        for sid, s in close:
+            first = (bodies[sid].strip().splitlines() or [""])[0][:38]
+            lines.append(f"  · {sid}「{first}」（相似 {s:.2f}）")
+        lines.append(f'要合吗？合 = 再 fold 一次，把它们一起折起来：fold(folds=["{new_id}", '
+                     f'"{close[0][0]}"], room="{room}", text=你重写的那一句, v=…, a=…)。'
+                     "被折的照旧搜得到、钻得到。不合就不用管，两条各自在。")
+        return "\n".join(lines)
+    except Exception as e:
+        try:
+            rt.logger.warning(f"fold merge question skipped for {new_id}: {e}")
+        except Exception:
+            pass
+        return ""

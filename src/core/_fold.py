@@ -129,9 +129,10 @@ from .bucket_manager import V2_FIELDS
 # (laid over a recalled stretch of time, kept out of the timeline, versioned with regrow)
 # needs a single line changed.
 # 🔴 A new version of one memory (regrow, n=1) is **not** a gist: it is the same memory
-#    in new words, and the pools that keep gists out (muse, dreams, a period's members)
-#    must keep seeing it. Only a chain that **began** as a gist keeps the tag across
-#    versions (`_began_as_gist`).
+#    in new words, and what treats gists apart (a period's members leave them out; muse
+#    and dreams leave them out while they are covered, `_muse._is_utility_record`) must
+#    keep seeing it as the memory. Only a chain that **began** as a gist keeps the tag
+#    across versions (`_began_as_gist`).
 GIST_TAG = "__gist__"
 
 # Tags the machinery writes for itself: what kind of record this is (`__…__`), or what the

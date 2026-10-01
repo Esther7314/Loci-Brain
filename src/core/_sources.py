@@ -89,7 +89,7 @@ Exports: SOURCES_FIELD · SOURCES_MAX · SourceId · SourceRecordError · normal
          granted · use_of · uses_of · revisions_of · describe · record_order · members_of ·
          lines_of ·
          rebuild_index · check_writable · claimed · run_once) ·
-         memories_of · write_key · current_write_key · write_key_scope · current_grant ·
+         names_identity · memories_of · write_key · current_write_key · write_key_scope · current_grant ·
          grant_scope · note_written · collect_written
 ========================================
 """
@@ -521,11 +521,21 @@ def _identity_key(identity) -> str:
     return _identity(identity).to_string()
 
 
+def names_identity(have: SourceId, want: SourceId, registry=None) -> bool:
+    """Does a reference to `have` stand on `want`: the same identity, or a run holding the
+    single piece `want` — by any of its lines when the registry knows them
+    (`SourceRegistry.lines_of`), by its first or last line when it does not."""
+    if have == want:
+        return True
+    if want.through is not None or have.through is None:
+        return False
+    return want in (registry.lines_of(have) if registry is not None
+                    else (have.first(), have.last()))
+
+
 async def memories_of(store, identity) -> list[str]:
-    """The memories (archive included) whose `sources` name this identity or contain it,
-    by scanning the library. A single piece is found in every run holding it: a run
-    whose lines the registry knows (`SourceRegistry.lines_of`) by any of them, one it
-    does not by its first or last line. The source side never stores this."""
+    """The memories (archive included) whose `sources` name this identity or contain it
+    (`names_identity`), by scanning the library. The source side never stores this."""
     want = _identity(identity)
     registry = getattr(store, "sources", None)
     out: list[str] = []
@@ -538,9 +548,7 @@ async def memories_of(store, identity) -> list[str]:
                 have = record_id(rec)
             except KeyError:
                 continue
-            if have == want or (want.through is None and have.through is not None and (
-                    want in (registry.lines_of(have) if registry is not None
-                             else (have.first(), have.last())))):
+            if names_identity(have, want, registry):
                 out.append(str(meta.get("id") or b.get("id") or ""))
                 break
     return [i for i in dict.fromkeys(out) if i]

@@ -1652,6 +1652,12 @@ _STATE_LOUD = {
 }
 
 
+# What a read by id says of an entry carrying the internally-generated mark (core/_dream
+# is_marked), on its own line and on every line linking to it: it happened inside, not out
+# there.
+DREAMT_MARK = "💭梦或想象"
+
+
 async def _linked(bucket_id: str, scope_view=None) -> tuple[dict | None, str, str] | None:
     """One entry a read by id links to — a source, what it covers, a period's member, who
     cites it — as its line shows it: (bucket or None, hint, mark).
@@ -1672,7 +1678,9 @@ async def _linked(bucket_id: str, scope_view=None) -> tuple[dict | None, str, st
         return b, "", "  （不在这次能看的范围里）"
     hint = re.sub(r"^[\d\- :]+", "",
                   str(meta.get("summary") or meta.get("name") or "").strip())[:60]
-    return b, hint, (f"  {verdict.mark}" if verdict.mark else "")
+    from core._dream import is_marked
+    dreamt = f"  {DREAMT_MARK}" if is_marked(meta, b.get("content") or "") else ""
+    return b, hint, (f"  {verdict.mark}" if verdict.mark else "") + dreamt
 
 
 async def recall_text_and_data(when: str, room: str, tag: str, query: str,
@@ -1873,6 +1881,17 @@ async def recall_core(when: str, room: str, tag: str, query: str,
                 info.append("标签:" + ",".join(tags_[:6]))
             if str(meta.get("card_of") or "").strip():
                 info.append(f"名字卡:{str(meta['card_of']).strip()}")
+            # From a dream: the entry's own mark, or an entry it stands on that carries one
+            # (a gist or a thought grown from a dream note carries no field of its own).
+            from core import _dream
+            if _dream.is_marked(meta, b.get("content") or ""):
+                info.append(f"{DREAMT_MARK}（内部生成，不是外面发生的事）")
+            else:
+                dreamt_roots = [r for r in await _dream.dream_roots(meta) if seen(r)]
+                if dreamt_roots:
+                    info.append(f"{DREAMT_MARK}：依据里有梦或想象（{'、'.join(dreamt_roots[:3])}"
+                                + (f" 等 {len(dreamt_roots)} 条" if len(dreamt_roots) > 3 else "")
+                                + "）")
             # Sources must never be reduced to bare ids: a mind holds only the
             # product of thinking, the events live in its provenance, and reading it
             # has to bring the sources' gists along or the thinking has nothing to

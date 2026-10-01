@@ -34,7 +34,7 @@ One rule, three instances: the four things unique to the dream instance
 ------------------------------------------------------------
 | | the dream instance |
 |---|---|
-| **which pool it eats** | wants that weigh on me (weighted by `weight`) + events never worked out (weighted by `arousal`) + a few tags |
+| **which pool it eats** | wants that weigh on me (weighted by `weight`) + events never worked out (weighted by `arousal`) + one old thing gone faint or sunk + one memory of the host's material (a quoted line, a book) + a few tags |
 | **who writes** | 🔴 the LLM (the only one of the three instances that does) |
 | **consequence of weaving** | **note `last_dreamt` and nothing else**, so it is picked less often for a while. **Neither weight nor arousal is touched.** |
 | **the fate of the product** | it will be forgotten. **Forgetting is the default, remembering is the exception** (only a `grow` makes it stay) |
@@ -47,7 +47,7 @@ The rule is implemented in `_muse.POOL_SPECS["dream"]` + `bucket_mgr.mind_from_i
 keep two copies (`night_fall/selection.py` retired along with night_fall).
 
 ------------------------------------------------------------
-The four ingredient streams · three points, none of which may be skipped
+The ingredient streams · three points, none of which may be skipped
 ------------------------------------------------------------
 1. **Weighted random — neither pure random nor sorted.**
    Pure random gives the heavy and the trivial equal odds; sorting makes the single
@@ -57,9 +57,45 @@ The four ingredient streams · three points, none of which may be skipped
    Without it, something from six weeks ago is exactly as likely as yesterday (measured:
    398 of 853 entries in the pool counted as "never worked out").
    **Real dreams are mostly day residue.**
+   The one exception is the cold share (below): it exists for the old, so age does not
+   discount it.
 3. 🔴 **Feed the full text, not the summary** (body truncated to ~800 characters).
    Everything good in a dream rests on concrete detail ("the nail mark left at five past
    eight"). **A summary is too dry; feeding summaries produces very hollow dreams.**
+
+Two shares of one entry each ride with every dream that is woven; neither takes part in
+the pressure, so neither decides whether a dream is woven:
+  · **the cold share** (`cold_pool`): an event gone faint or sunk (`decay_stage`,
+    core/decay_engine.py), weighted by arousal, not by age. A sunk one is fed its original
+    from archive/原文/<id>.txt, not the summary left in its body.
+  · **the quote share** (`quote_pool`, `_quoted`): a memory formed from the host's
+    material (a quoted line, a book's passage, a source record). Its hosts are asked for
+    the original through the fourth joint (core/_originals.py) — only once the pressure
+    has said a dream will be woven, never on a look that weaves nothing. Given: the host's
+    text is fed. Unreachable, or no host serving it, while the memory is still allowed:
+    the memory's own body is fed. A source refused (withdrawn, deleted, not allowed): the
+    memory is not drawn at all, and the next candidate is tried. The fetched text goes to
+    the weaver and nowhere else; the dream record keeps the string forms of the sources
+    behind it (`来源`), so a later withdrawal of any of them reaches the dream
+    (core/_source_change.py, `dream_records`).
+
+------------------------------------------------------------
+Never a dream of a dream
+------------------------------------------------------------
+What a dream leaves behind carries the internally-generated mark (`internally_generated`):
+the trace written when it fades, and anything written from it — a dream note retelling
+it, a want grown from it (the grow path asks `from_a_dream`: the text retells a dream
+still on disk, or what it grew from is from a dream). No stream draws from a dream: an
+entry that is marked, a trace written before the mark existed (known by its words), and
+everything grown from or covering one, any number of generations down
+(`dream_born_ids`) — which is how the mark survives a gist or a thought derived from a
+dream note, neither of which carries the field itself (only events do). A period never
+covers anything, so an entry circled into one keeps its own mark untouched.
+
+Weaving reads the whole library (no read scope): it runs only on a breath that reads the
+whole library, and a dream is handed out only to a request that reads the whole library
+(web/loci.py, `_scope_withholds`). A host asked for an original is told the same: no
+scope, the whole library.
 
 Why "a few words" and not "a place": a list of rooms from the Home system was rejected —
 that space is not actually lived in yet, so pushing it in would be an external injection.
@@ -108,7 +144,8 @@ Lifecycle: a dream is forgotten, and genuinely so
                ~30 min / 15 turns   the **fragment** is still available
                ~1 hour / 30 turns   **one sentence is left**
                after that           **the file is deleted, and a trace is left** (one
-                                    event; ⛔ it does not go into what weighs on me)
+                                    event carrying the internally-generated mark; ⛔ it
+                                    does not go into what weighs on me)
 
 Three rules, none of which may be turned into something event-driven:
 1. **What drives it is time, not "was it seen".** The upstream design deleted after four
@@ -157,24 +194,33 @@ degrade_on_wake() (🔴 the degrade signal: drop a living `完整` layer down to
 maintain() (the hook at awakening: sweep the expired ones and weave if above the line —
          both silently)
 gather_ingredients() · pressure() · parse_dream() · layer_of() · load_dreams() · dreams_dir() · first_sentence()
+want_pool() · unclear_pool() · cold_pool() · quote_pool()
+is_marked() · dream_born_ids() · dream_roots() · retells_a_dream() · from_a_dream() (the mark)
+ingredient_ids() · fed_by() (what a dream record stands on, for a source change)
+cue_candidates_of() (the weaver's thread candidates, handed out with the dream)
 ========================================
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import random
 import re
 import uuid
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+
+from utils import parse_bool
 
 from . import _holds as _H
 from . import _muse as M
+from . import _sources as _src
 from . import visibility as _V    # the one gate: what may be put in front of the model
+from ._rooms import is_event_room
 from tools import _runtime as rt
 from . import _when as _w
 
@@ -193,7 +239,9 @@ from . import _when as _w
 #      you do not know who you are and do not know there are rules. The current phrasing
 #      ("not what you lived through, what you know") gets through to it just fine.
 # ⚠️ Before editing this block: it is the third version of three that were tried, not a
-# form of words somebody dashed off.
+# form of words somebody dashed off. Three lines in it have not been tried against real
+# dreams yet: 很久以前的 and 读过听过的 (the cold share and the quote share) and 线索 (the
+# thread candidates handed out with the dream, plan 一·六) — no examples there either.
 DREAM_PROMPT = """你不是叙述者。你是梦的发生过程。
 
 你不知道自己是谁，不知道自己在哪里。你正在经历一些事。
@@ -204,6 +252,8 @@ DREAM_PROMPT = """你不是叙述者。你是梦的发生过程。
 
 压在心头的    还没了结的事，各带一个分量
 想不明白的    发生过、有情绪、但一直没想通的
+很久以前的    淡了、沉下去的旧事
+读过听过的    原话、书里的段落
 几个词        没有来由的，就是几个词
 底色          每件事各自的：好受不好受、平静还是激动
 
@@ -234,8 +284,9 @@ DREAM_PROMPT = """你不是叙述者。你是梦的发生过程。
 完整：整个梦。300~600 字。
 碎片：不是摘要，是残留 —— 醒来一段时间之后还剩下的那些。
       几个意象、一两句断掉的话，没有主语，没有前因后果。60~120 字。
+线索：醒来以后还连着的 —— 碰到什么，会想起什么。最多两条，没有就空着。
 
-只返回 JSON：{"完整": "…", "碎片": "…", "v": 0.0, "a": 0.0}
+只返回 JSON：{"完整": "…", "碎片": "…", "v": 0.0, "a": 0.0, "线索": [{"碰到": "…", "想起": "…"}]}
 v = 好受不好受（0 难受 ~ 1 好受），a = 平静还是激动（0 平静 ~ 1 激动）"""
 
 
@@ -250,6 +301,11 @@ DREAM_DEFAULTS: dict = {
     "excerpt_chars": 800,    # 🔴 the full text is fed, truncated to this length (not the summary)
     "half_life_days": 7,     # time decay: weight ÷ (1 + days/N)
     "word_pool_top": 120,    # the loose words are drawn from the N most frequent scene words
+    "quote_tries": 3,        # the quote share: at most this many candidates asked of their hosts
+    # ---- the internally-generated mark ----
+    # An event retells a dream still on disk when at least this share of its windows (and
+    # at least `_MIN_SHARED` of them) are found in the dream (`retells_a_dream`).
+    "mark_overlap": 0.3,
     # ---- Trigger: ⏳ **these two numbers are still open**; the factory values were read
     #      off a dry run against a real store, not guessed ----
     #   What `scripts/dream_dryrun.py` reported on a real store:
@@ -323,10 +379,12 @@ class Ingredient:
     text: str
     v: float
     a: float
-    weight: float                 # pressing wants take `weight`; never-worked-out events take `arousal`
+    weight: float                 # pressing wants take `weight`; the other streams take `arousal`
     days: int
-    route: str                     # "压在心头" (weighing on me) | "想不明白" (never worked out)
+    route: str                     # "压在心头" · "想不明白" · "很久以前" · "原话"
     days_since_dreamt: int | None = None   # days since it was last dreamt about; None = never
+    sunk: bool = False             # the cold share: its original lives in archive/原文/
+    records: list = field(default_factory=list)   # the quote share: the sources to ask for
 
 
 def time_decay(weight: float, days: int, c: dict) -> float:
@@ -393,7 +451,156 @@ def _days_since_dreamt(meta: dict, now: datetime) -> int | None:
     return max(0, (now - t).days) if t else None
 
 
-def want_pool(recs: list[tuple[dict, str]], now: datetime) -> list[Ingredient]:
+# ============================================================
+# The mark: what came from a dream never feeds one
+# ============================================================
+# What `leave_a_trace` writes after the day. A trace written before the mark existed
+# carries no `internally_generated` and is known by these words, which nothing else writes.
+TRACE_WORDS = "做了个梦，没记下来，现在想不起来是什么了。"
+_TRACE_RE = re.compile(r"^\d{2}-\d{2} " + re.escape(TRACE_WORDS) + r"$")
+
+
+def is_marked(meta: dict, text: str = "") -> bool:
+    """Carries the internally-generated mark (a dream, its trace, something imagined), or
+    is a trace written before the mark existed."""
+    if parse_bool((meta or {}).get("internally_generated"), default=False):
+        return True
+    return bool(_TRACE_RE.match(str(text or "").strip()))
+
+
+def _parents(meta: dict) -> list[str]:
+    """The entries this one stands on: every provenance line naming a memory (derived,
+    primary, the version it revises — not a quoted line, which names the host's material)
+    and what a gist covers."""
+    from utils import WAS_QUOTED_FROM, read_prov
+    from ._fold import cover_ids
+    out = [str(line["target"]) for line in read_prov(meta or {})
+           if line["rel"] != WAS_QUOTED_FROM]
+    return [x for x in dict.fromkeys(out + cover_ids(meta or {})) if x.strip()]
+
+
+def dream_born_ids(recs: list[tuple[dict, str]]) -> set[str]:
+    """The entries that are from a dream: marked (`is_marked`), or standing on one that is
+    (`_parents`), any number of generations down. Computed over the records each time and
+    never stored, so the mark reaches a gist or a thought derived from a dream note, which
+    do not carry the field themselves (only events do)."""
+    children: dict[str, list[str]] = {}
+    born: set[str] = set()
+    for meta, text in recs:
+        bid = str(meta.get("id") or "").strip()
+        if not bid:
+            continue
+        if is_marked(meta, text):
+            born.add(bid)
+        for parent in _parents(meta):
+            children.setdefault(parent, []).append(bid)
+    todo = list(born)
+    while todo:
+        for child in children.get(todo.pop(), []):
+            if child not in born:
+                born.add(child)
+                todo.append(child)
+    return born
+
+
+async def dream_roots(meta: dict, limit: int = 64) -> list[str]:
+    """The entries behind this one, any number of generations up, that are marked
+    themselves — archive included, at most `limit` entries read. What recall says out loud
+    about a gist or a thought standing on a dream, and what the grow path asks of `from`."""
+    seen: set[str] = set()
+    out: list[str] = []
+    todo = _parents(meta)
+    while todo and len(seen) < limit:
+        bid = todo.pop(0)
+        if bid in seen:
+            continue
+        seen.add(bid)
+        b = await rt.bucket_mgr.get_including_archive(bid)
+        if not b:
+            continue
+        m = b.get("metadata") or {}
+        if is_marked(m, b.get("content") or ""):
+            out.append(bid)
+            continue
+        todo.extend(_parents(m))
+    return out
+
+
+# A dream is compared by windows of its text: runs of four CJK characters (eight others)
+# inside each piece between punctuation, a shorter piece whole once it is three CJK (six
+# other) characters long. Only their prints are kept once waking strips the whole version.
+_PIECE_SPLIT = re.compile(r"[\s，。！？、；：,.!?;:\"'“”‘’（）()\[\]{}<>《》…—\-~·/\\|]+")
+_CJK = re.compile(r"[㐀-鿿豈-﫿]")
+_WINDOW = {True: 4, False: 8}
+_SHORTEST = {True: 3, False: 6}
+_MIN_SHARED = 3
+
+
+def _windows(text) -> set[str]:
+    out: set[str] = set()
+    for piece in _PIECE_SPLIT.split(str(text or "")):
+        piece = piece.strip()
+        cjk = bool(_CJK.search(piece))
+        n = _WINDOW[cjk]
+        if len(piece) < _SHORTEST[cjk]:
+            continue
+        if len(piece) <= n:
+            out.add(piece)
+            continue
+        out.update(piece[i:i + n] for i in range(len(piece) - n + 1))
+    return out
+
+
+def _print(window: str) -> str:
+    return hashlib.blake2b(window.encode("utf-8"), digest_size=6).hexdigest()
+
+
+def dream_prints(text) -> list[str]:
+    """The prints of a text's windows, as a dream record keeps them (`whole_prints`)."""
+    return sorted({_print(w) for w in _windows(text)})
+
+
+def retells_a_dream(text: str, c: dict | None = None,
+                    buckets_dir: str | None = None) -> bool:
+    """Does this text retell a dream still on disk? At least `mark_overlap` of its windows,
+    and at least `_MIN_SHARED`, are found in one dream — its whole version (by the prints
+    kept after waking, or the text while it lasts) or its fragment. A retelling in quite
+    other words is not caught here; the explicit `internally_generated=true` is."""
+    c = c or _c()
+    mine = {_print(w) for w in _windows(text)}
+    if len(mine) < _MIN_SHARED:
+        return False
+    line = float(c["mark_overlap"])
+    for rec in load_dreams(buckets_dir):
+        theirs = set(rec.get("whole_prints") or [])
+        for key in ("完整", "碎片"):
+            theirs |= {_print(w) for w in _windows(rec.get(key) or "")}
+        shared = len(mine & theirs)
+        if shared >= _MIN_SHARED and shared >= line * len(mine):
+            return True
+    return False
+
+
+async def from_a_dream(text: str, prov: list[dict] | None = None) -> bool:
+    """Should an event being written carry the internally-generated mark without being
+    told? Yes when its text retells a dream still on disk (`retells_a_dream`), or when an
+    entry it stands on is from a dream (`dream_roots`). The grow path asks this of each
+    event. Unreadable says no: a dream note left unmarked is the smaller harm next to a
+    real event marked as dreamt."""
+    try:
+        if await dream_roots({"prov": list(prov or [])}):
+            return True
+        return retells_a_dream(text)
+    except Exception as e:                          # noqa: BLE001 - a write never fails on this
+        rt.logger.warning("[dream] 判断是不是梦里来的失败（当作不是）: %s", e)
+        return False
+
+
+# ============================================================
+# The pools
+# ============================================================
+def want_pool(recs: list[tuple[dict, str]], now: datetime,
+              born: set[str] | None = None) -> list[Ingredient]:
     """What weighs on me: **wants that have not been closed**, weighted by `weight`.
 
     Same definition as "weighing on me" in `core/profile.py` (telic, not closed, not
@@ -402,13 +609,17 @@ def want_pool(recs: list[tuple[dict, str]], now: datetime) -> list[Ingredient]:
     column, but that is a **display split**. As far as a dream is concerned they are all
     still unfinished business, so all of them count here. And only an `avoid` hold keeps
     a want out of dreams: a `defer` asked not to be pushed, not to be forgotten.
-    Everything but "telic, not closed" is the gate's `dream` road (`core/visibility.py`).
+    Everything but "telic, not closed" is the gate's `dream` road (`core/visibility.py`);
+    a want grown from a dream is left out (`dream_born_ids`; `born` when the caller has it).
     """
     from utils import is_closed, is_telic
     holds = _H.hold_index(recs)
+    born = dream_born_ids(recs) if born is None else born
     out: list[Ingredient] = []
     for meta, text in recs:
         if not is_telic(meta) or is_closed(meta):
+            continue
+        if str(meta.get("id") or "").strip() in born:
             continue
         if not _V.visible_for(meta, road=_V.DREAM, now=now, holds=holds):
             continue
@@ -424,18 +635,25 @@ def want_pool(recs: list[tuple[dict, str]], now: datetime) -> list[Ingredient]:
     return out
 
 
-def unclear_pool(recs, digested: set[str], c: dict, now: datetime) -> list[Ingredient]:
+def unclear_pool(recs, digested: set[str], c: dict, now: datetime,
+                 born: set[str] | None = None) -> list[Ingredient]:
     """Never worked out: events that **carry emotion and that no insight points at**.
 
     🔴 The pool comes straight from `_muse.pool_of(..., "dream", ...)` — ingredient
     selection goes through one engine; never keep two copies. What the gate's `dream`
     road keeps out is taken out here — what an `avoid` hold is hung on, holds themselves,
     a deliberate `dont_surface`, an old version. Muse's own pool counts neither holds nor
-    `dont_surface`, so muse still sees those.
+    `dont_surface`, so muse still sees those. So is anything from a dream
+    (`dream_born_ids`): a fading dream's trace is neutral but its a=0.3 clears the
+    emotion line, and without the mark it came straight back in as material. And what has
+    gone faint or sunk belongs to the cold share (`cold_pool`), which feeds a sunk one its
+    original rather than the summary left in its body.
     """
     holds = _H.hold_index(recs)
     skip = {str(m.get("id") or "").strip() for m, _t in recs
-            if not _V.visible_for(m, road=_V.DREAM, now=now, holds=holds)}
+            if not _V.visible_for(m, road=_V.DREAM, now=now, holds=holds)
+            or str(m.get("decay_stage") or "") in COLD_STAGES}
+    skip |= dream_born_ids(recs) if born is None else born
     out: list[Ingredient] = []
     for it in M.pool_of(recs, "dream", M.muse_config(rt.config), now, digested):
         if it.id in skip:
@@ -443,6 +661,106 @@ def unclear_pool(recs, digested: set[str], c: dict, now: datetime) -> list[Ingre
         out.append(Ingredient(id=it.id, text=it.text, v=it.v, a=it.a,
                               weight=it.a, days=_age_days(it, now), route="想不明白"))
     return out
+
+
+# The decay stages the cold share draws from (core/decay_engine.py stage_of).
+COLD_STAGES = ("faded", "sunk")
+# Each woven dream carries exactly one entry of each of the two shares.
+SHARE_N = 1
+
+
+def _share_candidates(recs, now: datetime, born: set[str] | None):
+    """(meta, Item) of what either share may draw: the gate's `dream` road, not machinery,
+    not covered, not from a dream, a body to feed."""
+    holds = _H.hold_index(recs)
+    born = dream_born_ids(recs) if born is None else born
+    for meta, text in recs:
+        bid = str(meta.get("id") or "").strip()
+        if not bid or bid in born or M._is_utility_record(meta):
+            continue
+        if not _V.visible_for(meta, road=_V.DREAM, now=now, holds=holds):
+            continue
+        it = M.item_of(meta, text)
+        if it is None or it.covered or not it.text.strip():
+            continue
+        yield meta, it
+
+
+def cold_pool(recs, now: datetime, born: set[str] | None = None) -> list[Ingredient]:
+    """The cold share's pool: events gone faint or sunk (`COLD_STAGES`), weighted by
+    arousal and drawn without the time decay. A sunk one's body is its summary; its
+    original is read when it is drawn (`_cold_text`)."""
+    out: list[Ingredient] = []
+    for meta, it in _share_candidates(recs, now, born):
+        stage = str(meta.get("decay_stage") or "")
+        if stage not in COLD_STAGES or not is_event_room(it.room):
+            continue
+        out.append(Ingredient(id=it.id, text=it.text, v=it.v, a=it.a, weight=it.a,
+                              days=_age_days(it, now), route="很久以前",
+                              sunk=stage == "sunk"))
+    return out
+
+
+def quote_pool(recs, now: datetime, born: set[str] | None = None) -> list[Ingredient]:
+    """The quote share's pool: memories formed from the host's material — a quoted line,
+    a book's passage, a source record (`tools/recall/original.source_records_of`) — in
+    either room, weighted by arousal with the time decay. Whether one is drawn is the
+    hosts' answer (`_quoted`)."""
+    from tools.recall.original import source_records_of
+    out: list[Ingredient] = []
+    for meta, it in _share_candidates(recs, now, born):
+        records = source_records_of(meta)
+        if not records:
+            continue
+        out.append(Ingredient(id=it.id, text=it.text, v=it.v, a=it.a, weight=it.a,
+                              days=_age_days(it, now), route="原话",
+                              days_since_dreamt=_days_since_dreamt(meta, now),
+                              records=records))
+    return out
+
+
+def _cold_text(x: Ingredient) -> str:
+    """What the cold share feeds: a sunk entry's original from archive/原文/<id>.txt, its
+    body (the summary) when that file cannot be read; anything else its body."""
+    if not x.sunk:
+        return x.text
+    try:
+        with open(rt.bucket_mgr._sunk_orig_path(x.id), encoding="utf-8") as f:
+            original = f.read()
+    except (OSError, AttributeError):
+        return x.text
+    return original if original.strip() else x.text
+
+
+async def _quoted(pool: list[Ingredient], c: dict) -> tuple[list[Ingredient], list[str]]:
+    """Draw the quote share. Candidates come in weighted order, at most `quote_tries` of
+    them, each one's sources asked of their hosts through the fourth joint
+    (core/_originals.fetch) with no read scope: weaving reads the whole library.
+    A source refused (withdrawn, deleted, not allowed) — this memory is not drawn, try the
+    next. Otherwise it is drawn: what the hosts gave is fed; when nothing was given (the
+    host unreachable, none serving it) the memory's own body is.
+    Returns ([the ingredient] or [], the string forms of every source asked for it). The
+    fetched text is fed and nothing else: it is neither stored nor logged here."""
+    from core import _originals as _O
+    from tools.recall.original import deployment_hosts
+    if not pool:
+        return [], []
+    settings = _O.settings_from(rt.config)
+    hosts = deployment_hosts()
+    registry = getattr(rt.bucket_mgr, "sources", None)
+    for x in weighted_sample(pool, int(c["quote_tries"]), c):
+        asked = x.records[:settings.max_sources]
+        answers = await asyncio.gather(*(
+            _O.fetch(rec, hosts=hosts, request=None, settings=settings, registry=registry)
+            for rec in asked))
+        if any(a.outcome == _O.NOT_ALLOWED for a in answers):
+            continue
+        given = [ln.text for a in answers if a.outcome == _O.GIVEN
+                 for ln in a.lines if ln.text]
+        if given:
+            x.text = "\n".join(given)
+        return [x], [a.source for a in answers]
+    return [], []
 
 
 def few_words(recs, c: dict) -> list[str]:
@@ -464,8 +782,10 @@ def few_words(recs, c: dict) -> list[str]:
     return random.sample(pool, n) if n > 0 else []
 
 
-def weighted_sample(pool: list[Ingredient], n: int, c: dict) -> list[Ingredient]:
-    """**Weighted random** on "weight × freshness", without replacement.
+def weighted_sample(pool: list[Ingredient], n: int, c: dict,
+                    decay: bool = True) -> list[Ingredient]:
+    """**Weighted random** on "weight × freshness", without replacement. `decay=False`
+    (the cold share) weighs by weight alone: that share exists for the old.
 
     🔴 Weighted random is not sorting: heavier is likelier, **but never guaranteed** —
     sorting would make the single heaviest thing get dreamt about every night.
@@ -473,7 +793,8 @@ def weighted_sample(pool: list[Ingredient], n: int, c: dict) -> list[Ingredient]
     pool = list(pool)
     out: list[Ingredient] = []
     for _ in range(min(int(n), len(pool))):
-        w = [max(0.01, time_decay(x.weight, x.days, c) * cooldown_factor(x.days_since_dreamt, c))
+        w = [max(0.01, (time_decay(x.weight, x.days, c) if decay else float(x.weight))
+                 * cooldown_factor(x.days_since_dreamt, c))
              for x in pool]
         i = random.choices(range(len(pool)), weights=w)[0]
         out.append(pool.pop(i))
@@ -518,38 +839,55 @@ def pressure(pool: list[Ingredient], c: dict) -> tuple[float, float, list[tuple[
 
 
 async def gather_ingredients(c: dict | None = None) -> dict:
-    """Load one set of ingredients: the two pools, the four drawn streams, and the
-    pressure. **No LLM call, and nothing is written.**"""
+    """Load one set of ingredients: the pools, the drawn streams, the cold share, and the
+    pressure. **No LLM call, nothing is written, and no host is asked** — the quote share
+    keeps its candidates (`原话池`) until `weave` knows a dream will be woven."""
     c = c or _c()
     now = _w.now()
     recs, digested = await M.load_records()
-    pressing = want_pool(recs, now)
-    unclear = unclear_pool(recs, digested, c, now)
+    born = dream_born_ids(recs)
+    pressing = want_pool(recs, now, born=born)
+    unclear = unclear_pool(recs, digested, c, now, born=born)
     pressure_value, piled_up, over_line = pressure(pressing + unclear, c)
     picked_pressing = weighted_sample(pressing, int(c["want_n"]), c)
     picked_unclear = weighted_sample(unclear, int(c["unclear_n"]), c)
+    taken = {x.id for x in picked_pressing + picked_unclear}
+    cold = [x for x in cold_pool(recs, now, born=born) if x.id not in taken]
+    picked_cold = weighted_sample(cold, SHARE_N, c, decay=False)
+    for x in picked_cold:
+        x.text = _cold_text(x)
+    taken |= {x.id for x in picked_cold}
+    quotes = [x for x in quote_pool(recs, now, born=born) if x.id not in taken]
     return {
         "压在心头": picked_pressing,
         "想不明白": picked_unclear,
+        "冷档案": picked_cold,
+        "原话池": quotes,
         "几个词": few_words(recs, c),
         "压力": pressure_value,
         "攒着": piled_up,
         "过线的": over_line,
-        "池子": {"压在心头": len(pressing), "想不明白": len(unclear)},
+        "池子": {"压在心头": len(pressing), "想不明白": len(unclear),
+                 "冷档案": len(cold), "原话": len(quotes)},
     }
 
 
 def build_user_message(ingredients: dict, c: dict) -> str:
     """Ingredients -> the user message. **The full text is fed (truncated to ~800
-    characters) and each entry carries its own v/a; no global mood is supplied.**"""
+    characters) and each entry carries its own v/a; no global mood is supplied.** The two
+    shares appear only when they hold something."""
     n = int(c["excerpt_chars"])
-    return json.dumps({
+    msg = {
         "压在心头的": [{"正文": x.text[:n], "分量": round(x.weight, 2),
                         "v": x.v, "a": x.a} for x in ingredients["压在心头"]],
         "想不明白的": [{"正文": x.text[:n], "v": x.v, "a": x.a}
                        for x in ingredients["想不明白"]],
-        "几个词": ingredients["几个词"],
-    }, ensure_ascii=False, indent=2)
+    }
+    for key, label in (("冷档案", "很久以前的"), ("原话", "读过听过的")):
+        if ingredients.get(key):
+            msg[label] = [{"正文": x.text[:n], "v": x.v, "a": x.a} for x in ingredients[key]]
+    msg["几个词"] = ingredients["几个词"]
+    return json.dumps(msg, ensure_ascii=False, indent=2)
 
 
 # ============================================================
@@ -619,7 +957,37 @@ def parse_dream(raw: str) -> dict:
     except (KeyError, TypeError, ValueError) as e:
         raise RuntimeError(f"织梦没给 v/a：{data.keys()}") from e
     return {"完整": whole, "碎片": fragment,
-            "v": max(0.0, min(1.0, v)), "a": max(0.0, min(1.0, a))}
+            "v": max(0.0, min(1.0, v)), "a": max(0.0, min(1.0, a)),
+            "线索": cue_candidates_of(data.get("线索"))}
+
+
+CUE_CANDIDATES_MAX = 2
+_CUE_PART_MAX = 60
+
+
+def cue_candidates_of(raw) -> list[dict]:
+    """The weaver's thread candidates -> [{碰到, 想起}], at most `CUE_CANDIDATES_MAX`, each
+    side cut to `_CUE_PART_MAX` characters. Optional: anything not of that shape is dropped
+    rather than failing the dream. They are handed out with the dream and written nowhere:
+    a candidate becomes a cue only when the main model writes one."""
+    out: list[dict] = []
+    for row in raw if isinstance(raw, list) else []:
+        if not isinstance(row, dict):
+            continue
+        meet = str(row.get("碰到") or "").strip()[:_CUE_PART_MAX]
+        recall = str(row.get("想起") or "").strip()[:_CUE_PART_MAX]
+        if meet and recall:
+            out.append({"碰到": meet, "想起": recall})
+        if len(out) >= CUE_CANDIDATES_MAX:
+            break
+    return out
+
+
+def cue_hint(candidates: list[dict]) -> str:
+    """How a candidate is kept, said to the main model with the dream."""
+    lines = [f"梦里想到：碰到「{x['碰到']}」时，会想起「{x['想起']}」。" for x in candidates]
+    return ("\n".join(lines) + "\n要留就找到想起的那条记忆，"
+            'trace(bucket_id="那条的 id", cue={"condition": "碰到的那件事"})；不留就不用管。')
 
 
 async def call_model(ingredients: dict, c: dict) -> dict:
@@ -832,7 +1200,8 @@ async def leave_a_trace(rec: dict) -> str:
 
     ⛔ **It does not go into "weighing on me"** — a dream is not something that weighs on
        you; that column belongs to what is wanted. So it is grown thetic, an ordinary
-       event.
+       event, carrying the internally-generated mark: it is a dream's remains, and no
+       stream draws it back in as material (`dream_born_ids`).
     🔴 **Neutral v/a are used, not the dream's own**, for two solid reasons:
        ① the dream's v/a were **assigned by the model**, and storing them as my own
           feeling breaks "v/a are mine to assign and are never outsourced";
@@ -843,8 +1212,8 @@ async def leave_a_trace(rec: dict) -> str:
     """
     from tools import grow as _grow
     day = (_w.parse_stamp(rec.get("织于")) or _w.now()).strftime("%m-%d")
-    text = f"{day} 做了个梦，没记下来，现在想不起来是什么了。"
-    out = await _grow.dispatch(kind="event", items=[
+    text = f"{day} {TRACE_WORDS}"
+    out = await _grow.dispatch(kind="event", internally_generated=True, items=[
         {"room": "EVENT/SELF", "text": text, "v": 0.5, "a": 0.3}])
     return str(out or "")
 
@@ -916,6 +1285,10 @@ async def weave(force: bool = False, cfg: dict | None = None,
     if not ingredients["压在心头"] and not ingredients["想不明白"]:
         rt.logger.info("[dream] 两个池子都空的，没料可织")
         return None
+    # The quote share asks its hosts only now, once a dream will be woven.
+    if "原话" not in ingredients:
+        ingredients["原话"], ingredients["来源"] = await _quoted(
+            ingredients.get("原话池") or [], c)
 
     dream = await call_model(ingredients, c)
     now = _w.now()
@@ -936,13 +1309,22 @@ async def weave(force: bool = False, cfg: dict | None = None,
         #    deleting it would be pointless breakage.
         "完整": dream["完整"],
         "完整字数": len(dream["完整"]),
+        # The whole version's prints outlive it (`degrade_on_wake` strips the text): a
+        # dream note written after waking is still known as one (`retells_a_dream`).
+        "whole_prints": dream_prints(dream["完整"]),
         "v": dream["v"], "a": dream["a"],
         "nightmare": bool(nightmare),
         "素材": {
             "压在心头": [x.id for x in ingredients["压在心头"]],
             "想不明白": [x.id for x in ingredients["想不明白"]],
+            "冷档案": [x.id for x in ingredients.get("冷档案") or []],
+            "原话": [x.id for x in ingredients.get("原话") or []],
             "几个词": list(ingredients["几个词"]),
         },
+        # The string forms of the host's sources behind the quote share: identities only,
+        # never their text. A withdrawal of any of them reaches this dream.
+        "来源": list(ingredients.get("来源") or []),
+        "线索候选": list(dream.get("线索") or []),
         "压力": round(float(ingredients["压力"]), 3),
     }
     save_record(rec)
@@ -990,10 +1372,45 @@ async def weave(force: bool = False, cfg: dict | None = None,
     return out
 
 
-def _ingredient_ids(rec: dict) -> list[str]:
-    """The memory ids a dream was woven from (the few words are not memories)."""
+# The streams of a dream record's `素材` that hold memory ids (the few words are not memories).
+INGREDIENT_STREAMS = ("压在心头", "想不明白", "冷档案", "原话")
+
+
+def ingredient_ids(rec: dict) -> list[str]:
+    """The memory ids a dream was woven from, every stream."""
     material = rec.get("素材") or {}
-    return [str(i) for key in ("压在心头", "想不明白") for i in (material.get(key) or [])]
+    return [str(i) for key in INGREDIENT_STREAMS for i in (material.get(key) or [])]
+
+
+def fed_by(rec: dict, identity, registry=None) -> bool:
+    """Does this dream stand on the host's source `identity`: one of the sources behind
+    its quote share (`来源`) names it, or is a run holding it (`_sources.names_identity`)."""
+    want = (identity if isinstance(identity, _src.SourceId)
+            else _src.SourceId.parse(str(identity))[0])
+    for label in rec.get("来源") or []:
+        try:
+            have = _src.SourceId.parse(str(label))[0]
+        except _src.SourceRecordError:
+            continue
+        if _src.names_identity(have, want, registry):
+            return True
+    return False
+
+
+def _gone_sources(rec: dict) -> list[str]:
+    """The sources behind this dream the registry now holds as withdrawn or deleted."""
+    registry = getattr(rt.bucket_mgr, "sources", None)
+    if registry is None:
+        return []
+    out: list[str] = []
+    for label in rec.get("来源") or []:
+        try:
+            sid = _src.SourceId.parse(str(label))[0]
+        except _src.SourceRecordError:
+            continue
+        if registry.state_of(sid) in (_src.WITHDRAWN, _src.DELETED):
+            out.append(str(label))
+    return out
 
 
 async def withheld_ingredients(rec: dict, holds: "_H.HoldIndex | None" = None,
@@ -1007,15 +1424,17 @@ async def withheld_ingredients(rec: dict, holds: "_H.HoldIndex | None" = None,
 
     Judged by the gate's `dream_handout` road (`core/visibility.py`). A new version of an
     ingredient does not withhold it: the dream was made from the wording of its night.
+    A source behind the quote share that is withdrawn or deleted withholds it too (its
+    string form is listed); the source change removes such a dream outright.
     `holds`: the hold index over the store, when the caller has one for several dreams.
     """
-    ids = _ingredient_ids(rec)
+    out: list[str] = _gone_sources(rec)
+    ids = ingredient_ids(rec)
     if not ids:
-        return []
+        return out
     if holds is None:
         holds = _H.hold_index(await rt.bucket_mgr.list_all(include_archive=False))
     now = now or _w.now()
-    out: list[str] = []
     for bid in ids:
         b = await rt.bucket_mgr.get_including_archive(bid)
         if not b or not _V.visible_for(b, road=_V.DREAM_HANDOUT, now=now, holds=holds):
@@ -1030,7 +1449,7 @@ async def handable_dreams(dreams: list[dict]) -> list[dict]:
     holds = None
     out: list[dict] = []
     for rec in dreams:
-        if holds is None and _ingredient_ids(rec):
+        if holds is None and ingredient_ids(rec):
             holds = _H.hold_index(await rt.bucket_mgr.list_all(include_archive=False))
         unseen = await withheld_ingredients(rec, holds)
         if unseen:
@@ -1098,9 +1517,26 @@ async def current_dream(recall: bool = True, cfg: dict | None = None) -> dict | 
         "织于": rec.get("织于"),
         "回想次数": int(_f(rec.get("回想次数"), 0)),
         # There is one way to keep it: **write it down yourself.** The instant it is
-        # written down it is no longer a dream, it is a memory.
-        "留住的办法": 'grow(kind="event", room="EVENT/SELF", text=梦的正文)',
+        # written down it is no longer a dream, it is a memory — one carrying the
+        # internally-generated mark.
+        "留住的办法": KEEP_HINT,
+        **handout_cues(rec),
     }
+
+
+# How a dream is kept, said with it wherever it is handed out.
+KEEP_HINT = ('grow(kind="event", internally_generated=true, items=[{"room": "EVENT/SELF", '
+             '"text": 梦的正文, "v": …, "a": …}])——写下来的就是记忆了，带着「梦里来的」记号')
+
+
+def handout_cues(rec: dict) -> dict:
+    """The weaver's thread candidates as a handed-out dream carries them: the candidates
+    and how one is kept (`cue_hint`), or nothing when there are none. Nothing is written
+    from them here."""
+    candidates = cue_candidates_of(rec.get("线索候选"))
+    if not candidates:
+        return {}
+    return {"梦里想到": candidates, "要留线索": cue_hint(candidates)}
 
 
 async def maintain(cfg: dict | None = None) -> dict:

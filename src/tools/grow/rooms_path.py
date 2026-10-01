@@ -48,6 +48,10 @@ Key behaviour:
   trace take sources through here too
 - Validation comes first: if any single item is invalid the whole call errors and
   no bucket is created
+- Before the return is handed back it says which old views the new bodies run into
+  (回望) and, for an event that happened, asks about a scene the last two weeks keep
+  coming back to (场景常来) — tools/_write_returns.py, from the listing taken before the
+  write; a vector backend that is down or slow only drops the meaning hits
 
 What this file deliberately does not do:
 - No merging (fixed by the spec: every item in items becomes its own bucket)
@@ -72,11 +76,13 @@ from datetime import date, timedelta
 from core import _dates
 from core import _fold as _F       # a big event = fold's way of circling time
 from core import _holds as _H
+from core import _reconsolidation as _R
 from core.dehydrator import (BACKFILL_MAX_TOKENS, BackfillAnswer, backfill_kinds,
                              backfill_request, parse_backfill)
 from .. import _runtime as rt
 from core._bigevent import SPAN_RE, first_line as _F_first_line
 from .._common import check_content_size, read_scope, resolve_bucket_id, resolve_bucket_ids
+from .._write_returns import noticed
 from core._rooms import check_room, is_mind_room
 from core import _sources as _src
 from .. import _subjects as _S
@@ -443,12 +449,10 @@ async def _backfill_one(bucket_id: str, text: str, kind: str) -> None:
     # threshold the new bucket gets a 「疑似同件:xx」 tag for human eyes to settle
     # later.
     # The threshold errs high rather than low — fewer stickers is better than more.
-    # It now queries the **vector cosine** directly: it used to use search's
-    # combined score >= 80, but once scoring was cut down to two dimensions the
-    # scale of that combined score changed entirely — and "is this the same
-    # thing" is a question about semantic distance, not about retrieval ranking.
-    # Similarity between minds is handled elsewhere (the pin reminder: a thought
-    # recurring is not noise, it is a principle surfacing).
+    # It queries the **vector cosine** directly: "is this the same thing" is a
+    # question about semantic distance, not about retrieval ranking.
+    # A new body running into an old view is not tagged here: the write's own
+    # return says it (core/_reconsolidation.py, before the return is handed back).
     if kind == "event":
         try:
             ee = getattr(rt.bucket_mgr, "embedding_engine", None)
@@ -462,38 +466,6 @@ async def _backfill_one(bucket_id: str, text: str, kind: str) -> None:
                     if sid and sid != bucket_id and float(s) >= _DUP_COS_THRESHOLD:
                         tag_additions.append(f"疑似同件:{sid[:6]}")
                         break
-        except Exception:
-            pass
-    elif kind == "mind":
-        # Similarity between minds **does** deserve a reminder — the old comment
-        # here said "similar thinking is normal, do not flag it", and that was
-        # wrong: a thought recurring is not noise, **it is a principle
-        # surfacing**.
-        # Threshold 0.80, the same number as for suspected same-thing. It applies
-        # a 「相似认知:」 tag, and breath's waking screen suggests turning it into
-        # a statement of intent before pinning (a descriptive one must not be
-        # pinned as-is — pin a flaw as a principle and it comes to mean "I intend
-        # to keep making this mistake").
-        try:
-            ee = getattr(rt.bucket_mgr, "embedding_engine", None)
-            if ee and getattr(ee, "enabled", False):
-                sims = await ee.search_similar(text, top_k=6)
-                for sid, s in sims:
-                    sid = str(sid)
-                    if not sid or sid == bucket_id or float(s) < _DUP_COS_THRESHOLD:
-                        continue
-                    sb = await rt.bucket_mgr.get(sid)
-                    smeta = (sb or {}).get("metadata", {}) or {}
-                    # Do not write `"/MIND/" in room`: the new room names have no
-                    # leading slash and would silently fail to match
-                    if not is_mind_room(smeta.get("room")) \
-                            and str(smeta.get("type") or "") not in ("feel", "i"):
-                        continue
-                    if smeta.get("superseded_by"):
-                        continue  # a superseded thought is not "surfacing again" — it is the same entry's earlier life
-                    tag_additions.append(f"相似认知:{sid[:6]}")
-                    rt.logger.info(f"[准则冒头] {bucket_id} ≈ {sid[:6]} cos={float(s):.2f}")
-                    break
         except Exception:
             pass
 
@@ -1139,6 +1111,7 @@ async def grow_event(items: list, direction_of_fit: str = "", bound=None,
     ph = _placeholder_meta()
     results: list[str] = []
     pairs: list[tuple[str, str, str]] = []
+    dreamt: set[str] = set()
     # Identical-text deduplication: storing a body that matches word for word
     # returns the original id instead of creating a new bucket.
     # Duplicates that are worded differently are not blocked — those really are
@@ -1148,10 +1121,14 @@ async def grow_event(items: list, direction_of_fit: str = "", bound=None,
     # is what once dragged a batch of five out to 16 seconds).
     # Under a read scope an entry the request may not read is not a duplicate it can be
     # told about: its id would be named, so the write goes ahead.
+    # The same listing is the library the return's look-back and scene question read
+    # (tools/_write_returns.py): taken before the write, while the parse cache is warm.
     existing_by_content: dict[str, str] = {}
+    library: list | None = None
     _view = await read_scope()
     try:
-        for _b in await rt.bucket_mgr.list_all(include_archive=False):
+        library = await rt.bucket_mgr.list_all(include_archive=False)
+        for _b in library:
             _m = _b.get("metadata", {}) or {}
             if not _m.get("deleted_at") and (_view is None or _view.permits(_m)):
                 existing_by_content.setdefault(str(_b.get("content") or ""), str(_m.get("id") or ""))
@@ -1173,6 +1150,9 @@ async def grow_event(items: list, direction_of_fit: str = "", bound=None,
         if dup_id:
             results.append(f"♻️{dup_id} 已存过（同文，未重建）")
             continue
+        # Retelling a dream, or grown from one, is marked without being asked (core/_dream).
+        from core._dream import from_a_dream
+        ig = v2["internally_generated"] or await from_a_dream(item["text"], prov)
         bucket_id = await rt.bucket_mgr.create(
             content=item["text"],
             tags=ph["tags"],
@@ -1187,11 +1167,13 @@ async def grow_event(items: list, direction_of_fit: str = "", bound=None,
             when=item["when"],
             prov=prov,
             test_data=test_data,
-            **v2,
+            **{**v2, "internally_generated": ig},
             **extra,
         )
         results.append(f"📝{bucket_id} {item['room']}")
         pairs.append((bucket_id, item["text"], "event"))
+        if ig:
+            dreamt.add(bucket_id)
         existing_by_content.setdefault(item["text"], bucket_id)
         if hold_target:
             hold_ids.append(bucket_id)
@@ -1225,6 +1207,17 @@ async def grow_event(items: list, direction_of_fit: str = "", bound=None,
     for bid, n in long_ones:
         out += (f"\n📏 {bid} 有 {n} 字——真是好几件事就分成几条重存"
                 f"（正文在你手里，逐字贴过去，别改字），一件事就别管这条提示。")
+
+    # Old views these bodies run into, and a scene that keeps coming back. Only an event
+    # that happened earns the scene question: a want, a dream or a hold is not the scene
+    # occurring again.
+    if pairs:
+        happened = not telic and not hold_target
+        notes = await noticed(library, [(bid, txt) for bid, txt, _ in pairs],
+                              skip=_R.lineage(prov_targets(prov or []), library or []),
+                              scene_texts=[txt for bid, txt, _ in pairs
+                                           if bid not in dreamt] if happened else [])
+        out += "".join("\n" + line for line in notes)
     return out
 
 
@@ -1305,6 +1298,14 @@ async def grow_mind(room: str, text: str, from_ids, v, a,
     if not (0 <= v <= 1 and 0 <= a <= 1):
         return f"v/a 必须在 0~1 之间（收到 v={v}, a={a}；没传会是 -1）。MIND 的坐标你自己打。"
 
+    # The library as it stood before this write, for the return's look-back (listing it
+    # after the write would re-read every file: create() clears the parse cache).
+    try:
+        library = await rt.bucket_mgr.list_all(include_archive=False)
+    except Exception as e:  # noqa: BLE001 - without it the return only skips the look-back
+        rt.logger.warning(f"grow mind: library not listed, no look-back this time: {e}")
+        library = None
+
     ph = _placeholder_meta()
     bucket_id = await rt.bucket_mgr.create(
         content=text,
@@ -1342,4 +1343,9 @@ async def grow_mind(room: str, text: str, from_ids, v, a,
         head += f" [名字卡:{card}]"
     out = head + "（标签/摘要后台回填中）"
     out += "".join("\n" + note for note in source_notes)
-    return out + ("\n" + card_note if card_note else "")
+    if card_note:
+        out += "\n" + card_note
+    # Old views this thought runs into; the ones it stands on are its own lineage.
+    notes = await noticed(library, [(bucket_id, text)],
+                          skip=_R.lineage(source_ids, library or []))
+    return out + "".join("\n" + line for line in notes)

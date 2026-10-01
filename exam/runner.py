@@ -216,13 +216,19 @@ async def seed(lib: Path, clock_file: Path, entries: list[dict],
     if extra.get("dreams"):
         from core import _dream
         for d in extra["dreams"]:
-            _dream.save_record({"id": d["id"], "织于": d.get("at", ""), "起算点": d.get("at", ""),
-                                "回想次数": 0, "轮次": 0, "碎片": d["text"][:20],
-                                "完整": d["text"], "完整字数": len(d["text"]),
-                                "v": 0.5, "a": 0.3, "nightmare": False,
-                                "素材": {"压在心头": list(d.get("ingredients") or []),
-                                       "想不明白": [], "几个词": []}},
-                               str(lib))
+            rec = {"id": d["id"], "织于": d.get("at", ""), "起算点": d.get("at", ""),
+                   "回想次数": 0, "轮次": 0, "碎片": d["text"][:20],
+                   "完整": d["text"], "完整字数": len(d["text"]),
+                   "whole_prints": _dream.dream_prints(d["text"]),
+                   "v": 0.5, "a": 0.3, "nightmare": False,
+                   "素材": {"压在心头": list(d.get("ingredients") or []),
+                          "想不明白": [], "几个词": []}}
+            if d.get("degraded"):
+                # Woken at `at`: the whole text is gone and the fragment's clock runs
+                # from then (core/_dream.degrade_on_wake).
+                rec.update({"碎片": d["text"], "降级于": d.get("at", "")})
+                rec.pop("完整")
+            _dream.save_record(rec, str(lib))
     if extra.get("dehydration_cache"):
         from core.dehydrator import Dehydrator
         dh = Dehydrator(config)
@@ -579,6 +585,22 @@ class Run:
                 ok = ok and got == int(want)
                 notes.append(f"{etype} {got} (want {want})")
             return ok, "; ".join(notes)
+        if "dream" in c:
+            # The dream records on disk (core/_dream.load_dreams): how many there are, and
+            # whether their ingredients (every stream) name an id.
+            from core import _dream
+            spec = self.sub(c["dream"])
+            recs = _dream.load_dreams(str(self.lib))
+            used = [set(_dream.ingredient_ids(r)) for r in recs]
+            ok = True
+            if "count" in spec:
+                ok = ok and len(recs) == int(spec["count"])
+            if "has" in spec:
+                ok = ok and any(spec["has"] in u for u in used)
+            if "lacks" in spec:
+                ok = ok and all(spec["lacks"] not in u for u in used)
+            return ok, (f"{len(recs)} dream(s); ingredients: "
+                        + ("; ".join(", ".join(sorted(u)) or "-" for u in used) or "-"))
         if "var" in c:
             val = self.vars.get(c["var"], "")
             want = str(self.sub(c["equals"]))
@@ -717,6 +739,10 @@ async def library(item: dict, keep: bool, tag: str = ""):
         side_model_file.write_text(json.dumps(item["side_model"], ensure_ascii=False),
                                    encoding="utf-8")
         env["EXAM_SIDE_MODEL_FILE"] = str(side_model_file)
+    weaver_file = lib.parent / f"{lib.name}.weaver.json"
+    if item.get("weaver"):
+        weaver_file.write_text(json.dumps(item["weaver"], ensure_ascii=False), encoding="utf-8")
+        env["EXAM_WEAVER_FILE"] = str(weaver_file)
     for k in ("OPENAI_API_KEY", "DEEPSEEK_API_KEY", "LOCI_DEHYDRATION_API_KEY",
               "LOCI_EMBEDDING_API_KEY", "GEMINI_API_KEY"):
         env.pop(k, None)
@@ -745,7 +771,8 @@ async def library(item: dict, keep: bool, tag: str = ""):
                 os.environ[k] = v
         if not keep:
             shutil.rmtree(lib, ignore_errors=True)
-            for suffix in (".clock", ".config.yaml", ".server.log", ".side_model.json"):
+            for suffix in (".clock", ".config.yaml", ".server.log", ".side_model.json",
+                           ".weaver.json"):
                 (lib.parent / f"{lib.name}{suffix}").unlink(missing_ok=True)
 
 
@@ -835,7 +862,10 @@ def seams() -> tuple[str, ...]:
             "tests/test_cue.py's",
             "an item's names: is written to the library as aliases.yaml before setup",
             "an item's dreams: and dehydration_cache: are written in setup through Loci's own "
-            "_dream.save_record and Dehydrator cache")
+            "_dream.save_record and Dehydrator cache",
+            "an item's weaver: answers the one model call weaving a dream makes "
+            "(exam/serve.py stands it in for core/_dream.call_model; no item without one is "
+            "affected)")
 
 
 def require_search_deps() -> None:

@@ -1138,6 +1138,9 @@ async def build_poke(query: str = "", when: str = "", room: str = "",
                 "v": rec.get("v"), "a": rec.get("a"),
                 "nightmare": bool(rec.get("nightmare")),
                 "织于": rec.get("织于"),
+                # The weaver's thread candidates, when it had any: the main model decides
+                # whether one becomes a cue (core/_dream.handout_cues).
+                **_D.handout_cues(rec),
             })
     except Exception as e:                      # noqa: BLE001 - an unreadable dream must not blow up the whole poke endpoint
         logger.warning(f"[loci] poke 取梦失败: {e}")

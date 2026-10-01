@@ -39,6 +39,7 @@ The places, cleared in this order, each one of the entries only (what is derived
 for review, not cleared):
 
     dream_records      dream files whose ingredients include an entry or a derived memory,
+                       that were fed the changed source itself (the quote share's `来源`),
                        or whose text holds the entries' words
     dehydration_cache  cache rows keyed by an entry's body, or whose summary holds its words
     slices             pending slices over the changed lines: gist blanked, an open one dropped
@@ -221,14 +222,15 @@ async def _derived(store, entries: list[str]) -> list[str]:
 def _dream_records(store, ctx) -> str:
     from . import _dream
     ids = set(ctx["entries"]) | set(ctx["derived"])
+    registry = getattr(store, "sources", None)
     hit = 0
     for rec in _dream.load_dreams(store.base_dir):
         path = rec.get("_路径") or ""
-        material = rec.get("素材") or {}
-        used = {str(i) for k in ("压在心头", "想不明白") for i in (material.get(k) or [])}
+        used = set(_dream.ingredient_ids(rec))
         text = json.dumps({k: v for k, v in rec.items() if not k.startswith("_")},
                           ensure_ascii=False)
-        if (used & ids) or ctx["words"].hit(text):
+        if ((used & ids) or _dream.fed_by(rec, ctx["sid"], registry)
+                or ctx["words"].hit(text)):
             if path and os.path.exists(path):
                 os.remove(path)
                 hit += 1
@@ -510,7 +512,9 @@ async def _carry_out(store, host, change: dict, sid, prior: dict, prog: Optional
         for place in PLACES:
             if places.get(place) in (DONE, NONE):
                 continue
-            if place in _WORD_PLACES and not words and not entries and not derived:
+            # A dream may have been fed the source itself with no entry naming it.
+            if (place in _WORD_PLACES and place != "dream_records"
+                    and not words and not entries and not derived):
                 places[place] = NONE
                 continue
             try:

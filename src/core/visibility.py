@@ -48,6 +48,8 @@ The roads
 | dream           | surface | ✔            | ✔           |         | avoid        | ✔          |             |
 | dream_handout   | surface | ✔            |             |         | avoid        |            |             |
 | cue             | surface | ✔            | ✔           |         | defer, avoid |            |             |
+| reconsolidation | surface | ✔            | ✔           | ✔       | defer, avoid | ✔          |             |
+| case_recall     | surface | ✔            | ✔           |         | avoid        | ✔          |             |
 | list            | lookup  |              | ✔           |         |              |            |             |
 | read            | lookup  | (any state shown, with its mark)                                              |
 
@@ -104,6 +106,14 @@ through the strong-reminder card with the owner's next message, not through brea
   does not hold a card back: the owner's own words brought the entry up, which is not
   breath's unprompted screen. A memory in 依据变了的 is carded on the `invalidation` road,
   by id and status.
+- reconsolidation: the old views a write tool's return points back at (回望,
+  core/_reconsolidation.py). A covered view is not one: what covers it is the view now. A
+  view a hold is hung on stays off at either level — the return is unprompted, and 「先别提」
+  covers it as much as 「别碰」.
+- case_recall: the earlier entries a write tool's return counts and names when it asks
+  about a scene that keeps coming (场景常来, core/_case_recall.py). An entry that was
+  folded into something larger still happened on its day, so a cover does not take it out
+  of the count; 「先别催」 is about nagging, not about having happened, so only `avoid` does.
 - list: what recall lists and counts — search, time browsing, a period's members, the
   earliest-entry line in breath (`on_timeline`).
 - read: recall's read by id — the entry itself and every entry it links to (sources,
@@ -113,10 +123,6 @@ through the strong-reminder card with the owner's next message, not through brea
 Where a road's column is empty it is because that road never honoured the rule, not an
 oversight: the gate took each road's rules as they stood and closed only the known
 leaks (`dont_surface` on 「忽然想起」 and on the undigested dream pool).
-
-Callers still to come, and the road each will ask:
-- stage 6's write tools return memories (回望 / 场景常来): a return is surfacing — they
-  will ask with a road of their own added to this table.
 
 ------------------------------------------------------------
 Read scope
@@ -187,6 +193,8 @@ MUSE = "muse"
 DREAM = "dream"
 DREAM_HANDOUT = "dream_handout"
 CUE = "cue"
+RECONSOLIDATION = "reconsolidation"
+CASE_RECALL = "case_recall"
 LIST = "list"
 READ = "read"
 
@@ -224,6 +232,10 @@ ROADS: dict[str, Road] = {
                 hold_entry=True),
     DREAM_HANDOUT: Road(SURFACE, dont_surface=True, holds=frozenset({"avoid"})),
     CUE: Road(SURFACE, dont_surface=True, superseded=True, holds=_BOTH_LEVELS),
+    RECONSOLIDATION: Road(SURFACE, dont_surface=True, superseded=True, covered=True,
+                          holds=_BOTH_LEVELS, hold_entry=True),
+    CASE_RECALL: Road(SURFACE, dont_surface=True, superseded=True,
+                      holds=frozenset({"avoid"}), hold_entry=True),
     LIST: Road(LOOKUP, superseded=True),
     READ: Road(LOOKUP, states=_ALL_STATES),
 }

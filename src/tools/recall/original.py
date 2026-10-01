@@ -25,7 +25,7 @@ fence or pass for Loci's own words: it is material, not instructions. Loci's own
 inside a fence (a line missing for now, where the text stops) stand behind "┆ ", which
 no line of the host's can start with.
 
-Exports: render_original(query) -> str
+Exports: render_original(query) -> str · source_records_of(meta) · deployment_hosts()
 ========================================
 """
 
@@ -65,7 +65,7 @@ _REASON = {"withdrawn": "撤回了", "deleted": "删了", "out_of_scope": "不�
 _MISSING = {"unavailable": "这一行宿主那边暂时取不到"}
 
 
-def _hosts():
+def deployment_hosts():
     """The deployment's hosts, read per call the way the request layer reads them
     (web/panel_auth.hosts): `hosts:` in config, the legacy host's key falling back to the
     hook key."""
@@ -75,7 +75,7 @@ def _hosts():
     return _scope.load_hosts(cfg, os.environ, legacy_token=legacy)
 
 
-def _records_of(meta: dict) -> list[dict]:
+def source_records_of(meta: dict) -> list[dict]:
     """The sources to ask for: the entry's records, then the sources its wasQuotedFrom
     lines name by string form; each identity-and-revision once. A record that no longer
     reads as one (a hand edit), or a quoted target that is not a source string form, is
@@ -179,13 +179,13 @@ async def render_original(query: str) -> str:
                 "只凭还剩的来源重写（regrow），或者收起来（trace delete=True）。")
     if not verdict:
         return f"{q} 不在这次能看的范围里。"
-    records = _records_of(meta)
+    records = source_records_of(meta)
     if not records:
         return (f"{q} 没挂宿主的来源，没有原话可取。它自己记的正文：recall(query=\"{q}\")。")
 
     settings = _O.settings_from(rt.config)
     asked = records[:settings.max_sources]
-    hosts = _hosts()
+    hosts = deployment_hosts()
     request = _scope.current_request()
     registry = getattr(rt.bucket_mgr, "sources", None)
     answers = await asyncio.gather(*(

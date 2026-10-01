@@ -68,11 +68,17 @@ captured value; `${var:6}` its first six characters, the handle tools print.
 Setup extras: an item's `names:` is the names table ({name: {aliases, instance_of,
 present_in, member_of}}), written as the library's aliases.yaml; an entry's `sink: true`
 sinks it after its fields (it needs a summary); an
-item's `dreams: [{id, text, ingredients}]` are saved as woven dream records and its
+item's `dreams: [{id, text, ingredients, degraded?}]` are saved as woven dream records
+(`degraded: true`: woken at `at`, the whole text gone, the fragment's clock running) and its
 `dehydration_cache: [{text, summary}]` cached by Loci's own dehydrator.
 
 An item may carry `side_model: {phrase: answer}`: the backfill's side-model call is answered
 with the answer whose phrase appears in the entry's body (a seam, listed in the report).
+
+An item may carry `weaver: {完整, 碎片, v, a, 线索?}`: the one model call weaving a dream
+makes is answered with it (a seam, listed in the report). Dreams have no MCP tool; breath's
+upkeep sweeps them and weaves one when the pressure is over the line, so a `call: breath`
+and a short `wait:` weave on the fake clock.
 
 Checks, each tagged with the paper's segment (store / find / think / source / input / use):
 
@@ -88,11 +94,12 @@ Checks, each tagged with the paper's segment (store / find / think / source / in
 | `vector: id` (+ `absent: true`) | embeddings.db holds (or no longer holds) its row |
 | `ledger: {unique_seq: true, type_count: {Type: n}}` | the ledger's numbers are distinct and gapless; n lines of that type |
 | `var: name, equals: v` | a captured value matches |
+| `dream: {count?, has?, lacks?}` | the dream records on disk number that many; their ingredients (every stream) name / do not name the id |
 
 `interface: none` + `needs:` marks an item the current version has nothing to call for.
 It is reported as NO INTERFACE, with what the next version has to expose.
 `interface: blocked` is different: the version has the behaviour but the harness cannot
-reach it (dreams, today). It is reported as BLOCKED, never as the version lacking it.
+reach it. It is reported as BLOCKED, never as the version lacking it.
 
 Every report opens with the Loci version, commit, time zone and the test seams the
 runner added. A baseline that needed more seams than those is not a baseline.
@@ -144,4 +151,6 @@ python exam/turn.py exam/turns/*.yaml                      # 3 runs per item
 - Background work (backfill after a write) is given a short settle time after each call.
   Without a model key it fails fast, so names fall back to the first line of the body
   and no summary is written.
-- Dreams have no MCP tool, so dream items cannot run on the tool layer yet.
+- Dreams have no MCP tool: dream items weave through breath's upkeep with the `weaver:`
+  seam, and read what was woven off the disk. What a dream is handed out as (the poke and
+  `/api/dream/current` routes) is tests' (tests/test_dream_material.py), not the exam's.

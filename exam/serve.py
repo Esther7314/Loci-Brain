@@ -33,6 +33,9 @@ answers the side model's chat — the backfill's one call — with the answer wh
 appears in the request (the entry's body), and "" when none does. Without the file the
 chat is untouched: no key, so it answers "".
 
+And a fourth: an item's `weaver:` (EXAM_WEAVER_FILE) answers the one model call weaving a
+dream makes, so breath's upkeep weaves with no key (see the end of this file).
+
 Nothing else differs from a real start: same tools, same argument checks, same output.
 """
 
@@ -126,5 +129,23 @@ if _side_model_file:
         return ""
 
     Dehydrator._chat = _side_model_chat
+
+# And a fourth: an item's `weaver:` (the JSON the weaving model answers, handed over in
+# EXAM_WEAVER_FILE) stands in for the one model call a dream makes (core/_dream.call_model),
+# so breath's upkeep weaves on the fake clock with no key. What is drawn, the pressure line,
+# the parse, the record and everything after it are Loci's own. Without the file a dream
+# cannot be woven here (no key), and breath's upkeep only sweeps.
+_weaver_file = os.environ.get("EXAM_WEAVER_FILE", "").strip()
+if _weaver_file:
+    import json  # noqa: E402
+
+    from core import _dream  # noqa: E402
+
+    _weaver_answer = json.loads(Path(_weaver_file).read_text(encoding="utf-8"))
+
+    async def _weaver(ingredients, c):
+        return _dream.parse_dream(json.dumps(_weaver_answer, ensure_ascii=False))
+
+    _dream.call_model = _weaver
 
 runpy.run_path(str(ROOT / "src" / "server.py"), run_name="__main__")

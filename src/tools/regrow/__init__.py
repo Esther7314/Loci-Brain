@@ -41,6 +41,10 @@ Four things fixed during review:
 - Backfill self-healing: backfill_sweep also recognises source_tool=regrow (that
   change lives over in rooms_path)
 
+The return also says which old views the new version runs into (回望,
+tools/_write_returns.py); its own lineage — what it stands on, the versions it replaces,
+what grew out of the old version — is not among them.
+
 The old version's `sources` come across with its standing; new ones (`sources=`) are
 checked like any write's and added. A source withdrawn or deleted since the old version
 was written is left behind, quoted line and all, and the receipt says so.
@@ -50,6 +54,7 @@ Exports: dispatch(bucket_id, text, v, a, from_, mode, sources) -> str · MODES
 """
 
 from core import _fold as _F           # fold's bones: regrow is its n=1 case
+from core import _reconsolidation as _R
 from core import _sources as _src
 from .. import _runtime as rt
 from core._bigevent import is_big as _is_big
@@ -59,6 +64,7 @@ from .._common import _keyed_turn, read_scope, resolve_bucket_id, with_write_key
 # from core._rooms import is_mind_room
 from utils import PROV_MAX_LINES, WAS_REVISION_OF, now_iso, prov_targets, read_prov
 from ..grow.rooms_path import _normalize_from, check_sources
+from .._write_returns import noticed
 
 MODES = ("supplement", "overturn")
 _MODE_WORD = {"supplement": "补充", "overturn": "推翻"}
@@ -278,6 +284,13 @@ async def _regrow(bucket_id: str = "", text: str = "", v=-1, a=-1, from_=None,
             _t0, _t1, span_err = _F.check_span(new_when)
             if span_err:
                 return span_err
+        # The library as it stood before the new version, for the return's look-back
+        # (listing it after the write would re-read every file: the write clears the cache).
+        try:
+            library = await rt.bucket_mgr.list_all(include_archive=False)
+        except Exception as e:  # noqa: BLE001 - without it the return only skips the look-back
+            rt.logger.warning(f"regrow: library not listed, no look-back this time: {e}")
+            library = None
         new_id, report = await _F.save_gist(
             text, room, v, a, cover, when=new_when if is_big else "",
             prov=prov, sources=merged_sources, supersedes=bucket_id, test_data=is_test)
@@ -335,4 +348,9 @@ async def _regrow(bucket_id: str = "", text: str = "", v=-1, a=-1, from_=None,
     tail = _F.format_report(report)
     if tail:
         out += "\n" + tail
-    return out
+    # Old views the new version runs into. Its own lineage is not one: what it stands on,
+    # the versions it replaces, and what grew out of the version it replaces.
+    notes = await noticed(library, [(new_id, text)],
+                          skip=_R.lineage([bucket_id, *prov_targets(prov)], library or [],
+                                          down_from=[bucket_id]))
+    return out + "".join("\n" + line for line in notes)
