@@ -131,3 +131,56 @@
       as: new
     - check: {segment: store, desc: "no new version", var: new, equals: e60001000000}
     - check: {segment: think, desc: "the descendant is untouched", unchanged: e60002000000, since: child_before, keys: [last_active, status, tags]}
+
+# A run of lines is one source record; the host revises one line in its middle. The memory
+# is carded naming that line and its revision, confirmed per line and revision.
+- id: E7
+  title: "a line revised inside a run cards the memory, once per revision"
+  start: "2026-10-01T10:00:00+08:00"
+  hosts:
+    legacy: {token: t-life, scope_mode: open, may_restore: true}
+  setup:
+    - id: e70001000000
+      at: "2026-09-30T21:00:00+08:00"
+      room: EVENT/WORLD
+      text: "小周和我商量周日去郊游，定了早上八点在地铁站碰头。"
+      sources: [{system: lento, instance: home, container: "private:U", id: m_20260930_0002, through: m_20260930_0005}]
+  slices:
+    source: {system: lento, instance: home, container: "private:U"}
+    day: "2026-09-30"
+    lines:
+      - {id: m_20260930_0001, speaker: 我, text: "周日有空吗？"}
+      - {id: m_20260930_0002, speaker: 小周, text: "有，想出去走走。"}
+      - {id: m_20260930_0003, speaker: 我, text: "那去郊游，早上八点？"}
+      - {id: m_20260930_0004, speaker: 小周, text: "好，地铁站碰头。"}
+      - {id: m_20260930_0005, speaker: 我, text: "就这么定了。"}
+      - {id: m_20260930_0006, speaker: 小周, text: "晚安。"}
+    cut:
+      - {from: 2, to: 5, gist: "约周日早上八点郊游"}
+  steps:
+    - source_change: {change_id: c-e7-1, host_seq: 1, change: revised, revision: "2",
+                      source: "lento:home/private:U#m_20260930_0003"}
+      host: t-life
+    - call: breath
+      as: first
+    - check: {segment: think, desc: "the memory is carded", output: first, section: 依据变了的, contains: e70001}
+    - check: {segment: think, desc: "naming the line inside the run that was revised", output: first, section: 依据变了的, contains: "m_20260930_0003 出了新版本（2"}
+    - call: trace
+      args: {bucket_id: e70001000000, invalidation: confirmed}
+    - call: breath
+      as: confirmed
+    - check: {segment: think, desc: "confirmed at that revision: gone", output: confirmed, section: 依据变了的, lacks: e70001}
+    - source_change: {change_id: c-e7-2, host_seq: 2, change: revised, revision: "3",
+                      source: "lento:home/private:U#m_20260930_0003"}
+      host: t-life
+    - call: breath
+      as: again
+    - check: {segment: think, desc: "a later revision of the same line cards it again", output: again, section: 依据变了的, contains: "m_20260930_0003 出了新版本（3"}
+    - call: trace
+      args: {bucket_id: e70001000000, invalidation: confirmed}
+    - source_change: {change_id: c-e7-3, host_seq: 1, change: revised, revision: "2",
+                      source: "lento:home/private:U#m_20260930_0006"}
+      host: t-life
+    - call: breath
+      as: outside
+    - check: {segment: think, desc: "a line outside the run does not card it", output: outside, section: 依据变了的, lacks: e70001}

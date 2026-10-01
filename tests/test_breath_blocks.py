@@ -419,6 +419,58 @@ def test_a_revised_source_is_carded_and_confirming_records_the_revision(store, t
     assert I.block(run(store.list_all()), store.sources) == []
 
 
+def _revise(store, cid, seq, line, revision):
+    run(store.sources.apply_change({"change_id": cid, "kind": "revised", "host_seq": seq,
+                                    "source": f"lento:home/private:U#{line}",
+                                    "revision": revision}))
+
+
+def test_a_line_revised_inside_a_run_cards_the_memory_until_confirmed_per_revision(
+        store, tmp_path):
+    store.sources.record_order(SRC, [f"m_{i:04d}" for i in range(1, 11)])
+    bid = run(store.create("A talk about the trip.", room="EVENT/WORLD",
+                           sources=[{**SRC, "id": "m_0002", "through": "m_0006",
+                                     "fingerprint": "sha256:run", "fingerprint_by": "loci"}]))
+    _revise(store, "out", 1, "m_0008", "2")                 # outside the run
+    _revise(store, "out2", 1, "m_0001", "2")                # just before it
+    assert I.block(run(store.list_all()), store.sources) == []
+    from core import _cue
+    before = _cue.fingerprint(_disk(tmp_path, bid), "x", registry=store.sources)
+    _revise(store, "mid", 1, "m_0004", "2")                 # a line in the middle
+    [it] = I.block(run(store.list_all()), store.sources)
+    assert it["id"] == bid and it["text"]
+    assert it["revised"] == [{"source": "lento:home/private:U#m_0004", "revision": "2"}]
+    assert _cue.fingerprint(_disk(tmp_path, bid), "x", registry=store.sources) != before, \
+        "the card's version moves with it (the same findings)"
+    run(trace(bucket_id=bid, invalidation="confirmed"))
+    [rec] = _disk(tmp_path, bid)["invalidation"]
+    assert (rec["of"], rec["by"]) == ("lento:home/private:U#m_0004", "2") and rec["confirmed_at"]
+    assert I.block(run(store.list_all()), store.sources) == []
+    _revise(store, "mid2", 2, "m_0004", "3")                # the same line again
+    [it] = I.block(run(store.list_all()), store.sources)
+    assert it["revised"] == [{"source": "lento:home/private:U#m_0004", "revision": "3"}]
+    run(trace(bucket_id=bid, invalidation="confirmed"))
+    _revise(store, "last", 1, "m_0006", "2")                # another line of the run
+    [it] = I.block(run(store.list_all()), store.sources)
+    assert it["revised"] == [{"source": "lento:home/private:U#m_0006", "revision": "2"}]
+
+
+def test_a_revision_announced_before_the_memory_was_written_does_not_card_it(store, tmp_path):
+    reg = store.sources
+    reg.record_order(SRC, [f"m_{i:04d}" for i in range(1, 11)])
+    _revise(store, "early", 1, "m_0003", "2")
+    row = json.loads(reg.changes_path.read_text(encoding="utf-8"))
+    row["recorded_at"] = "2020-01-01T00:00:00+00:00"        # long before the memory
+    reg.changes_path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    reg.rebuild_index()
+    run(store.create("Written from the revised lines.", room="EVENT/WORLD",
+                     sources=[{**SRC, "id": "m_0002", "through": "m_0004"}]))
+    assert I.block(run(store.list_all()), reg) == []
+    _revise(store, "later", 2, "m_0003", "3")               # a revision after it does
+    [it] = I.block(run(store.list_all()), reg)
+    assert it["revised"] == [{"source": "lento:home/private:U#m_0003", "revision": "3"}]
+
+
 def test_a_panel_correction_is_carded_until_folded_or_confirmed(store, tmp_path):
     bid = run(store.create("Actually it was Tuesday.", room="EVENT/WORLD", tags=["人改的"]))
     [it] = I.block(run(store.list_all()), store.sources)

@@ -650,7 +650,10 @@ _CHANGE_CONTENT = ("source", "kind", "host_seq", "revision", "fingerprint", "fin
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    """Now, on the clock every stored stamp is written by (utils.utc_now): a change's
+    time is compared with a memory's `created`."""
+    from utils import utc_now
+    return utc_now().replace(tzinfo=timezone.utc).isoformat(timespec="seconds")
 
 
 def _append_line(path: Path, row: dict) -> None:
@@ -832,7 +835,8 @@ class SourceRegistry:
             entry["use_changed"] = True
         if row.get("kind") == "revised":
             entry["revisions"].append({k: row.get(k) for k in (
-                "revision", "fingerprint", "fingerprint_by", "host_seq", "seq")})
+                "revision", "fingerprint", "fingerprint_by", "host_seq", "seq",
+                "recorded_at")})
 
     def _fresh(self) -> None:
         with self._guard:
