@@ -1140,7 +1140,7 @@ async def recall(
         "Only meaningful without a query."
     ))] = 0,
     view: Annotated[str, _PydField(description=(
-        'Two values. "scene": groups the entries that matched into clusters sharing the '
+        'Three values. "scene": groups the entries that matched into clusters sharing the '
         "same scene words, with the rest hanging under a representative. This is how a "
         "single thread reads across time. Needs a query: without one nothing has "
         "matched, so there is nothing to cluster.\n"
@@ -1148,7 +1148,13 @@ async def recall(
         "waiting for you — each with its span, one line of what it is, and the entries "
         "from that day that look like they already record it. Handle each one: not "
         'recorded → grow(..., slice="sl_…"); recorded → trace(bucket_id=…, '
-        'slice="sl_…"); cut wrong → trace(slice="sl_…", slice_span=…) or drop_slice=True.'
+        'slice="sl_…"); cut wrong → trace(slice="sl_…", slice_span=…) or drop_slice=True.\n'
+        '"original", with query set to one entry\'s id: asks the host for the original '
+        "material that entry was formed from (the host keeps it; Loci keeps only where it "
+        "is). The first line says whether the host gave it, could not reach it for now "
+        "(the entry's own text stands in), or no longer allows it (then nothing of the "
+        "entry is shown). Use it when the exact words matter; it goes over the network, so "
+        "not for every read."
     ))] = "",
 ) -> str:
     """Look back through memories that are already stored.
@@ -1202,7 +1208,10 @@ async def recall(
     Example — read one entry word for word:
       recall(query="a1b2c3d4e5f6")
       Passing a full bucket_id as the query returns that entry verbatim, along with its
-      metadata, where it came from, and what has cited it."""
+      metadata, where it came from, and what has cited it.
+
+    Example — the host's original words behind one entry:
+      recall(query="a1b2c3d4e5f6", view="original")"""
     return await _with_notice(
         _t_recall.dispatch(when=when, room=room, tag=tag, query=query,
                            slices=int(slices or 0), view=view),

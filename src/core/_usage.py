@@ -3,12 +3,16 @@
 core/_usage.py — the usage log: what Loci handed out, and what was used as a source
 ========================================
 
-Three things are recorded by code, each as one line of `<buckets>/_usage/usage.jsonl`:
+Four things are recorded by code, each as one line of `<buckets>/_usage/usage.jsonl`:
 
     shown    put in front of the model by itself — breath's blocks
     found    handed back to a lookup — recall's search, browsing, a read by id
     source   used as a source — a write stood on it (grow's from, regrow, fold): the
              one use that refreshes decay (BucketManager.touch)
+    fetched  a host's original of the memory's sources was handed to the model
+             (core/_originals.py): `sources` names the ones the host gave, by string
+             form — never their text. It refreshes nothing: the memory was read, not
+             written from
 
     {"at": "2026-10-01T12:00:00+00:00", "kind": "shown", "road": "breath.recent",
      "ids": ["3f9c1a2b7d40"], "host": "life-line", "key": "life-line:t-1001#2"}
@@ -37,8 +41,8 @@ failed write only logs.
 A lookup's candidates reach the tool that hands its text out through `offering()` /
 `offer()`: the lookup offers what it collected, the tool keeps what its text shows.
 
-Exports: SHOWN · FOUND · SOURCE · KINDS · DEFAULT_RETAIN_DAYS · UsageLog · ids_in ·
-         offering · offer
+Exports: SHOWN · FOUND · SOURCE · FETCHED · KINDS · DEFAULT_RETAIN_DAYS · UsageLog ·
+         ids_in · offering · offer
 ========================================
 """
 
@@ -57,8 +61,8 @@ from locibrain.eventsourcing.ledger_mirror import file_lease
 
 logger = logging.getLogger("loci_brain.usage")
 
-SHOWN, FOUND, SOURCE = "shown", "found", "source"
-KINDS = (SHOWN, FOUND, SOURCE)
+SHOWN, FOUND, SOURCE, FETCHED = "shown", "found", "source", "fetched"
+KINDS = (SHOWN, FOUND, SOURCE, FETCHED)
 USAGE_DIR = "_usage"
 USAGE_FILE = "usage.jsonl"
 DEFAULT_RETAIN_DAYS = 30
@@ -140,10 +144,12 @@ class UsageLog:
         self._pruned_at = 0.0
 
     def record(self, kind: str, ids: Iterable[str], road: str, *,
-               query: Optional[str] = None, gates: Optional[dict] = None) -> None:
-        """Append one line. `shown` and `source` with no ids write nothing; `found` always
-        writes (a search that listed nothing is part of how searching goes). `query` and
-        `gates` are taken on `found` lines only."""
+               query: Optional[str] = None, gates: Optional[dict] = None,
+               sources: Optional[Iterable[str]] = None) -> None:
+        """Append one line. `shown`, `source` and `fetched` with no ids write nothing;
+        `found` always writes (a search that listed nothing is part of how searching goes).
+        `query` and `gates` are taken on `found` lines only, `sources` (string forms) on
+        `fetched` lines only."""
         if kind not in KINDS:
             raise ValueError(f"usage kind must be one of {KINDS}")
         ids = [str(i) for i in dict.fromkeys(ids) if i]
@@ -157,6 +163,8 @@ class UsageLog:
                 row["query"] = str(query)[:_QUERY_MAX]
             if gates:
                 row["gates"] = {k: str(gates.get(k) or "") for k in _GATE_KEYS if k in gates}
+        if kind == FETCHED and sources:
+            row["sources"] = [str(s) for s in dict.fromkeys(sources) if s]
         if host:
             row["host"] = host
         if key:

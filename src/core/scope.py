@@ -34,6 +34,9 @@ Hosts
         max_grant:
           - {system: telegram, instance: bot-a}
         may_restore: false                 # scope_mode defaults to restricted
+        fetch_url: http://127.0.0.1:3010/api/loci/source   # optional: where Loci asks
+                                           # for the original of a source in max_grant
+                                           # (core/_originals.py)
 
 No `hosts:` table means exactly one host, `legacy` above (its key falls back to config
 `hook_token`, as the hook routes always read it). The host named `legacy` is also who a
@@ -88,6 +91,7 @@ import re
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Iterable, Mapping, Optional
+from urllib.parse import urlsplit
 
 from utils import parse_bool, read_from_ids
 
@@ -135,6 +139,9 @@ class Host:
     max_grant: Optional[tuple] = None    # places; None = no ceiling (an open host only)
     may_restore: bool = False
     token: str = field(default="", repr=False, compare=False)
+    # Where Loci asks this host for a source's original (core/_originals.py); "" = never
+    # asked. It serves the sources its `max_grant` covers.
+    fetch_url: str = ""
 
     @property
     def open(self) -> bool:
@@ -146,7 +153,8 @@ def _host_from(name: str, raw, environ: Mapping[str, str], fallback_token: str) 
         raise ValueError(f"host name {name!r} must be 1-64 of A-Z a-z 0-9 _ . -")
     if not isinstance(raw, dict):
         raise ValueError(f"host {name}: expected a mapping")
-    extra = sorted(set(map(str, raw)) - {"token_env", "max_grant", "may_restore", "scope_mode"})
+    extra = sorted(set(map(str, raw)) - {"token_env", "max_grant", "may_restore", "scope_mode",
+                                         "fetch_url"})
     if extra:
         raise ValueError(f"host {name}: unknown keys {extra}")
     mode = str(raw.get("scope_mode") or RESTRICTED).strip().lower()
@@ -164,8 +172,16 @@ def _host_from(name: str, raw, environ: Mapping[str, str], fallback_token: str) 
             raise ValueError(f"host {name}: max_grant is a list of places")
         max_grant = tuple(_src.Place.from_mapping(p, where=f" max_grant[{i}]")
                           for i, p in enumerate(items))
+    fetch_url = str(raw.get("fetch_url") or "").strip()
+    if fetch_url:
+        parts = urlsplit(fetch_url)
+        if (parts.scheme not in ("http", "https") or not parts.hostname or parts.username
+                or parts.password or parts.fragment):
+            raise ValueError(f"host {name}: fetch_url must be an http(s) URL with a host and "
+                             "no credentials or fragment in it")
     return Host(name=name, scope_mode=mode, max_grant=max_grant,
-                may_restore=parse_bool(raw.get("may_restore"), default=False), token=token)
+                may_restore=parse_bool(raw.get("may_restore"), default=False), token=token,
+                fetch_url=fetch_url)
 
 
 class Hosts:

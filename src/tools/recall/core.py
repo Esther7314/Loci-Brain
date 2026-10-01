@@ -1800,10 +1800,20 @@ async def recall_core(when: str, room: str, tag: str, query: str,
                     "when / room / tag / query 管不到它。")
         from .. import _slices
         return await _slices.render_pending()
+    # view="original" with query=<id>: ask the hosts for the original of that memory's
+    # sources (tools/recall/original.py). Only on this explicit ask: it goes over the
+    # network, so no other read does it.
+    if view == "original":
+        if any(str(x or "").strip() for x in (when, room, tag)) or not query.strip():
+            return ('view="original" 只配 query="记忆的 id" 用：它向宿主取那条记忆依据的原话，'
+                    "when / room / tag 管不到它。")
+        from .original import render_original
+        return await render_original(query)
     if view and view != "scene":
-        return (f'view 无效：{view}。只有两种："scene"'
+        return (f'view 无效：{view}。只有三种："scene"'
                 "（按共享场景词聚成簇，看这件事怎么一路过来的）；"
-                '"slices"（宿主交来、还没认领的切片）。'
+                '"slices"（宿主交来、还没认领的切片）；'
+                '"original"（配 query="记忆的 id"，向宿主取那条依据的原话）。'
                 "不给 view = 默认按时间＋分数排，找那件事。")
     if view and not query.strip():
         return ('view="scene" 要跟 query 一起用——簇是按**命中的记忆**共享的场景词聚的，'
@@ -1925,6 +1935,9 @@ async def recall_core(when: str, room: str, tag: str, query: str,
             if src_lines:
                 lines.append("来源:")
                 lines.extend(src_lines)
+                # The host's own words are not in the library; this says where to ask.
+                if quoted or _source_strings(meta):
+                    lines.append(f'  （宿主那边的原话：recall(query="{q}", view="original")）')
             # **This is unfold, and it is not a separate tool**: what a gist
             # covers is laid out here, one line each (id + gist).
             # Why not a separate tool: the drilling-down action already exists

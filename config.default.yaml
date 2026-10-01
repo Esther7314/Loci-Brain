@@ -290,3 +290,18 @@ panel_auth: true
 #       - {system: telegram, instance: bot-a}
 #       - {system: lento, instance: home, container: "private:U"}
 #     may_restore: false                  # scope_mode 不写就是 restricted
+#     fetch_url: "http://127.0.0.1:3010/api/loci/source"   # 可选：向这个宿主取原话的地址
+#
+# fetch_url（第四个接头，core/_originals.py）：模型 recall(query=id, view="original") 要看一条记忆
+# 依据的原话时，Loci 拿这条来源去问 max_grant 盖得住它的那个宿主（盖得最细的那个），带上这个宿主自己的
+# 钥匙（Authorization: Bearer）。没写 max_grant 的宿主不会被问。谁都没配 = 原话取不到，模型照旧只看记忆自己的正文。
+# 原文只进那一次回复：不存、不缓存、不写日志。
+
+# --- Original text from the host / 向宿主取原话（core/_originals.py）---
+# Only when the model asks for it (recall view="original"); never on an ordinary read.
+# 只在模型明着要的时候问（recall view="original"），平常读不问。
+source_fetch:
+  timeout_seconds: 5              # one fetch in all, then it counts as unavailable / 一次最多等几秒，过了算暂时取不到
+  max_chars: 8000                 # text past this is cut and said so / 原文超过这些字就截，并说明
+  max_bytes: 262144               # a bigger answer is refused unread / 回答超过这些字节不收
+  max_sources: 5                  # sources of one memory asked per call / 一条记忆一次最多问几条来源
