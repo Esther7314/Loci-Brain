@@ -26,7 +26,25 @@ What each kind of change does:
 | restored    | -> active (withdrawn/deleted need the host's `may_restore`) | no | nothing; a cleared body does not come back |
 | revised     | unchanged (unreadable -> active); the new revision is chained | no | nothing |
 
-`entries` are the memories naming the source or holding it in a run; `derived_pending`
+Who may send it: the source's declared change authority (`authority:` in `hosts:`,
+core/scope.Hosts.authority_for), within its `max_grant`. One order per source — the
+authority's host_seq — so a newer change can never be overtaken by an older one arriving
+later from somewhere else. A change past the ceiling is `forbidden` with `note:
+exceeds_max_grant`; from a host that is not the authority, `forbidden` with `note:
+not_change_authority` (another host relays through the authority); for a source no host is
+declared the authority of, `forbidden` with `note: no_change_authority`. With no `hosts:`
+table the one legacy host is the authority for everything.
+
+A host with a ceiling never sees the ledger's own numbers: its receipt carries
+`applied_cursor` (core/_ledger.cursor_of) where an open host's carries `applied_seq`.
+
+A withdrawn, deleted or restored change also settles a hold (`hold`): a host serving the
+original said the source was withdrawn or deleted before any ordered change did, and the
+memories resting on it were held — open `source_held` records — not cleared. The ordered
+change closes those records; withdrawn or deleted then blocks and clears as below.
+
+`entries` are the memories resting on the source (naming it, holding it in a run, or
+quoting it by string form, core/_sources.memories_of); `derived_pending`
 everything derived from them (prov's derived-from and primary-source lines, every
 generation). Blocking comes first, before anything is cleared: each of them gets an open
 `source_gone` invalidation record (`cleared: true` on the entries), which the read gate
@@ -70,7 +88,8 @@ with the progress now; once every place is done or none the answer is `duplicate
 final result. Progress lives in `<buckets>/_sources/cleanup.jsonl`, one line per step, the
 last line per change winning; every place is safe to run twice.
 
-Exports: PLACES · CLEARING · Words · handle · request_record
+Exports: PLACES · CLEARING · NO_AUTHORITY · NOT_AUTHORITY · LINES_MAX · Words · handle ·
+         handle_lines · hold · request_record
 ========================================
 """
 
@@ -100,6 +119,9 @@ _WORD_PLACES = frozenset({"dream_records", "dehydration_cache", "usage_log"})
 CLEARING = (_src.WITHDRAWN, _src.DELETED)
 DONE, NONE, PENDING = "done", "none", "pending"
 PROGRESS_FILE = "cleanup.jsonl"
+# Why a change is forbidden although the host's ceiling reaches the source.
+NO_AUTHORITY = "no_change_authority"      # no host is declared the source's authority
+NOT_AUTHORITY = "not_change_authority"    # another host is
 _FRAGMENT = re.compile(r"[\s，。！？、；：,.!?;:\"'“”‘’（）()\[\]{}<>《》…—\-~·/\\|]+")
 _CJK = re.compile(r"[㐀-鿿豈-﫿]")
 
@@ -386,6 +408,169 @@ async def _words(store, entries: list[str]) -> tuple[list[str], Words]:
 
 
 # ------------------------------------------------------------
+# A run's lines, registered by the host (POST /api/v2/source/lines)
+# ------------------------------------------------------------
+
+LINES_MAX = 2000                # lines in one run, the same cap as one slicing batch
+_LINES_KEYS = {"source", "revision", "lines"}
+
+
+def _lines_request(body) -> tuple[_src.SourceId, Optional[str], list[str], Optional[dict]]:
+    """The body -> (run, watermark, line ids, per-line revisions or None). Raises
+    ValueError on anything but the agreed shape."""
+    if not isinstance(body, dict):
+        raise ValueError("the body must be a JSON object")
+    extra = sorted(set(map(str, body)) - _LINES_KEYS)
+    if extra:
+        raise ValueError(f"unknown fields {extra}; send {sorted(_LINES_KEYS)}")
+    source = body.get("source")
+    if isinstance(source, dict):
+        if "revision" in source or "span" in source:
+            raise ValueError("source names the run only; its watermark goes in revision")
+        sid = _src.record_id(_src._normalize_record(source, where=""))
+    elif isinstance(source, str):
+        sid, at = _src.SourceId.parse(source)
+        if at is not None:
+            raise ValueError("source names the run only; its watermark goes in revision")
+    else:
+        raise ValueError("source is {system, instance, container, id, through} or its "
+                         "string form")
+    if not sid.through:
+        raise ValueError("source is a run: id is its first line and through its last")
+    revision = _src._opt_text(body.get("revision"))
+    if revision is not None:
+        _src._normalize_record({**_identity_fields(sid), "revision": revision}, where="")
+    rows = body.get("lines")
+    if not isinstance(rows, list) or not 2 <= len(rows) <= LINES_MAX:
+        raise ValueError(f"lines lists the run's lines in order, 2 to {LINES_MAX} of them")
+    ids: list[str] = []
+    revisions: dict = {}
+    said = False
+    for i, row in enumerate(rows):
+        if isinstance(row, str):
+            row = {"id": row}
+        if not isinstance(row, dict) or set(map(str, row)) - {"id", "revision"}:
+            raise ValueError(f"lines[{i}] is a line id or {{id, revision?}}")
+        try:
+            rec = _src._normalize_record({**_identity_fields(sid), "id": row.get("id"),
+                                          "revision": row.get("revision")}, where=f"[{i}]")
+        except _src.SourceRecordError as e:
+            raise ValueError(f"lines[{i}]: {e}") from None
+        if rec["id"] in ids:
+            raise ValueError(f"lines[{i}]: {rec['id']} appears twice")
+        ids.append(rec["id"])
+        if "revision" in row:
+            revisions[rec["id"]] = rec["revision"]
+            said = True
+    if ids[0] != sid.id or ids[-1] != sid.through:
+        raise ValueError("lines start at the run's first line (id) and end at its last "
+                         "(through)")
+    return sid, revision, ids, (revisions if said else None)
+
+
+def _identity_fields(sid: _src.SourceId) -> dict:
+    return {"system": sid.system, "instance": sid.instance, "container": sid.container,
+            "id": sid.id}
+
+
+async def handle_lines(store, body, host) -> tuple[int, dict]:
+    """`POST /api/v2/source/lines`: a host registers which lines a run holds, in order,
+    without handing their text over for slicing:
+
+        {"source": {"system", "instance", "container", "id": first, "through": last} | "…",
+         "revision": "<the host's watermark for this delivery>" | null,
+         "lines": ["m_0010", {"id": "m_0011", "revision": "e1"}, …, "m_0030"]}
+     -> {"status": "recorded" | "known" | "conflict" | "forbidden", "source": "…",
+         "lines": n, "revision": …, "note"?}
+
+    The same registration as a slicing batch's (core/_sources.SourceRegistry.record_order,
+    `_sources/line_orders.jsonl`). A line with `revision` says which revision of it was
+    delivered under the watermark; a run record whose own `revision` is that watermark
+    adopted those revisions. `conflict`: the watermark already gives one of these lines
+    another revision; nothing is recorded. `forbidden`: the run lies past the host's
+    `max_grant`. Like source changes, 400 for a malformed body, 403 for a caller that is
+    not a host, every outcome a 200."""
+    from .bucket_manager import _filesystem_turn      # lazy: bucket_manager imports _sources
+    from .scope import Host
+
+    if not isinstance(host, Host):
+        return 403, {"error": "a run's lines come from a host's credential "
+                              "(x-loci-hook-token), not from the panel"}
+    try:
+        sid, revision, ids, revisions = _lines_request(body)
+    except (ValueError, _src.SourceRecordError) as e:
+        return 400, {"error": str(e)}
+    out = {"source": sid.to_string(), "lines": len(ids), "revision": revision}
+    if host.max_grant is not None and not (
+            any(p.covers(sid) for p in host.max_grant)
+            or all(any(p.covers(sid.piece(i)) for p in host.max_grant) for i in ids)):
+        return 200, {"status": _src.FORBIDDEN, **out, "note": "exceeds_max_grant",
+                     "exceeds": _src.Place.coerce(sid).label()}
+    where = {"system": sid.system, "instance": sid.instance, "container": sid.container}
+    async with _filesystem_turn(store.base_dir, "source-registry"):
+        got = store.sources.record_order(where, ids, batch_id=f"lines:{host.name}",
+                                         revision=revision, revisions=revisions)
+    if got not in (_src.RECORDED, _src.KNOWN):
+        return 200, {"status": _src.CONFLICT, **out, "note": got}
+    if revisions is not None and revision is None:
+        # Kept, but no run record can name this delivery: its lines' revisions stay unknown.
+        out["note"] = "revisions_without_watermark"
+    return 200, {"status": got, **out}
+
+
+# ------------------------------------------------------------
+# Holds: a host's unordered word that a source is gone
+# ------------------------------------------------------------
+
+_SETTLING = (_src.WITHDRAWN, _src.DELETED, "restored")
+
+
+async def hold(store, identity, said: str, host: str = "") -> list[str]:
+    """A host serving a source's original said it is `said` (withdrawn or deleted) while
+    the registry records no such change. Nothing is cleared and the registry's state is
+    not written — the answer was not ordered — but nothing resting on the source may be
+    used until the ordered change settles it: the registry holds the source
+    (core/_sources.SourceRegistry.hold) and every memory resting on it, and everything
+    derived from those, gets an open `source_held` record the read gate honours on every
+    road but 依据变了的. Returns the memories held (empty when the registry already records
+    the source withdrawn or deleted)."""
+    registry = store.sources
+    sid = (identity if isinstance(identity, _src.SourceId)
+           else _src.SourceId.parse(str(identity))[0])
+    if registry.state_of(sid) in CLEARING:
+        return []
+    row = registry.hold(sid, said, host)
+    entries = await _src.memories_of(store, sid)
+    derived = await _derived(store, entries)
+    rec = {"kind": _I.SOURCE_HELD, "of": sid.to_string(), "by": said,
+           "at": _w.now().isoformat(timespec="seconds"),
+           "change": f"held:{row.get('host') or ''}:{row.get('after_seq')}:{sid}"}
+    for bid in entries + derived:
+        await store.add_invalidation_record(bid, dict(rec))
+    logger.info("source %s held on %s's word that it is %s (%d memories)", sid,
+                host or "a host", said, len(entries) + len(derived))
+    return entries + derived
+
+
+async def _settle_holds(store, ids: list[str], stamp: str, by: str) -> None:
+    """Close the open `source_held` records on these memories whose hold the registry no
+    longer has open (an ordered change settled it)."""
+    registry = store.sources
+    for bid in dict.fromkeys(ids):
+        b = await store.get_including_archive(bid)
+        if not b:
+            continue
+        for r in _I.open_records(b.get("metadata") or {}, _I.SOURCE_HELD):
+            of = str(r.get("of") or "")
+            try:
+                still = registry.held_of(of) is not None
+            except _src.SourceRecordError:
+                still = False
+            if not still:
+                await store.close_invalidation_records(bid, _I.SOURCE_HELD, of, stamp, by=by)
+
+
+# ------------------------------------------------------------
 # The request
 # ------------------------------------------------------------
 
@@ -413,11 +598,28 @@ def _outward(row: dict) -> dict:
             "use": row.get("use")}
 
 
-async def handle(store, body, host, *, dehydrator=None) -> tuple[int, dict]:
+def _for_host(store, host, reply: dict) -> dict:
+    """A host with a ceiling never sees the ledger's own numbers (core/_ledger.py): its
+    receipt names the change's line by `applied_cursor` instead of `applied_seq`."""
+    if not _ledger.host_view(host):
+        return reply
+    seq = reply.pop("applied_seq", None)
+    if isinstance(seq, int):
+        reply["applied_cursor"] = _ledger.cursor_of(store.ledger_mirror, seq, host.name)
+    return reply
+
+
+async def handle(store, body, host, *, dehydrator=None, hosts=None) -> tuple[int, dict]:
     """One change from `host` (a core.scope.Host). Returns (HTTP status, reply): 400 for a
     malformed body, 403 when the caller is not a host; every outcome of a well-formed
     change — applied, duplicate, conflict, stale, forbidden, unknown_source — is a 200
-    whose `status` says which."""
+    whose `status` says which. `hosts` is the deployment's table (core/scope.Hosts), which
+    names each source's change authority; None = a deployment of `host` alone."""
+    status, reply = await _handle(store, body, host, dehydrator=dehydrator, hosts=hosts)
+    return status, (_for_host(store, host, reply) if status == 200 else reply)
+
+
+async def _handle(store, body, host, *, dehydrator=None, hosts=None) -> tuple[int, dict]:
     from .scope import Host
 
     if not isinstance(host, Host):
@@ -429,9 +631,15 @@ async def handle(store, body, host, *, dehydrator=None) -> tuple[int, dict]:
     except (ValueError, _src.SourceRecordError) as e:
         return 400, {"error": str(e)}
     sid = _src.SourceId.parse(change["source"])[0]
-    if host.max_grant is not None and not store.sources.granted(host.max_grant, sid):
+    if host.max_grant is not None and not store.sources.reaches(host.max_grant, sid):
         return 200, _reply(change, _src.FORBIDDEN, note="exceeds_max_grant",
                            exceeds=_src.Place.coerce(sid).label())
+    # One order per source: only its declared change authority sends its changes.
+    authority = hosts.authority_for(sid) if hosts is not None else host
+    if authority is None:
+        return 200, _reply(change, _src.FORBIDDEN, note=NO_AUTHORITY)
+    if authority.name != host.name:
+        return 200, _reply(change, _src.FORBIDDEN, note=NOT_AUTHORITY)
     registry = store.sources
     out = await registry.apply_change(record, may_restore=host.may_restore, host=host.name)
     outcome = out["outcome"]
@@ -536,10 +744,15 @@ async def _carry_out(store, host, change: dict, sid, prior: dict, prog: Optional
             prog["places"] = dict(places)
             _save(store, prog)
         prog["places"] = places
-    elif kind == "restored" and state == _src.ACTIVE:
-        for bid in await _derived(store, entries):
+    reached = list(derived)
+    if kind == "restored" and state == _src.ACTIVE:
+        reached = await _derived(store, entries)
+        for bid in reached:
             await store.close_invalidation_records(bid, _I.SOURCE_GONE, change["source"],
                                                    stamp, by=key.replace("\x00", ":"))
+    if kind in _SETTLING:
+        # The ordered word has come: what a host's unordered word held is settled by it.
+        await _settle_holds(store, entries + reached, stamp, key.replace("\x00", ":"))
     _save(store, prog)
     return _reply(change, status, state=state, blocked=state in CLEARING,
                   applied_seq=prog["applied_seq"], entries=entries,

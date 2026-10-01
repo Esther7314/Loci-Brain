@@ -207,9 +207,12 @@ RUN_SRC = SRC + "..m_0160"
 
 def test_a_run_is_as_bad_as_its_worst_line(reg):
     [run_rec] = S.normalize_sources(RUN)
-    assert reg.describe(RUN_SRC) is None and reg.check_writable([run_rec]) == ("", [])
+    assert reg.describe(RUN_SRC) is None
+    assert "没交过这段里有哪几行" in reg.check_writable([run_rec])[0], "its lines unknown"
     apply(reg, "c1", "withdrawn", 1)                       # the first line, as the host says it
     assert reg.state_of(RUN_SRC) == "withdrawn"
+    reg.record_order({"system": "lento", "instance": "home", "container": "private:U"},
+                     ["m_0142", "m_0160"])
     refusal, _ = reg.check_writable([run_rec])
     assert RUN_SRC in refusal and "撤回" in refusal
     # Restoring the run's own identity does not lift a line inside it.
@@ -251,21 +254,25 @@ def test_an_inner_lines_use_narrows_the_run(reg):
     assert {"venues": ["private"]} in reg.uses_of(run_rec)
 
 
-def test_two_hosts_own_their_change_ids_and_host_seqs(reg):
-    first = run(reg.apply_change(change("c1", "unreadable", 5), host="a"))
-    other = run(reg.apply_change(change("c1", "withdrawn", 1), host="b"))
+def test_a_change_id_is_its_hosts_and_host_seq_is_one_order_per_source(reg):
+    # The other team's counter-example: B's newer withdrawal arrives first, A's older
+    # restore later. One order per source, whoever sent it: the older one cannot win.
+    first = run(reg.apply_change(change("c1", "withdrawn", 7), host="b"))
     assert first["outcome"] in ("applied", "unknown_source")
-    assert other["outcome"] in ("applied", "unknown_source"), "another host's id and seq"
+    late = run(reg.apply_change(change("c1", "restored", 5), host="a", may_restore=True))
+    assert late["outcome"] == "stale", "older in the source's one order"
     assert reg.state_of(SRC) == "withdrawn"
-    again = run(reg.apply_change(change("c1", "withdrawn", 1), host="b"))
-    assert again["outcome"] == "duplicate"
-    stale = run(reg.apply_change(change("c2", "restored", 3), host="a", may_restore=True))
-    assert stale["outcome"] == "stale", "host a's own order"
+    again = run(reg.apply_change(change("c1", "withdrawn", 7), host="b"))
+    assert again["outcome"] == "duplicate", "a change_id is its host's own"
+    reused = run(reg.apply_change(change("c9", "restored", 7), host="a", may_restore=True))
+    assert reused["outcome"] == "conflict" and reused["note"] == "host_seq_reused"
     assert S.SourceRegistry(reg.base_dir).state_of(SRC) == "withdrawn"
 
 
 def test_a_run_is_granted_by_its_container_or_itself_never_by_its_first_line(reg):
     [run_rec] = S.normalize_sources(RUN)
+    reg.record_order({"system": "lento", "instance": "home", "container": "private:U"},
+                     [f"m_{i:04d}" for i in range(142, 161)])
     assert "不在这一轮" in reg.check_writable([run_rec], grant=[SRC])[0]
     assert reg.check_writable([run_rec], grant=[RUN_SRC]) == ("", [])
     whole = {"system": "lento", "instance": "home", "container": "private:U"}

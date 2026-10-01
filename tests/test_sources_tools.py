@@ -244,7 +244,24 @@ RUN = {**REC, "through": "m_0160"}
 RUN_SRC = SRC + "..m_0160"
 
 
+def _order(store):
+    """The host registers the lines of the chat these runs are cut from."""
+    store.sources.record_order({"system": "lento", "instance": "home", "container": "private:U"},
+                               [f"m_{i:04d}" for i in range(140, 176)])
+
+
+def test_a_run_whose_lines_were_never_registered_is_refused_as_a_basis(store, tmp_path):
+    out, bid = run(_event(sources=[RUN]))
+    assert not bid and RUN_SRC in out and "POST /api/v2/source/lines" in out
+    out, bid = run(_event(from_=[RUN_SRC]))
+    assert not bid and _files(tmp_path) == []
+    _order(store)
+    _out, bid = run(_event(sources=[RUN]))
+    assert bid
+
+
 def test_a_run_is_stored_and_quoted_by_its_range_form(store, tmp_path):
+    _order(store)
     _out, bid = run(_event(sources=[RUN]))
     meta = _disk(tmp_path, bid)
     assert meta["sources"][0]["through"] == "m_0160" and _quoted(meta) == [RUN_SRC]
@@ -253,6 +270,7 @@ def test_a_run_is_stored_and_quoted_by_its_range_form(store, tmp_path):
 
 
 def test_a_run_whose_first_line_is_withdrawn_refuses_the_write(store, tmp_path):
+    _order(store)
     _withdraw(store)
     out, bid = run(_event(sources=[RUN]))
     assert not bid and RUN_SRC in out and "撤回" in out
@@ -261,6 +279,7 @@ def test_a_run_whose_first_line_is_withdrawn_refuses_the_write(store, tmp_path):
 
 
 def test_the_same_run_is_a_hint_and_another_run_from_its_first_line_is_not(store, tmp_path):
+    _order(store)
     _out, first = run(_event(sources=[RUN]))
     out, second = run(_event("The second thing said in that talk.", sources=[RUN]))
     assert second and f"这条来源已经记过 {first}" in out

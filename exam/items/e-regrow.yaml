@@ -138,7 +138,7 @@
   title: "a line revised inside a run cards the memory, once per revision"
   start: "2026-10-01T10:00:00+08:00"
   hosts:
-    legacy: {token: t-life, scope_mode: open, may_restore: true}
+    legacy: {token: t-life, scope_mode: open, may_restore: true, authority: [{system: lento}]}
   setup:
     - id: e70001000000
       at: "2026-09-30T21:00:00+08:00"
@@ -184,3 +184,45 @@
     - call: breath
       as: outside
     - check: {segment: think, desc: "a line outside the run does not card it", output: outside, section: 依据变了的, lacks: e70001}
+
+# The other team's 10-02 counter-example: the model reads m_0003 at e1, the e2 notice
+# arrives, then the model writes a memory resting on e1. When it was written proves
+# nothing; the revision the host registered as delivered under the run's watermark does.
+- id: E8
+  title: "a line read at e1, revised to e2 before the write: the memory is carded"
+  start: "2026-10-02T10:00:00+08:00"
+  hosts:
+    legacy: {token: t-life, scope_mode: open, may_restore: true, authority: [{system: lento}]}
+  steps:
+    - source_lines: {source: "lento:home/private:U#m_20261002_0001..m_20261002_0004", revision: w-1,
+                     lines: [{id: m_20261002_0001, revision: e1}, {id: m_20261002_0002, revision: e1},
+                             {id: m_20261002_0003, revision: e1}, {id: m_20261002_0004, revision: e1}]}
+      host: t-life
+      as: delivered
+    - check: {segment: store, desc: "the delivery is registered with each line's revision", output: delivered, contains: '"status": "recorded"'}
+    - source_change: {change_id: c-e8-1, host_seq: 1, change: revised, revision: e2,
+                      source: "lento:home/private:U#m_20261002_0003"}
+      host: t-life
+    - call: grow
+      args:
+        kind: event
+        sources: [{system: lento, instance: home, container: "private:U", id: m_20261002_0001, through: m_20261002_0004, revision: w-1}]
+        items: [{room: EVENT/WORLD, text: "约好周六早上九点在地铁站碰头去爬山。", v: 0.6, a: 0.4}]
+      as: stale
+      capture: {stale: "📝([0-9a-f]{12})"}
+    - check: {segment: think, desc: "the receipt says the line it rests on moved on", output: stale, contains: "m_20261002_0003 宿主已经出了新版本 e2（你依据的是 e1）"}
+    - source_lines: {source: "lento:home/private:U#m_20261002_0001..m_20261002_0004", revision: w-2,
+                     lines: [{id: m_20261002_0001, revision: e1}, {id: m_20261002_0002, revision: e1},
+                             {id: m_20261002_0003, revision: e2}, {id: m_20261002_0004, revision: e1}]}
+      host: t-life
+    - call: grow
+      args:
+        kind: event
+        sources: [{system: lento, instance: home, container: "private:U", id: m_20261002_0001, through: m_20261002_0004, revision: w-2}]
+        items: [{room: EVENT/WORLD, text: "改成周六早上十点在公交站碰头去爬山。", v: 0.6, a: 0.4}]
+      as: fresh
+      capture: {fresh: "📝([0-9a-f]{12})"}
+    - call: breath
+      as: review
+    - check: {segment: think, desc: "the one written on e1 is carded, naming the line and its new revision", all_of: [{output: review, section: 依据变了的, contains: "${stale:6}"}, {output: review, section: 依据变了的, contains: "m_20261002_0003 出了新版本（e2"}]}
+    - check: {segment: think, desc: "the one written on e2 is not", output: review, section: 依据变了的, lacks: "${fresh:6}"}

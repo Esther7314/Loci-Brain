@@ -103,10 +103,10 @@ async def _mark_overturned(old_id: str, new_id: str) -> tuple[list[str], list[st
 
 def _carry_sources(old_meta: dict) -> tuple[list[dict], list[str]]:
     """The old version's source records a new version may stand on, and the string forms
-    of those it may not. A source withdrawn or deleted since the old version was written
-    is not carried (nor its quoted line): a new version is a new write, and the registry
-    refuses that material to every write. A record that no longer reads as one is left
-    behind the same way."""
+    of those it may not. A source withdrawn, deleted or held since the old version was
+    written is not carried (nor its quoted line), nor a run whose lines were never
+    registered: a new version is a new write, and the registry refuses that material to
+    every write. A record that no longer reads as one is left behind the same way."""
     registry = getattr(rt.bucket_mgr, "sources", None)
     kept: list[dict] = []
     dropped: list[str] = []
@@ -115,8 +115,10 @@ def _carry_sources(old_meta: dict) -> tuple[list[dict], list[str]]:
             [rec] = _src.normalize_sources([raw])
         except (_src.SourceRecordError, ValueError):
             continue
-        state = registry.state_of(_src.record_id(rec)) if registry is not None else _src.ACTIVE
-        if state in (_src.WITHDRAWN, _src.DELETED):
+        sid = _src.record_id(rec)
+        state = registry.state_of(sid) if registry is not None else _src.ACTIVE
+        if (state in (_src.WITHDRAWN, _src.DELETED, _src.HELD)
+                or (registry is not None and not registry.order_known(sid))):
             dropped.append(_src.record_string(rec))
         else:
             kept.append(rec)
@@ -341,7 +343,8 @@ async def _regrow(bucket_id: str = "", text: str = "", v=-1, a=-1, from_=None,
         out += f"\n⚠️ 来源链满：这几个没挂上 {', '.join(dropped)}（继承链优先）"
     if dropped_sources:
         out += (f"\n新版没带上这几条来源：{', '.join(dropped_sources)}"
-                "——宿主那边已经撤回或删除了，旧版留档照旧挂着。")
+                "——宿主那边已经撤回或删除了（或说过撤回、正等确认，或是一段没交过有哪几行的），"
+                "旧版留档照旧挂着。")
     out += "".join("\n" + note for note in source_notes)
     if report["链没写全"]:
         out += "\n⚠️ 版本链没写全（supersedes/superseded_by 有一半失败）——把这条报给AI查"

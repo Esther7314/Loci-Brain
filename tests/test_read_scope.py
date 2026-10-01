@@ -195,12 +195,31 @@ RUN = {**GROUP, "id": "m_1", "through": "m_9"}
 
 def test_only_the_first_line_granted_refuses_the_whole_run(tmp_path):
     reg = S.SourceRegistry(tmp_path)
+    reg.record_order(GROUP, [f"m_{i}" for i in range(1, 12)])
     e = _entry("a", [RUN])
     first_only = scope_json(grant=({**GROUP, "id": "m_1"},))
     assert not _view([e], first_only, reg).permits(e)
     [record] = S.normalize_sources([RUN])
     assert "不在这一轮" in reg.check_writable([record], [{**GROUP, "id": "m_1"}])[0]
     assert _view([e], scope_json(), reg).permits(e), "the container grants it whole"
+
+
+def test_a_run_whose_lines_are_unknown_is_refused_even_under_its_container(tmp_path):
+    # The other team's 10-02 ruling: a middle line's withdrawal could not be told.
+    reg = S.SourceRegistry(tmp_path)
+    e = _entry("a", [RUN])
+    assert not _view([e], scope_json(), reg).permits(e), "the container grant is not enough"
+    assert not S.places_cover([S.Place.coerce(GROUP)], S.record_id(RUN))
+    [record] = S.normalize_sources([RUN])
+    for grant in ([GROUP], None):
+        refusal, _ = reg.check_writable([record], grant)
+        assert "没交过这段里有哪几行" in refusal, "refused as a basis, with a grant or without"
+    # Where it lies is still known: a host's ceiling reaches it.
+    assert reg.reaches([S.Place("telegram", "bot-a")], S.record_id(RUN))
+    # Registered on its own, without slicing: the same registration, and it reads.
+    assert reg.record_order(GROUP, [f"m_{i}" for i in range(1, 10)]) == S.RECORDED
+    assert _view([e], scope_json(), reg).permits(e)
+    assert reg.check_writable([record], [GROUP]) == ("", [])
 
 
 def test_a_run_granted_line_by_line_needs_every_line_and_the_order(tmp_path):
@@ -596,3 +615,26 @@ def test_breath_over_the_hook_opens_with_the_scope(store, monkeypatch):
 def test_an_unknown_key_on_a_hook_route_is_refused_when_hosts_are_written(store, monkeypatch):
     resp = _hook(monkeypatch, store, "/api/v2/breath", [("x-loci-hook-token", "stale")])
     assert resp.status_code == 401
+
+
+def test_a_quoted_source_is_one_more_thing_an_entry_rests_on_never_enough_alone(tmp_path):
+    reg = S.SourceRegistry(tmp_path)
+    quote = "telegram:bot-a/group:G#m_7"
+    both = {**_entry("a", [rec("m_1")]),
+            "prov": [{"rel": "wasQuotedFrom", "target": quote}]}
+    assert _view([both], registry=reg).permits(both)
+    run(reg.apply_change({"change_id": "w", "source": quote, "kind": "withdrawn",
+                          "host_seq": 1}))
+    assert not _view([both], registry=reg).permits(both), "the quoted line is withdrawn"
+    alone = {"id": "b", "sources": [],
+             "prov": [{"rel": "wasQuotedFrom", "target": "telegram:bot-a/group:G#m_8"}]}
+    assert not _view([alone], registry=reg).permits(alone), "a quote alone reads as before"
+
+
+def test_a_held_source_is_not_readable_under_a_scope(tmp_path):
+    reg = S.SourceRegistry(tmp_path)
+    e = _entry("a", [rec("m_1")])
+    assert _view([e], registry=reg).permits(e)
+    reg.hold("telegram:bot-a/group:G#m_1", "withdrawn", "bot")
+    assert reg.state_of("telegram:bot-a/group:G#m_1") == S.HELD
+    assert not _view([e], registry=reg).permits(e)

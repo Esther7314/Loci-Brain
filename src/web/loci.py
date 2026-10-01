@@ -29,12 +29,15 @@ produces data; all rendering lives in frontend/loci.html.
                                          the same text the tool returns, or `?format=json` for
                                          its structured form (hook key). Like the tool, it
                                          stamps a question it hands out as asked
-    GET  /api/v2/changes              -> the ledger from seq N on (`?since=N&limit=`): ids, kinds,
-                                         source identities and hashes, never text; without
-                                         "was merely touched"; only what the host's credential
-                                         reaches (hook key; core/_ledger.py)
+    GET  /api/v2/changes              -> the ledger past a point: ids, kinds, source identities
+                                         and hashes, never text; without "was merely touched";
+                                         only what the host's credential reaches. An open host
+                                         reads by the ledger's numbers (`?since=N&limit=`); a
+                                         host with a max_grant by an opaque cursor
+                                         (`?cursor=…&limit=`) and never sees those numbers
+                                         (hook key; core/_ledger.py)
 
-🔴 THE WRITE SURFACE — twelve POST routes, and every one of them writes something.
+🔴 THE WRITE SURFACE — thirteen POST routes, and every one of them writes something.
 
     POST /api/loci/similar/action     -> a human verdict on a suspected duplicate: keep
                                          both, or sink one (trace delete=True — a soft
@@ -52,13 +55,22 @@ produces data; all rendering lives in frontend/loci.html.
     POST /api/v2/source/change        -> a host's change to one piece of its material: the
                                          source registry, the block on what stood on it, and
                                          for withdrawn / deleted the clearing of every place
-                                         its text reached (host credential; core/_source_change.py)
+                                         its text reached. Only the source's declared change
+                                         authority may send it (host credential;
+                                         core/_source_change.py)
+    POST /api/v2/source/lines         -> a host registers which lines a run holds, in order,
+                                         with the revision of each as delivered under its
+                                         watermark: the source registry's line orders (host
+                                         credential; core/_source_change.handle_lines)
     POST /api/v2/cue                  -> the owner's message as it arrives ({text, window,
-                                         turn}): at most three cards to paste after it. Writes
-                                         the card ledger (the window's opening, the offer) and
-                                         the usage log (hook key; core/_cue.py)
-    POST /api/v2/cue/delivered        -> the host's word that cards reached the model's input
-                                         ({window, turn} / {window, cards}); only then are
+                                         turn}): at most three cards to paste after it; the
+                                         same turn again gets the same cards, less any no
+                                         longer good. Writes the card ledger (the window's
+                                         opening, the offer) and the usage log (hook key;
+                                         core/_cue.py)
+    POST /api/v2/cue/delivered        -> the host's word that cards were placed in the model's
+                                         input ({window, turn} when all of the turn's were /
+                                         {window, cards} for exactly those); only then are
                                          they not handed to that window again (hook key)
     POST /api/v2/cue/dropped          -> the host's word that cards left the input ({window,
                                          cards} / {window, turns} / {window, all: true}); they
@@ -2392,7 +2404,7 @@ def register(mcp) -> None:
     @mcp.custom_route("/api/v2/slices", methods=["POST"])
     async def api_v2_slices_take(request: Request) -> Response:
         """The host hands over a stretch of raw lines before it lets go of them:
-        {source: {system, instance, container}, day, lines: [{id, text, at?, speaker?}],
+        {source: {system, instance, container}, day, lines: [{id, text, at?, speaker?, revision?}],
         revision?}. The side model slices them; the slices wait for the main model
         (recall(view="slices")). A `fingerprint_by` in the body is accepted and not used:
         a slice's fingerprint is Loci's own (core/_slicer.py). 400 for a malformed batch,
@@ -2501,13 +2513,34 @@ def register(mcp) -> None:
             body = await sh._read_json_object(request)
         except (ValueError, json.JSONDecodeError) as e:
             return JSONResponse({"error": f"body: {e}"}, status_code=400)
+        from . import panel_auth as _pa
         req = _request_of(request)
         host = req.host if req is not None else None
         try:
             status, out = await _sc.handle(sh.bucket_mgr, body, host,
-                                           dehydrator=sh.dehydrator)
+                                           dehydrator=sh.dehydrator, hosts=_pa.hosts())
         except Exception as e:
             logger.warning(f"[loci] source change failed: {e}")
+            return JSONResponse({"error": str(e)}, status_code=500)
+        return JSONResponse(out, status_code=status)
+
+    @mcp.custom_route("/api/v2/source/lines", methods=["POST"])
+    async def api_v2_source_lines(request: Request) -> Response:
+        """{source: run, revision?, lines: [id | {id, revision?}]} from a host: which lines
+        the run holds, in order. 200 with `status` (recorded, known, conflict, forbidden);
+        400 for a malformed body; 403 when the caller is the panel rather than a host."""
+        from starlette.responses import JSONResponse
+        from core import _source_change as _sc
+        try:
+            body = await sh._read_json_object(request)
+        except (ValueError, json.JSONDecodeError) as e:
+            return JSONResponse({"error": f"body: {e}"}, status_code=400)
+        req = _request_of(request)
+        host = req.host if req is not None else None
+        try:
+            status, out = await _sc.handle_lines(sh.bucket_mgr, body, host)
+        except Exception as e:
+            logger.warning(f"[loci] source lines failed: {e}")
             return JSONResponse({"error": str(e)}, status_code=500)
         return JSONResponse(out, status_code=status)
 
@@ -2533,7 +2566,8 @@ def register(mcp) -> None:
         """{text, window, turn} -> {window, turn, cards: [{card, kind, id, short, why,
         text}], text, scope}. `text` is the cards to paste after the owner's message, one
         line each; `card` is what the host confirms or strikes. Nothing counts as delivered
-        until the host says so. A refused request gets its refusal, as every read does."""
+        until the host says so. The same turn again gets the same cards back, less any whose
+        entry is no longer good, and nothing new. A refused request gets its refusal, as every read does."""
         from core import _cue
         return await _cue_route(request, _cue.handle_cue)
 
@@ -2555,10 +2589,11 @@ def register(mcp) -> None:
 
     @mcp.custom_route("/api/v2/changes", methods=["GET"])
     async def api_v2_changes(request: Request) -> Response:
-        """The ledger past seq `since` (default 0), at most `limit` lines (default 1000,
-        at most 5000): {since, next, more, changes}. A host with a ceiling sees only what
-        its credential reaches; the panel and an open host see every line. Ask again from
-        `next` while `more`."""
+        """At most `limit` lines (default 1000, at most 5000) past a point. The panel and an
+        open host: past seq `since` (default 0), {since, next, more, changes}, every line.
+        A host with a ceiling: past `cursor` (none = from the start), {cursor, next, more,
+        changes}, only what its credential reaches, no seq anywhere; a `since` from it is
+        refused. Ask again from `next` while `more`."""
         from starlette.responses import JSONResponse
         from core import _ledger
         from core import scope as _scope
@@ -2569,12 +2604,22 @@ def register(mcp) -> None:
             return JSONResponse({"error": "since and limit are integers"}, status_code=400)
         if since < 0 or limit < 1:
             return JSONResponse({"error": "since >= 0 and limit >= 1"}, status_code=400)
+        cursor = str(request.query_params.get("cursor") or "").strip() or None
         req = _request_of(request)
         host = req.host if req is not None else None
         if req is not None and req.host is None and req.mode == _scope.OPEN:
             host = _scope.Host("panel", scope_mode=_scope.OPEN)
+        if _ledger.host_view(host):
+            if since:
+                return JSONResponse({"error": "a host with a max_grant reads by cursor "
+                                              "(?cursor=<next>), not by seq"}, status_code=400)
+        elif cursor is not None:
+            return JSONResponse({"error": "an open host reads by seq (?since=N)"},
+                                status_code=400)
         try:
-            out = await _ledger.changes_since(sh.bucket_mgr, host, since, limit)
+            out = await _ledger.changes_since(sh.bucket_mgr, host, since, limit, cursor=cursor)
+        except _ledger.CursorError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
         except Exception as e:
             logger.warning(f"[loci] changes failed: {e}")
             return JSONResponse({"error": str(e)}, status_code=500)

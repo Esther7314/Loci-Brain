@@ -396,5 +396,51 @@
       args: {query: 露营}
       host: book-bot-key
       scope: {v: 1, entry: {system: telegram, instance: bot-a, container: "group:G"}, venue: group, audience: ["user:U"], grant: [{system: telegram, instance: bot-a, container: "group:G"}]}
+      as: order_unknown
+    - check: {segment: find, desc: "the run's lines never registered: refused even under its container (10-02 ruling)", output: order_unknown, lacks: a06001}
+    - source_lines: {source: "telegram:bot-a/group:G#m_201..m_205", lines: [m_201, m_202, m_203, m_204, m_205]}
+      host: book-bot-key
+      as: registered
+    - check: {segment: find, desc: "the host registers the run's lines without slicing", output: registered, contains: '"status": "recorded"'}
+    - call: recall
+      args: {query: 露营}
+      host: book-bot-key
+      scope: {v: 1, entry: {system: telegram, instance: bot-a, container: "group:G"}, venue: group, audience: ["user:U"], grant: [{system: telegram, instance: bot-a, container: "group:G"}]}
       as: whole
     - check: {segment: find, desc: "control: the container granted, the run is read", output: whole, contains: a06001}
+
+# The other team's 10-02 ruling: a run whose lines Loci does not know is no basis either,
+# whatever the grant; once the host registers its lines (POST /api/v2/source/lines, the
+# `source_lines:` step), the same write goes through.
+- id: G7
+  title: "a run whose lines are not registered is refused as a basis, even under its container"
+  start: "2026-10-02T10:00:00+08:00"
+  hosts:
+    book-bot: {token: book-bot-key, max_grant: [{system: telegram, instance: bot-a}]}
+  steps:
+    - call: grow
+      host: book-bot-key
+      turn: "t-g7#1"
+      scope: {v: 1, entry: {system: telegram, instance: bot-a, container: "group:G"}, venue: group, audience: ["user:U"], grant: [{system: telegram, instance: bot-a, container: "group:G"}]}
+      args:
+        kind: event
+        sources: [{system: telegram, instance: bot-a, container: "group:G", id: "m_301", through: "m_304"}]
+        items: [{room: EVENT/WORLD, text: "群里定了周六去湖边烧烤。", v: 0.6, a: 0.4}]
+      as: refused
+    - check: {segment: store, desc: "the run's lines unknown: nothing written", output: refused, contains: "本次什么都没写"}
+    - check: {segment: store, desc: "saying how the host makes it known", output: refused, contains: "/api/v2/source/lines"}
+    - check: {segment: store, desc: "no memory came of it", no_entry: {body_has: 湖边烧烤}}
+    - source_lines: {source: {system: telegram, instance: bot-a, container: "group:G", id: "m_301", through: "m_304"}, lines: [m_301, m_302, m_303, m_304]}
+      host: book-bot-key
+      as: registered
+    - check: {segment: store, desc: "registered", output: registered, contains: '"status": "recorded"'}
+    - call: grow
+      host: book-bot-key
+      turn: "t-g7#2"
+      scope: {v: 1, entry: {system: telegram, instance: bot-a, container: "group:G"}, venue: group, audience: ["user:U"], grant: [{system: telegram, instance: bot-a, container: "group:G"}]}
+      args:
+        kind: event
+        sources: [{system: telegram, instance: bot-a, container: "group:G", id: "m_301", through: "m_304"}]
+        items: [{room: EVENT/WORLD, text: "群里定了周六去湖边烧烤。", v: 0.6, a: 0.4}]
+      as: written
+    - check: {segment: store, desc: "with the lines known, the same write goes through", entry: {body_has: 湖边烧烤}}

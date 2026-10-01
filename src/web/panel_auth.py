@@ -90,7 +90,8 @@ PUBLIC_PATHS = frozenset([
 #
 # The host's intake of raw lines for slicing (`/api/v2/slices`, core/_slicer.py) and its
 # window-opening read of breath (`/api/v2/breath`), its change notices about its material
-# (`/api/v2/source/change`), its reconciliation read of the ledger (`/api/v2/changes`)
+# (`/api/v2/source/change`) and the lines of its runs (`/api/v2/source/lines`), its
+# reconciliation read of the ledger (`/api/v2/changes`)
 # and the strong reminder with its two acknowledgements (`/api/v2/cue`, `.../delivered`,
 # `.../dropped`) are bridge-facing routes on the same terms: the host's process calls
 # them, with the key.
@@ -102,6 +103,7 @@ HOOK_PATHS = frozenset([
     "/api/v2/slices",
     "/api/v2/breath",
     "/api/v2/source/change",
+    "/api/v2/source/lines",
     "/api/v2/changes",
     "/api/v2/cue",
     "/api/v2/cue/delivered",

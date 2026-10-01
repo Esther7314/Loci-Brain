@@ -60,8 +60,18 @@ breath and recall.
 ------------------------------------------------------------
 Counting what was delivered (core/_cue_ledger.py)
 ------------------------------------------------------------
-A card is offered, then delivered only when the host confirms it reached the model's input
-(`POST /api/v2/cue/delivered`). A delivered card is not handed to that window again while
+A card is offered, then delivered only when the host confirms it was actually placed in the
+model's input (`POST /api/v2/cue/delivered`): by `cards` for exactly the cards placed —
+which is how a partial placement is told — and by `turn` only when every card of the turn's
+answer was placed. Nothing else counts a card as delivered.
+
+A turn is answered once. The same `turn` asked again (a host retrying) gets that answer's
+cards back, in its order, and nothing new — never a fresh pick merged in. Each card is
+produced again for the retry, under the retry's own scope and against the entry as it is
+then, so one whose entry was since withdrawn, revised (a new version is a new key) or put
+out of scope is dropped; the retry's answer becomes the turn's answer (what `turn`
+delivers). The first answer holds at most CARD_LIMIT cards, so no retry holds more. A
+delivered card is not handed to that window again while
 the entry stays at the same version — `fingerprint()`: the body, when, status, bound, cue,
 recurrence, direction, a hold's own level and target, the holds ever hung on it (opened or
 closed), its open invalidation records, and what the source registry says of its sources.
@@ -649,7 +659,19 @@ async def cue(store, *, text: str, window: str, turn: str, host: str, scope=None
     candidates = (lib.due_cards(win.opened) + lib.cue_cards(msg)
                   + lib.review_cards(win.baseline) + lib.name_cards(msg))
     candidates.sort(key=lambda c: _RANK[c.kind])     # stable: each list keeps its order
-    chosen: list[Card] = []
+    prior = win.offers.get(turn)
+    if prior is not None:
+        # A retry of this turn: the cards it was answered with, in that order, each
+        # produced again just now — under this request's scope, against the entry as it
+        # is now. A card whose entry was withdrawn, revised (a new version is a new key) or
+        # is out of scope is not produced again, and is dropped. Nothing new is added.
+        fresh = {c.key: c for c in candidates}
+        chosen = [fresh[c["card"]] for c in prior if c["card"] in fresh]
+        cards = [c.public() for c in chosen]
+        ledger.offer(host, window, turn, cards, retry=True)
+        return {"window": window, "turn": turn, "cards": cards,
+                "text": "\n".join(c.text for c in chosen)}
+    chosen = []
     used: set[str] = set()
     for c in candidates:
         if len(chosen) >= limit:
@@ -759,8 +781,10 @@ async def handle_cue(store, body, req, *, now: Optional[datetime] = None) -> tup
 
 async def handle_delivered(store, body, req) -> tuple[int, dict]:
     """`POST /api/v2/cue/delivered`: {window, turn} and/or {window, cards: [keys]} — the
-    cards that reached the model's input. -> {window, delivered, unknown}. Reads no memory,
-    so a Loci-Scope is not needed; the host's credential keys the ledger."""
+    cards actually placed in the model's input: `turn` for every card of that turn's
+    answer (only when all of them were placed), `cards` for exactly those (a partial
+    placement). -> {window, delivered, unknown}. Reads no memory, so a Loci-Scope is not
+    needed; the host's credential keys the ledger."""
     host = _host_of(req)
     if host is None:
         return 403, {"error": req.first_line()}

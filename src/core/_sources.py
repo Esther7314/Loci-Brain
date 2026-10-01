@@ -29,29 +29,49 @@ registry, prov lines) is `lento:home/private:U#m_20260925_0142`, or
 `…#m_20260925_0142..m_20260925_0160` for a run, plus `@<revision>` when there is one.
 One message can support several memories and several messages one memory; the source
 side never records which memory it belongs to (that is `memories_of`, a reverse lookup).
-A `wasQuotedFrom` prov line names a source by its string form.
+A `wasQuotedFrom` prov line names a source by its string form, and a memory quoting a
+source rests on it as much as one listing it in `sources` (`quoted_records`).
 
 The host announces changes per piece, never per run, and a change to any line inside a
 run reaches the run: its state is the worst of its own identity and every line it holds
 (`state_of`), and each line's `use_changed` narrows it (`uses_of`), so a memory standing
 on the run is blocked whole until it is rewritten — nothing trims a run automatically.
-What a run holds is the host's order of its lines, kept when the host hands a stretch of
-lines over for slicing (`record_order`, `<buckets>/_sources/line_orders.jsonl`: the ids in
-order, never their text, kept after the slices themselves are handled). A run whose order
-was never handed over is known only by its first and last line (`lines_of`).
+What a run holds is the host's order of its lines, registered when the host hands a
+stretch of lines over for slicing or registers a run's lines on its own (`record_order`,
+`<buckets>/_sources/line_orders.jsonl`: the ids in order, never their text, kept after the
+slices are handled and after a withdrawal clears a body — they are what carries the next
+withdrawal to the memories still standing on the run). Registrations of one container that
+disagree are joined (`members_of`): a line is never taken out of a run again. A run whose
+lines were never registered is known only by its first and last line (`lines_of`) and is
+refused as a basis and for reading under any grant (`places_cover`, `check_writable`).
 `memories_of` a single line finds every run holding it.
+
+A registration may carry the host's watermark for the delivery (`revision`) and each
+line's revision as delivered (`revisions`). A run record whose `revision` names that
+watermark adopted those line revisions (`adopted_revisions`); a line whose newest announced
+revision differs from the adopted one, or whose adopted revision is unknown while the host
+has announced one, counts as revised (`run_revisions`) — when the memory was written
+proves nothing about which version the model read.
 
 The registry holds each source's own state, which cannot be read back from the md
 files: active / unreadable / withdrawn / deleted, the revisions the host announced,
-and `host_seq`, the host's per-source change counter. Newer and older are judged by
-host_seq alone, never by arrival order or revision; a change_id and the host_seq order
-belong to the host that sent them (two hosts never collide or stale each other). Its
-truth is the append-only
+and `host_seq`, the change counter of the source's change authority. Newer and older are
+judged by host_seq alone, one order per source whoever sent the change, never by arrival
+order or revision; a change_id belongs to the host that sent it. Only the source's
+declared change authority sends its changes (core/_source_change.py), so its order is the
+one order. Its truth is the append-only
 `<buckets>/_sources/changes.jsonl`, one applied change per line, numbered by `seq`
 (the line the host reconciles against, `applied_seq`). The index is an in-memory dict
 rebuilt from that file on first use and whenever another process has appended to it;
 at this size (a few thousand lines at most) no SQLite is needed, and if one is added
 later it is only an index of this file.
+
+A hold (`<buckets>/_sources/held.jsonl`, `hold`): a host serving an original said the
+source is withdrawn or deleted while the registry records no such change. That answer was
+not ordered, so it is never written as the source's state; the source reads as HELD — not
+readable, not usable as a basis — until a change that settles it (withdrawn, deleted,
+restored) is applied after the hold. Restoring a source that was never withdrawn needs no
+`may_restore`.
 
 Write keys: a host that resends a write (a retry, a restart) sends the same key, and
 the same key is answered with the first result instead of a second memory. The key is
@@ -67,12 +87,13 @@ parameters; nothing here reads a header.
 
 A grant is a list of places (`Place`): a prefix of a source's identity, system →
 instance → container → id. A place covers every source under it; a place naming an id
-covers that one piece, never a run starting at it. A run passes a grant only when every
-line in it is granted (`SourceRegistry.granted`): a place at its container or wider
-covers it, and so do places naming each of its lines, when the host's order of them is
-known; with the order unknown, only the container or wider will do. The read gate
-(core/scope.py), the write-time check and `/changes` all ask the same question, so what a
-turn may read and what it may write from are the same set.
+covers that one piece, never a run starting at it. A run passes a grant only when its
+lines are registered and every one of them is granted (`SourceRegistry.granted`): by a
+place at its container or wider, or by places naming each line; with its lines unknown,
+nothing grants it. The read gate (core/scope.py) and the write-time check ask that same
+question, so what a turn may read and what it may write from are the same set. A host's
+ceiling (`max_grant`) asks where a source lies (`SourceRegistry.reaches`): a run lies in
+its container whether its lines are registered or not.
 
 `use` on a record is the host's rule for where the piece may be used: an object
 `{venues: [...], audience: [...]}` — the venues it may be used in and the people allowed
@@ -84,12 +105,13 @@ by the gate as a rule it cannot understand: under a scope it lets nothing throug
 
 Exports: SOURCES_FIELD · SOURCES_MAX · SourceId · SourceRecordError · normalize_sources ·
          coerce_sources_arg · record_id · record_string · same_delivery · same_reference ·
-         Place · places_of · places_cover · parse_use · STATES · CHANGE_KINDS · OUTCOMES ·
-         next_state · SourceRegistry (apply_change · prior_change · state_of · read_state ·
-         granted · use_of · uses_of · revisions_of · describe · record_order · members_of ·
-         lines_of ·
-         rebuild_index · check_writable · claimed · run_once) ·
-         names_identity · memories_of · write_key · current_write_key · write_key_scope · current_grant ·
+         Place · places_of · places_cover · parse_use · STATES · HELD · CHANGE_KINDS ·
+         OUTCOMES · next_state · SourceRegistry (apply_change · prior_change · state_of ·
+         read_state · granted · reaches · order_known · use_of · uses_of · revisions_of ·
+         describe · record_order · order_conflict · members_of · adopted_revisions ·
+         run_revisions · lines_of · hold · held_of · rebuild_index · check_writable ·
+         claimed · run_once) · names_identity · quoted_records · basis_records ·
+         memories_of · write_key · current_write_key · write_key_scope · current_grant ·
          grant_scope · note_written · collect_written
 ========================================
 """
@@ -489,16 +511,20 @@ class Place:
 
 
 def places_cover(places: Iterable, identity, members: Optional[list] = None) -> bool:
-    """Do these places grant this source? A piece: one place covers it. A run: one place
-    covers it whole (its container or wider, or the run itself), or — with `members`, the
-    ids it holds in the host's order — every one of its lines is covered."""
+    """Do these places grant this source for reading or as a basis? A piece: one place
+    covers it. A run: only with `members`, the ids it holds as the host registered them —
+    then one place covering it whole (its container or wider, or the run itself) or places
+    covering each of its lines. A run whose lines Loci does not know is granted by
+    nothing: a line withdrawn in its middle could not be told."""
     sid = _identity(identity)
     places = tuple(places)
-    if any(p.covers(sid) for p in places):
-        return True
-    if sid.through and members:
+    if sid.through:
+        if not members:
+            return False
+        if any(p.covers(sid) for p in places):
+            return True
         return all(any(p.covers(sid.piece(m)) for p in places) for m in members)
-    return False
+    return any(p.covers(sid) for p in places)
 
 
 def places_of(grant: Optional[Iterable]) -> Optional[tuple]:
@@ -533,15 +559,54 @@ def names_identity(have: SourceId, want: SourceId, registry=None) -> bool:
                     else (have.first(), have.last()))
 
 
+def quoted_records(meta) -> list[dict]:
+    """The sources a memory's `wasQuotedFrom` lines name by string form that its own
+    `sources` do not already name, each as a record (no use, no fingerprint). A line with
+    the host's bare id (`m_0142`) names no container and is not one."""
+    from utils import WAS_QUOTED_FROM, read_prov      # lazy: utils is heavier than this module
+
+    have: set[str] = set()
+    for rec in (meta or {}).get(SOURCES_FIELD) or []:
+        try:
+            have.add(record_id(rec).to_string())
+        except (KeyError, TypeError, AttributeError):
+            continue
+    out: list[dict] = []
+    for line in read_prov(meta or {}):
+        target = str(line.get("target") or "")
+        if line.get("rel") != WAS_QUOTED_FROM or "#" not in target:
+            continue
+        try:
+            sid, revision = SourceId.parse(target)
+        except SourceRecordError:
+            continue
+        if sid.to_string() in have:
+            continue
+        have.add(sid.to_string())
+        out.append({"system": sid.system, "instance": sid.instance, "container": sid.container,
+                    "id": sid.id, "through": sid.through, "revision": revision,
+                    "fingerprint": None, "fingerprint_by": None, "use": None})
+    return out
+
+
+def basis_records(meta) -> list[dict]:
+    """Every source a memory rests on: its `sources`, then what its quoted lines name
+    (`quoted_records`)."""
+    own = [r for r in (meta or {}).get(SOURCES_FIELD) or [] if isinstance(r, dict)]
+    return own + quoted_records(meta)
+
+
 async def memories_of(store, identity) -> list[str]:
-    """The memories (archive included) whose `sources` name this identity or contain it
-    (`names_identity`), by scanning the library. The source side never stores this."""
+    """The memories (archive included) resting on this identity or on a run containing
+    it (`names_identity`): through their `sources`, or through a quoted line naming it by
+    string form — a memory quoting a line rests on that line as much as one listing it.
+    Found by scanning the library; the source side never stores this."""
     want = _identity(identity)
     registry = getattr(store, "sources", None)
     out: list[str] = []
     for b in await store.list_all(include_archive=True):
         meta = b.get("metadata") or {}
-        for rec in meta.get(SOURCES_FIELD) or []:
+        for rec in basis_records(meta):
             try:
                 if not isinstance(rec, dict):
                     continue
@@ -640,6 +705,12 @@ def collect_written():
 
 ACTIVE, UNREADABLE, WITHDRAWN, DELETED = "active", "unreadable", "withdrawn", "deleted"
 STATES = (ACTIVE, UNREADABLE, WITHDRAWN, DELETED)
+# Not a state a change records: a source a host said (while serving its original) was
+# withdrawn or deleted, until an ordered change settles it (`SourceRegistry.hold`).
+HELD = "held"
+HOLD_WORDS = (WITHDRAWN, DELETED)
+# The changes that settle a hold: the ones that say whether the source may be used.
+_SETTLING = (WITHDRAWN, DELETED, "restored")
 CHANGE_KINDS = ("withdrawn", "deleted", "use_changed", "unreadable", "restored", "revised")
 APPLIED, DUPLICATE, CONFLICT, STALE, FORBIDDEN, UNKNOWN_SOURCE = (
     "applied", "duplicate", "conflict", "stale", "forbidden", "unknown_source")
@@ -649,8 +720,11 @@ SOURCES_DIR = "_sources"
 CHANGES_FILE = "changes.jsonl"
 WRITE_KEYS_FILE = "write_keys.jsonl"
 LINE_ORDERS_FILE = "line_orders.jsonl"
+HELD_FILE = "held.jsonl"
 # The worse state wins when a run is judged by its lines.
-_STATE_RANK = {ACTIVE: 0, UNREADABLE: 1, WITHDRAWN: 2, DELETED: 3}
+_STATE_RANK = {ACTIVE: 0, UNREADABLE: 1, HELD: 2, WITHDRAWN: 3, DELETED: 4}
+# Outcomes of registering a run's lines (`record_order`).
+RECORDED, KNOWN = "recorded", "known"
 _CHANGE_ID_MAX = 128
 # The fields that make two sends of one change_id the same change.
 _CHANGE_CONTENT = ("source", "kind", "host_seq", "revision", "fingerprint", "fingerprint_by",
@@ -775,6 +849,22 @@ def next_state(current: str, kind: str, may_restore: bool) -> tuple[Optional[str
     raise ValueError(f"unknown change kind {kind!r}")
 
 
+def _opt_text(value) -> Optional[str]:
+    """A revision or watermark as stored: text, or None for none."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    return str(value).strip()
+
+
+@dataclass(frozen=True)
+class _Order:
+    """One registration of the host's order of a container's lines."""
+    ids: list
+    pos: dict
+    revision: Optional[str] = None       # the host's watermark for this delivery
+    revisions: Optional[dict] = None     # {id: revision or None} as delivered; None = not said
+
+
 class SourceRegistry:
     """The source registry and the write-key claims of one library (`<buckets>/_sources`).
 
@@ -786,18 +876,21 @@ class SourceRegistry:
         self.changes_path = self.dir / CHANGES_FILE
         self.keys_path = self.dir / WRITE_KEYS_FILE
         self.orders_path = self.dir / LINE_ORDERS_FILE
+        self.held_path = self.dir / HELD_FILE
         self.store = store
         self._guard = threading.RLock()
         self._changes_size = -1
         self._keys_size = -1
         self._orders_size = -1
+        self._held_size = -1
         self._seq = 0
         self._by_source: dict[str, dict] = {}
         self._by_change: dict[str, dict] = {}
         self._claims: dict[str, dict] = {}
-        # (system, instance, container) -> [(ids in the host's order, {id: position})],
-        # newest first
+        # (system, instance, container) -> [_Order], newest first
         self._orders: dict[tuple, list] = {}
+        # source key -> the newest hold row
+        self._held: dict[str, dict] = {}
 
     # ---------- the index ----------
 
@@ -832,12 +925,12 @@ class SourceRegistry:
         self._by_change[key] = row
         entry = self._by_source.setdefault(source, {
             "state": ACTIVE, "host_seq": -1, "use": None, "use_changed": False,
-            "revisions": [], "hosts": {}})
-        mine = entry["hosts"].setdefault(host, {"host_seq": -1, "seqs": {}})
-        mine["seqs"][host_seq] = key
-        mine["host_seq"] = max(mine["host_seq"], host_seq)
-        entry["host_seq"] = host_seq
+            "revisions": [], "seqs": {}, "settled_seq": 0})
+        entry["seqs"][host_seq] = key
+        entry["host_seq"] = max(entry["host_seq"], host_seq)
         entry["state"] = str(row.get("state") or entry["state"])
+        if row.get("kind") in _SETTLING:
+            entry["settled_seq"] = max(entry["settled_seq"], seq)
         if row.get("kind") == "use_changed":
             entry["use"] = row.get("use")
             entry["use_changed"] = True
@@ -865,44 +958,206 @@ class SourceRegistry:
                     ids = [str(i) for i in row["ids"]]
                 except (KeyError, TypeError):
                     continue
+                revs = row.get("revisions")
                 if ids:
-                    orders.setdefault(where, []).insert(
-                        0, (ids, {i: n for n, i in enumerate(ids)}))
+                    orders.setdefault(where, []).insert(0, _Order(
+                        ids, {i: n for n, i in enumerate(ids)},
+                        _opt_text(row.get("revision")),
+                        ({str(k): _opt_text(v) for k, v in revs.items()}
+                         if isinstance(revs, dict) else None)))
             self._orders = orders
             self._orders_size = size
 
-    def record_order(self, source: dict, ids: list[str], batch_id: str = "") -> None:
-        """Keep the host's order of a stretch of lines (a batch handed over for slicing):
-        ids only, never their text. It is how a run `first..last` is known to hold the
-        lines between, after the batch itself is gone."""
-        ids = [str(i) for i in ids if str(i or "").strip()]
-        if not ids:
-            return
+    def order_conflict(self, source: dict, ids: list[str], revision: Optional[str] = None,
+                       revisions: Optional[dict] = None) -> str:
+        """Why registering these lines would contradict what is registered, or "". A
+        watermark (`revision`) names one delivery of a container: a second registration
+        under the same watermark carrying per-line revisions may not give a line another
+        revision."""
+        if revision in (None, "") or revisions is None:
+            return ""
         where = (str(source.get("system")), str(source.get("instance")),
                  str(source.get("container")))
         self._fresh_orders()
         with self._guard:
-            for known, _pos in self._orders.get(where, []):
-                if known == ids:
-                    return
-            _append_line(self.orders_path, {
-                "system": where[0], "instance": where[1], "container": where[2],
-                "ids": ids, "batch": str(batch_id or ""), "recorded_at": _now()})
+            for known in self._orders.get(where, []):
+                if known.revision != revision or known.revisions is None:
+                    continue
+                for line_id in ids:
+                    if (line_id in known.revisions and line_id in revisions
+                            and known.revisions[line_id] != revisions[line_id]):
+                        return (f"watermark {revision} already gives {line_id} the revision "
+                                f"{known.revisions[line_id]!r}, not {revisions[line_id]!r}")
+        return ""
+
+    def record_order(self, source: dict, ids: list[str], batch_id: str = "", *,
+                     revision: Optional[str] = None,
+                     revisions: Optional[dict] = None) -> str:
+        """Keep the host's order of a stretch of lines — a batch handed over for slicing,
+        or a run registered on its own (POST /api/v2/source/lines): ids only, never their
+        text, kept after the batch itself is gone. It is how a run `first..last` is known
+        to hold the lines between. `revision` is the host's watermark for this delivery
+        (a run record naming it as its revision adopted these lines' revisions);
+        `revisions` the revision of each line as delivered ({id: revision or None}; a line
+        left out is unknown). Returns RECORDED, KNOWN (the same registration was there) or
+        a conflict's reason (`order_conflict`; nothing is recorded)."""
+        ids = [str(i) for i in ids if str(i or "").strip()]
+        if not ids:
+            return KNOWN
+        revision = _opt_text(revision)
+        if revisions is not None:
+            wanted = set(ids)
+            revisions = {str(k): _opt_text(v) for k, v in revisions.items() if str(k) in wanted}
+        where = (str(source.get("system")), str(source.get("instance")),
+                 str(source.get("container")))
+        self._fresh_orders()
+        with self._guard:
+            why = self.order_conflict(source, ids, revision, revisions)
+            if why:
+                return why
+            for known in self._orders.get(where, []):
+                if (known.ids == ids and known.revision == revision
+                        and (revisions is None or known.revisions == revisions)):
+                    return KNOWN
+            row = {"system": where[0], "instance": where[1], "container": where[2],
+                   "ids": ids, "batch": str(batch_id or ""), "recorded_at": _now()}
+            if revision is not None:
+                row["revision"] = revision
+            if revisions is not None:
+                row["revisions"] = revisions
+            _append_line(self.orders_path, row)
             self._orders_size = -1
+            return RECORDED
+
+    def _orders_holding(self, sid: SourceId) -> list:
+        """[(registration, first position, last position)] of the run's container that
+        hold both its ends in order, newest first."""
+        self._fresh_orders()
+        with self._guard:
+            out = []
+            for known in self._orders.get((sid.system, sid.instance, sid.container), []):
+                a, z = known.pos.get(sid.id), known.pos.get(sid.through)
+                if a is not None and z is not None and a <= z:
+                    out.append((known, a, z))
+            return out
 
     def members_of(self, identity) -> Optional[list[str]]:
-        """The ids a run holds, first to last, when a recorded order of its container has
-        both its ends in order; None when none does (or for a single piece)."""
+        """The ids a run holds, when a registration of its container holds both its ends
+        in order; None when none does (or for a single piece). Registrations that disagree
+        are joined, the oldest's order first: every line any of them put inside the run
+        counts, so a withdrawal of any of them reaches it and no registration can take a
+        line out again."""
         sid = _identity(identity)
         if not sid.through:
             return None
-        self._fresh_orders()
+        holding = self._orders_holding(sid)
+        if not holding:
+            return None
+        out: list[str] = []
+        seen: set[str] = set()
+        for known, a, z in reversed(holding):
+            for i in known.ids[a:z + 1]:
+                if i not in seen:
+                    seen.add(i)
+                    out.append(i)
+        return out
+
+    def adopted_revisions(self, record) -> Optional[dict]:
+        """The revision of each line a run record adopted: {line id: revision or None},
+        from the registrations of its container holding the run under the watermark the
+        record names as its `revision`. None when the record names none, or no such
+        registration carries per-line revisions; a line missing from the dict is unknown."""
+        sid = record_id(record) if isinstance(record, dict) else _identity(record)
+        watermark = record.get("revision") if isinstance(record, dict) else None
+        if not sid.through or watermark in (None, ""):
+            return None
+        found: dict = {}
+        hit = False
+        for known, a, z in self._orders_holding(sid):
+            if known.revision != str(watermark) or known.revisions is None:
+                continue
+            hit = True
+            for line_id in known.ids[a:z + 1]:
+                if line_id in known.revisions:
+                    found.setdefault(line_id, known.revisions[line_id])
+        return found if hit else None
+
+    def run_revisions(self, record) -> list[tuple]:
+        """[(line identity, the host's newest announced revision of it, the revision the
+        record adopted or None)] for every line of a run (`lines_of`) whose newest
+        announced revision is not the one adopted (`adopted_revisions`). A line whose
+        adopted revision is unknown counts whenever the host has announced any: when the
+        memory was written proves nothing about which version the model read."""
+        sid = record_id(record) if isinstance(record, dict) else _identity(record)
+        adopted = self.adopted_revisions(record) or {}
+        out = []
+        for line in self.lines_of(sid):
+            revisions = self.revisions_of(line)
+            if not revisions:
+                continue
+            latest = revisions[-1]
+            newer = str(latest.get("revision") or latest.get("fingerprint") or "")
+            if not newer:
+                continue
+            mine = adopted.get(line.id)
+            if mine not in (None, "") and str(mine) == newer:
+                continue
+            out.append((line, newer, mine if mine not in (None, "") else None))
+        return out
+
+    # ---------- holds: a host's word, while serving an original, awaiting its change ----------
+
+    def _fresh_held(self) -> None:
         with self._guard:
-            for ids, pos in self._orders.get((sid.system, sid.instance, sid.container), []):
-                a, z = pos.get(sid.id), pos.get(sid.through)
-                if a is not None and z is not None and a <= z:
-                    return ids[a:z + 1]
-        return None
+            size = _size(self.held_path)
+            if size == self._held_size:
+                return
+            held: dict[str, dict] = {}
+            for row in _read_lines(self.held_path):
+                if row.get("source") and row.get("said") in HOLD_WORDS:
+                    held[str(row["source"])] = row
+            self._held = held
+            self._held_size = size
+
+    def held_of(self, identity) -> Optional[dict]:
+        """The open hold on exactly this identity, or None. A hold is open until a change
+        that settles whether the source may be used (withdrawn, deleted, restored) is
+        applied after it — for a held run, a change to the run or to any line it holds
+        (the host announces changes per line)."""
+        sid = _identity(identity)
+        key = sid.to_string()
+        self._fresh_held()
+        with self._guard:
+            row = self._held.get(key)
+        if row is None:
+            return None
+        after = int(row.get("after_seq") or 0)
+        keys = [key] + ([x.to_string() for x in self.lines_of(sid)] if sid.through else [])
+        for k in keys:
+            entry = self._entry(k)
+            if entry is not None and entry["settled_seq"] > after:
+                return None
+        return dict(row)
+
+    def hold(self, identity, said: str, host: str = "") -> dict:
+        """A host said, while serving the original, that this source is `said` (withdrawn
+        or deleted) and Loci's registry does not record it: hold it, so nothing standing on
+        it is used until the ordered change arrives. The registry's state is not touched —
+        an answer to a fetch is not ordered. Returns the open hold row (the one already
+        open, if any): {source, said, host, after_seq, recorded_at}."""
+        if said not in HOLD_WORDS:
+            raise ValueError(f"a hold says withdrawn or deleted, got {said!r}")
+        key = _identity_key(identity)
+        self._fresh()
+        with self._guard:
+            open_row = self.held_of(key)
+            if open_row is not None:
+                return open_row
+            row = {"source": key, "said": said, "host": str(host or ""),
+                   "after_seq": self._seq, "recorded_at": _now()}
+            _append_line(self.held_path, row)
+            self._held_size = -1
+            return dict(row)
 
     def lines_of(self, identity) -> list[SourceId]:
         """The single pieces a record stands on: itself for a piece; for a run, every line
@@ -943,15 +1198,19 @@ class SourceRegistry:
     def state_of(self, identity) -> str:
         """The source's state; one the registry has never heard of is active. A run is as
         bad as the worst of its own identity and every line it holds (`lines_of`): a line
-        withdrawn inside it withdraws the whole run."""
+        withdrawn inside it withdraws the whole run. An open hold (`hold`) reads as HELD
+        where the recorded state is no worse."""
         sid = _identity(identity)
         keys = [sid.to_string()] + ([x.to_string() for x in self.lines_of(sid)]
                                     if sid.through else [])
         worst = ACTIVE
         for key in dict.fromkeys(keys):
             entry = self._entry(key)
-            if entry is not None and _STATE_RANK.get(entry["state"], 0) > _STATE_RANK[worst]:
-                worst = entry["state"]
+            state = entry["state"] if entry is not None else ACTIVE
+            if _STATE_RANK.get(state, 0) < _STATE_RANK[HELD] and self.held_of(key):
+                state = HELD
+            if _STATE_RANK.get(state, 0) > _STATE_RANK[worst]:
+                worst = state
         return worst
 
     def read_state(self, record) -> str:
@@ -968,11 +1227,29 @@ class SourceRegistry:
         return record.get("use")
 
     def granted(self, places, identity) -> bool:
-        """Do these places grant this source (`places_cover`, with the run's lines when
-        the host's order of them is known)?"""
+        """Do these places grant this source for reading or as a basis (`places_cover`,
+        with the run's registered lines; a run whose lines are not registered is never
+        granted)?"""
         sid = _identity(identity)
         return places_cover(places_of(places) or (), sid,
                             self.members_of(sid) if sid.through else None)
+
+    def reaches(self, places, identity) -> bool:
+        """Does a host's ceiling (`max_grant`) reach this source? Where a source lies, not
+        whether it may be read: a run lies within its container whether or not its lines
+        are registered, and within places naming each of its lines when they are."""
+        sid = _identity(identity)
+        places = places_of(places) or ()
+        if any(p.covers(sid) for p in places):
+            return True
+        members = self.members_of(sid) if sid.through else None
+        return bool(members) and all(any(p.covers(sid.piece(m)) for p in places)
+                                     for m in members)
+
+    def order_known(self, identity) -> bool:
+        """A single piece, or a run whose lines are registered."""
+        sid = _identity(identity)
+        return not sid.through or self.members_of(sid) is not None
 
     def uses_of(self, record: dict) -> list:
         """Every `use` a record has to satisfy: its own (`use_of`) and, for a run, the
@@ -1005,9 +1282,12 @@ class SourceRegistry:
         `unknown_source` is an applied change for a source no memory names yet, recorded
         all the same so a later delivery from it meets its real state. `memories` lists
         the memories naming the source or holding it in a run, which is what a cleanup
-        step acts on. `host` names the sender: a change_id and the order of host_seq are
-        the sending host's own, so two hosts never collide or stale each other. A
-        malformed record raises ValueError."""
+        step acts on. `host` names the sender, whose change_id it is (two hosts may use
+        one id). host_seq is one order per source, whoever sent the change: a change
+        older than the newest applied one for the source is stale, and one reusing a
+        host_seq already applied for it is a conflict. Who may send changes for a source
+        at all (its declared authority) is the caller's check (core/_source_change.py).
+        A malformed record raises ValueError."""
         from .bucket_manager import _filesystem_turn      # lazy: bucket_manager imports this module
 
         change = _change_from(record)
@@ -1029,10 +1309,9 @@ class SourceRegistry:
             source = change["source"]
             entry = self._by_source.get(source)
             current = entry["state"] if entry else ACTIVE
-            mine = (entry or {}).get("hosts", {}).get(host)
             base = {"change_id": change["change_id"], "source": source, "kind": change["kind"],
                     "state": current, "previous": current,
-                    "host_seq": mine["host_seq"] if mine else None,
+                    "host_seq": entry["host_seq"] if entry else None,
                     "applied_seq": None, "memories": list(memories or [])}
             prior = self._by_change.get(self.change_key(host, change["change_id"]))
             if prior is not None:
@@ -1042,13 +1321,13 @@ class SourceRegistry:
                             "applied_seq": prior.get("seq")}
                 return {**base, "outcome": CONFLICT, "conflict_with": dict(prior),
                         "note": "change_id_reused"}
-            if mine is not None:
-                other = mine["seqs"].get(change["host_seq"])
+            if entry is not None:
+                other = entry["seqs"].get(change["host_seq"])
                 if other is not None:
                     return {**base, "outcome": CONFLICT,
                             "conflict_with": dict(self._by_change.get(other) or {}),
                             "note": "host_seq_reused"}
-                if change["host_seq"] < mine["host_seq"]:
+                if change["host_seq"] < entry["host_seq"]:
                     return {**base, "outcome": STALE}
             state, note = next_state(current, change["kind"], may_restore)
             if state is None:
@@ -1076,16 +1355,24 @@ class SourceRegistry:
         """May a memory be written from these (normalised) records? Returns (refusal,
         notes for the receipt). Each source has to be covered by the turn's grant when
         one is given (places, mappings or string forms; None = not enforced), and not
-        withdrawn or deleted. An unreadable source is taken (the host just handed its text
-        over) with a note; one the registry has never seen is simply active. A run is
-        granted only when every line in it is (`granted`), and its state is the worst of
-        its lines (`state_of`). Writing never changes a source's state: only the host's
-        change notices do."""
+        withdrawn or deleted, nor held. An unreadable source is taken (the host just handed
+        its text over) with a note; one the registry has never seen is simply active. A run
+        has to have its lines registered (a withdrawal in its middle could not be told
+        otherwise, so it is refused under any grant and with none), is granted only when
+        every line in it is (`granted`), and its state is the worst of its lines
+        (`state_of`). A source whose newest announced revision is not the one the record
+        adopted (`run_revisions` for a run, the record's own revision for a piece) is taken
+        with a note: the memory comes up in 依据变了的 at once. Writing never changes a
+        source's state: only the host's change notices do."""
         granted = places_of(grant)
         notes: list[str] = []
         for rec in sources or []:
             sid = record_id(rec)
             key = sid.to_string()
+            if not self.order_known(sid):
+                return (f"来源 {key} 是连着的一段，宿主没交过这段里有哪几行，Loci 没法知道中间哪一行"
+                        "被撤回——不能拿它当依据。宿主先交这段的行（POST /api/v2/source/lines，"
+                        "或走 /api/v2/slices），或者引单条。本次什么都没写。"), []
             if granted is not None and not self.granted(granted, sid):
                 return (f"来源 {key} 不在这一轮宿主交过来的材料里——只能用这一轮给的来源写。"
                         "本次什么都没写。"), []
@@ -1094,9 +1381,29 @@ class SourceRegistry:
                 return (f"来源 {key} 已经被撤回了，不能再拿它写记忆。本次什么都没写。"), []
             if state == DELETED:
                 return (f"来源 {key} 已经被删除了，不能再拿它写记忆。本次什么都没写。"), []
+            if state == HELD:
+                return (f"来源 {key} 宿主给原文时说它已经撤回或删除了，正等宿主的变化通知确认；"
+                        "这段时间不能拿它写记忆。本次什么都没写。"), []
             if state == UNREADABLE:
                 notes.append(f"来源 {key} 宿主那边眼下读不到；这次的原文是刚交过来的，照收。")
+            notes += self._revision_notes(rec, sid)
         return "", notes
+
+    def _revision_notes(self, rec: dict, sid: SourceId) -> list[str]:
+        if sid.through:
+            changed = self.run_revisions(rec)
+        else:
+            revisions = self.revisions_of(sid)
+            latest = revisions[-1] if revisions else {}
+            newer = str(latest.get("revision") or latest.get("fingerprint") or "")
+            mine = rec.get("revision") if latest.get("revision") else rec.get("fingerprint")
+            changed = [(sid, newer, mine or None)] if newer and newer != mine else []
+        out = []
+        for line, newer, mine in changed:
+            had = f"你依据的是 {mine}" if mine else "依据的是哪一版宿主没说"
+            out.append(f"来源 {line} 宿主已经出了新版本 {newer}（{had}）——照写，"
+                       "这条会挂在「依据变了的」里待确认。")
+        return out
 
     # ---------- write keys ----------
 

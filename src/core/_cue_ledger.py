@@ -18,7 +18,8 @@ hosts never share one. A card's key is `<entry id>@<version>` (a name with no ca
 One append-only file, `<buckets>/_cue/ledger.jsonl`, one line per event:
 
     {"op": "open",    "at", "host", "window", "baseline": [keys]}
-    {"op": "offer",   "at", "host", "window", "turn", "cards": [{card, id, kind, why}]}
+    {"op": "offer",   "at", "host", "window", "turn", "cards": [{card, id, kind, why}],
+                      "retry"?: true, "ever"?: [{card, id, kind, why}]}
     {"op": "deliver", "at", "host", "window", "turn", "cards": [{card, id, at?}]}
     {"op": "drop",    "at", "host", "window", "cards": [keys]}
     {"op": "clear",   "at", "host", "window"}
@@ -30,8 +31,12 @@ One append-only file, `<buckets>/_cue/ledger.jsonl`, one line per event:
            `baseline` the 依据变了的 items that existed then, which that window's breath
            already listed.
   offer    the cards one cue call returned, with why each was picked: the turn's record
-           of what was handed out. Nothing is delivered by being offered.
-  deliver  the host's word that these cards reached the model's input.
+           of what was handed out, an empty answer included. Nothing is delivered by being
+           offered. A retry of the turn (`retry`) is answered with the first answer's cards
+           that are still good, and its row replaces the turn's latest answer; `ever` (in a
+           compacted file) keeps the cards an earlier answer of the turn handed out.
+  deliver  the host's word that these cards were placed in the model's input — by turn
+           only when every card of the turn's latest answer was, by card otherwise.
   drop     the host's word that these delivered cards are no longer in the input.
   clear    the whole window's input is gone: every delivered card and the baseline.
 
@@ -78,15 +83,19 @@ class WindowState:
     opened     when it first asked for cards
     baseline   the 依据变了的 keys it had when it opened (its breath listed them)
     delivered  {card key: {"at", "turn", "id"}} — in the model's input now
-    offers     {turn: [card dicts]} — what each turn was handed"""
+    offers     {turn: [card dicts]} — the turn's latest answer: its first answer, or what a
+               retry of the turn came back with (the first answer's cards still good)
+    ever       {turn: [card dicts]} — every card any answer of the turn handed out, which
+               the host may still confirm or strike by key"""
     opened: datetime
     baseline: set = field(default_factory=set)
     delivered: dict = field(default_factory=dict)
     offers: dict = field(default_factory=dict)
     offer_at: dict = field(default_factory=dict)
+    ever: dict = field(default_factory=dict)
 
     def offered_keys(self) -> set:
-        return {c["card"] for cards in self.offers.values() for c in cards}
+        return {c["card"] for cards in self.ever.values() for c in cards}
 
 
 def _stamp(dt: datetime) -> str:
@@ -181,9 +190,18 @@ class CueLedger:
         if op == "offer":
             turn = str(row.get("turn") or "")
             cards = [c for c in row.get("cards") or [] if isinstance(c, dict) and c.get("card")]
-            win.offers.setdefault(turn, [])
-            have = {c["card"] for c in win.offers[turn]}
-            win.offers[turn].extend(c for c in cards if c["card"] not in have)
+            ever = win.ever.setdefault(turn, [])
+            seen = {c["card"] for c in ever}
+            for c in cards + [c for c in row.get("ever") or []
+                              if isinstance(c, dict) and c.get("card")]:
+                if c["card"] not in seen:
+                    ever.append(c)
+                    seen.add(c["card"])
+            if row.get("retry") or turn not in win.offers:
+                win.offers[turn] = list(cards)
+            else:
+                have = {c["card"] for c in win.offers[turn]}
+                win.offers[turn].extend(c for c in cards if c["card"] not in have)
             win.offer_at[turn] = at
         elif op == "deliver":
             for c in row.get("cards") or []:
@@ -268,25 +286,30 @@ class CueLedger:
             with self._guard:
                 return self._windows[(host, window)], True
 
-    def offer(self, host: str, window: str, turn: str, cards: list[dict]) -> None:
-        """Record what one cue call handed this window (nothing when it handed nothing)."""
-        if not cards:
-            return
-        self._append([{"op": "offer", "at": _stamp(_w.now()), "host": host, "window": window,
-                       "turn": turn,
-                       "cards": [{k: c.get(k) for k in ("card", "id", "kind", "why")}
-                                 for c in cards]}])
+    def offer(self, host: str, window: str, turn: str, cards: list[dict],
+              retry: bool = False) -> None:
+        """Record what one cue call handed this window, an empty answer included: a turn
+        that was answered is answered the same way when it is asked again. `retry` marks a
+        retry's answer, which replaces the turn's latest answer (core/_cue.cue)."""
+        row = {"op": "offer", "at": _stamp(_w.now()), "host": host, "window": window,
+               "turn": turn,
+               "cards": [{k: c.get(k) for k in ("card", "id", "kind", "why")} for c in cards]}
+        if retry:
+            row["retry"] = True
+        self._append([row])
 
     def deliver(self, host: str, window: str, *, turn: Optional[str] = None,
                 cards: Optional[list[str]] = None) -> tuple[list[str], list[str]]:
-        """The host's word that cards reached the model: every card offered to this window
-        in `turn`, and/or the named `cards`. A card this window was never offered is not
-        recorded. Returns (delivered, unknown)."""
+        """The host's word that cards were placed in the model's input. By `turn`: every
+        card of the turn's latest answer — the host says it so only when it placed all of
+        them. By `cards`: exactly those keys, which is how a partial placement is told; any
+        card an answer of this window handed out may be named. A card this window was never
+        handed is not recorded. Returns (delivered, unknown)."""
         win = self.window(host, window)
         if win is None:
             return [], sorted({str(c) for c in cards or []})
         offered: dict[str, dict] = {}
-        for t, offs in win.offers.items():
+        for t, offs in win.ever.items():
             for c in offs:
                 offered.setdefault(c["card"], {**c, "turn": t})
         wanted: list[str] = []
@@ -343,8 +366,11 @@ class CueLedger:
                 for turn, cards in win.offers.items():
                     at = win.offer_at.get(turn) or win.opened
                     if at >= offer_cut:
+                        latest = {c["card"] for c in cards}
                         rows.append({"op": "offer", "at": _stamp(at), "host": host,
-                                     "window": window, "turn": turn, "cards": cards})
+                                     "window": window, "turn": turn, "cards": cards,
+                                     "ever": [c for c in win.ever.get(turn, [])
+                                              if c["card"] not in latest]})
                 if win.delivered:
                     rows.append({"op": "deliver", "at": _stamp(now), "host": host,
                                  "window": window, "turn": None,

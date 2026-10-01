@@ -736,13 +736,16 @@ async def _quoted(pool: list[Ingredient], c: dict) -> tuple[list[Ingredient], li
     """Draw the quote share. Candidates come in weighted order, at most `quote_tries` of
     them, each one's sources asked of their hosts through the fourth joint
     (core/_originals.fetch) with no read scope: weaving reads the whole library.
-    A source refused (withdrawn, deleted, not allowed) — this memory is not drawn, try the
-    next. Otherwise it is drawn: what the hosts gave is fed; when nothing was given (the
-    host unreachable, none serving it) the memory's own body is.
+    A source refused (withdrawn, deleted, not allowed, an answer that cannot be read) —
+    this memory is not drawn, try the next; what a host said is gone is held for every road
+    (tools/recall/original.hold_what_hosts_said). Otherwise it is drawn: what the hosts gave
+    is fed; when nothing was given (the host unreachable, none serving it) the memory's own
+    body is — once the memory is read again and still stands on nothing withdrawn, deleted
+    or held.
     Returns ([the ingredient] or [], the string forms of every source asked for it). The
     fetched text is fed and nothing else: it is neither stored nor logged here."""
     from core import _originals as _O
-    from tools.recall.original import deployment_hosts
+    from tools.recall.original import deployment_hosts, hold_what_hosts_said
     if not pool:
         return [], []
     settings = _O.settings_from(rt.config)
@@ -753,7 +756,11 @@ async def _quoted(pool: list[Ingredient], c: dict) -> tuple[list[Ingredient], li
         answers = await asyncio.gather(*(
             _O.fetch(rec, hosts=hosts, request=None, settings=settings, registry=registry)
             for rec in asked))
+        await hold_what_hosts_said(answers, rt.bucket_mgr)
         if any(a.outcome == _O.NOT_ALLOWED for a in answers):
+            continue
+        fresh = await rt.bucket_mgr.get_including_archive(x.id)
+        if not fresh or _V.source_gone(fresh.get("metadata") or {}):
             continue
         given = [ln.text for a in answers if a.outcome == _O.GIVEN
                  for ln in a.lines if ln.text]

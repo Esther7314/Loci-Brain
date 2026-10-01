@@ -33,6 +33,7 @@ _PROV_WORD = {WAS_DERIVED_FROM: "派生", WAS_REVISION_OF: "新版本",
 
 # The registry's state of a source, as the 「来源:」 block says it; active says nothing.
 _SOURCE_STATE_WORD = {_src.WITHDRAWN: "⚠️撤回", _src.DELETED: "⚠️删除",
+                      _src.HELD: "⚠️宿主说已撤回，等确认",
                       _src.UNREADABLE: "⚠️宿主那边读不到"}
 
 

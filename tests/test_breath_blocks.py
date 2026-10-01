@@ -29,6 +29,7 @@ import frontmatter
 import pytest
 
 from core import _invalidation as I
+from core import _sources as S
 from core import _when as W
 from core import visibility as V
 from core.bucket_manager import BucketManager
@@ -455,20 +456,61 @@ def test_a_line_revised_inside_a_run_cards_the_memory_until_confirmed_per_revisi
     assert it["revised"] == [{"source": "lento:home/private:U#m_0006", "revision": "2"}]
 
 
-def test_a_revision_announced_before_the_memory_was_written_does_not_card_it(store, tmp_path):
+def test_the_counter_example_read_e1_notice_e2_then_written_on_e1_is_carded(store, tmp_path):
+    # The other team's order: the model reads m_0003 at e1, the e2 notice arrives, then the
+    # model writes a memory resting on e1. Write time proves nothing; the adopted revision
+    # registered under the delivery's watermark does.
+    reg = store.sources
+    ids = [f"m_{i:04d}" for i in range(1, 11)]
+    assert reg.record_order(SRC, ids, revision="w-1",
+                            revisions={i: "e1" for i in ids}) == S.RECORDED
+    _revise(store, "e2", 1, "m_0003", "e2")                 # arrives before the write
+    rec = {**SRC, "id": "m_0002", "through": "m_0004", "revision": "w-1"}
+    refusal, notes = reg.check_writable(S.normalize_sources([rec]))
+    assert not refusal and any("m_0003 宿主已经出了新版本 e2（你依据的是 e1）" in n
+                               for n in notes), notes
+    run(store.create("Written from what was read at e1.", room="EVENT/WORLD", sources=[rec]))
+    [it] = I.block(run(store.list_all()), reg)
+    assert it["revised"] == [{"source": "lento:home/private:U#m_0003", "revision": "e2"}]
+    run(trace(bucket_id=it["id"], invalidation="confirmed"))  # per (line, revision)
+    assert I.block(run(store.list_all()), reg) == []
+
+
+def test_a_line_adopted_at_its_newest_revision_is_not_carded(store, tmp_path):
+    reg = store.sources
+    ids = [f"m_{i:04d}" for i in range(1, 11)]
+    _revise(store, "e2", 1, "m_0003", "e2")
+    reg.record_order(SRC, ids, revision="w-2", revisions={**{i: "e1" for i in ids},
+                                                          "m_0003": "e2"})
+    run(store.create("Written from what was read at e2.", room="EVENT/WORLD",
+                     sources=[{**SRC, "id": "m_0002", "through": "m_0004", "revision": "w-2"}]))
+    assert I.block(run(store.list_all()), reg) == []
+    _revise(store, "e3", 2, "m_0003", "e3")                 # a later one does
+    [it] = I.block(run(store.list_all()), reg)
+    assert it["revised"] == [{"source": "lento:home/private:U#m_0003", "revision": "e3"}]
+
+
+def test_an_unknown_adopted_revision_is_pending_review_whenever_it_was_written(store, tmp_path):
+    # No watermark on the record (or none registered with line revisions): which version
+    # was read is unknown, so any announced revision cards it, before the write or after.
     reg = store.sources
     reg.record_order(SRC, [f"m_{i:04d}" for i in range(1, 11)])
     _revise(store, "early", 1, "m_0003", "2")
-    row = json.loads(reg.changes_path.read_text(encoding="utf-8"))
-    row["recorded_at"] = "2020-01-01T00:00:00+00:00"        # long before the memory
-    reg.changes_path.write_text(json.dumps(row) + "\n", encoding="utf-8")
-    reg.rebuild_index()
     run(store.create("Written from the revised lines.", room="EVENT/WORLD",
                      sources=[{**SRC, "id": "m_0002", "through": "m_0004"}]))
-    assert I.block(run(store.list_all()), reg) == []
-    _revise(store, "later", 2, "m_0003", "3")               # a revision after it does
     [it] = I.block(run(store.list_all()), reg)
-    assert it["revised"] == [{"source": "lento:home/private:U#m_0003", "revision": "3"}]
+    assert it["revised"] == [{"source": "lento:home/private:U#m_0003", "revision": "2"}]
+
+
+def test_one_watermark_cannot_give_a_line_two_revisions(store):
+    reg = store.sources
+    ids = ["m_0001", "m_0002", "m_0003"]
+    assert reg.record_order(SRC, ids, revision="w", revisions={"m_0002": "e1"}) == S.RECORDED
+    assert reg.record_order(SRC, ids, revision="w", revisions={"m_0002": "e1"}) == S.KNOWN
+    why = reg.record_order(SRC, ids, revision="w", revisions={"m_0002": "e2"})
+    assert why not in (S.RECORDED, S.KNOWN) and "m_0002" in why
+    assert reg.adopted_revisions({**SRC, "id": "m_0001", "through": "m_0003",
+                                  "revision": "w"}) == {"m_0002": "e1"}
 
 
 def test_a_panel_correction_is_carded_until_folded_or_confirmed(store, tmp_path):

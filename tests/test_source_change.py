@@ -270,9 +270,12 @@ def test_the_route_answers_through_the_hook_guard(library, monkeypatch):
     monkeypatch.setenv("T_LIFE", "life-key")
     monkeypatch.setattr(sh, "bucket_mgr", store)
     monkeypatch.setattr(sh, "dehydrator", None)
+    monkeypatch.setenv("T_RELAY", "relay-key")
     monkeypatch.setattr(sh, "config", {"hosts": {
-        "life": {"token_env": "T_LIFE", "scope_mode": "open", "may_restore": True},
-        "bot": {"token_env": "T_BOT", "max_grant": [{"system": "telegram"}]}}})
+        "life": {"token_env": "T_LIFE", "scope_mode": "open", "may_restore": True,
+                 "authority": [{"system": "lento"}]},
+        "bot": {"token_env": "T_BOT", "max_grant": [{"system": "telegram"}]},
+        "relay": {"token_env": "T_RELAY", "max_grant": [{"system": "lento"}]}}})
     monkeypatch.setattr(PA, "gate_needed", lambda: True)
     monkeypatch.setattr(PA, "has_session", lambda r: False)
 
@@ -293,12 +296,190 @@ def test_the_route_answers_through_the_hook_guard(library, monkeypatch):
     status, out = call("POST", "/api/v2/source/change", change("c-1", "withdrawn", 1),
                        key="bot-key")
     assert status == 200 and out["status"] == "forbidden"
+    # Within its ceiling, but not the source's change authority: refused, and nothing moves.
+    status, out = call("POST", "/api/v2/source/change", change("c-1", "withdrawn", 1),
+                       key="relay-key")
+    assert (status, out["status"], out["note"]) == (200, "forbidden", "not_change_authority")
+    assert store.sources.state_of(M_STR) == "active"
     status, out = call("POST", "/api/v2/source/change", change("c-1", "withdrawn", 1),
                        key="life-key")
     assert status == 200 and out["status"] == "applied" and out["entries"] == [e]
+    assert isinstance(out["applied_seq"], int), "an open host sees the ledger's numbers"
     status, seen = call("GET", "/api/v2/changes", key="life-key", query=b"since=0")
     assert status == 200 and any(r["type"] == "SourceChanged" for r in seen["changes"])
     assert PHRASE not in json.dumps(seen, ensure_ascii=False)
     status, seen = call("GET", "/api/v2/changes", key="bot-key", query=b"since=0")
     assert status == 200 and seen["changes"] == [], "nothing of lento's reaches the bot"
+    assert "since" not in seen and isinstance(seen["next"], str), "a cursor, not a seq"
+    assert call("GET", "/api/v2/changes", key="bot-key", query=b"since=3")[0] == 400
+    assert call("GET", "/api/v2/changes", key="bot-key", query=b"cursor=c1nope")[0] == 400
+    assert call("GET", "/api/v2/changes", key="life-key", query=b"cursor=x")[0] == 400
     assert call("GET", "/api/v2/changes", key="life-key", query=b"since=x")[0] == 400
+    # A run's lines, registered by a host directly.
+    lines = {"source": "lento:home/private:U#m_0010..m_0012", "revision": "w-1",
+             "lines": ["m_0010", {"id": "m_0011", "revision": "e1"}, "m_0012"]}
+    assert call("POST", "/api/v2/source/lines", lines)[0] == 401
+    status, out = call("POST", "/api/v2/source/lines", lines, key="bot-key")
+    assert (status, out["status"]) == (200, "forbidden")
+    status, out = call("POST", "/api/v2/source/lines", lines, key="relay-key")
+    assert (status, out["status"], out["lines"]) == (200, "recorded", 3)
+    assert store.sources.members_of("lento:home/private:U#m_0010..m_0012") == [
+        "m_0010", "m_0011", "m_0012"]
+    assert call("POST", "/api/v2/source/lines", {**lines, "lines": ["m_0010"]},
+                key="relay-key")[0] == 400
+
+
+# ───────────────────── the other team's 10-02 rulings ─────────────────────
+
+def _hosts(**spec):
+    from core import scope as SCOPE
+    env = {f"T_{name.upper()}": f"{name}-key" for name in spec}
+    table = {name: {"token_env": f"T_{name.upper()}", **body} for name, body in spec.items()}
+    return SCOPE.load_hosts({"hosts": table}, env)
+
+
+def test_only_the_declared_authority_sends_and_its_order_is_the_one_order(library):
+    # Their counter-example: B's newer withdrawal arrives first, A's older restore later.
+    store, e, _d, _root = library
+    hosts = _hosts(a={"max_grant": [{"system": "lento"}], "may_restore": True},
+                   b={"max_grant": [{"system": "lento"}], "may_restore": True,
+                      "authority": [{"system": "lento", "instance": "home"}]})
+    a, b = hosts.get("a"), hosts.get("b")
+    _s, out = run(SC.handle(store, change("b-7", "withdrawn", 7), b, hosts=hosts))
+    assert out["status"] == "applied" and out["state"] == "withdrawn"
+    _s, out = run(SC.handle(store, change("a-5", "restored", 5), a, hosts=hosts))
+    assert (out["status"], out["note"]) == ("forbidden", SC.NOT_AUTHORITY)
+    # Relayed through the authority, the older restore is still older.
+    _s, out = run(SC.handle(store, change("b-5", "restored", 5), b, hosts=hosts))
+    assert out["status"] == "stale"
+    assert store.sources.state_of(M_STR) == "withdrawn"
+    # A source nobody is declared the authority of: nobody may change it.
+    _s, out = run(SC.handle(store, change("x", "withdrawn", 1,
+                                          source="lento:work/c#m_1"), b, hosts=hosts))
+    assert (out["status"], out["note"]) == ("forbidden", SC.NO_AUTHORITY)
+
+
+def test_two_hosts_declaring_the_same_place_name_neither_and_authority_stays_in_the_ceiling():
+    hosts = _hosts(a={"max_grant": [{"system": "lento"}], "authority": [{"system": "lento"}]},
+                   b={"max_grant": [{"system": "lento"}], "authority": [{"system": "lento"}]})
+    assert hosts.authority_for("lento:home/c#m_1") is None
+    deeper = _hosts(a={"max_grant": [{"system": "lento"}], "authority": [{"system": "lento"}]},
+                    b={"max_grant": [{"system": "lento"}],
+                       "authority": [{"system": "lento", "instance": "home"}]})
+    assert deeper.authority_for("lento:home/c#m_1").name == "b"
+    assert deeper.authority_for("lento:work/c#m_1").name == "a"
+    past = _hosts(a={"max_grant": [{"system": "telegram"}], "authority": [{"system": "lento"}]})
+    assert past.get("a") is None and past.errors
+
+
+def test_without_a_hosts_table_the_legacy_host_is_the_authority_for_everything(library):
+    from core import scope as SCOPE
+    store, e, _d, _root = library
+    hosts = SCOPE.load_hosts({}, {}, legacy_token="life-key")
+    legacy = hosts.default
+    assert hosts.authority_for(M_STR) is legacy and hosts.provider_for(M_STR) is None
+    _s, out = run(SC.handle(store, change("c-1", "withdrawn", 1), legacy, hosts=hosts))
+    assert out["status"] == "applied" and out["entries"] == [e]
+    assert isinstance(out["applied_seq"], int) and "applied_cursor" not in out
+
+
+def test_a_host_with_a_ceiling_gets_a_cursor_not_the_ledgers_number(library):
+    from core import _ledger as L
+    store, e, _d, _root = library
+    bridge = Host("bridge", max_grant=(S.Place("lento"),))
+    _s, out = run(SC.handle(store, change("c-1", "withdrawn", 1), bridge))
+    assert "applied_seq" not in out and out["applied_cursor"].startswith("c1")
+    seen = run(L.changes_since(store, bridge))
+    assert out["applied_cursor"] in [r["cursor"] for r in seen["changes"]]
+    assert all("seq" not in r for r in seen["changes"])
+
+
+def test_a_memory_only_quoting_the_source_is_reached_by_its_withdrawal(library):
+    # Found by our own dream worker: a wasQuotedFrom line is a tie to the source too.
+    store, e, _d, _root = library
+    q = run(store.create(f"小周说过一句：{PHRASE}。", room="EVENT/SELF",
+                         prov=[{"rel": "wasQuotedFrom", "target": M_STR}]))
+    bare = run(store.create("只记了宿主的编号。", room="EVENT/SELF",
+                            prov=[{"rel": "wasQuotedFrom", "target": "m_0003"}]))
+    assert set(run(S.memories_of(store, M_STR))) == {e, q}
+    _s, out = run(SC.handle(store, change("c-1", "withdrawn", 1), OPEN_HOST))
+    assert set(out["entries"]) == {e, q}
+    assert run(store.get(q))["content"].strip() == store.CLEARED_BODY
+    assert bare not in out["entries"], "a bare host id names no container: not matched"
+
+
+def test_a_cleared_body_keeps_what_carries_the_next_withdrawal(tmp_path, monkeypatch):
+    from tools import _runtime as rt
+    store = BucketManager({"buckets_dir": str(tmp_path)})
+    monkeypatch.setattr(rt, "bucket_mgr", store)
+    where = {"system": "lento", "instance": "home", "container": "c"}
+    store.sources.record_order(where, [f"m_{i}" for i in range(1, 10)])
+    run_rec = {**where, "id": "m_2", "through": "m_6"}
+    e = run(store.create(f"一段话，{PHRASE}。", sources=[run_rec]))
+    run(SC.handle(store, change("c-1", "withdrawn", 1, source="lento:home/c#m_3"), OPEN_HOST))
+    meta = _meta(store, e)
+    assert meta["sources"][0]["through"] == "m_6", "the run's identity stays on the md"
+    assert store.sources.members_of("lento:home/c#m_2..m_6") == [f"m_{i}" for i in range(2, 7)]
+    assert run(S.memories_of(store, "lento:home/c#m_5")) == [e], "another line still finds it"
+    _s, out = run(SC.handle(store, change("c-2", "deleted", 1, source="lento:home/c#m_5"),
+                            OPEN_HOST))
+    assert out["entries"] == [e] and store.sources.state_of("lento:home/c#m_2..m_6") == "deleted"
+
+
+def test_a_hosts_unordered_word_holds_until_the_ordered_change_settles_it(library):
+    store, e, d, _root = library
+    held = run(SC.hold(store, M_STR, "withdrawn", "lento"))
+    assert set(held) == {e, d}
+    assert store.sources.state_of(M_STR) == S.HELD
+    assert store.sources.describe(M_STR) is None, "no state was written"
+    for bid in (e, d):
+        meta = _meta(store, bid)
+        assert V.source_gone(meta)
+        assert not V.visible_for(meta, road=V.READ) and not V.visible_for(meta, road=V.RECENT)
+    assert run(store.get_including_archive(e))["content"].strip() != store.CLEARED_BODY
+    [rec] = S.normalize_sources([M])
+    assert "正等宿主的变化通知确认" in store.sources.check_writable([rec])[0]
+    # The ordered change: a restore of a source that was never withdrawn settles it.
+    _s, out = run(SC.handle(store, change("c-1", "restored", 1), Host("x", scope_mode="open")))
+    assert out["status"] == "applied" and store.sources.state_of(M_STR) == "active"
+    for bid in (e, d):
+        assert not V.source_gone(_meta(store, bid))
+
+
+def test_a_held_source_settled_by_its_withdrawal_is_cleared_then(library):
+    store, e, d, _root = library
+    run(SC.hold(store, M_STR, "deleted", "lento"))
+    _s, out = run(SC.handle(store, change("c-1", "withdrawn", 1), OPEN_HOST))
+    assert out["status"] == "applied" and out["cleanup"]["body"] == "done"
+    assert store.sources.held_of(M_STR) is None
+    gone = I.gone_records(_meta(store, d))
+    assert [r["kind"] for r in gone] == [I.SOURCE_GONE], "the hold closed, the gone stays"
+
+
+def test_registering_a_runs_lines_directly(library):
+    store, *_ = library
+    host = Host("bridge", max_grant=(S.Place("lento", "home"),))
+    body = {"source": {"system": "lento", "instance": "home", "container": "private:U",
+                       "id": "m_0020", "through": "m_0023"},
+            "revision": "w-9",
+            "lines": [{"id": "m_0020", "revision": "e1"}, {"id": "m_0021", "revision": None},
+                      "m_0022", {"id": "m_0023", "revision": "e4"}]}
+    status, out = run(SC.handle_lines(store, body, host))
+    assert (status, out["status"], out["lines"]) == (200, "recorded", 4)
+    assert run(SC.handle_lines(store, body, host))[1]["status"] == "known"
+    run_rec = {"system": "lento", "instance": "home", "container": "private:U",
+               "id": "m_0020", "through": "m_0023", "revision": "w-9"}
+    assert store.sources.adopted_revisions(run_rec) == {"m_0020": "e1", "m_0021": None,
+                                                        "m_0023": "e4"}
+    clash = {**body, "lines": [{"id": "m_0020", "revision": "e2"}, "m_0021", "m_0022",
+                               "m_0023"]}
+    status, out = run(SC.handle_lines(store, clash, host))
+    assert out["status"] == "conflict" and "m_0020" in out["note"]
+    for bad in ({**body, "lines": ["m_0021", "m_0023"]},          # does not start at id
+                {**body, "source": "lento:home/private:U#m_0020"},  # not a run
+                {**body, "lines": ["m_0020", "m_0020", "m_0023"]},  # a line twice
+                {**body, "extra": 1}):
+        assert run(SC.handle_lines(store, bad, host))[0] == 400, bad
+    assert run(SC.handle_lines(store, body, "panel"))[0] == 403
+    far = Host("bot", max_grant=(S.Place("telegram"),))
+    assert run(SC.handle_lines(store, body, far))[1]["status"] == "forbidden"

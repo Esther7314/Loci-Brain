@@ -347,13 +347,16 @@ class Run:
             if m:
                 self.vars[var] = m.group(1)
 
-    def _host(self, token: str):
-        """The host a credential names, read from the item's hosts table the way the
-        server reads it (core/scope.load_hosts); the legacy open host when the item has
-        no table."""
+    def _hosts(self, token: str = ""):
+        """The item's hosts table read the way the server reads it (core/scope.load_hosts);
+        the one legacy open host when the item has no table."""
         from core import scope as _scope
         table, env = hosts_config(self.hosts) if self.hosts else ({}, {})
-        hs = _scope.load_hosts({"hosts": table} if table else {}, env, legacy_token=token)
+        return _scope.load_hosts({"hosts": table} if table else {}, env, legacy_token=token)
+
+    def _host(self, token: str):
+        """The host a credential names (the legacy host for none)."""
+        hs = self._hosts(token)
         return hs.by_token(token) if token else hs.default
 
     def _store(self):
@@ -368,15 +371,28 @@ class Run:
         from core import _source_change
         from core.dehydrator import Dehydrator
         body = self.sub(step["source_change"])
-        host = self._host(str(self.sub(step.get("host") or "")))
+        token = str(self.sub(step.get("host") or ""))
+        host = self._host(token)
         # The route hands the server's dehydrator over (its cache keys); this is the same.
         dehydrator = Dehydrator(load_config())
         try:
             status, out = await _source_change.handle(self._store(), body, host,
-                                                      dehydrator=dehydrator)
+                                                      dehydrator=dehydrator,
+                                                      hosts=self._hosts(token))
         finally:
             dehydrator.close()
         self._keep(step, step.get("as") or "source_change",
+                   json.dumps({"http": status, **out}, ensure_ascii=False))
+        await asyncio.sleep(SETTLE_SECONDS + 1.0)   # the server notices changed files
+
+    async def source_lines(self, step: dict) -> None:
+        """What POST /api/v2/source/lines runs (core/_source_change.handle_lines), in this
+        process, on the same library: the reply as JSON text under `as`."""
+        from core import _source_change
+        host = self._host(str(self.sub(step.get("host") or "")))
+        status, out = await _source_change.handle_lines(self._store(),
+                                                        self.sub(step["source_lines"]), host)
+        self._keep(step, step.get("as") or "source_lines",
                    json.dumps({"http": status, **out}, ensure_ascii=False))
         await asyncio.sleep(SETTLE_SECONDS + 1.0)   # the server notices changed files
 
@@ -404,12 +420,14 @@ class Run:
                    json.dumps({"http": status, **out}, ensure_ascii=False))
 
     async def changes(self, step: dict) -> None:
-        """What GET /api/v2/changes runs (core/_ledger.changes_since): JSON text."""
+        """What GET /api/v2/changes runs (core/_ledger.changes_since): JSON text. A host
+        with a max_grant reads by `cursor`, an open one by `since`."""
         from core import _ledger
         spec = self.sub(step["changes"]) or {}
         host = self._host(str(self.sub(step.get("host") or "")))
         out = await _ledger.changes_since(self._store(), host, int(spec.get("since", 0)),
-                                          int(spec.get("limit", _ledger.CHANGES_LIMIT)))
+                                          int(spec.get("limit", _ledger.CHANGES_LIMIT)),
+                                          cursor=spec.get("cursor") or None)
         self._keep(step, step.get("as") or "changes", json.dumps(out, ensure_ascii=False))
 
     async def concurrent(self, step: dict) -> None:
@@ -807,6 +825,8 @@ async def run_item(item: dict, keep: bool) -> ItemResult:
                                 await run.call(step)
                             elif "source_change" in step:
                                 await run.source_change(step)
+                            elif "source_lines" in step:
+                                await run.source_lines(step)
                             elif "changes" in step:
                                 await run.changes(step)
                             elif {"cue", "cue_delivered", "cue_dropped"} & set(step):
@@ -852,10 +872,12 @@ def seams() -> tuple[str, ...]:
             "for the side model (exam/runner.py seed_slices)",
             "an item's side_model: answers the backfill's side-model call, picked by a phrase "
             "in the body (exam/serve.py; no item without one is affected)",
-            "source_change: and changes: steps run what POST /api/v2/source/change and GET "
-            "/api/v2/changes run (core/_source_change.handle, core/_ledger.changes_since) in "
-            "the runner's process on the same library, a second entry point beside the "
-            "server; the HTTP layer and the hook guard are tests/test_source_change.py's",
+            "source_change:, source_lines: and changes: steps run what POST "
+            "/api/v2/source/change, POST /api/v2/source/lines and GET /api/v2/changes run "
+            "(core/_source_change.handle with the item's hosts table, handle_lines, "
+            "core/_ledger.changes_since) in the runner's process on the same library, a "
+            "second entry point beside the server; the HTTP layer and the hook guard are "
+            "tests/test_source_change.py's",
             "cue:, cue_delivered: and cue_dropped: steps run what POST /api/v2/cue and its two "
             "acknowledgements run (core/_cue.handle_*) the same way, the host credential and "
             "Loci-Scope resolved as the hook guard resolves them; the HTTP layer is "

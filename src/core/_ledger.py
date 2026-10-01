@@ -24,21 +24,42 @@ above, so `/changes` never hands out text whichever kind of line it reads. The o
 themselves are rewritten only for memories a withdrawn or deleted source clears
 (`scrub_traces`, through the ledger's atomic rewrite), never wholesale.
 
-`changes_since` is `GET /api/v2/changes?since=N`: the lines numbered above N, in order,
-without "was merely touched" (TraceTouched), and only those about sources the calling
-host's credential (`max_grant`) reaches. A memory line counts as about every source
-standing behind the memory — its own records and, for anything derived, every root's
-(the same walk as the read gate, core/scope.ScopeView); a memory with none, or with one
-past the credential, is not shown to a host with a ceiling. A host without a ceiling (an
-open host) sees every line.
+`changes_since` is `GET /api/v2/changes`: the lines past a point, in order, without "was
+merely touched" (TraceTouched), and only those about sources the calling host's
+credential (`max_grant`) reaches. A memory line counts as about every source standing
+behind the memory — its own records and, for anything derived, every root's (the same
+walk as the read gate, core/scope.ScopeView, judging only where each source lies); a
+memory with none, or with one past the credential, is not shown to a host with a ceiling.
 
-Exports: SOURCE_CHANGED · SOURCE_CLEARED · TRACE_CLEARED · NOISE · payload_of ·
-         source_keys · public_row · scrub_traces · changes_since
+Where a host reads from depends on whether it has a ceiling:
+
+    open host (no max_grant)   `?since=N`: the ledger's own numbers; every line is shown,
+                               rows carry `seq`, `next` is a number
+    host with a max_grant      `?cursor=<opaque>`: rows carry `cursor` instead of `seq`,
+                               `next` is a cursor. The ledger's numbers never reach it:
+                               their gaps would count what it may not see.
+
+A cursor (`cursor_of`) is the seq of the last line looked at, put through a keyed
+permutation (a six-round Feistel network over 64 bits, HMAC-SHA256 rounds) under a key
+kept beside the ledger (`_ledger/cursor.key`, made on first use), plus a tag binding it to
+the host. Two cursors say nothing of how far apart they are; a page whose every line was
+filtered out still hands back a new `next`, so the reader moves on. The source change
+receipt gives such a host `applied_cursor` in place of `applied_seq`, the cursor of the
+change's own line.
+
+Exports: SOURCE_CHANGED · SOURCE_CLEARED · TRACE_CLEARED · NOISE · CursorError · payload_of ·
+         source_keys · public_row · scrub_traces · cursor_of · seq_of_cursor · host_view ·
+         changes_since
 ========================================
 """
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import os
+import time
+from pathlib import Path
 from typing import Iterable, Optional
 
 from utils import parse_bool
@@ -158,13 +179,104 @@ def scrub_traces(ledger, ids: Iterable[str]) -> int:
     return ledger.rewrite(redact)
 
 
+# ------------------------------------------------------------
+# A host's cursor
+# ------------------------------------------------------------
+
+CURSOR_KEY_FILE = "cursor.key"
+_CURSOR_PREFIX = "c1"
+_ROUNDS = 6
+_MASK32 = 0xFFFFFFFF
+
+
+class CursorError(ValueError):
+    """A cursor this library did not hand to this host."""
+
+
+def _cursor_key(ledger) -> bytes:
+    """The library's cursor key, made on first use (created exclusively, so two processes
+    racing to make it end up with the same one)."""
+    path = Path(ledger.path).with_name(CURSOR_KEY_FILE)
+    try:
+        data = path.read_bytes()
+        if len(data) >= 32:
+            return data[:32]
+    except OSError:
+        pass
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        # Another process is making it: wait for its 32 bytes.
+        for _ in range(100):
+            data = path.read_bytes()
+            if len(data) >= 32:
+                return data[:32]
+            time.sleep(0.01)
+        raise CursorError("the cursor key is unreadable") from None
+    with os.fdopen(fd, "wb") as f:
+        f.write(os.urandom(32))
+        f.flush()
+        os.fsync(f.fileno())
+    return path.read_bytes()[:32]
+
+
+def _round(key: bytes, i: int, half: int) -> int:
+    digest = hmac.new(key, bytes([i]) + half.to_bytes(4, "big"), hashlib.sha256).digest()
+    return int.from_bytes(digest[:4], "big")
+
+
+def _permute(key: bytes, value: int, back: bool = False) -> int:
+    left, right = (value >> 32) & _MASK32, value & _MASK32
+    if not back:
+        for i in range(_ROUNDS):
+            left, right = right, left ^ _round(key, i, right)
+    else:
+        for i in reversed(range(_ROUNDS)):
+            left, right = right ^ _round(key, i, left), left
+    return (left << 32) | right
+
+
+def _tag(key: bytes, host_name: str, block: int) -> str:
+    msg = f"cursor|{host_name}|".encode("utf-8") + block.to_bytes(8, "big")
+    return hmac.new(key, msg, hashlib.sha256).hexdigest()[:16]
+
+
+def cursor_of(ledger, seq: int, host_name: str) -> str:
+    """The opaque cursor standing for ledger seq `seq`, for `host_name`."""
+    key = _cursor_key(ledger)
+    block = _permute(key, int(seq) & ((1 << 64) - 1))
+    return f"{_CURSOR_PREFIX}{block:016x}{_tag(key, host_name, block)}"
+
+
+def seq_of_cursor(ledger, cursor: str, host_name: str) -> int:
+    """The ledger seq a cursor stands for. Raises CursorError for one this library did not
+    hand to this host."""
+    text = str(cursor or "").strip()
+    if len(text) != len(_CURSOR_PREFIX) + 32 or not text.startswith(_CURSOR_PREFIX):
+        raise CursorError("not a cursor this library handed out")
+    try:
+        block = int(text[len(_CURSOR_PREFIX):len(_CURSOR_PREFIX) + 16], 16)
+    except ValueError:
+        raise CursorError("not a cursor this library handed out") from None
+    key = _cursor_key(ledger)
+    if not hmac.compare_digest(text[-16:], _tag(key, host_name, block)):
+        raise CursorError("not a cursor this library handed to this host")
+    return _permute(key, block, back=True)
+
+
+def host_view(host) -> bool:
+    """Does this host read the ledger through cursors (a host with a ceiling)?"""
+    return host is not None and getattr(host, "max_grant", None) is not None
+
+
 class _CoverageView(_scope.ScopeView):
-    """The read gate's walk to the roots, judging each record by the credential's
-    ceiling alone: a host may reconcile what its material became whatever the material's
-    state or rule."""
+    """The read gate's walk to the roots, judging each record by where it lies against
+    the credential's ceiling alone: a host may reconcile what its material became whatever
+    the material's state or rule, and whether its lines were registered."""
 
     def _judge_record(self, rec: dict, sid) -> bool:
-        return self.registry.granted(self.request.scope.grant, sid)
+        return self.registry.reaches(self.request.scope.grant, sid)
 
 
 def _coverage_view(host, metas: dict, registry) -> Optional[_CoverageView]:
@@ -183,17 +295,25 @@ def _covered(view: Optional[_CoverageView], places, key: str) -> bool:
         sid = _src.SourceId.parse(key)[0]
     except _src.SourceRecordError:
         return False
-    return view.registry.granted(places, sid)
+    return view.registry.reaches(places, sid)
 
 
-async def changes_since(store, host, since: int, limit: int = CHANGES_LIMIT) -> dict:
-    """`GET /api/v2/changes?since=N` for `host` (a core.scope.Host; None reads nothing).
+async def changes_since(store, host, since: int = 0, limit: int = CHANGES_LIMIT, *,
+                        cursor: Optional[str] = None) -> dict:
+    """`GET /api/v2/changes` for `host` (a core.scope.Host; None reads nothing).
 
-        {since, next, more, changes: [public_row, ...]}
+        open host            {since, next, more, changes: [public_row, ...]}
+        host with a ceiling  {cursor, next, more, changes: [public_row without seq, with
+                              cursor, ...]} — read from `cursor` (None: from the start);
+                              `since` is not taken. Raises CursorError for a cursor this
+                              library did not hand to this host.
 
-    `next` is the seq to ask from next time (past every line this call looked at, shown
-    or not); `more` says lines are left past it. No total is given: under a ceiling a
-    count of what else happened is itself a leak."""
+    `next` is where to ask from next time (past every line this call looked at, shown or
+    not); `more` says lines are left past it. No total is given: under a ceiling a count
+    of what else happened is itself a leak."""
+    restricted = host_view(host)
+    if restricted:
+        since = seq_of_cursor(store.ledger_mirror, cursor, host.name) if cursor else 0
     limit = max(1, min(int(limit or CHANGES_LIMIT), CHANGES_LIMIT_MAX))
     metas: dict = {}
     view = None
@@ -236,4 +356,10 @@ async def changes_since(store, host, since: int, limit: int = CHANGES_LIMIT) -> 
                     if not keys or not all(_covered(view, places, k) for k in keys):
                         continue
         out.append(row)
-    return {"since": since, "next": nxt, "more": more, "changes": out}
+    if not restricted:
+        return {"since": since, "next": nxt, "more": more, "changes": out}
+    ledger = store.ledger_mirror
+    for row in out:
+        row["cursor"] = cursor_of(ledger, row.pop("seq"), host.name)
+    return {"cursor": cursor or None, "next": cursor_of(ledger, nxt, host.name), "more": more,
+            "changes": out}

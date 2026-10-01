@@ -8,13 +8,16 @@ host. When the model asks for it (tools/recall/original.py), Loci asks the host 
 the source, once per source, and hands back what the host gave. Nothing fetched is
 stored, cached or logged: the text goes into that one reply and nowhere else.
 
-Which host: one in `hosts:` with a `fetch_url` whose `max_grant` covers the source; the
-deepest covering place wins and config order breaks a tie. A host with no `max_grant`
-(an open host that wrote none) is never asked: nothing says which sources are its. No
-such host is NO_HOST: the original is not reachable from here.
+Which host: the one declared as serving the source (`provides:` in `hosts:`,
+core/scope.Hosts.provider_for — the deepest declared place covering it; two hosts at the
+same depth name neither), with a `fetch_url`. What a host may touch (`max_grant`) never
+decides it. No declared provider is NO_HOST: the original cannot be fetched from here, and
+the memory's own body stands in as for UNAVAILABLE.
 
-The request: POST `fetch_url`, a JSON body, the host's own credential (the value of its
-`token_env`) as `Authorization: Bearer <credential>`.
+The request: POST `fetch_url`, a JSON body, Loci's own credential toward that host (the
+value of its `fetch_token_env`, never the host's inbound credential) as
+`Authorization: Bearer <credential>`. A provider with no such credential is not asked
+(UNAVAILABLE, `no_token`).
 
     {"v": 1,
      "source":    {"system": "lento", "instance": "home", "container": "private:U",
@@ -55,25 +58,49 @@ answer):
       text            its text (with a span: the fragment's own text)
       cut             optional; true = this line's text stops short
       missing         in place of text: withdrawn · deleted · out_of_scope · unavailable
+                      (for now) · not_found (the host has no record of it — not the same
+                      word as deleted)
     truncated_after   given only: null, or the id of the last line sent when the lines
                       after it were left out (it is then the last line listed)
 
 How an answer is taken:
 
-    given, nothing missing for good             GIVEN; lines missing for now are marked
+    given, nothing missing                      GIVEN
+    given, some lines unavailable / not_found,  GIVEN and `partial`: shown as partial, the
+      or cut, or truncated                      missing lines marked
+    given, every line unavailable / not_found   UNAVAILABLE
+    unavailable · a timeout · no connection     UNAVAILABLE
     given, a line withdrawn / deleted /         NOT_ALLOWED for the whole source: a run is
       out_of_scope                              as bad as its worst line
-    given, every line missing for now           UNAVAILABLE
-    unavailable · no answer · a timeout · a     UNAVAILABLE: the memory itself is still
-      status other than 200 · a redirect · an   allowed, so its own body stands in
-      answer too big or not of this shape
-    not_allowed · a status or missing word      NOT_ALLOWED: the memory is fed neither its
-      this version does not know                body nor its summary in this reply
+    not_allowed                                 NOT_ALLOWED
+    HTTP 401 / 403 (the host refused Loci)      NOT_ALLOWED
+    HTTP 410 (gone)                             NOT_ALLOWED, taken as the host's word that
+                                                the source is deleted
+    any other status than 200 · a redirect ·    NOT_ALLOWED: an answer Loci cannot read lets
+      an answer too big, not of this shape, or  nothing through
+      with a word this version does not know
 
-A source the registry holds as withdrawn or deleted is NOT_ALLOWED without asking. A
-state the host reveals that Loci did not know (not_allowed for a source held active)
-blocks the memory in this reply only: a source's state changes only by the host's ordered
-change notices (POST /api/v2/source/change), never by a fetch.
+NOT_ALLOWED feeds the memory neither its body nor its summary in this reply. UNAVAILABLE,
+NO_HOST and a partial GIVEN let the memory's own body stand in — only when, checked again
+after the answer came back, the request may still read the memory and nothing it rests on
+is withdrawn, deleted or held (the caller's check, tools/recall/original.py); they never
+override a withdrawal.
+
+What a NOT_ALLOWED does to state, by why:
+    out_of_scope (or a refusal, an unreadable answer)  this call only; nothing is recorded
+    withdrawn / deleted / HTTP 410                     `holds` names each source (or line
+                                                       of a run) the host said is gone: the
+                                                       caller holds it (core/_source_change.
+                                                       hold), so breath, recall, cards and
+                                                       dreams stop using what rests on it
+                                                       until the ordered change settles it
+The registry's state itself changes only by the host's ordered change notices (POST
+/api/v2/source/change), never by a fetch.
+
+Before asking: a source the registry holds as withdrawn, deleted or held is NOT_ALLOWED
+without asking, and so is a run whose lines are not registered (`order_unknown`). After
+the answer comes back the registry is read again, so a withdrawal that landed while the
+fetch was in flight wins over whatever the host gave.
 
 Limits (`source_fetch:` in config, `Settings`): one fetch gets `timeout_seconds` in all;
 an answer over `max_bytes` is refused unread; text past `max_chars` is cut here and said
@@ -81,9 +108,9 @@ so; a reply asks at most `max_sources` of one memory's sources. Redirects are no
 followed and no proxy from the environment is used, so the text reaches Loci and nothing
 else.
 
-Exports: GIVEN · UNAVAILABLE · NOT_ALLOWED · NO_HOST · GONE_WORDS · Settings ·
-         settings_from · Line · Answer · host_for · scope_wire · build_request ·
-         parse_answer · fetch
+Exports: GIVEN · UNAVAILABLE · NOT_ALLOWED · NO_HOST · GONE_WORDS · MISSING_NOW ·
+         HOLD_WORDS · Settings · settings_from · Line · Answer · host_for · scope_wire ·
+         build_request · parse_answer · fetch
 ========================================
 """
 
@@ -104,16 +131,22 @@ logger = logging.getLogger("loci_brain.originals")
 GIVEN, UNAVAILABLE, NOT_ALLOWED, NO_HOST = "given", "unavailable", "not_allowed", "no_host"
 VERSION = 1
 GONE_WORDS = ("withdrawn", "deleted", "out_of_scope")
-MISSING_NOW = "unavailable"
+# A line missing for now, or one the host has no record of: neither blocks the source.
+MISSING_NOW = ("unavailable", "not_found")
+NOT_FOUND = "not_found"
+# The host's words that a source is gone for good: the caller holds it.
+HOLD_WORDS = ("withdrawn", "deleted")
 _ANSWER_KEYS = frozenset({"v", "status", "reason", "lines", "truncated_after"})
 _LINE_KEYS = frozenset({"id", "revision", "text", "cut", "missing"})
 
 # Why an answer is UNAVAILABLE (for the reply's wording and the log; never the text).
-UNREACHABLE, TIMEOUT, REDIRECT, TOO_BIG, MALFORMED, HOST_SAYS, NO_TOKEN, ALL_MISSING = (
-    "unreachable", "timeout", "redirect", "too_big", "malformed", "host_says", "no_token",
-    "all_lines_missing")
-# Why an answer is NOT_ALLOWED when the host's word is not one of GONE_WORDS.
-UNKNOWN_WORD, REQUEST_REFUSED = "unknown_word", "request_refused"
+UNREACHABLE, TIMEOUT, HOST_SAYS, NO_TOKEN, ALL_MISSING = (
+    "unreachable", "timeout", "host_says", "no_token", "all_lines_missing")
+# Why an answer is NOT_ALLOWED when the host's word is not one of GONE_WORDS: an answer
+# Loci cannot read, a refusal, or a word this version does not know.
+REDIRECT, TOO_BIG, MALFORMED, UNKNOWN_WORD, REQUEST_REFUSED, ORDER_UNKNOWN = (
+    "redirect", "too_big", "malformed", "unknown_word", "request_refused", "order_unknown")
+GONE_HTTP = "http_410"
 
 
 @dataclass(frozen=True)
@@ -165,9 +198,12 @@ class Answer:
     lines             GIVEN: the lines, in the host's order
     truncated_after   GIVEN: the last line sent when later ones were left out
     cut_here          GIVEN: Loci cut the text at max_chars
-    reason            NOT_ALLOWED: one of GONE_WORDS, UNKNOWN_WORD, REQUEST_REFUSED, or ""
-                      (the host gave none)
-    why               UNAVAILABLE: what went wrong (UNREACHABLE, TIMEOUT, …, or http_<code>)
+    reason            NOT_ALLOWED: one of GONE_WORDS, a registry state, REDIRECT, TOO_BIG,
+                      MALFORMED, UNKNOWN_WORD, REQUEST_REFUSED, ORDER_UNKNOWN or http_<code>;
+                      "" when the host gave none
+    why               UNAVAILABLE: what went wrong (UNREACHABLE, TIMEOUT, HOST_SAYS, …)
+    holds             [(identity string, withdrawn | deleted)]: what the host said is gone
+                      that the caller has to hold (core/_source_change.hold)
     """
     outcome: str
     source: str = ""
@@ -177,24 +213,22 @@ class Answer:
     cut_here: bool = False
     reason: str = ""
     why: str = ""
+    holds: tuple = ()
 
-
-def _depth(place: _src.Place) -> int:
-    return sum(1 for level in _src.PLACE_KEYS if getattr(place, level) is not None)
+    @property
+    def partial(self) -> bool:
+        """GIVEN, but not all of it: a line missing, cut, or the lines after one left out."""
+        return self.outcome == GIVEN and (
+            self.cut_here or self.truncated_after is not None
+            or any(ln.missing is not None or ln.cut for ln in self.lines))
 
 
 def host_for(hosts, identity) -> Optional[object]:
-    """The host to ask for this source: one with a `fetch_url` whose `max_grant` covers
-    it, the deepest covering place first, config order on a tie. None = none serves it."""
+    """The host to ask for this source: the one declared as serving it, with a
+    `fetch_url` (core/scope.Hosts.provider_for). None = none is declared."""
     sid = identity if isinstance(identity, _src.SourceId) else _src.record_id(identity)
-    best, best_depth = None, -1
-    for host in getattr(hosts, "hosts", {}).values():
-        if not host.fetch_url or not host.max_grant:
-            continue
-        for place in host.max_grant:
-            if _src.places_cover((place,), sid) and _depth(place) > best_depth:
-                best, best_depth = host, _depth(place)
-    return best
+    provider_for = getattr(hosts, "provider_for", None)
+    return provider_for(sid) if callable(provider_for) else None
 
 
 def scope_wire(request) -> Optional[dict]:
@@ -232,7 +266,7 @@ def build_request(record: dict, request, settings: Settings) -> dict:
 
 def _malformed(note: str) -> Answer:
     logger.info("[originals] answer not of the agreed shape: %s", note)
-    return Answer(UNAVAILABLE, why=MALFORMED)
+    return Answer(NOT_ALLOWED, reason=MALFORMED)
 
 
 def _optional_text(value) -> bool:
@@ -258,7 +292,10 @@ def parse_answer(raw: bytes, identity, settings: Settings) -> Answer:
         reason = data.get("reason")
         if reason is None:
             return Answer(NOT_ALLOWED)
-        return Answer(NOT_ALLOWED, reason=reason if reason in GONE_WORDS else UNKNOWN_WORD)
+        if reason not in GONE_WORDS:
+            return Answer(NOT_ALLOWED, reason=UNKNOWN_WORD)
+        holds = ((sid.to_string(), reason),) if reason in HOLD_WORDS else ()
+        return Answer(NOT_ALLOWED, reason=reason, holds=holds)
     if status != GIVEN:
         return Answer(NOT_ALLOWED, reason=UNKNOWN_WORD)
     rows = data.get("lines")
@@ -279,7 +316,7 @@ def parse_answer(raw: bytes, identity, settings: Settings) -> Answer:
         cut = row.get("cut", False)
         if not isinstance(cut, bool):
             return _malformed("cut is true or false")
-        if missing is not None and missing not in (*GONE_WORDS, MISSING_NOW):
+        if missing is not None and missing not in (*GONE_WORDS, *MISSING_NOW):
             return Answer(NOT_ALLOWED, reason=UNKNOWN_WORD)
         lines.append(Line(id=lid, revision=row.get("revision"), text=text, cut=cut,
                           missing=missing))
@@ -295,11 +332,14 @@ def parse_answer(raw: bytes, identity, settings: Settings) -> Answer:
             return _malformed("an untruncated run ends at its last line")
     elif after != ids[-1]:
         return _malformed("truncated_after is not the last line listed")
+    holds = tuple((sid.piece(ln.id).to_string() if sid.through else sid.to_string(),
+                   ln.missing) for ln in lines if ln.missing in HOLD_WORDS)
     gone = next((ln.missing for ln in lines if ln.missing in GONE_WORDS), None)
     if gone:
-        return Answer(NOT_ALLOWED, reason=gone)
+        return Answer(NOT_ALLOWED, reason=gone, holds=holds)
     if all(ln.text is None for ln in lines):
-        return Answer(UNAVAILABLE, why=ALL_MISSING)
+        return Answer(UNAVAILABLE, why=(NOT_FOUND if all(ln.missing == NOT_FOUND for ln in lines)
+                                        else ALL_MISSING))
     return _within_budget(lines, after, settings.max_chars)
 
 
@@ -319,12 +359,23 @@ def _within_budget(lines: list[Line], after: Optional[str], budget: int) -> Answ
     return Answer(GIVEN, lines=tuple(kept), truncated_after=after)
 
 
+def _by_status(status: int, sid) -> Answer:
+    """An HTTP status other than 200. 401 / 403: the host refused Loci. 410: gone — the
+    host's word that the source is deleted. Anything else, a redirect included, is an
+    answer Loci cannot read. None of them lets the memory's body stand in."""
+    if status == 410:
+        return Answer(NOT_ALLOWED, reason=GONE_HTTP, holds=((sid.to_string(), "deleted"),))
+    if 300 <= status < 400:
+        return Answer(NOT_ALLOWED, reason=REDIRECT)
+    return Answer(NOT_ALLOWED, reason=f"http_{status}")
+
+
 class _TooBig(Exception):
     pass
 
 
 async def _post(host, body: dict, settings: Settings, transport) -> tuple[int, bytes]:
-    headers = {"Authorization": f"Bearer {host.token}", "Accept": "application/json"}
+    headers = {"Authorization": f"Bearer {host.fetch_token}", "Accept": "application/json"}
     async with httpx.AsyncClient(timeout=httpx.Timeout(settings.timeout_seconds),
                                  follow_redirects=False, trust_env=False,
                                  transport=transport) as client:
@@ -342,23 +393,34 @@ async def _post(host, body: dict, settings: Settings, transport) -> tuple[int, b
             return 200, bytes(got)
 
 
+def _blocked_by_registry(registry, sid) -> str:
+    """The registry's reason not to show this source now: withdrawn, deleted, held, or
+    order_unknown for a run whose lines are not registered; "" when there is none."""
+    if registry is None:
+        return ""
+    if not registry.order_known(sid):
+        return ORDER_UNKNOWN
+    state = registry.state_of(sid)
+    return state if state in (_src.WITHDRAWN, _src.DELETED, _src.HELD) else ""
+
+
 async def fetch(record: dict, *, hosts, request=None, settings: Settings = Settings(),
                 registry=None, transport: Optional[httpx.AsyncBaseTransport] = None) -> Answer:
     """Ask the host serving this source record for its original. `request` is the call's
     resolved RequestScope (None outside a request), `registry` the source registry,
-    `transport` an httpx transport for tests. Never raises for anything the host does."""
+    `transport` an httpx transport for tests. Never raises for anything the host does, and
+    writes nothing: what the host said is gone comes back in `holds` for the caller."""
     sid = _src.record_id(record)
     label = _src.record_string(record)
     if request is not None and getattr(request, "refused", False):
         return Answer(NOT_ALLOWED, source=label, reason=REQUEST_REFUSED)
-    if registry is not None:
-        state = registry.state_of(sid)
-        if state in (_src.WITHDRAWN, _src.DELETED):
-            return Answer(NOT_ALLOWED, source=label, reason=state)
+    blocked = _blocked_by_registry(registry, sid)
+    if blocked:
+        return Answer(NOT_ALLOWED, source=label, reason=blocked)
     host = host_for(hosts, sid)
     if host is None:
         return Answer(NO_HOST, source=label)
-    if not host.token:
+    if not host.fetch_token:
         return Answer(UNAVAILABLE, source=label, host=host.name, why=NO_TOKEN)
     body = build_request(record, request, settings)
     status, raw = 0, b""
@@ -368,16 +430,15 @@ async def fetch(record: dict, *, hosts, request=None, settings: Settings = Setti
     except (asyncio.TimeoutError, httpx.TimeoutException):
         answer = Answer(UNAVAILABLE, why=TIMEOUT)
     except _TooBig:
-        answer = Answer(UNAVAILABLE, why=TOO_BIG)
+        answer = Answer(NOT_ALLOWED, reason=TOO_BIG)
     except httpx.HTTPError:
         answer = Answer(UNAVAILABLE, why=UNREACHABLE)
     else:
-        if 300 <= status < 400:
-            answer = Answer(UNAVAILABLE, why=REDIRECT)
-        elif status != 200:
-            answer = Answer(UNAVAILABLE, why=f"http_{status}")
-        else:
-            answer = parse_answer(raw, sid, settings)
+        answer = parse_answer(raw, sid, settings) if status == 200 else _by_status(status, sid)
+    # A withdrawal that landed while the host was answering wins over what it gave.
+    blocked = _blocked_by_registry(registry, sid)
+    if blocked and answer.outcome != NOT_ALLOWED:
+        answer = Answer(NOT_ALLOWED, reason=blocked)
     answer = replace(answer, source=label, host=host.name)
     # Identity, outcome and sizes only: the text itself is never logged.
     logger.info("[originals] %s from %s: %s%s (%d bytes)", label, host.name, answer.outcome,

@@ -31,21 +31,30 @@ What puts a memory in the block:
              confirmed, regrown or archived has been dealt with, and its children come up
              next. Looking at a grandchild before its parent is settled would be judging it
              on ground that may still move.
-  sources    a source the registry (core/_sources.SourceRegistry) now reports withdrawn or
-             deleted (a run: any line inside it), or revised past the revision this memory
-             recorded (and not confirmed at that revision). A run records one revision and
-             one fingerprint for all its lines, which say nothing of one line's version, so
-             a line inside it counts as revised when the host's latest `revised` for that
-             line was applied at or after the memory was written (`created`); it is named
-             by the line's identity and confirmed per line and revision, so a later
-             revision of the same or another line comes up again.
+  sources    a source the memory rests on (its `sources` and what its quoted lines name,
+             core/_sources.basis_records) that the registry now reports withdrawn, deleted
+             or held (a run: any line inside it), or revised past the revision this memory
+             adopted (and not confirmed at that revision). A run's own revision names the
+             host's watermark for the delivery it was formed from, and the registration
+             under that watermark says which revision of each line was adopted
+             (core/_sources.SourceRegistry.run_revisions): a line counts as revised when
+             the host's newest announced revision of it is not the adopted one, or when the
+             adopted one is unknown and the host has announced any — when the memory was
+             written proves nothing. It is named by the line's identity and confirmed per
+             line and revision, so a later revision of the same or another line comes up
+             again.
   gone       an open `{kind: source_gone, of, by, at, change, cleared?}` record: written
              when the host's withdrawn / deleted change is applied (core/_source_change.py)
-             on every memory naming the source — `cleared: true` there, its body was
+             on every memory resting on the source — `cleared: true` there, its body was
              cleared — and on everything derived from those, which stays readable to
              nobody until it is rewritten or put away. A memory whose body was cleared
              keeps its record even if the source is restored later (the text does not come
              back); a derived one's record is closed by the restore.
+  held       an open `{kind: source_held, of, by, at, change}` record: a host serving the
+             original said the source is withdrawn or deleted before any ordered change did
+             (core/_source_change.hold). Read like `gone` — nothing of the memory is used —
+             until the ordered change settles it: withdrawn / deleted turn it into `gone`,
+             restored closes it. Nothing is cleared on a host's unordered word.
 
 🔴 The body of a memory standing on a withdrawn or deleted source is **never handed back**
    here: only its id, each failed basis and its state, and the sources that are still
@@ -58,7 +67,7 @@ Which memories the block may show at all is the gate's: the `edited` road for pa
 corrections, the `invalidation` road for the rest (core/visibility.py).
 
 Exports: FIELD · OVERTURN · SOURCE_REVISED · EDITED · CONFIRMED · CONFIRMED_AT ·
-         SOURCE_GONE · CLEARED · records · is_open · open_records · gone_records ·
+         SOURCE_GONE · SOURCE_HELD · CLEARED · HELD_WORD · records · is_open · open_records · gone_records ·
          edit_confirmed · SourceFindings · source_findings · waiting_on_overturn ·
          state_word · confirm · block
 ========================================
@@ -67,7 +76,6 @@ Exports: FIELD · OVERTURN · SOURCE_REVISED · EDITED · CONFIRMED · CONFIRMED
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 
 from utils import now_iso, read_from_ids
 
@@ -81,9 +89,12 @@ EDITED = "edited"
 CONFIRMED = "confirmed"          # the one value trace's `invalidation=` takes
 CONFIRMED_AT = "confirmed_at"
 SOURCE_GONE = "source_gone"
+SOURCE_HELD = "source_held"
 CLEARED = "cleared"              # a source_gone record's word once the body was cleared
+HELD_WORD = "held"               # a source_held record's word, and a held source's
 
-_STATE_WORD = {_src.WITHDRAWN: "已撤回", _src.DELETED: "已删除", CLEARED: "正文已清"}
+_STATE_WORD = {_src.WITHDRAWN: "已撤回", _src.DELETED: "已删除", CLEARED: "正文已清",
+               HELD_WORD: "宿主说已撤回或删除，等变化通知确认"}
 
 
 def records(meta) -> list[dict]:
@@ -146,40 +157,17 @@ def _newer_revision(rec: dict, registry) -> str:
     return ""
 
 
-def _stamp(value):
-    """A stored stamp as an aware UTC datetime (naive stamps are UTC), or None."""
-    try:
-        dt = datetime.fromisoformat(str(value or "").strip())
-    except ValueError:
-        return None
-    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-
-
-def _run_revisions(meta: dict, rec: dict, registry) -> list[tuple[str, str]]:
-    """[(line identity, its newer revision)] for the lines a run holds (the host's order
-    when known, else its first and last line): each line whose latest announced revision
-    was applied at or after the memory was written. A memory with no readable `created`
-    counts every announced revision."""
-    since = _stamp((meta or {}).get("created"))
-    out = []
-    for line in registry.lines_of(_src.record_id(rec)):
-        revisions = registry.revisions_of(line)
-        if not revisions:
-            continue
-        latest = revisions[-1]
-        at = _stamp(latest.get("recorded_at"))
-        if since is not None and (at is None or at < since):
-            continue
-        newer = str(latest.get("revision") or latest.get("fingerprint") or "")
-        if newer:
-            out.append((str(line), newer))
-    return out
+def _run_revisions(rec: dict, registry) -> list[tuple[str, str]]:
+    """[(line identity, its newer revision)] for the lines of a run whose newest announced
+    revision is not the one the record adopted (core/_sources.SourceRegistry.run_revisions)."""
+    return [(str(line), newer) for line, newer, _mine in registry.run_revisions(rec)]
 
 
 def gone_records(meta) -> list[dict]:
-    """The open `source_gone` records: a source behind this memory was withdrawn or
-    deleted, written on it when the host's change was applied."""
-    return open_records(meta, SOURCE_GONE)
+    """The open `source_gone` and `source_held` records: a source behind this memory was
+    withdrawn or deleted (written when the host's change was applied), or a host serving
+    its original said so and the ordered change has not settled it yet."""
+    return [r for r in open_records(meta) if r.get("kind") in (SOURCE_GONE, SOURCE_HELD)]
 
 
 def source_findings(meta, registry) -> SourceFindings:
@@ -190,26 +178,27 @@ def source_findings(meta, registry) -> SourceFindings:
     out = SourceFindings()
     gone = gone_records(meta)
     for r in gone:
-        state = str(r.get("by") or "")
-        out.failed.append((str(r.get("of") or ""), CLEARED if r.get("cleared") else state))
+        state = (CLEARED if r.get("cleared") else
+                 HELD_WORD if r.get("kind") == SOURCE_HELD else str(r.get("by") or ""))
+        out.failed.append((str(r.get("of") or ""), state))
     failed_keys = {str(r.get("of") or "") for r in gone}
     if registry is None:
         return out
-    for raw in (meta or {}).get(_src.SOURCES_FIELD) or []:
+    for raw in _src.basis_records(meta):
         try:
             [rec] = _src.normalize_sources([raw])
         except (_src.SourceRecordError, ValueError):
             continue
         text = _src.record_string(rec)
         state = registry.read_state(rec)
-        if state in (_src.WITHDRAWN, _src.DELETED):
+        if state in (_src.WITHDRAWN, _src.DELETED, _src.HELD):
             if str(_src.record_id(rec)) not in failed_keys:
-                out.failed.append((text, state))
+                out.failed.append((text, HELD_WORD if state == _src.HELD else state))
             continue
         out.remaining.append(text)
         identity = str(_src.record_id(rec))
         if _src.record_id(rec).through:
-            changed = _run_revisions(meta, rec, registry)
+            changed = _run_revisions(rec, registry)
         else:
             newer = _newer_revision(rec, registry)
             changed = [(identity, newer)] if newer else []

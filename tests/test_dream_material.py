@@ -41,6 +41,7 @@ from core import _originals as O
 from core import _source_change as SC
 from core import _sources as S
 from core import _when as W
+from core import visibility as V
 from core.bucket_manager import BucketManager
 from core.scope import Host
 from tools import _runtime as rt
@@ -482,3 +483,33 @@ def test_a_nightmare_is_one_mark_and_nothing_more(store, monkeypatch):
     rec = run(D.weave(force=True))
     assert rec["nightmare"] is True
     assert run(D.current_dream())["nightmare"] is True
+
+
+def test_a_host_saying_withdrawn_holds_the_quoted_memory_for_every_road(store, monkeypatch):
+    # The other team's 10-02 ruling: not refused just this once while the rest keeps
+    # feeding it — held until the ordered change settles it; nothing written as its state.
+    run(heavy_want(store))
+    quoted = _quoted_memory(store)
+    said = (O.NOT_ALLOWED, {"reason": "withdrawn", "holds": ((M_STR, "withdrawn"),)})
+    monkeypatch.setattr(O, "fetch", Hosts({M_STR: said}))
+    got, _fed = run(D._quoted(D.quote_pool(run(records()), W.now()), D.dream_config()))
+    assert got == []
+    assert store.sources.state_of(M_STR) == S.HELD and store.sources.describe(M_STR) is None
+    meta = run(store.get_including_archive(quoted))["metadata"]
+    assert V.source_gone(meta), "held on every road, not just this dream"
+    assert quoted not in {x.id for x in D.quote_pool(run(records()), W.now())}
+
+
+def test_an_unavailable_original_is_not_fed_once_the_memory_is_held_meanwhile(store,
+                                                                            monkeypatch):
+    run(heavy_want(store))
+    quoted = _quoted_memory(store)
+
+    class Meanwhile(Hosts):
+        async def __call__(self, record, **kw):
+            from core import _source_change as SCH
+            await SCH.hold(store, M_STR, "deleted", "home")
+            return await super().__call__(record, **kw)
+    monkeypatch.setattr(O, "fetch", Meanwhile({M_STR: (O.UNAVAILABLE, {"why": O.TIMEOUT})}))
+    got, _fed = run(D._quoted(D.quote_pool(run(records()), W.now()), D.dream_config()))
+    assert quoted not in [x.id for x in got]

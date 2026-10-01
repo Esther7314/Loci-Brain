@@ -283,7 +283,7 @@ def side_model(dehydrator, config: Optional[dict]) -> ModelCall:
 # ============================================================
 
 _BODY_KEYS = {"source", "day", "lines", "revision", "fingerprint_by"}
-_LINE_KEYS = {"id", "text", "at", "speaker"}
+_LINE_KEYS = {"id", "text", "at", "speaker", "revision"}
 _SOURCE_KEYS = ("system", "instance", "container")
 _DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -339,7 +339,8 @@ def read_batch(body, *, max_lines: int = DEFAULT_MAX_LINES_PER_BATCH) -> dict:
         raise BatchError(f"day must be a calendar day YYYY-MM-DD, got {day!r}")
     lines = body.get("lines")
     if not isinstance(lines, list) or not lines:
-        raise BatchError("lines must be a non-empty list of {id, text, at?, speaker?}")
+        raise BatchError("lines must be a non-empty list of {id, text, at?, speaker?, "
+                         "revision?}")
     if len(lines) > max_lines:
         raise BatchError(f"{len(lines)} lines is over the {max_lines}-line cap of one "
                          "batch; send the day in parts")
@@ -351,7 +352,7 @@ def read_batch(body, *, max_lines: int = DEFAULT_MAX_LINES_PER_BATCH) -> dict:
     for i, line in enumerate(lines):
         where = f"lines[{i}]"
         if not isinstance(line, dict):
-            raise BatchError(f"{where} must be an object {{id, text, at?, speaker?}}")
+            raise BatchError(f"{where} must be an object {{id, text, at?, speaker?, revision?}}")
         extra = sorted(set(map(str, line)) - _LINE_KEYS)
         if extra:
             raise BatchError(f"{where} has unknown keys {extra}")
@@ -366,11 +367,17 @@ def read_batch(body, *, max_lines: int = DEFAULT_MAX_LINES_PER_BATCH) -> dict:
         if record["id"] in seen:
             raise BatchError(f"{where}: id {record['id']} appears twice in the batch")
         seen.add(record["id"])
-        out_lines.append({"id": record["id"], "text": text,
-                          "fingerprint": record["fingerprint"],
-                          "at": _short_text(line.get("at"), "at", _AT_MAX, where),
-                          "speaker": _short_text(line.get("speaker"), "speaker",
-                                                 _SPEAKER_MAX, where)})
+        row = {"id": record["id"], "text": text, "fingerprint": record["fingerprint"],
+               "at": _short_text(line.get("at"), "at", _AT_MAX, where),
+               "speaker": _short_text(line.get("speaker"), "speaker", _SPEAKER_MAX, where)}
+        if "revision" in line:
+            try:
+                [rev] = _src.normalize_sources({**template, "id": record["id"],
+                                                "revision": line.get("revision")})
+            except _src.SourceRecordError as e:
+                raise BatchError(f"{where}.revision: {e}") from e
+            row["revision"] = rev["revision"]
+        out_lines.append(row)
     norm_source = {k: record[k] for k in _SOURCE_KEYS}
     return {"source": norm_source, "day": day, "revision": record["revision"],
             "lines": out_lines,
@@ -432,6 +439,14 @@ async def take_batch(store, body, *, model: ModelCall,
     Raises BatchError (malformed, nothing is called) or SlicerError (the side model
     failed; nothing is written). The raw text goes no further than the side model."""
     batch = read_batch(body, max_lines=max_lines)
+    ids = [ln["id"] for ln in batch["lines"]]
+    revisions = ({ln["id"]: ln["revision"] for ln in batch["lines"] if "revision" in ln}
+                 or None)
+    registry = getattr(store, "sources", None)
+    if registry is not None:
+        why = registry.order_conflict(batch["source"], ids, batch["revision"], revisions)
+        if why:
+            raise BatchError(f"the lines contradict what is registered: {why}")
     slices = await slice_lines(batch["lines"], model=model)
     guesses = await guess_covering(store, [s.gist for s in slices], batch["day"],
                                    threshold=threshold)
@@ -443,11 +458,11 @@ async def take_batch(store, body, *, model: ModelCall,
                 for s, g in zip(slices, guesses)],
         model=str(getattr(model, "model_name", "") or ""))
     # The host's order of these lines outlives the batch: it is how a run cut from them
-    # is known to hold the lines between its ends (core/_sources.SourceRegistry.lines_of).
-    registry = getattr(store, "sources", None)
+    # is known to hold the lines between its ends (core/_sources.SourceRegistry.lines_of),
+    # and with the batch's revision as watermark, which revision of each line was read.
     if registry is not None:
-        registry.record_order(batch["source"], [ln["id"] for ln in batch["lines"]],
-                              batch_id=batch["batch_id"])
+        registry.record_order(batch["source"], ids, batch_id=batch["batch_id"],
+                              revision=batch["revision"], revisions=revisions)
     covered = sum(s.count for s in slices)
     return {"batch_id": row["batch_id"], "day": row["day"], "source": dict(row["source"]),
             "slices": [store.slices.get(s["slice_id"], public=True) for s in row["slices"]],

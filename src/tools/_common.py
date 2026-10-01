@@ -251,14 +251,15 @@ _FULL_ID_RE = re.compile(r"[0-9a-f]{12}|feel_\d{12}_V\d{3}(_\d+)?")   # what a f
 _VIEW: contextvars.ContextVar = contextvars.ContextVar("loci_scope_view", default=None)
 
 
-async def read_scope():
+async def read_scope(fresh: bool = False):
     """This call's `ScopeView`, or None when nothing is filtered (an open host that sent
-    no scope, no request at all)."""
+    no scope, no request at all). `fresh` reads the library and the registry again instead
+    of the view this call already made (a check after waiting on something outside)."""
     req = _scope.current_request()
     if req is None or req.whole_library:
         return None
     cached = _VIEW.get()
-    if cached is not None and cached[0] is req:
+    if cached is not None and cached[0] is req and not fresh:
         return cached[1]
     metas: dict = {}
     if not req.refused:

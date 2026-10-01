@@ -478,3 +478,17 @@ def test_the_hosts_order_of_a_batch_outlives_its_slices(store, tmp_path):
     fresh = BucketManager({"buckets_dir": str(tmp_path)})
     assert fresh.sources.members_of(run_) == IDS[1:6], "kept on disk, ids only"
     assert "Slept" not in (tmp_path / "_sources" / "line_orders.jsonl").read_text(encoding="utf-8")
+
+
+def test_a_batch_registers_each_lines_revision_under_its_watermark(store):
+    # The other team's 10-02 ruling: what was delivered at which revision is registered
+    # with the order, so a memory cut from it is checked against what the host revises.
+    b = body(revision="w-1")
+    b["lines"] = [{**ln, "revision": "e1"} for ln in b["lines"]]
+    take(store, stub(THREE), b=b)
+    run_rec = {**SOURCE, "id": IDS[0], "through": IDS[3], "revision": "w-1"}
+    assert store.sources.adopted_revisions(run_rec) == {i: "e1" for i in IDS[:4]}
+    clash = body(day="2026-01-01", revision="w-1")
+    clash["lines"] = [{**ln, "revision": "e2"} for ln in clash["lines"]]
+    with pytest.raises(SL.BatchError):
+        take(store, stub(THREE), b=clash)

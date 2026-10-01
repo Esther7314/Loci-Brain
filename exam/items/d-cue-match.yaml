@@ -163,7 +163,7 @@
   title: "a withdrawn source: never its text on a card; what stood on it gets a review card"
   start: "2026-10-01T10:00:00+08:00"
   hosts:
-    legacy: {token: t-life, scope_mode: open, may_restore: true}
+    legacy: {token: t-life, scope_mode: open, may_restore: true, authority: [{system: lento}]}
   setup:
     - id: dc0001000000
       at: "2026-09-25T10:00:00+08:00"
@@ -209,3 +209,48 @@
     - check: {segment: think, desc: "it shows the original words", output: card, contains: 原话「今晚」}
     - check: {segment: think, desc: "and says the hour is a reference, not agreed", all_of: [{output: card, contains: 参考时间}, {output: card, contains: 不是说好的点}, {output: card, lacks: 约的是}]}
     - check: {segment: think, desc: "past the reference hour it is not overdue", output: card, lacks: 过了}
+
+# The other team's 10-02 ruling: a retry of the same turn gets the same cards back — no
+# fresh pick merged in — each checked again, so one whose entry was since withdrawn is
+# dropped.
+- id: D14
+  title: "a turn asked again: the same cards, less what is no longer good"
+  start: "2026-10-02T10:00:00+08:00"
+  hosts:
+    legacy: {token: t-life, scope_mode: open, may_restore: true, authority: [{system: lento}]}
+  setup:
+    - id: de0001000000
+      at: "2026-09-25T10:00:00+08:00"
+      room: EVENT/SELF
+      text: "考完试一起去吃那家甜品。"
+      fields: {direction_of_fit: telic, bound: [AI],
+               cue: {condition: "考完试", phrasings: ["考完"]}}
+    - id: de0002000000
+      at: "2026-09-26T10:00:00+08:00"
+      room: EVENT/WORLD
+      text: "小周说周末想去海边看日出。"
+      sources: [{system: lento, instance: home, container: "private:U", id: m_20260926_0001}]
+      fields: {direction_of_fit: telic, cue: {condition: "看日出", phrasings: ["海边"]}}
+    - id: de0003000000
+      at: "2026-09-27T10:00:00+08:00"
+      room: EVENT/WORLD
+      text: "还欠小林一本书。"
+      fields: {direction_of_fit: telic, cue: {condition: "还书", phrasings: ["那本书"]}}
+  steps:
+    - cue: {text: "考完了，周末去海边吧", window: w1, turn: t1}
+      host: t-life
+      as: first
+    - check: {segment: think, desc: "the first answer", all_of: [{output: first, contains: "(de0001)"}, {output: first, contains: "(de0002)"}]}
+    - source_change: {change_id: c-d14-1, host_seq: 1, change: withdrawn,
+                      source: "lento:home/private:U#m_20260926_0001"}
+      host: t-life
+    - cue: {text: "考完了，周末去海边吧，顺便还那本书", window: w1, turn: t1}
+      host: t-life
+      as: retry
+    - check: {segment: think, desc: "the retry keeps the card still good", output: retry, contains: "(de0001)"}
+    - check: {segment: source, desc: "drops the one whose source was withdrawn", all_of: [{output: retry, lacks: "(de0002)"}, {output: retry, lacks: 日出}]}
+    - check: {segment: think, desc: "and picks nothing new", output: retry, lacks: "(de0003)"}
+    - cue_delivered: {window: w1, turn: t1}
+      host: t-life
+      as: placed
+    - check: {segment: think, desc: "by turn: only the retry's answer counts as placed", all_of: [{output: placed, contains: "de0001000000@"}, {output: placed, lacks: "de0002000000@"}]}

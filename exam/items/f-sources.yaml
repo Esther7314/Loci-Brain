@@ -32,7 +32,7 @@
   title: "a deleted source stops its descendants on every road"
   start: "2026-10-01T10:00:00+08:00"
   hosts:
-    legacy: {token: t-life, scope_mode: open, may_restore: true}
+    legacy: {token: t-life, scope_mode: open, may_restore: true, authority: [{system: lento}]}
   setup:
     - id: f20001000000
       at: "2026-09-30T20:00:00+08:00"
@@ -83,7 +83,7 @@
   title: "a descendant of two sources is rewritten from the one left"
   start: "2026-10-01T10:00:00+08:00"
   hosts:
-    legacy: {token: t-life, scope_mode: open, may_restore: true}
+    legacy: {token: t-life, scope_mode: open, may_restore: true, authority: [{system: lento}]}
   setup:
     - id: f30001000000
       at: "2026-09-30T20:00:00+08:00"
@@ -125,7 +125,7 @@
   title: "a withdrawn source is also cleared from Loci's own derived stores"
   start: "2026-10-01T10:00:00+08:00"
   hosts:
-    legacy: {token: t-life, scope_mode: open, may_restore: true}
+    legacy: {token: t-life, scope_mode: open, may_restore: true, authority: [{system: lento}]}
   setup:
     - id: f40001000000
       at: "2026-09-29T20:00:00+08:00"
@@ -259,3 +259,41 @@
         items: [{room: EVENT/WORLD, text: "又记一遍睡觉的事。", v: 0.5, a: 0.3}]
       as: again
     - check: {segment: done, desc: "a handled slice is refused by name", output: again, contains: "写成了 $new_id"}
+
+# The other team's 10-02 counter-example: B's newer withdrawal arrives first, A's older
+# restore arrives later and must not win. One order per source — its declared change
+# authority's — and another host's change for it is refused (they relay through the
+# authority).
+- id: F7
+  title: "one order per source: an older change arriving later never wins"
+  start: "2026-10-02T10:00:00+08:00"
+  hosts:
+    legacy: {token: t-life, scope_mode: open}
+    entry-a: {token: t-a, max_grant: [{system: lento}], may_restore: true}
+    entry-b: {token: t-b, max_grant: [{system: lento}], may_restore: true, authority: [{system: lento, instance: home}]}
+  setup:
+    - id: f70001000000
+      at: "2026-10-01T20:00:00+08:00"
+      room: EVENT/WORLD
+      text: "小周说周五晚上一起去看那部新电影。"
+      sources: [{system: lento, instance: home, container: "private:U", id: m_20261001_0007}]
+  steps:
+    - source_change: {change_id: b-7, host_seq: 7, change: withdrawn,
+                      source: "lento:home/private:U#m_20261001_0007"}
+      host: t-b
+      as: newer
+    - check: {segment: store, desc: "the authority's newer withdrawal applies", output: newer, contains: '"status": "applied"'}
+    - source_change: {change_id: a-5, host_seq: 5, change: restored,
+                      source: "lento:home/private:U#m_20261001_0007"}
+      host: t-a
+      as: other_host
+    - check: {segment: store, desc: "another host's change for it is refused, saying why", all_of: [{output: other_host, contains: '"status": "forbidden"'}, {output: other_host, contains: not_change_authority}]}
+    - source_change: {change_id: b-5, host_seq: 5, change: restored,
+                      source: "lento:home/private:U#m_20261001_0007"}
+      host: t-b
+      as: relayed
+    - check: {segment: store, desc: "relayed through the authority, the older restore is stale", output: relayed, contains: '"status": "stale"'}
+    - call: recall
+      args: {query: 新电影}
+      as: search
+    - check: {segment: find, desc: "the withdrawal stands: the memory is not found", output: search, lacks: f70001}

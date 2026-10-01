@@ -62,7 +62,7 @@
   title: "changes since number N"
   start: "2026-10-01T10:00:00+08:00"
   hosts:
-    legacy: {token: t-life, scope_mode: open, may_restore: true}
+    legacy: {token: t-life, scope_mode: open, may_restore: true, authority: [{system: lento}]}
   setup:
     - id: a30001000000
       at: "2026-09-29T19:00:00+08:00"
@@ -107,3 +107,45 @@
     - check: {segment: changes, desc: "nothing about what was there before", output: since, lacks: a30002000000}
     - check: {segment: changes, desc: "was merely touched is left out", output: since, lacks: TraceTouched}
     - check: {segment: changes, desc: "no text comes out", output: since, lacks: 实验报告}
+
+# The other team's 10-02 ruling: a host with a max_grant never sees the ledger's own
+# numbers — their gaps would count what it may not see. It reads by an opaque cursor, and
+# a page whose lines were all filtered out still moves it on.
+- id: J4
+  title: "a host with a ceiling reads changes by cursor, never by the ledger's numbers"
+  start: "2026-10-02T10:00:00+08:00"
+  hosts:
+    legacy: {token: t-life, scope_mode: open}
+    bot: {token: t-bot, max_grant: [{system: telegram, instance: bot-a}]}
+  setup:
+    - id: a40001000000
+      at: "2026-10-01T19:00:00+08:00"
+      room: EVENT/WORLD
+      text: "群里约了周日一起跑步。"
+      sources: [{system: telegram, instance: bot-a, container: "group:G", id: "m_401"}]
+    - id: a40002000000
+      at: "2026-10-01T20:00:00+08:00"
+      room: EVENT/WORLD
+      text: "家里换了新的窗帘。"
+      sources: [{system: lento, instance: home, container: "private:U", id: m_20261001_0401}]
+  steps:
+    - changes: {}
+      host: t-bot
+      as: first
+      capture: {c: '"next": "(c1[0-9a-f]+)"'}
+    - check: {segment: changes, desc: "its own material", output: first, contains: a40001000000}
+    - check: {segment: changes, desc: "not the home line", output: first, lacks: a40002000000}
+    - check: {segment: changes, desc: "no ledger number anywhere", all_of: [{output: first, lacks: '"seq"'}, {output: first, lacks: '"since"'}]}
+    - call: grow
+      args: {kind: event, items: [{room: EVENT/WORLD, text: "晚饭做了咖喱。", v: 0.5, a: 0.3}]}
+      capture: {curry: "📝([0-9a-f]{12})"}
+    - wait: 1
+    - changes: {cursor: $c}
+      host: t-bot
+      as: hidden
+    - check: {segment: changes, desc: "a line it may not see is not shown", output: hidden, lacks: $curry}
+    - check: {segment: changes, desc: "and the cursor still moved on", output: hidden, lacks: '"next": "$c"'}
+    - changes: {since: 0}
+      host: t-life
+      as: open
+    - check: {segment: changes, desc: "an open host keeps the ledger's numbers", output: open, contains: '"seq": 1'}

@@ -44,6 +44,7 @@ M = {"system": "lento", "instance": "home", "container": "private:U", "id": "m_0
 M_STR = "lento:home/private:U#m_0003@r1"
 RUN = {"system": "lento", "instance": "home", "container": "private:U", "id": "m_0001",
        "through": "m_0004"}
+SRC_PLACE = {"system": "lento", "instance": "home", "container": "private:U"}
 TOKEN = "lento-key"
 
 
@@ -114,7 +115,9 @@ def config(tmp_path, url, **fetch):
     return {"buckets_dir": str(tmp_path),
             "hosts": {"legacy": {"token_env": "T_LIFE", "scope_mode": "open"},
                       "lento": {"token_env": "T_LENTO", "fetch_url": url,
-                                "max_grant": [{"system": "lento", "instance": "home"}]}},
+                                "fetch_token_env": "T_LENTO_FETCH",
+                                "max_grant": [{"system": "lento", "instance": "home"}],
+                                "provides": [{"system": "lento", "instance": "home"}]}},
             "source_fetch": {"timeout_seconds": 2, **fetch}}
 
 
@@ -130,7 +133,8 @@ def library(tmp_path, monkeypatch, host):
     store = BucketManager({"buckets_dir": str(tmp_path)})
     monkeypatch.setattr(rt, "bucket_mgr", store)
     monkeypatch.setattr(rt, "config", config(tmp_path, host.url))
-    monkeypatch.setenv("T_LENTO", TOKEN)
+    monkeypatch.setenv("T_LENTO", "lento-inbound-key")
+    monkeypatch.setenv("T_LENTO_FETCH", TOKEN)
     monkeypatch.setenv("T_LIFE", "life-key")
     e = run(store.create(BODY, name="海边的约定", summary="周六去海边的约定", sources=[M],
                          room="EVENT/WORLD"))
@@ -164,7 +168,7 @@ def test_given_shows_the_fenced_original_and_keeps_no_copy(library, host, caplog
     assert f"│ 小周：{PHRASE}" in lines and "│ 周六见" in lines
     assert "（宿主给的是 @r2；这条记忆是按 @r1 记的）" in out
     assert BODY not in out, "given: the original, not the memory's own body"
-    # What was asked, field by field, with the host's own credential.
+    # What was asked, field by field, with Loci's own credential toward the host.
     [req] = host.requests
     assert req["headers"]["Authorization"] == f"Bearer {TOKEN}"
     assert req["body"] == {"v": 1, "source": {k: M[k] for k in ("system", "instance",
@@ -212,12 +216,17 @@ def test_not_allowed_feeds_neither_body_nor_summary_and_writes_no_state(library,
 
 # ───────────────────────── every way of not answering ─────────────────────────
 
+def _serving(url, token="k", **kw):
+    """A deployment of one host declared as serving lento's originals."""
+    return SC.Hosts([SC.Host("lento", max_grant=(S.Place("lento", "home"),), token="in",
+                             fetch_url=url, fetch_token=token,
+                             provides=(S.Place("lento", "home"),), **kw)], implicit=False)
+
+
 @pytest.mark.parametrize("case,why", [
-    ("refused", O.UNREACHABLE), ("slow", O.TIMEOUT), ("redirect", O.REDIRECT),
-    ("big", O.TOO_BIG), ("500", "http_500"), ("garbled", O.MALFORMED),
-    ("extra_key", O.MALFORMED), ("wrong_line", O.MALFORMED), ("no_token", O.NO_TOKEN),
+    ("refused", O.UNREACHABLE), ("slow", O.TIMEOUT), ("no_token", O.NO_TOKEN),
 ])
-def test_no_answer_is_unavailable(host, case, why, monkeypatch):
+def test_only_no_connection_a_timeout_or_no_credential_is_unavailable(host, case, why):
     other = FakeHost()
     try:
         url = host.url
@@ -230,72 +239,201 @@ def test_no_answer_is_unavailable(host, case, why, monkeypatch):
             settings = O.Settings(timeout_seconds=5.0, max_bytes=1024)
         elif case == "slow":
             host.delay, host.answer = 2.0, given({"id": "m_0003", "revision": None, "text": "x"})
-        elif case == "redirect":
+        elif case == "no_token":
+            token = ""
+        answer = run(O.fetch(M, hosts=_serving(url, token), settings=settings))
+        assert (answer.outcome, answer.why) == (O.UNAVAILABLE, why)
+        assert not answer.holds
+    finally:
+        if case != "refused":
+            other.close()
+
+
+@pytest.mark.parametrize("case,reason", [
+    ("redirect", O.REDIRECT), ("big", O.TOO_BIG), ("500", "http_500"), ("404", "http_404"),
+    ("401", "http_401"), ("403", "http_403"), ("garbled", O.MALFORMED),
+    ("extra_key", O.MALFORMED), ("wrong_line", O.MALFORMED),
+])
+def test_a_refusal_or_an_answer_loci_cannot_read_lets_nothing_through(host, case, reason):
+    other = FakeHost()
+    try:
+        if case == "redirect":
             host.answer = (302, {"Location": other.url})
         elif case == "big":
             host.answer = given({"id": "m_0003", "revision": None, "text": "长" * 2000})
-        elif case == "500":
-            host.answer = (500, {})
+        elif case in ("500", "404", "401", "403"):
+            host.answer = (int(case), {})
         elif case == "garbled":
             host.answer = b"<html>oops</html>"
         elif case == "extra_key":
             host.answer = {**given({"id": "m_0003", "revision": None, "text": "x"}), "more": 1}
         elif case == "wrong_line":
             host.answer = given({"id": "m_9999", "revision": None, "text": "x"})
-        elif case == "no_token":
-            token = ""
-        hosts = SC.Hosts([SC.Host("lento", max_grant=(S.Place("lento", "home"),),
-                                  token=token, fetch_url=url)], implicit=False)
-        answer = run(O.fetch(M, hosts=hosts, settings=settings))
-        assert (answer.outcome, answer.why) == (O.UNAVAILABLE, why)
+        answer = run(O.fetch(M, hosts=_serving(host.url),
+                             settings=O.Settings(timeout_seconds=2.0, max_bytes=1024)))
+        assert (answer.outcome, answer.reason) == (O.NOT_ALLOWED, reason)
+        assert not answer.holds, "this call only"
         if case == "redirect":
             assert other.requests == [], "a redirect is never followed"
     finally:
-        if case != "refused":
-            other.close()
+        other.close()
+
+
+def test_gone_410_is_not_allowed_and_held_as_deleted(host):
+    host.answer = (410, {})
+    answer = run(O.fetch(M, hosts=_serving(host.url)))
+    assert (answer.outcome, answer.reason) == (O.NOT_ALLOWED, O.GONE_HTTP)
+    assert answer.holds == (("lento:home/private:U#m_0003", "deleted"),)
 
 
 def test_a_word_this_version_does_not_know_is_taken_as_not_allowed(host):
-    hosts = SC.Hosts([SC.Host("lento", max_grant=(S.Place("lento"),), token="k",
-                              fetch_url=host.url)], implicit=False)
+    hosts = _serving(host.url)
     host.answer = {"v": 1, "status": "expired"}
     assert run(O.fetch(M, hosts=hosts)).outcome == O.NOT_ALLOWED
     host.answer = given({"id": "m_0003", "revision": None, "missing": "embargoed"})
     assert run(O.fetch(M, hosts=hosts)).reason == O.UNKNOWN_WORD
 
 
+def test_the_fetch_credential_is_loci_own_never_the_hosts_inbound_one():
+    env = {"T_IN": "same", "T_OUT": "same"}
+    hs = SC.load_hosts({"hosts": {"h": {"token_env": "T_IN", "fetch_url": "https://h/x",
+                                        "fetch_token_env": "T_OUT",
+                                        "max_grant": [{"system": "lento"}],
+                                        "provides": [{"system": "lento"}]}}}, env)
+    assert hs.get("h") is not None and hs.get("h").fetch_token == "", "equal value: not used"
+    hs = SC.load_hosts({"hosts": {"h": {"token_env": "T_IN", "fetch_token_env": "T_IN",
+                                        "max_grant": [{"system": "lento"}]}}}, env)
+    assert hs.get("h") is None and hs.errors, "the same variable is refused"
+    env["T_OUT"] = "other"
+    hs = SC.load_hosts({"hosts": {"h": {"token_env": "T_IN", "fetch_url": "https://h/x",
+                                        "fetch_token_env": "T_OUT",
+                                        "max_grant": [{"system": "lento"}],
+                                        "provides": [{"system": "lento"}]}}}, env)
+    assert hs.get("h").fetch_token == "other" and hs.get("h").token == "same"
+
+
 # ───────────────────────── runs of lines ─────────────────────────
 
-def test_a_run_is_asked_whole_and_a_withdrawn_line_blocks_it(library, host):
+def test_a_withdrawn_line_blocks_the_run_and_holds_that_line(library, host):
     store, _e, _root = library
+    store.sources.record_order(SRC_PLACE, ["m_0001", "m_0002", "m_0003", "m_0004"])
     bid = run(store.create("那天聊了一晚上。", name="长聊", sources=[RUN], room="EVENT/SELF"))
     host.answer = given({"id": "m_0001", "revision": None, "text": "早"},
                         {"id": "m_0002", "revision": None, "missing": "withdrawn"},
                         {"id": "m_0003", "revision": None, "text": "晚"},
                         {"id": "m_0004", "revision": None, "text": "安"})
     out = original(bid)
-    assert out.splitlines()[0].startswith("原话不许看了") and "那天聊了一晚上" not in out
+    assert "那天聊了一晚上" not in out and "依据的来源被撤回或删除了" in out, out
     assert host.requests[0]["body"]["source"] == RUN
+    # Not just this once: the line is held until the host's ordered change settles it.
+    assert store.sources.state_of("lento:home/private:U#m_0002") == S.HELD
+    assert store.sources.describe("lento:home/private:U#m_0002") is None
+    shown = run(R.recall_core(when="", room="", tag="", query=bid))
+    assert "那天聊了一晚上" not in shown
+    asked = len(host.requests)
+    original(bid)
+    assert len(host.requests) == asked, "a held source is not asked again"
 
 
-def test_a_run_marks_lines_missing_for_now_and_where_the_host_stopped(library, host):
+def test_a_run_marks_lines_missing_shows_it_as_partial(library, host):
     store, _e, _root = library
+    store.sources.record_order(SRC_PLACE, ["m_0001", "m_0002", "m_0003", "m_0004"])
     bid = run(store.create("那天聊了一晚上。", name="长聊", sources=[RUN], room="EVENT/SELF"))
     host.answer = given({"id": "m_0001", "revision": "e1", "text": "早"},
                         {"id": "m_0002", "revision": None, "missing": "unavailable"},
                         {"id": "m_0003", "revision": None, "text": "晚\n还没睡"},
                         after="m_0003")
     out = original(bid)
-    assert out.splitlines()[0].startswith("原话：宿主给了"), out
+    assert out.splitlines()[0].startswith("原话：宿主只给了一部分"), out
     assert "│ [m_0001 @e1] 早" in out and "┆ [m_0002] ⚠️这一行宿主那边暂时取不到" in out
     assert "│ [m_0003] 晚" in out and "│          还没睡" in out
     assert "┆ …（宿主只给到 m_0003，后面的没给）" in out
+    assert out.rstrip().endswith("那天聊了一晚上。"), "the memory's own body below the part"
+
+
+def test_a_line_the_host_has_no_record_of_is_not_found_not_deleted(library, host):
+    store, e, _root = library
+    host.answer = given({"id": "m_0003", "revision": None, "missing": "not_found"})
+    out = original(e)
+    assert out.splitlines()[0].startswith("原话暂时取不到") and "宿主那边找不到这条" in out
+    assert out.rstrip().endswith(BODY)
+    assert store.sources.state_of(S.record_id(M)) == S.ACTIVE, "nothing held"
+    store.sources.record_order(SRC_PLACE, ["m_0001", "m_0002", "m_0003", "m_0004"])
+    bid = run(store.create("那天聊了一晚上。", name="长聊", sources=[RUN], room="EVENT/SELF"))
+    host.answer = given({"id": "m_0001", "revision": None, "text": "早"},
+                        {"id": "m_0002", "revision": None, "missing": "not_found"},
+                        {"id": "m_0003", "revision": None, "text": "晚"},
+                        {"id": "m_0004", "revision": None, "text": "安"})
+    out = original(bid)
+    assert out.splitlines()[0].startswith("原话：宿主只给了一部分")
+    assert "┆ [m_0002] ⚠️这一行宿主那边找不到" in out
+
+
+def test_a_run_whose_lines_are_unknown_is_not_asked(library, host):
+    store, _e, _root = library
+    bid = run(store.create("那天聊了一晚上。", name="长聊", sources=[RUN], room="EVENT/SELF"))
+    out = original(bid)
+    assert out.splitlines()[0].startswith("原话不许看了") and host.requests == []
+    assert "宿主没交过里面有哪几行" in out and "那天聊了一晚上" not in out
 
 
 def test_a_run_with_a_span_is_refused_before_anything_is_sent():
     with pytest.raises(ValueError):
         O.build_request({**RUN, "span": {"unit": "utf16", "start": 0, "end": 3}}, None,
                         O.Settings())
+
+
+# ───────────────────────── the state, checked again after the answer ─────────────────────────
+
+def test_a_withdrawal_landing_while_the_host_answers_wins(library, host, monkeypatch):
+    store, e, _root = library
+    host.answer = given({"id": "m_0003", "revision": "r1", "text": PHRASE})
+    real = O._post
+
+    async def withdrawn_meanwhile(*a, **kw):
+        got = await real(*a, **kw)
+        await SCH.handle(store, {"change_id": "c-1", "source": M_STR.split("@")[0],
+                                 "host_seq": 1, "change": "withdrawn"},
+                         SC.Host("life", scope_mode="open"))
+        return got
+    monkeypatch.setattr(O, "_post", withdrawn_meanwhile)
+    out = original(e)
+    assert PHRASE not in out and BODY not in out, out
+    assert "依据的来源被撤回或删除了" in out
+
+
+def test_unavailable_does_not_fall_back_once_the_source_is_gone_meanwhile(library, host,
+                                                                          monkeypatch):
+    store, e, _root = library
+    host.answer = {"v": 1, "status": "unavailable"}
+    real = O._post
+
+    async def withdrawn_meanwhile(*a, **kw):
+        got = await real(*a, **kw)
+        await SCH.handle(store, {"change_id": "c-1", "source": M_STR.split("@")[0],
+                                 "host_seq": 1, "change": "withdrawn"},
+                         SC.Host("life", scope_mode="open"))
+        return got
+    monkeypatch.setattr(O, "_post", withdrawn_meanwhile)
+    out = original(e)
+    assert BODY not in out and "海边的约定" not in out, out
+
+
+def test_a_host_saying_withdrawn_holds_it_everywhere_until_the_ordered_change(library, host):
+    store, e, _root = library
+    host.answer = {"v": 1, "status": "not_allowed", "reason": "withdrawn"}
+    out = original(e)
+    assert BODY not in out
+    assert store.sources.state_of(S.record_id(M)) == S.HELD
+    assert not (store.sources.changes_path).exists(), "no state was written"
+    shown = run(R.recall_core(when="", room="", tag="", query=e))
+    assert BODY not in shown, "recall does not keep feeding the old body"
+    # The ordered change settles it either way: here, the host restores it.
+    run(SCH.handle(store, {"change_id": "c-1", "source": M_STR.split("@")[0], "host_seq": 1,
+                           "change": "restored"}, SC.Host("life", scope_mode="open")))
+    assert store.sources.state_of(S.record_id(M)) == S.ACTIVE
+    host.answer = given({"id": "m_0003", "revision": "r1", "text": PHRASE})
+    assert original(e).splitlines()[0].startswith("原话：宿主给了")
 
 
 # ───────────────────────── config, the gate, the scope, the cap ─────────────────────────
@@ -361,15 +499,25 @@ def test_the_read_by_id_says_where_to_ask(library):
 
 # ───────────────────────── which host ─────────────────────────
 
-def test_the_deepest_covering_host_is_asked_and_one_without_a_ceiling_never():
-    wide = SC.Host("wide", max_grant=(S.Place("lento"),), token="a", fetch_url="http://a/")
-    deep = SC.Host("deep", max_grant=(S.Place("lento", "home", "private:U"),), token="b",
-                   fetch_url="http://b/")
-    bare = SC.Host("bare", scope_mode=SC.OPEN, token="c", fetch_url="http://c/")
-    hosts = SC.Hosts([bare, wide, deep], implicit=False)
+def test_the_declared_provider_is_asked_never_a_host_that_merely_may_touch_it():
+    wide = SC.Host("wide", max_grant=(S.Place("lento"),), fetch_token="a",
+                   fetch_url="http://a/", provides=(S.Place("lento"),))
+    deep = SC.Host("deep", max_grant=(S.Place("lento", "home", "private:U"),),
+                   fetch_token="b", fetch_url="http://b/",
+                   provides=(S.Place("lento", "home", "private:U"),))
+    toucher = SC.Host("toucher", max_grant=(S.Place("telegram"),), fetch_token="c",
+                      fetch_url="http://c/")
+    hosts = SC.Hosts([toucher, wide, deep], implicit=False)
     assert O.host_for(hosts, S.record_id(M)).name == "deep"
     assert O.host_for(hosts, S.SourceId("lento", "work", "x", "1")).name == "wide"
-    assert O.host_for(hosts, S.SourceId("telegram", "bot", "x", "1")) is None
+    assert O.host_for(hosts, S.SourceId("telegram", "bot", "x", "1")) is None, \
+        "max_grant says what a host may touch, not whose the source is"
+    twin = SC.Host("twin", fetch_token="d", fetch_url="http://d/",
+                   provides=(S.Place("lento", "home", "private:U"),))
+    assert O.host_for(SC.Hosts([deep, twin], implicit=False), S.record_id(M)) is None, \
+        "two providers declared at the same place: neither"
+    no_url = SC.Host("no-url", fetch_token="e", provides=(S.Place("lento"),))
+    assert O.host_for(SC.Hosts([no_url], implicit=False), S.record_id(M)) is None
 
 
 def test_a_fetch_url_that_is_not_plain_http_leaves_the_host_out():

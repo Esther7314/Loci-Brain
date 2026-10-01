@@ -19,6 +19,8 @@ import sys
 import threading
 from pathlib import Path
 
+import pytest
+
 from core import _ledger as L
 from core import _sources as S
 from core.bucket_manager import BucketManager
@@ -181,3 +183,58 @@ def test_changes_leaves_out_touches_and_what_the_credential_does_not_reach(tmp_p
     assert [r["seq"] for r in page["changes"] + rest["changes"]] == \
         [r["seq"] for r in every["changes"]]
     assert run(L.changes_since(store, None, 0))["changes"] == []
+
+
+# ── a host with a ceiling reads by cursor (the other team's 10-02 ruling) ──
+
+def test_a_host_with_a_ceiling_never_sees_the_ledgers_numbers(tmp_path):
+    store = BucketManager({"buckets_dir": str(tmp_path)})
+    tg = {"system": "telegram", "instance": "bot-a", "container": "g", "id": "1"}
+    home = {"system": "lento", "instance": "home", "container": "p", "id": "1"}
+    run(store.create("群里说的事。", sources=[tg]))
+    for i in range(5):                                   # lines the bot may not see
+        run(store.create(f"家里的事 {i}。", sources=[home]))
+    mine = run(store.create("群里又说了一件。", sources=[tg]))
+    bot = Host("bot", max_grant=(S.Place("telegram", "bot-a"),))
+    out = run(L.changes_since(store, bot))
+    assert "since" not in out and out["cursor"] is None
+    assert all("seq" not in r and r["cursor"].startswith("c1") for r in out["changes"])
+    text = json.dumps(out)
+    for n in range(1, 12):
+        assert f'"seq": {n}' not in text
+    # Paging past what it may not see: the lines between are skipped, never counted.
+    first = run(L.changes_since(store, bot, limit=1))
+    assert first["more"] and len(first["changes"]) == 1
+    second = run(L.changes_since(store, bot, limit=1, cursor=first["next"]))
+    assert [r["id"] for r in second["changes"]] == [mine]
+    caught_up = run(L.changes_since(store, bot, cursor=second["next"]))
+    assert caught_up["changes"] == [] and not caught_up["more"]
+    # A page whose every line is filtered out still moves the cursor on.
+    run(store.create("家里又有一件事。", sources=[home]))
+    hidden = run(L.changes_since(store, bot, cursor=caught_up["next"]))
+    assert hidden["changes"] == [] and hidden["next"] != caught_up["next"]
+    assert run(L.changes_since(store, bot, cursor=hidden["next"]))["next"] == hidden["next"]
+
+
+def test_a_cursor_says_nothing_of_the_seq_and_is_the_hosts_own(tmp_path):
+    a = LedgerMirror(tmp_path / "a" / "_ledger" / "events.jsonl")
+    b = LedgerMirror(tmp_path / "b" / "_ledger" / "events.jsonl")
+    tokens = [L.cursor_of(a, n, "bot") for n in range(1, 50)]
+    assert len(set(tokens)) == len(tokens) and tokens != sorted(tokens)
+    assert L.cursor_of(b, 7, "bot") != L.cursor_of(a, 7, "bot"), "keyed per library"
+    assert all(L.seq_of_cursor(a, t, "bot") == n for n, t in enumerate(tokens, start=1))
+    with pytest.raises(L.CursorError):
+        L.seq_of_cursor(a, tokens[3], "other-host")
+    with pytest.raises(L.CursorError):
+        L.seq_of_cursor(b, tokens[3], "bot")
+    with pytest.raises(L.CursorError):
+        L.seq_of_cursor(a, "c1" + "0" * 32, "bot")
+    assert L.cursor_of(LedgerMirror(a.path), 7, "bot") == L.cursor_of(a, 7, "bot"), "kept"
+
+
+def test_an_open_host_keeps_the_global_seq(tmp_path):
+    store = BucketManager({"buckets_dir": str(tmp_path)})
+    run(store.create("一件事。"))
+    out = run(L.changes_since(store, Host("life", scope_mode="open"), 0))
+    assert out["since"] == 0 and isinstance(out["next"], int)
+    assert all(isinstance(r["seq"], int) for r in out["changes"])

@@ -34,12 +34,27 @@ Hosts
         max_grant:
           - {system: telegram, instance: bot-a}
         may_restore: false                 # scope_mode defaults to restricted
-        fetch_url: http://127.0.0.1:3010/api/loci/source   # optional: where Loci asks
-                                           # for the original of a source in max_grant
-                                           # (core/_originals.py)
+        authority:                         # the sources whose changes this host sends
+          - {system: telegram, instance: bot-a}
+        provides:                          # the sources whose originals this host serves
+          - {system: telegram, instance: bot-a}
+        fetch_url: http://127.0.0.1:3010/api/loci/source   # where Loci asks for them
+        fetch_token_env: LOCI_FETCH_TOKEN_ENTRY_A           # Loci's own credential there
+
+`max_grant` says what a host may touch; it never says whose a source is. Who is the change
+authority for a source (`authority`, core/_source_change.py) and who serves its original
+(`provides` with `fetch_url` and `fetch_token_env`, core/_originals.py) are declared,
+place by place: the deepest declared place covering a source names its host, and two
+hosts declaring the same place name neither (`Hosts.authority_for`, `Hosts.provider_for`).
+A source no host declares has no authority (its changes are refused) and no provider (its
+original cannot be fetched). An authority place has to lie within the host's `max_grant`.
+The fetch credential is Loci's toward the host, never the host's own toward Loci: it
+names another environment variable, and a value equal to the host's inbound credential is
+not used.
 
 No `hosts:` table means exactly one host, `legacy` above (its key falls back to config
-`hook_token`, as the hook routes always read it). The host named `legacy` is also who a
+`hook_token`, as the hook routes always read it), which is then the change authority for
+every source and serves no originals. The host named `legacy` is also who a
 caller presenting no host credential is: an MCP client authenticated the old way (or with
 MCP auth off) and a hook caller on an unlocked panel. A table without `legacy` has no
 such caller — a request without a host credential is refused. Only an `open` host reads
@@ -59,12 +74,17 @@ Every source record standing behind it must pass all three:
      a subset); `use: null` is no rule of its own (the material's authorisation stands,
      i.e. the grant); a use the gate cannot read lets nothing through;
   2. the grant covers it (`SourceRegistry.granted`): a piece by a place over it, a run
-     only when every line in it is granted — a place at its container or wider, or places
-     naming each of its lines when the host's order of them is known;
+     only when Loci knows which lines it holds (the host registered its order) and every
+     one of them is granted — by a place at its container or wider, or by places naming
+     each line. A run whose order Loci does not know is refused under any grant: a line
+     withdrawn in its middle could not be told;
   3. its state (`SourceRegistry.read_state`, a run judged by every line it holds) is
      active, or unreadable (the text is out of reach for now; what was understood from it
-     stays readable).
-"Standing behind it" is the entry's own `sources` and, for anything derived, every root:
+     stays readable). Held (a host said, while serving the original, that it is withdrawn
+     or deleted, and the ordered change has not settled it) is not readable.
+"Standing behind it" is the entry's own `sources`, every source its quoted lines name by
+string form (`wasQuotedFrom`; such a line alone does not make an entry readable), and, for
+anything derived, every root:
 the walk follows `read_from_ids` (derived-from and primary source, the same edges
 recall's root lines follow; a revision's previous version is not a source) to the entries
 with nothing further, through every state — a root that sank or was deleted still says
@@ -75,7 +95,8 @@ standing on such an entry, or on an id the library does not have.
 The view never says how many entries it withheld: a count is itself a leak.
 
 Exports: SCOPE_HEADER · TURN_HEADER · HOST_HEADER · SCOPE_ENV · HOST_TOKEN_ENV · OPEN ·
-         RESTRICTED · LEGACY · ScopeError · Host · Hosts · load_hosts · Scope ·
+         RESTRICTED · LEGACY · ScopeError · Host · Hosts (authority_for · provider_for) ·
+         load_hosts · Scope ·
          parse_scope · parse_turn · RequestScope · ScopeView · unsupported_line ·
          current_request · request_scope
 ========================================
@@ -140,12 +161,27 @@ class Host:
     may_restore: bool = False
     token: str = field(default="", repr=False, compare=False)
     # Where Loci asks this host for a source's original (core/_originals.py); "" = never
-    # asked. It serves the sources its `max_grant` covers.
+    # asked. It serves the sources its `provides` declares.
     fetch_url: str = ""
+    # Loci's credential toward `fetch_url`; "" = none, and then nothing is fetched.
+    fetch_token: str = field(default="", repr=False, compare=False)
+    provides: tuple = ()                 # places whose originals it serves
+    authority: tuple = ()                # places whose changes it sends
 
     @property
     def open(self) -> bool:
         return self.scope_mode == OPEN
+
+
+_HOST_KEYS = {"token_env", "max_grant", "may_restore", "scope_mode", "fetch_url",
+              "fetch_token_env", "provides", "authority"}
+
+
+def _places(name: str, raw, key: str) -> tuple:
+    items = raw.get(key) or []
+    if not isinstance(items, list):
+        raise ValueError(f"host {name}: {key} is a list of places")
+    return tuple(_src.Place.from_mapping(p, where=f" {key}[{i}]") for i, p in enumerate(items))
 
 
 def _host_from(name: str, raw, environ: Mapping[str, str], fallback_token: str) -> Host:
@@ -153,8 +189,7 @@ def _host_from(name: str, raw, environ: Mapping[str, str], fallback_token: str) 
         raise ValueError(f"host name {name!r} must be 1-64 of A-Z a-z 0-9 _ . -")
     if not isinstance(raw, dict):
         raise ValueError(f"host {name}: expected a mapping")
-    extra = sorted(set(map(str, raw)) - {"token_env", "max_grant", "may_restore", "scope_mode",
-                                         "fetch_url"})
+    extra = sorted(set(map(str, raw)) - _HOST_KEYS)
     if extra:
         raise ValueError(f"host {name}: unknown keys {extra}")
     mode = str(raw.get("scope_mode") or RESTRICTED).strip().lower()
@@ -179,9 +214,45 @@ def _host_from(name: str, raw, environ: Mapping[str, str], fallback_token: str) 
                 or parts.password or parts.fragment):
             raise ValueError(f"host {name}: fetch_url must be an http(s) URL with a host and "
                              "no credentials or fragment in it")
+    fetch_env = str(raw.get("fetch_token_env") or "").strip()
+    if fetch_env and fetch_env == token_env:
+        raise ValueError(f"host {name}: fetch_token_env names Loci's own credential toward the "
+                         "host and must be another variable than token_env")
+    fetch_token = str(environ.get(fetch_env) or "").strip() if fetch_env else ""
+    if fetch_token and token and hmac.compare_digest(fetch_token.encode("utf-8"),
+                                                     token.encode("utf-8")):
+        _say_once(f"host {name}: the value of {fetch_env} equals the host's own credential; "
+                  "Loci fetches nothing from it until the two differ")
+        fetch_token = ""
+    authority = _places(name, raw, "authority")
+    if max_grant is not None:
+        for place in authority:
+            if not any(place.within(top) for top in max_grant):
+                raise ValueError(f"host {name}: authority {place.label()} is past its max_grant")
     return Host(name=name, scope_mode=mode, max_grant=max_grant,
                 may_restore=parse_bool(raw.get("may_restore"), default=False), token=token,
-                fetch_url=fetch_url)
+                fetch_url=fetch_url, fetch_token=fetch_token,
+                provides=_places(name, raw, "provides"), authority=authority)
+
+
+def _depth(place) -> int:
+    return sum(1 for level in _src.PLACE_KEYS if getattr(place, level) is not None)
+
+
+def _declared(hosts: Iterable[Host], attr: str, sid) -> Optional[Host]:
+    """The host whose `attr` places declare this source: the deepest covering place wins;
+    two hosts declaring covering places of the same depth name neither."""
+    best: list[Host] = []
+    best_depth = -1
+    for host in hosts:
+        depth = max((_depth(p) for p in getattr(host, attr) if p.covers(sid)), default=-1)
+        if depth < 0:
+            continue
+        if depth > best_depth:
+            best, best_depth = [host], depth
+        elif depth == best_depth:
+            best.append(host)
+    return best[0] if len(best) == 1 else None
 
 
 class Hosts:
@@ -210,6 +281,21 @@ class Hosts:
     def get(self, name: str) -> Optional[Host]:
         return self.hosts.get(str(name or ""))
 
+    def authority_for(self, identity) -> Optional[Host]:
+        """The host declared as the change authority for this source (a SourceId, a
+        record or a string form); None when none is, or two are at the same depth. With
+        no `hosts:` table the one legacy host is the authority for every source."""
+        if self.implicit:
+            return self.default
+        return _declared(self.hosts.values(), "authority", _src._identity(identity))
+
+    def provider_for(self, identity) -> Optional[Host]:
+        """The host declared as serving this source's original (`provides`), when it
+        has a `fetch_url`; None otherwise. Nothing else decides it: a host that may touch
+        a source is not thereby asked for it."""
+        host = _declared(self.hosts.values(), "provides", _src._identity(identity))
+        return host if host is not None and host.fetch_url else None
+
 
 def load_hosts(config: Mapping, environ: Mapping[str, str], *,
                legacy_token: str = "") -> Hosts:
@@ -232,13 +318,18 @@ def load_hosts(config: Mapping, environ: Mapping[str, str], *,
         except (ValueError, _src.SourceRecordError) as e:
             errors.append(str(e))
     for e in errors:
-        if e not in _LOGGED:          # hosts are read per request; say each problem once
-            _LOGGED.add(e)
-            logger.error("[hosts] %s — that host is left out and its credential refused", e)
+        _say_once(f"{e} — that host is left out and its credential refused")
     return Hosts(hosts, implicit=False, errors=errors)
 
 
 _LOGGED: set[str] = set()
+
+
+def _say_once(message: str) -> None:
+    """Hosts are read per request: log each configuration problem once."""
+    if message not in _LOGGED:
+        _LOGGED.add(message)
+        logger.error("[hosts] %s", message)
 
 
 # ============================================================
@@ -482,10 +573,13 @@ class ScopeView:
         fails, or a root has nothing to stand on. None: only a cycle was found."""
         if bid and bid in self._memo:
             return self._memo[bid]
-        own = meta.get(_src.SOURCES_FIELD) or []
+        sources = meta.get(_src.SOURCES_FIELD) or []
+        # A source named only by a quoted line is one more thing it rests on; it is never
+        # enough on its own to make an entry readable.
+        own = list(sources) + _src.quoted_records(meta)
         parents = [p for p in read_from_ids(meta) if p]
         result: Optional[bool]
-        if not own and not parents:
+        if not sources and not parents:
             result = False
         else:
             result = True if own else None

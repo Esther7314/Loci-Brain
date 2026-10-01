@@ -365,6 +365,84 @@ def test_a_withdrawn_source_never_puts_its_text_on_a_card(tmp_path, clock, names
     assert ask(store, "考完了", window="later")["cards"] == [], "breath listed it there"
 
 
+# ── a turn asked again (the other team's 10-02 ruling) ──────────────────────
+
+TRIP = bucket("b", "周末去海边看日出。", direction_of_fit="telic",
+              cue={"condition": "看日出", "phrasings": ["海边", "日出"]})
+CAKE = bucket("c", "答应给小周买蛋糕。", direction_of_fit="telic",
+              cue={"condition": "买蛋糕", "phrasings": ["蛋糕"]})
+BOOK = bucket("d", "那本书还没还。", direction_of_fit="telic",
+              cue={"condition": "还书", "phrasings": ["那本书"]})
+
+
+def test_a_retry_of_a_turn_gets_the_same_cards_and_nothing_new(tmp_path, clock, names):
+    store = Store(tmp_path, [EXAM])
+    first = ask(store, "终于考完了", turn="t1")
+    assert ids(first) == [EXAM["id"]]
+    store.rows = [EXAM, TRIP]                      # something new would match now
+    again = ask(store, "终于考完了，周末去海边", turn="t1")
+    assert again["cards"] == first["cards"] and again["text"] == first["text"]
+    empty = ask(store, "早", turn="t2")
+    assert empty["cards"] == []
+    assert ask(store, "去海边吗", turn="t2")["cards"] == [], "an empty answer stays empty"
+    assert ids(ask(store, "去海边吗", turn="t3")) == [TRIP["id"]], "a new turn picks afresh"
+
+
+def test_the_first_answer_holds_at_most_three_and_a_retry_no_more(tmp_path, clock, names):
+    store = Store(tmp_path, [EXAM, TRIP, CAKE, BOOK])
+    first = ask(store, "考完了，去海边，买蛋糕，还有那本书", turn="t1")
+    assert len(first["cards"]) == C.CARD_LIMIT
+    assert ask(store, "考完了，去海边，买蛋糕，还有那本书", turn="t1")["cards"] == first["cards"]
+
+
+def test_a_retry_drops_what_was_since_revised_withdrawn_or_put_out_of_scope(tmp_path, clock,
+                                                                           names):
+    from core import scope as S
+    store = Store(tmp_path, [EXAM, TRIP, CAKE])
+    first = ask(store, "考完了，去海边，买蛋糕", turn="t1")
+    assert sorted(ids(first)) == sorted([EXAM["id"], TRIP["id"], CAKE["id"]])
+    revised = json.loads(json.dumps(TRIP))
+    revised["content"] = "周末改去山上看日出。"           # a new version: a new card key
+    gone = json.loads(json.dumps(CAKE))
+    gone["metadata"]["invalidation"] = [{"kind": "source_gone", "of": "lento:home/p#m1",
+                                         "by": "withdrawn", "at": TODAY.isoformat()}]
+    store.rows = [EXAM, revised, gone]
+    again = ask(store, "考完了，去海边，买蛋糕", turn="t1")
+    assert ids(again) == [EXAM["id"]], again
+    assert "山上" not in again["text"] and "蛋糕" not in again["text"]
+    # Under a scope the request may not read it: dropped as well, and nothing said.
+    req = S.RequestScope.resolve(
+        S.Host("bot", max_grant=None),
+        json.dumps({"v": 1, "entry": {"system": "telegram", "instance": "b"},
+                    "venue": "group", "audience": ["user:U"],
+                    "grant": [{"system": "telegram", "instance": "b"}]}))
+    view = S.ScopeView(req, {r["id"]: r["metadata"] for r in store.rows}, store.sources)
+    assert ask(store, "考完了", turn="t1", scope=view)["cards"] == []
+
+
+def test_delivered_by_turn_counts_the_turns_answer_and_by_card_a_partial_placement(
+        tmp_path, clock, names):
+    store = Store(tmp_path, [EXAM, TRIP])
+    first = ask(store, "考完了，去海边", turn="t1")
+    keys = [c["card"] for c in first["cards"]]
+    assert len(keys) == 2
+    # The host placed only one of them: it says so by card.
+    done, unknown = store.cues.deliver("life", "w1", cards=[keys[0]])
+    assert done == [keys[0]] and unknown == []
+    assert ids(ask(store, "考完了，去海边", turn="t2")) == [first["cards"][1]["id"]]
+    # A retry that lost a card: by turn, only what the retry answered is delivered.
+    store2 = Store(tmp_path / "other", [EXAM, TRIP])
+    a = ask(store2, "考完了，去海边", turn="t1")
+    store2.rows = [EXAM]
+    b = ask(store2, "考完了，去海边", turn="t1")
+    assert ids(b) == [EXAM["id"]]
+    done, _ = store2.cues.deliver("life", "w1", turn="t1")
+    assert done == [b["cards"][0]["card"]]
+    # The dropped card was handed once all the same: the host may still name it.
+    lost = next(c["card"] for c in a["cards"] if c["id"] == TRIP["id"])
+    assert store2.cues.deliver("life", "w1", cards=[lost]) == ([lost], [])
+
+
 # ── the route ───────────────────────────────────────────────────────────────
 
 def test_the_routes_answer_through_the_hook_guard(tmp_path, clock, names, monkeypatch):

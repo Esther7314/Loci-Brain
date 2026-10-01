@@ -33,7 +33,7 @@
   title: "a changed entry is carded again in the same window"
   start: "2026-10-01T10:00:00+08:00"
   hosts:
-    legacy: {token: t-life, scope_mode: open, may_restore: true}
+    legacy: {token: t-life, scope_mode: open, may_restore: true, authority: [{system: lento}]}
   setup:
     - id: d20001000000
       at: "2026-09-28T10:00:00+08:00"

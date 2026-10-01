@@ -61,7 +61,9 @@ invalidation record from the moment the change is applied, and so does everythin
 from them (core/_source_change.py). Under a read scope the registry says the same thing
 again (core/scope.py reads each source's state on every request); without one this record
 is how the gate knows. `invalidation` lists such an entry by id and status only, never its
-text (core/_invalidation.py).
+text (core/_invalidation.py). A source a host said was withdrawn or deleted while serving
+its original is held the same way (an open `source_held` record) until the host's ordered
+change settles it.
 
 later today: an open entry whose `when` names a clock time later today (`waits_for_clock`)
 stays off until that time has passed — 「今晚回来说面试结果」 written in the morning is not
@@ -286,19 +288,21 @@ def _superseded(m: dict) -> bool:
     return bool(str(m.get("superseded_by") or "").strip())
 
 
-# The invalidation record a withdrawn or deleted source leaves on what stood on it
-# (core/_invalidation.SOURCE_GONE; spelled here because that module imports this one).
-_SOURCE_GONE_KIND = "source_gone"
+# The invalidation records a withdrawn or deleted source leaves on what stood on it, and
+# the ones a host's unordered word that it is withdrawn leaves until the ordered change
+# settles it (core/_invalidation.SOURCE_GONE / SOURCE_HELD; spelled here because that
+# module imports this one).
+_SOURCE_GONE_KINDS = frozenset({"source_gone", "source_held"})
 
 
 def source_gone(meta) -> bool:
     """Does the entry carry an open record that a source standing behind it was withdrawn
-    or deleted? Written when the host's change is applied, on the entries naming the
-    source and on everything derived from them (core/_source_change.py)."""
+    or deleted, or is held awaiting the host's ordered change? Written on the entries
+    resting on the source and on everything derived from them (core/_source_change.py)."""
     raw = _meta_of(meta).get("invalidation") or []
     if not isinstance(raw, list):
         return False
-    return any(isinstance(r, dict) and r.get("kind") == _SOURCE_GONE_KIND
+    return any(isinstance(r, dict) and r.get("kind") in _SOURCE_GONE_KINDS
                and not str(r.get("confirmed_at") or "").strip() for r in raw)
 
 
