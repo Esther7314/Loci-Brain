@@ -449,6 +449,23 @@ def test_cue_and_hold_fields_reach_disk(store):
     run(go())
 
 
+def test_card_of_reaches_disk(store):
+    async def go():
+        bid = await store.create(BODY, room="MIND/TRAITS")
+        assert await store.update(bid, card_of="Connor") is True
+        # Criterion: the same trap a seventh time. A card whose name is dropped here is
+        # an ordinary mind, and the next card for that name goes in unchallenged.
+        assert (await _meta(store, bid))["card_of"] == "Connor"
+        # An event is never a card, whichever way it becomes one.
+        assert await store.update(bid, room="EVENT/SELF") is False
+        assert (await _meta(store, bid))["room"] == "MIND/TRAITS"
+        assert await store.update(bid, card_of="") is True
+        assert "card_of" not in await _meta(store, bid)
+        event = await store.create(BODY + " (event)", room="EVENT/WORLD")
+        assert await store.update(event, card_of="Connor") is False
+    run(go())
+
+
 def test_none_deletes_a_field_instead_of_writing_the_word_none(store):
     async def go():
         bid = await store.create(BODY)

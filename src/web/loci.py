@@ -534,12 +534,13 @@ async def build_subjects() -> dict:
     names_out = []
     for nm, c in counts.most_common():
         ts = last.get(nm)
+        rec = subj.record_of(nm)
         names_out.append({
             "name": nm,
             "n": c,
             "last": ts.strftime("%Y-%m-%d") if ts else "",
             "last_bucket": last_bucket.get(nm, ""),
-            # empty = not in the alias table yet (a newly appeared person)
+            # empty = not in the alias table yet (a newly appeared name)
             "canonical": table.get(nm.lower(), ""),
             # older spellings still on disk; a merge applies going forward and never
             # rewrites history
@@ -547,6 +548,11 @@ async def build_subjects() -> dict:
             # a pronoun should never be a subject (the gate is on the write side), so one
             # showing up here means that gate leaked — flag it
             "pronoun": subj.is_pronoun(nm),
+            # what the table says the name is (instance_of) and where it appears; empty
+            # when it says nothing (a table of aliases alone, or a name not in it)
+            "kind": rec.instance_of if rec else "",
+            "present_in": list(rec.present_in) if rec else [],
+            "member_of": list(rec.member_of) if rec else [],
         })
     return {
         "total": total,                       # visible entries
@@ -2371,16 +2377,17 @@ def register(mcp) -> None:
         "tidy all of this up for me" request is accepted: one call changes one name.
 
         The three actions reduce to two operations, because merging and renaming are the same
-        thing — filing one spelling under one canonical name:
+        thing — folding one name's entry into another (`_subjects.merge_names`: its key
+        and aliases become the other's aliases, its links move, its entry goes):
           not_person  this is not a person -> record it on the blocklist so it is never
                       extracted again.
                       **Not one byte of the historical entries is touched.** Rewriting
                          historical metadata means writing into someone's memories, and
                          "this is what the model extracted at the time" is itself a fact. The
                          blocklist is enough, and it can be undone at any moment.
-          merge       these two are one person -> file `name` under `target`
+          merge       these two are one person -> fold `name` into `target`
           rename      give them a proper name -> the same, with `target` as the new canonical
-                      name
+                      name (created when the table does not have it)
 
         WARNING: all of it applies **going forward** only. Older entries keep their old names
            on disk; there is no migration script for this table. The panel screen merges them
@@ -2404,7 +2411,7 @@ def register(mcp) -> None:
                 note = ("记下了，以后不再抽它（历史那几条没动）" if changed
                         else "它已经在黑名单里了")
             elif action in ("merge", "rename"):
-                changed = subj.add_alias(target, name)
+                changed = subj.merge_names(name, target)
                 note = ("写进别名表了 —— 只管以后，老条目盘上还是老名字" if changed
                         else "这条已经在表里了")
             else:

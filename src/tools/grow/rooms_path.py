@@ -33,6 +33,10 @@ Key behaviour:
   checked here (the target live and current, the level known, when a day or a
   closed span), bound defaulting to the AI, review_after set from the host's
   config for a defer without a date
+- card_of makes a mind the card of a name (check_card): the name goes through the
+  names table, a person's card sits in MIND/TRAITS and a thing's in MIND/VIEWS when
+  the table knows which it is, and a name has one live card at a time. trace reads
+  cards through here too
 - Validation comes first: if any single item is invalid the whole call errors and
   no bucket is created
 
@@ -46,7 +50,8 @@ What this file deliberately does not do:
 Exports: grow_event(items, direction_of_fit, bound, evidential, internally_generated,
                     weight, from_ids, test_data, cue, exception_of, hold) -> str
          grow_mind(room, text, from_ids, v, a, direction_of_fit, bound, evidential,
-                   internally_generated, weight, test_data, cue) -> str
+                   internally_generated, weight, test_data, cue, card_of) -> str
+         check_card(card_of, room, exclude) · card_room_rule(name, room) · live_card(name)
 ========================================
 """
 
@@ -60,6 +65,7 @@ from .. import _runtime as rt
 from core._bigevent import SPAN_RE, first_line as _F_first_line
 from .._common import check_content_size, resolve_bucket_id, resolve_bucket_ids
 from core._rooms import check_room, is_mind_room
+from .. import _subjects as _S
 from .._subjects import normalize_bound, normalize_subjects
 from utils import (PROV_MAX_LINES, PROV_TARGET_MAX, WAS_DERIVED_FROM, WAS_QUOTED_FROM,
                    is_bucket_id, parse_bool, prov_targets)
@@ -515,6 +521,88 @@ def _hold_receipt(bid: str, target: str, level: str, when: str, review_after: st
     return f"{head}：不会自己放下，要放下就 {close}。"
 
 
+# ------------------------------------------------------------
+# Name cards: card_of
+# ------------------------------------------------------------
+# A card is one MIND entry filed as the card of a name: how I see that person, or that
+# game, book, group. What the name is (person or thing) is the names table's call; the
+# card only follows it, and says nothing when the table does not know yet.
+
+_CARD_NAME_MAX = 64      # the store's cap on one name (bucket_manager._MAX_SUBJECT_CHARS)
+
+
+def card_room_rule(name: str, room: str) -> tuple[str, str]:
+    """Which room a card of `name` may sit in. Returns (refusal, note).
+
+    A card is a mind. A person's card is MIND/TRAITS and a thing's MIND/VIEWS, once
+    the names table says which the name is; while it does not, either MIND room is
+    taken and the note says the table does not know yet — nothing is guessed from
+    the card itself."""
+    if not is_mind_room(room):
+        return ("名字卡是一条 mind：人的卡放 MIND/TRAITS（这个人是什么样的），"
+                "东西的卡放 MIND/VIEWS（我怎么看它）。"), ""
+    person = _S.is_person(name)
+    if person is None:
+        return "", f"人名表里还不知道「{name}」是什么（人还是东西），先按 {room} 收下。"
+    if person and room != "MIND/TRAITS":
+        return f"「{name}」在人名表里是人，人的卡放 MIND/TRAITS。", ""
+    if not person and room != "MIND/VIEWS":
+        kind = _S.kind_of(name)
+        what = f"是{kind}" if kind else "记着不是人"
+        return f"「{name}」在人名表里{what}，东西的卡放 MIND/VIEWS（我怎么看它）。", ""
+    return "", ""
+
+
+async def live_card(name: str, exclude: str = "") -> str:
+    """The id of `name`'s live card, or "". Live = in the active store and not replaced
+    by a live newer version; a stored card_of is read through the table as it is now,
+    so a card filed under a spelling that has since become an alias still counts."""
+    want = name.lower()
+    for b in await rt.bucket_mgr.list_all(include_archive=False):
+        meta = b.get("metadata") or {}
+        bid = str(meta.get("id") or b.get("id") or "")
+        card = str(meta.get("card_of") or "").strip()
+        if not card or bid == exclude or meta.get("deleted_at"):
+            continue
+        newer = str(meta.get("superseded_by") or "").strip()
+        if newer and rt.bucket_mgr.is_live(newer):
+            continue
+        if (_S.name_key(card) or card).lower() == want:
+            return bid
+    return ""
+
+
+async def check_card(card_of, room: str, exclude: str = "") -> tuple[str, str, str]:
+    """The card_of argument -> (the name to store, a note for the reply, refusal). An
+    empty argument is no card. `exclude` is the entry being changed, so trace can set
+    the card an entry already is.
+
+    The name is stored as the table's key for it (an alias spelling files under the
+    entry it stands for). One live card per name: a second is refused, naming the one
+    there is."""
+    raw = str(card_of or "").strip()
+    if not raw:
+        return "", "", ""
+    if "\n" in raw or len(raw) > _CARD_NAME_MAX:
+        return "", "", f"card_of 是一个名字（最多 {_CARD_NAME_MAX} 字，不换行）。"
+    name = _S.name_key(raw)
+    if not name:
+        return "", "", f"card_of 写名字，不写「{raw}」——卡是某个名字的卡。"
+    owners = _S.candidates(raw)
+    if len(owners) > 1 and name not in owners:
+        return "", "", (f"「{raw}」在人名表里挂在好几个名字底下（{'、'.join(owners)}）"
+                        "——card_of 写其中那一个的规范名。")
+    room_err, note = card_room_rule(name, room)
+    if room_err:
+        return "", "", room_err
+    existing = await live_card(name, exclude=exclude)
+    if existing:
+        return "", "", (f"「{name}」已经有名字卡了：{existing}。一个名字一张卡——"
+                        f'改写它用 regrow(bucket_id="{existing}", ...)；真要换一张，'
+                        f'先 trace(bucket_id="{existing}", card_of="") 把那张摘掉。')
+    return name, note, ""
+
+
 def _in_the_future(when: str) -> bool:
     """Is `when` after now? A bare date is its local midnight; ten minutes of slack for
     a clock that runs a little ahead."""
@@ -834,12 +922,15 @@ async def grow_mind(room: str, text: str, from_ids, v, a,
                     direction_of_fit: str = "", bound=None, evidential: str = "",
                     internally_generated: bool = False, weight=None,
                     importance=None, meaning: str = "",
-                    test_data: bool = False, cue=None) -> str:
+                    test_data: bool = False, cue=None, card_of: str = "") -> str:
     room = str(room or "").strip()
     text = str(text or "")  # stored verbatim: never strip the body
     room_err = check_room(room, "mind")
     if room_err:
         return room_err
+    card, card_note, card_err = await check_card(card_of, room)
+    if card_err:
+        return card_err
     if not text.strip():
         return "text 不能为空。"
     size_err = check_content_size(text)
@@ -897,6 +988,7 @@ async def grow_mind(room: str, text: str, from_ids, v, a,
         room=room,
         test_data=test_data,
         cue=cue_v,
+        card_of=card,
         **v2,
     )
     try:
@@ -914,4 +1006,7 @@ async def grow_mind(room: str, text: str, from_ids, v, a,
         head += " [telic]"
     if cue_v:
         head += " [cue]"
-    return head + "（标签/摘要后台回填中）"
+    if card:
+        head += f" [名字卡:{card}]"
+    out = head + "（标签/摘要后台回填中）"
+    return out + ("\n" + card_note if card_note else "")

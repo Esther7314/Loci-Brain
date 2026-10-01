@@ -1599,6 +1599,8 @@ async def recall_core(when: str, room: str, tag: str, query: str,
             tags_ = [str(t) for t in (meta.get("tags") or []) if not str(t).startswith("__")]
             if tags_:
                 info.append("标签:" + ",".join(tags_[:6]))
+            if str(meta.get("card_of") or "").strip():
+                info.append(f"名字卡:{str(meta['card_of']).strip()}")
             # Sources must never be reduced to bare ids: a mind holds only the
             # product of thinking, the events live in its provenance, and reading it
             # has to bring the sources' gists along or the thinking has nothing to

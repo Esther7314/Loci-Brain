@@ -51,6 +51,7 @@ async def dispatch(
     cue=None,
     exception_of: str = "",
     hold: str = "",
+    card_of: str = "",
 ) -> str:
     await rt.decay_engine.ensure_started()
 
@@ -103,6 +104,9 @@ async def dispatch(
             import asyncio as _asyncio
             _asyncio.create_task(backfill_sweep())
     if kind == "event":
+        if str(card_of or "").strip():
+            return ('名字卡是一条 mind：grow(kind="mind", room="MIND/TRAITS"（人）或 '
+                    '"MIND/VIEWS"（东西）, card_of="名字", text=…, from=[…], v=…, a=…)。')
         payload_err = check_grow_items_payload(items or [])
         if payload_err:
             return payload_err
@@ -119,7 +123,8 @@ async def dispatch(
                                direction_of_fit=direction_of_fit, bound=bound,
                                evidential=evidential,
                                internally_generated=internally_generated,
-                               weight=weight, test_data=test_data, cue=cue)
+                               weight=weight, test_data=test_data, cue=cue,
+                               card_of=card_of)
     if kind == "big":
         # ⚰️ `kind="big"` was pulled from the tool face.
         #    Underneath it called fold's own bones (`_F.save_gist`) — it was a

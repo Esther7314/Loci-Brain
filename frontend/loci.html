@@ -1954,6 +1954,13 @@ async function loadWho(){
       // line is "what it has also been called".
       if ((x.variants||[]).length)
         meta.appendChild(el("span",null, "盘上还写着 " + x.variants.join("、")));
+      // What the table says it is and where it appears — shown only when the table
+      // says so; editing them is not on this screen.
+      if (x.kind) meta.appendChild(el("span",null, "是" + x.kind));
+      if ((x.present_in||[]).length)
+        meta.appendChild(el("span",null, "出现在 " + x.present_in.join("、")));
+      if ((x.member_of||[]).length)
+        meta.appendChild(el("span",null, "属于 " + x.member_of.join("、")));
       main.appendChild(meta);
       // Badges appear only when there is something to say; ordinary rows stay clean.
       if (x.pronoun) main.appendChild(el("span","flag warn","代词漏进来了"));

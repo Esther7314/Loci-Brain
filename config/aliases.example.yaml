@@ -18,7 +18,10 @@
 #   canonical name (key)  the word that lands in `subjects` in the frontmatter
 #   aliases (values)      the ways it might actually appear in the text (case-insensitive)
 #
-# ⚠️ People only. Places do not belong here — those go through tags.
+# People and things (a game, a book, a group) — whatever an entry is about. Places do
+# not belong here; those go through tags. Whether a name is a person or a thing is
+# this table's call: say it with instance_of. A table of bare alias lists (the older
+# shape, last example below) keeps working; it just says nothing about kinds.
 # ⚠️ Once a canonical name is set, do not change it. Changing it orphans every `subjects`
 #    entry already written to disk, and this table has no migration script. Decide who is
 #    going to rewrite the stored data before you touch it.
@@ -33,10 +36,38 @@
 # into one person this time. Losing the merge is much cheaper than losing the subject.
 
 # ——— write it in this shape ———
-# Michael Chen:
-#   - Mike
-#   - MC
+# Every key under a name is optional.
+#   aliases       other spellings, collapsed into the name
+#   instance_of   what it is: a person is 人; anything else is a thing (游戏, 书, 群, ...)
+#   present_in    where it appears: a character -> the work it is in
+#   member_of     a member -> the group
+# A name with nothing under it (`Book Club:`) is fine: a work or a group often has no
+# other spelling. Two same-named things are two names (`Leon`, `Leon (Detroit)`) hung in
+# different places; they are never merged by spelling.
 #
+# Michael Chen:
+#   aliases:
+#     - Mike
+#     - MC
+#   instance_of: 人
+#   member_of:
+#     - Book Club
+#
+# Book Club:
+#   instance_of: 群
+#
+# Detroit:
+#   instance_of: 游戏
+#
+# Connor:
+#   instance_of: 人
+#   present_in:
+#     - Detroit
+#
+# ——— the older shape, aliases only (still read as it always was) ———
 # Sarah:
 #   - Sarah J
 #   - "SJ"
+#
+# Names under the special key __不是人__ are "not a person" (and are no longer
+# extracted as subjects). A name with an instance_of of its own goes by that instead.

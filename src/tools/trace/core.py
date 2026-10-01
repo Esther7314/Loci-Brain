@@ -32,7 +32,7 @@ Exports: trace_core(bucket_id, name, domain, valence, arousal, tags, pinned,
                     delete, status, weight, dont_surface, media_append,
                     media_replace, hard_delete, delete_reason, restore,
                     old_str, new_str, closed_by, mark_asked, direction_of_fit,
-                    bound, cue) -> str
+                    bound, cue, card_of) -> str
 ⚰️ Seven dead parameters were removed: importance / resolved / digested /
    content / why_remembered / meaning_append / meaning_replace (see the epitaph
    at _retired below)
@@ -200,6 +200,7 @@ async def trace_core(
     direction_of_fit: Optional[str] = "",
     bound: Optional[list | str] = None,
     cue: Optional[dict | str] = None,
+    card_of: Optional[str] = None,
 ) -> str:
     bucket_id = "" if bucket_id is None else str(bucket_id)
     if name is None:
@@ -356,6 +357,7 @@ async def trace_core(
         bool(when),
         bool(folds_append),
         cue_update is not None,
+        card_of is not None,
     ))
     if restore and restore_conflicts:
         return (
@@ -632,6 +634,25 @@ async def trace_core(
             updates["bound"] = bound_names
         if cue_update is not None:
             updates["cue"] = cue_update[0]
+        # card_of: None leaves it alone, "" takes the entry off as a card, a name makes
+        # it that name's card (grow's check). A card moved to another room is checked
+        # against the rule again, so a person's card cannot drift into MIND/VIEWS.
+        card_note = ""
+        if card_of is not None:
+            if not str(card_of).strip():
+                updates["card_of"] = None
+            else:
+                from ..grow.rooms_path import check_card
+                card, card_note, card_err = await check_card(
+                    card_of, room or str(meta.get("room") or ""), exclude=bucket_id)
+                if card_err:
+                    return card_err
+                updates["card_of"] = card
+        elif room and str(meta.get("card_of") or "").strip():
+            from ..grow.rooms_path import card_room_rule
+            card_err, card_note = card_room_rule(str(meta["card_of"]).strip(), room)
+            if card_err:
+                return f"{bucket_id} 是「{meta['card_of']}」的名字卡。{card_err}"
         if when:
             # Checked against the direction this same call leaves it in.
             when_meta = ({**meta, "direction_of_fit": direction_of_fit}
@@ -740,6 +761,8 @@ async def trace_core(
     elif updates.get("status") == "active":
         changed += f" → {resolved_hint(False)}"
     out = f"已修改记忆桶 {bucket_id}: {changed}"
+    if card_note:
+        out += "\n" + card_note
     # pin's reminder trails the **success receipt**: it is not an error, the pin
     # is already on disk (see the epitaph in tools/_pin.py)
     if pin_hint:

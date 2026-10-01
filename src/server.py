@@ -846,6 +846,12 @@ async def grow(
         "Without a when, neither lifts by itself: a defer gets a day to look at it again, "
         "an avoid waits until you close it."
     ))] = "",
+    card_of: Annotated[str, _PydField(description=(
+        'Mind only: makes this entry the card of a name — the one place for how you see '
+        "that person, or that game, book or group. A person's card goes in MIND/TRAITS, "
+        "a thing's in MIND/VIEWS; one card per name, so a second is refused and the "
+        'first is reworded with regrow. e.g. card_of="Detroit", room="MIND/VIEWS".'
+    ))] = "",
 ) -> str:
     """Store what happened, and what you realized from it. Several entries per call.
 
@@ -914,6 +920,12 @@ async def grow(
            items=[{"room": "EVENT/SELF", "text": "She asked me not to push her on the gym until Sunday.", "v": 0.5, "a": 0.3}])
       Lifting it early is trace(bucket_id=<the hold>, status="resolved").
 
+    Example — the card of a name (who an entry is about may be a person or a thing; a
+    card is your one standing view of it):
+      grow(kind="mind", room="MIND/VIEWS", card_of="Detroit",
+           text="A game about choices that I keep thinking about after we stopped playing.",
+           from=["a1b2c3d4e5f6"], v=0.7, a=0.5)
+
     For a few dozen seconds after writing, tags and summaries are still being filled in in the
     background. Not finding the entry during that window is expected. Do not store it again."""
     return await _with_notice(
@@ -924,7 +936,7 @@ async def grow(
             internally_generated=bool(internally_generated),
             weight=(None if weight is None or weight < 0 else weight),
             test_data=bool(test_data), when=when,
-            cue=cue, exception_of=exception_of, hold=hold,
+            cue=cue, exception_of=exception_of, hold=hold, card_of=card_of,
         ),
         op="grow",
         args={"items": len(items or []),
@@ -933,7 +945,7 @@ async def grow(
               "bound": bound, "evidential": evidential,
               "internally_generated": bool(internally_generated), "weight": weight,
               "when": when, "test_data": bool(test_data), "cue": cue,
-              "exception_of": exception_of, "hold": hold},
+              "exception_of": exception_of, "hold": hold, "card_of": card_of},
     )
 
 
@@ -1421,6 +1433,11 @@ async def trace(
         "Replaces any cue it had; the condition is required. An empty string takes the "
         'cue off. e.g. cue={"condition": "he is back from the trip"}.'
     ))] = None,
+    card_of: Annotated[Optional[str], _PydField(description=(
+        "Make this mind entry the card of a name (a person in MIND/TRAITS, a thing in "
+        "MIND/VIEWS; one card per name). An empty string takes it off as a card. "
+        'e.g. card_of="Detroit".'
+    ))] = None,
     room: Annotated[str, _PydField(description=(
         "Move the entry to another room. Which room it is in is metadata: it says what "
         "kind of thing this is, not what the entry says, so changing it leaves no version "
@@ -1513,7 +1530,7 @@ async def trace(
 
     Changing fields:
       name / domain / tags / valence / arousal / weight / dont_surface / room / when /
-      direction_of_fit / bound / cue
+      direction_of_fit / bound / cue / card_of
       Everything here is metadata: what kind of thing this is, where it hangs in time,
       how it felt. None of it is what the entry says, so none of it leaves a version
       behind — this is correction fluid, not a new draft. The moment the words themselves
@@ -1538,7 +1555,7 @@ async def trace(
             hard_delete=hard_delete, delete_reason=delete_reason,
             restore=restore,
             old_str=old_str, new_str=new_str,
-            direction_of_fit=direction_of_fit, bound=bound, cue=cue,
+            direction_of_fit=direction_of_fit, bound=bound, cue=cue, card_of=card_of,
         ),
         op="trace",
         args={
@@ -1548,6 +1565,7 @@ async def trace(
             "folds_append": folds_append,
             "delete": delete, "status": status,
             "direction_of_fit": direction_of_fit, "bound": bound, "cue": cue,
+            "card_of": card_of,
             "hard_delete": hard_delete,
             "restore": restore,
             "delete_reason_len": len(str(delete_reason or "")),

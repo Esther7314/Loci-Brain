@@ -256,7 +256,7 @@ from utils import (
     parse_bool,
     parse_iso_datetime,
 )
-from ._rooms import is_mind_room
+from ._rooms import is_event_room, is_mind_room
 from locibrain.storage.media_store import MediaStore
 from locibrain.eventsourcing.ledger_mirror import LedgerMirror
 
@@ -336,8 +336,12 @@ HOLD_LEVELS = frozenset({"defer", "avoid"})
 # cue = "when I meet this, remember that": {condition, phrasings}. Writing one declares
 # the entry is waiting on something, so a cue without a condition is no cue. phrasings
 # are the ways it might be said, filled in later by the backfill; [] until then.
+# card_of = the name this MIND entry is the card of (the names table's key, normalised by
+# the tool that writes it). Only a MIND entry is a card; which MIND room, and one live card
+# per name, are the write tools' checks (tools/grow/rooms_path.check_card).
 V2_FIELDS = ("direction_of_fit", "bound", "evidential", "internally_generated",
-             "recurrence", "backfilled", "cue", "exception_of", "hold", "review_after")
+             "recurrence", "backfilled", "cue", "exception_of", "hold", "review_after",
+             "card_of")
 _CUE_CONDITION_MAX = 200
 _CUE_PHRASINGS_MAX_ITEMS = 16
 _CUE_PHRASING_MAX = 200
@@ -367,9 +371,9 @@ _MAX_TAG_CHARS = 128
 _MAX_DOMAINS = 16
 _MAX_DOMAIN_CHARS = 128
 # --- subjects: the third of the three kinds of label ---
-# Not many people appear in one memory; the cap exists to stop a model having a fit and
-# splitting an entire passage into person names.
-_MAX_SUBJECTS = 8
+# Not many names appear in one memory, people and things together; the cap exists to stop a
+# model having a fit and splitting an entire passage into names.
+_MAX_SUBJECTS = 16
 _MAX_BOUND = 8
 _MAX_SUBJECT_CHARS = 64
 
@@ -731,6 +735,11 @@ class BucketManager:
                 if not real_day:
                     raise ValueError(f"review_after must be one YYYY-MM-DD day, got {v!r}")
             out["review_after"] = v or None
+        if "card_of" in given:
+            v = self._sanitize_text(str(given["card_of"] or "")).strip()
+            if v and (len(v) > _MAX_SUBJECT_CHARS or "\n" in v):
+                raise ValueError(f"card_of must be one name, got {v[:_MAX_SUBJECT_CHARS + 1]!r}")
+            out["card_of"] = v or None
         return out
 
     @classmethod
@@ -1280,6 +1289,7 @@ class BucketManager:
         exception_of: str = "",
         hold: str = "",
         review_after: str = "",
+        card_of: str = "",
     ) -> str:
         """
         Create a new memory bucket, return bucket ID.
@@ -1438,10 +1448,12 @@ class BucketManager:
             direction_of_fit=direction_of_fit, bound=bound, evidential=evidential,
             internally_generated=internally_generated, recurrence=recurrence,
             backfilled=backfilled, cue=cue, exception_of=exception_of, hold=hold,
-            review_after=review_after).items() if v is not None})
+            review_after=review_after, card_of=card_of).items() if v is not None})
         if bool(metadata.get("exception_of")) != bool(metadata.get("hold")):
             raise ValueError("exception_of and hold come together: a hold names what it "
                              "is hung on and how far it reaches")
+        if metadata.get("card_of") and is_event_room(metadata.get("room")):
+            raise ValueError("card_of is for MIND entries: an event is not the card of a name")
         # --- "weight of the promise", 0.0-1.0, which is not importance ---
         # importance = how important this thing is; weight = how heavily it presses on me.
         # It belongs to what is wanted (telic).
@@ -2469,6 +2481,9 @@ class BucketManager:
         # or a level hung on nothing.
         if bool(post.get("exception_of")) != bool(post.get("hold")):
             logger.warning(f"update() refused {bucket_id}: exception_of and hold come together")
+            return False
+        if post.get("card_of") and is_event_room(post.get("room")):
+            logger.warning(f"update() refused {bucket_id}: card_of is for MIND entries")
             return False
 
         # --- Activation time and activation count ---

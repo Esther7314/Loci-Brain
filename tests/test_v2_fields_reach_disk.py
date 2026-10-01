@@ -108,3 +108,17 @@ def test_half_a_hold_or_an_empty_cue_never_reaches_disk(store, tmp_path, fields)
     with pytest.raises(ValueError):
         run(store.create(BODY, tags=["t"], **fields))
     assert not list(tmp_path.rglob("*.md"))
+
+
+def test_create_writes_card_of_on_a_mind_and_refuses_it_on_an_event(store, tmp_path):
+    bid = run(store.create(BODY, tags=["t"], room="MIND/VIEWS", card_of=" Detroit "))
+    assert _disk(tmp_path, bid)["card_of"] == "Detroit"
+    with pytest.raises(ValueError):
+        run(store.create(BODY + " (2)", tags=["t"], room="EVENT/SELF", card_of="Detroit"))
+    assert len(list(tmp_path.rglob("*.md"))) == 1
+
+
+def test_up_to_sixteen_subjects_land(store, tmp_path):
+    names = [f"name{i}" for i in range(20)]
+    bid = run(store.create(BODY, tags=["t"], subjects=names))
+    assert _disk(tmp_path, bid)["subjects"] == names[:16]
