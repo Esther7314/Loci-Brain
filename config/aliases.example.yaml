@@ -1,5 +1,7 @@
 # ============================================================
-# Alias table — used to normalise subjects. Maintained by hand, never by a model.
+# Alias table — used to normalise subjects. Maintained by hand; the background backfill
+# only ever adds a name it has not seen (with its kind) or fills in a missing instance_of,
+# and never changes a kind, an alias or a link that is already here.
 # ============================================================
 #
 # 🔴 To use it: copy this into your DATA VOLUME and rename it to aliases.yaml:

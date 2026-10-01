@@ -26,9 +26,11 @@ Tags come in three kinds, and subjects are **the new third kind**:
    be cut down to four, and a third party no longer has to be forced into the
    WORLD branch.
 
-The names table: `aliases.yaml` in the data volume (hand-maintained; never written
-by a model). Whether a name is a person or a game is the table's call, not the
-field's: subjects holds names, and the table says what each one is.
+The names table: `aliases.yaml` in the data volume (hand-maintained; the backfill
+may only add a name it does not have, with a kind, or give a kind to a name that has
+none — tools/grow/rooms_path._record_kinds). Whether a name is a person or a game is
+the table's call, not the field's: subjects holds names, and the table says what each
+one is.
 
 One entry per canonical name, every key optional:
 
@@ -441,12 +443,14 @@ def normalize_bound(names) -> tuple[list[str], str]:
 
 
 # ============================================================
-# Writing into the table — **only ever reached because a person clicked**
+# Writing into the table — the panel's clicks, and one narrow automatic writer
 # ============================================================
 # The same rule as muse/fold: the system's job is to lay things out; which one
 # changes is decided by a human click.
-# So none of these write paths has any automatic trigger; they hang off the
-# panel's "who is in here" screen.
+# These write paths hang off the panel's "who is in here" screen. The one automatic
+# caller is the backfill, through set_kind only, and only for a name the table does not
+# have or a name with no kind yet (tools/grow/rooms_path._record_kinds): it never changes
+# a kind, an alias or a link.
 #
 # 🔴 Why **text edits** rather than rewriting the whole file with
 #    yaml.safe_dump:
@@ -465,7 +469,7 @@ _QUOTES = '"' + chr(39)
 
 _NEW_TABLE_HEADER = _NL.join([
     "# " + "=" * 58,
-    "# 别名表 —— 主体（subjects）归一用。手工维护，不给模型写。",
+    "# 别名表 —— 主体（subjects）归一用。手工维护；回填只会添新名字和补空着的种类。",
     "# " + "=" * 58,
     "# 规范名（key）= 落进 frontmatter 的那个词；别名（value）= 正文里的各种写法。",
     "# 一个名字底下还可以写 instance_of（它是什么：人 / 游戏 / 书 / 群）、",

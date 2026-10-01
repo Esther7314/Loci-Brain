@@ -1,6 +1,6 @@
 """
 ========================================
-dehydrator.py — the LLM calls: dehydrate / merge / tag / split
+dehydrator.py — the LLM calls: dehydrate / merge / backfill / split
 ========================================
 
 This file wraps every prompt and every call that goes to an external LLM. tools/hold,
@@ -10,9 +10,12 @@ some content; none of them assembles a prompt itself.
 Key behaviours:
 - dehydrate(content): compress long content into a dense summary and save tokens
 - merge(old, new): blend new content into old while keeping bucket size roughly constant
-- analyze(content, for_mind=False): returns {domain, valence, arousal, tags, aliases,
-  suggested_name} (tags = the scene anchors, verified to appear literally in the body;
-  aliases = expansion words that only feed bm25; for_mind skips scene extraction)
+- backfill_request(content, context) / parse_backfill(raw, content): the one call that
+  fills a new entry's blanks — name, summary, tags (scene anchors, verified to appear
+  literally in the body), aliases (feed bm25 only), domain, subjects with kinds, and the
+  slots read off the sentence (bound, the time phrase, dreamt or imagined, evidential,
+  cue phrasings, looks like a promise). The call itself and what gets written are
+  tools/grow/rooms_path._backfill_one's
 - digest(content): split a diary entry or long text into 2~6 independent entries (used by grow)
 - Goes through an OpenAI-compatible client (DeepSeek / Ollama / LM Studio / vLLM / Gemini all work)
 - Caches dehydration results in SQLite so identical content never hits the API twice
@@ -23,8 +26,8 @@ What it deliberately does not do:
 - With no API key it does not raise; it returns a degraded result and lets the layer above
   decide what to do
 
-Exports: the Dehydrator class (dehydrate / merge / analyze / digest) and the default
-prompt strings
+Exports: the Dehydrator class (dehydrate / merge / digest), the default prompt strings,
+         BackfillAnswer · backfill_request · parse_backfill · backfill_kinds
 ========================================
 """
 
@@ -37,12 +40,13 @@ import hashlib
 import sqlite3
 import weakref
 import logging
+from dataclasses import dataclass, field
+from datetime import date
 from typing import Optional
 
 from openai import AsyncOpenAI
 
 from utils import clean_llm_json, count_tokens_approx, positive_float
-from tools._subjects import normalize_subjects
 
 from locibrain.integrations.provider_detect import (
     is_gemini_native_host,
@@ -60,9 +64,9 @@ logger = logging.getLogger("loci_brain.dehydrator")
 # templates themselves stay below, where readability wins.
 # ============================================================
 
-# --- Dehydration cache version ---
-# Bump this by one whenever a prompt that affects dehydrate/merge output changes, so
-# existing cache entries fall out of use naturally (see _content_key).
+# --- Prompt version ---
+# Bump this by one whenever a prompt in this file changes, so existing cache entries fall
+# out of use naturally (see _content_key).
 # v2: DEHYDRATE/MERGE gained the "perspective rule", which forces first person to survive
 #     (「我」 for the AI side, the person's name for the human side).
 # v3: dehydration results are accepted only against the documented JSON schema, which
@@ -74,7 +78,10 @@ logger = logging.getLogger("loci_brain.dehydrator")
 #     a line describing what the other person did came back describing what I did). So a
 #     reverse clause was added, plus a rule for handling an omitted subject, plus a
 #     reversed example.
-_PROMPT_VERSION = 4
+# v5: tagging and the summary became one backfill prompt (BACKFILL_PROMPT) that also
+#     reads bound, the time phrase, dreamt/imagined, evidential, cue phrasings, whether it
+#     looks like a promise, and a kind for each subject.
+_PROMPT_VERSION = 5
 
 # --- LLM defaults ---
 _DEFAULT_MODEL = "gemini-2.0-flash"
@@ -105,11 +112,11 @@ _DEHYDRATE_MIN_TOKENS = 100
 # --- Input truncation caps per API call (so the prompt cannot blow past the token limit) ---
 _DEHYDRATE_INPUT_LIMIT = 3000
 _MERGE_INPUT_LIMIT = 2000     # one each for old and new
-_ANALYZE_INPUT_LIMIT = 2000
+_BACKFILL_INPUT_LIMIT = 2000
 _DIGEST_INPUT_LIMIT = 5000    # a whole day of diary is a lot of text
 
 # --- max_tokens overrides for the specialised calls ---
-_ANALYZE_MAX_TOKENS = 4096      # thinking models burn a lot of tokens; leave headroom
+BACKFILL_MAX_TOKENS = 4096      # thinking models burn a lot of tokens; leave headroom
 _DIGEST_MAX_TOKENS = 8192       # splitting a diary produces a lot: thinking and output both need room
 _DIGEST_TEMPERATURE = 0.0       # splitting has to be deterministic
 
@@ -119,9 +126,10 @@ _DEFAULT_AROUSAL = 0.3  # 0 = completely calm, 1 = extremely aroused
 
 # --- Output truncation lengths ---
 _TAGS_MAX = 15           # how many tags are kept at most
+_MAX_TAG_LEN = 128       # one tag, alias or domain (bucket_manager caps at the same length)
 # Tags that merely point at "the two people this store is about" — their names, and bare
 # pronouns — never make it into tags. The reasoning is in the comments inside
-# _parse_analysis.
+# parse_backfill.
 # 🔴 The names themselves were **moved out of the code.** They used to be hard-coded here,
 #    which amounts to publishing living people's names; and anyone cloning this repo would
 #    have inherited a filter for someone else's household, which is useless to them.
@@ -318,21 +326,34 @@ MERGE_PROMPT = """你是一个信息合并专家。请将旧记忆与新内容�
 直接输出合并后的文本，不要加额外说明。"""
 
 
-# --- Auto-tagging prompt: analyze content for domain and emotion coords ---
-# The three tag groups were re-divided, cutting straight to the root:
-#   core   -> 🗑️ cut. What it extracted were words already in the body, and both the bm25
-#            index and literal matching already cover the body, so its contribution to
-#            search was zero. The one effect it did have was precisely the unwanted one:
-#            when a collapsed row picks tags by frequency, the abstract core words win
-#            every time, and that row ends up reading like a list of category names.
-#   scene  -> ✅ kept, and tags now consist of nothing else (the literal check guarantees
-#            they really do appear in the body).
-#   expand -> moved to the new `aliases` field: it feeds bm25 only, never enters the
-#            vectors, and never shows up in a collapsed row or in chips.
-ANALYZE_PROMPT = """你是一个内容分析器。请分析以下文本，输出结构化的元数据。
+# --- Backfill prompt: one call fills every slot the sentence itself can answer ---
+# Who fills which slot: the main model writes only what cannot be read off the sentence
+# (whether it is wanted, how it felt, where it goes); what can be read off it is this
+# prompt's; what has a known origin is code's. So the model copies a time phrase word for
+# word and core/_dates.py does the arithmetic, and the model names a kind for each name
+# while the names table decides whether that kind is ever written down.
+#
+# The three tag kinds keep their split:
+#   tags     the scene anchors — what a photograph of the moment would show. Verified to
+#            appear literally in the body (a model substitutes a near-variant about 4% of
+#            the time; the check is in code, not in the prompt).
+#   aliases  broadenings: they feed bm25 only, never the vectors, never a row a human reads.
+#   subjects who or what — people and things (a game, a book, a group), each with a kind.
+#
+# `{kinds}` is filled in per call (see backfill_kinds); everything else is literal JSON.
+BACKFILL_PROMPT = """你是记忆系统的回填器。下面是一条刚存下的记忆：正文是主模型写的，一个字都不能改；你只读这段话，把能从字面上读出来的格子填上。
 
-分析规则：
-1. domain（主题域）：选最精确的 1~2 个，只选真正相关的
+总规则：
+1. 只读这段话。原文没写的，一个都不许补；拿不准就留空（""、[]、false）。
+2. 「已经有的」里列出的格子是主模型自己写的，对应的键一律留空，不要重填。
+3. 不要使用 [[]] 双链标记。
+
+各个格子：
+- name：10字以内的简短标题。
+- summary：一句话摘要，中文，不超过60字。一件事就概括发生了什么；一条认知/感受就概括认识到了什么。
+- tags（场景锚点）：设想那一刻如果拍了一张照片——原文里哪些词是照片里能看见的东西（人、地方、物件），或者身体当时直接接收到的（光线明暗、冷热、声音、气味）。必须是原文里的原词。房间是 MIND 的，一律交白卷。
+- aliases（引申词）：5~8 个语义相关词（近义词、上位词、换个说法搜它时会用的词）。
+- domain（主题域）：选最精确的 1~2 个，只选真正相关的
    日常: ["饮食", "穿搭", "出行", "居家", "购物"]
    人际: ["家庭", "恋爱", "友谊", "社交"]
    成长: ["工作", "学习", "考试", "求职"]
@@ -341,62 +362,264 @@ ANALYZE_PROMPT = """你是一个内容分析器。请分析以下文本，输出
    数字: ["编程", "AI", "硬件", "网络"]
    事务: ["财务", "计划", "待办"]
    内心: ["情绪", "回忆", "梦境", "自省"]
-2. valence（情感效价）：0.0~1.0，0=极度消极 → 0.5=中性 → 1.0=极度积极
-3. arousal（情感唤醒度）：0.0~1.0，0=非常平静 → 0.5=普通 → 1.0=非常激动
-4. 关键词分两组，各自成数组：
-   scene（场景锚点）：设想那一刻如果拍了一张照片——原文里哪些词，是这张
-     照片里能看见的东西，例如：人、地方、物件等等；或者当时身体直接能
-     接收到的，例如光线明暗、冷热、声音、气味等。
-     ⚠️ 原文里没写的，一个都不许补。宁可这一步交白卷（空数组）。
-   expand（引申词）：5~8 个语义相关词（近义词、上位词、可能用别的措辞搜索的词）
-5. subjects（主体）：这段话里**出现了哪些人**，只列人，不列地点、物件、组织。
-   用文本里对他们的**称呼原样列出**（「小王」「我哥」「老板」这类**名字和称谓**），
-   ⚠️ **纯代词一律不要**（我/你/他/她/它/我们/自己/对方等）——代词是指代不是名字。
-   不要推测真名，不要给没出现的人。没有人就交白卷（空数组）。
-6. suggested_name（建议桶名）：10字以内的简短标题
-7. 在关键词和 suggested_name 中不要使用 [[]] 双链标记
+- subjects（主体）：这段话里出现的人和东西（游戏、书、群、作品……；地点不算）。每个写成 {"name": "文本里的称呼原样", "kind": "它是什么"}，kind 只能从这些里选：{kinds}；认不出是什么就写 ""。纯代词一律不要（我/你/他/她/它/我们/自己/对方等）——代词是指代不是名字。不要推测真名，不要给没出现的人。
+- bound（谁被绑着）：只在「想让它发生」是「是」的时候填：这件事是谁答应的、谁要去做（「我们俩约好」就是两个人都在）。写名字；写这条记忆的「我」就写「我」，跟「我」说话的那个人写「你」。
+- time：句子里说到的时间，**原样抄下来，不要换算**，例如 {"phrase": "下周一两点", "yearly": false, "absolute": ""}。每年都会再来的（生日、纪念日，「每年8月7号」）yearly 写 true。absolute 只在原文写明了是哪一天、你能确定时写 YYYY-MM-DD，否则留空。没说时间就都留空。
+- internally_generated：只看房间是 EVENT 的。这段话说的是梦见的、想象的、假设的（「梦见」「幻想」「假如」）写 true。
+- evidential：只看房间是 MIND 的。从看得见的迹象推出来的（「看来」「应该是」）写 "inference"；凭猜测、常识（「可能」「大概」「我猜」）写 "assumption"；都不是就留空。
+- cue_phrasings：只在「在等的事」有内容时填：那件事以后可能被怎么说出来，写几种说法（最多 16 句，每句不超过 200 字）。
+- looks_like_promise：只在「想让它发生」是「否」的时候看：这句话读起来像个承诺、约定（「答应」「说好」「下次一定」）就写 true。
 
 输出格式（纯 JSON，无其他内容）：
 {
-  "domain": ["主题域1", "主题域2"],
-  "valence": 0.7,
-  "arousal": 0.4,
-  "scene": ["场景锚点1", "场景锚点2"],
-  "expand": ["引申词1", "引申词2"],
-  "subjects": ["称呼1", "称呼2"],
-  "suggested_name": "简短标题"
+  "name": "简短标题",
+  "summary": "一句话摘要",
+  "tags": ["场景锚点"],
+  "aliases": ["引申词"],
+  "domain": ["主题域"],
+  "subjects": [{"name": "称呼", "kind": "人"}],
+  "bound": [],
+  "time": {"phrase": "", "yearly": false, "absolute": ""},
+  "internally_generated": false,
+  "evidential": "",
+  "cue_phrasings": [],
+  "looks_like_promise": false
 }"""
 
-# MIND only: there are no photographs inside an insight, so scene is not extracted —
-# forcing a model to find "the picture" inside a piece of thinking only forces it to make
-# one up. All that is wanted is expand, so a different phrasing still finds it.
-ANALYZE_PROMPT_MIND = """你是一个内容分析器。下面是一段第一人称的认知/判断（不是事件叙述）。请输出结构化元数据。
+# The kinds the prompt offers. A kind the side model returns has to be one of these or
+# one the names table already uses: an unknown word would be written into the table as
+# the name's kind and stay there (the backfill never changes a kind it finds), so a new
+# kind is the owner's to introduce on the panel.
+BACKFILL_KINDS = ("人", "游戏", "书", "群", "影视", "作品", "动物", "组织")
+_WEEKDAY_NAMES = "一二三四五六日"
+_EVIDENTIALS = ("inference", "assumption")
+_TIME_PHRASE_MAX = 40
+_PHRASINGS_MAX = 16
+_PHRASING_MAX_CHARS = 200
+_SUMMARY_MAX_CHARS = 200
+_BOUND_MAX = 8
+_SUBJECTS_MAX = 16
+_SUBJECT_NAME_MAX = 40       # the names table refuses a longer name (tools/_subjects._check_name)
+_KIND_MAX = 8
+_ABSOLUTE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
-分析规则：
-1. domain（主题域）：选最精确的 1~2 个（可选：情绪/回忆/自省/心理/恋爱/工作/学习/编程/AI 等）
-2. valence / arousal：0.0~1.0（仅供参考，调用方可能已自带）
-3. expand（引申词）：5~8 个语义相关词（近义词、上位词、可能用别的措辞搜索的词）
-4. subjects（主体）：这段话里**出现了哪些人**，只列人。用文本里对他们的称呼原样列出
-   （名字和称谓；⚠️ **纯代词一律不要**：我/你/他/她/它/我们/自己/对方等），
-   不要推测真名，不要给没出现的人。没有人就交白卷（空数组）。
-5. suggested_name（建议桶名）：10字以内的简短标题
-6. 不要使用 [[]] 双链标记
 
-输出格式（纯 JSON，无其他内容）：
-{
-  "domain": ["主题域1"],
-  "valence": 0.5,
-  "arousal": 0.3,
-  "expand": ["引申词1", "引申词2"],
-  "subjects": ["称呼1", "称呼2"],
-  "suggested_name": "简短标题"
-}"""
+def backfill_kinds() -> tuple[str, ...]:
+    """The kinds a subject may carry: the prompt's own, then any other kind the names
+    table already uses (the owner's vocabulary)."""
+    from tools._subjects import load_names_table
+    kinds = list(BACKFILL_KINDS)
+    try:
+        for rec in load_names_table().values():
+            if rec.instance_of and rec.instance_of not in kinds:
+                kinds.append(rec.instance_of)
+    except Exception:                # an unreadable table offers the prompt's kinds only
+        pass
+    return tuple(kinds)
+
+
+def backfill_request(content: str, context: dict, kinds=None) -> tuple[str, str]:
+    """The (system, user) pair for one backfill call. `context` describes the entry as it
+    is on disk: room, telic, created_day (a date), cue_condition, and `existing` —
+    {slot: value} for the slots the main model already filled, which the model is told
+    to leave alone."""
+    kinds = tuple(kinds or backfill_kinds())
+    system = BACKFILL_PROMPT.replace("{kinds}", " / ".join(kinds))
+    day = context.get("created_day")
+    lines = ["【这条记忆】",
+             f"房间：{context.get('room') or '（没写）'}"]
+    if day is not None:
+        lines.append(f"存下的那天：{day.isoformat()}（星期{_WEEKDAY_NAMES[day.weekday()]}）")
+    lines.append(f"想让它发生：{'是' if context.get('telic') else '否'}")
+    lines.append(f"在等的事：{context.get('cue_condition') or '（无）'}")
+    existing = {k: v for k, v in (context.get("existing") or {}).items() if v}
+    if existing:
+        shown = "；".join(f"{k}={'、'.join(map(str, v)) if isinstance(v, list) else v}"
+                         for k, v in existing.items())
+        lines.append(f"已经有的：{shown}")
+    lines += ["", "【正文】", content[:_BACKFILL_INPUT_LIMIT]]
+    return system, "\n".join(lines)
+
+
+@dataclass
+class BackfillAnswer:
+    """What one backfill call said, every part validated on its own. An empty value is
+    "not said"; `subjects` is None when the names part was absent or malformed, which is
+    different from a valid empty list. `problems` names each part that was dropped."""
+    name: str = ""
+    summary: str = ""
+    tags: list = field(default_factory=list)
+    aliases: list = field(default_factory=list)
+    domain: list = field(default_factory=list)
+    subjects: Optional[list] = None           # [(name, kind)], kind "" when not known
+    bound: list = field(default_factory=list)
+    time_phrase: str = ""
+    time_yearly: bool = False
+    time_absolute: str = ""
+    internally_generated: bool = False
+    evidential: str = ""
+    cue_phrasings: list = field(default_factory=list)
+    looks_like_promise: bool = False
+    problems: list = field(default_factory=list)
+
+    def says_anything(self) -> bool:
+        return any((self.name, self.summary, self.tags, self.aliases, self.domain,
+                    self.subjects, self.bound, self.time_phrase, self.time_absolute,
+                    self.internally_generated, self.evidential, self.cue_phrasings,
+                    self.looks_like_promise))
+
+
+def _clean_text(value) -> str:
+    return re.sub(r"\[\[([^\]]+)\]\]", r"\1", value).strip().strip('"').strip()
+
+
+def _string_list(value, *, max_items: int, max_chars: int) -> Optional[list]:
+    """A list of strings, stripped, deduplicated, empty ones dropped; an item over
+    max_chars is dropped rather than cut (half a phrase is not a phrase). None when the
+    value is not a list of strings at all."""
+    if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+        return None
+    out: list[str] = []
+    for x in value:
+        x = _clean_text(x)
+        if x and len(x) <= max_chars and x not in out:
+            out.append(x)
+    return out[:max_items]
+
+
+def _subjects_part(value, kinds) -> Optional[list]:
+    """[(name, kind)] from [{"name", "kind"}], or None when any item is malformed: a name
+    that is not a short one-line string, a kind that is not a string, or a kind outside
+    `kinds`. One bad item spoils the part — a model returning a bad shape must not get
+    the rest of its names into the table."""
+    if not isinstance(value, list) or len(value) > _SUBJECTS_MAX:
+        return None
+    out: list[tuple[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict) or set(item) - {"name", "kind"}:
+            return None
+        name, kind = item.get("name"), item.get("kind", "")
+        if kind is None:
+            kind = ""
+        if not isinstance(name, str) or not isinstance(kind, str):
+            return None
+        name, kind = name.strip(), kind.strip()
+        if not name or len(name) > _SUBJECT_NAME_MAX or "\n" in name or "\r" in name:
+            return None
+        if kind and (len(kind) > _KIND_MAX or kind not in kinds):
+            return None
+        if name not in [n for n, _ in out]:
+            out.append((name, kind))
+    return out
+
+
+def _real_day(value: str) -> bool:
+    if not _ABSOLUTE_DATE_RE.match(value):
+        return False
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
+def parse_backfill(raw: str, content: str, kinds=None) -> Optional["BackfillAnswer"]:
+    """Validate one backfill answer strictly. None when it is not a JSON object or says
+    nothing usable; otherwise every part that holds up, each part on its own — a bad
+    `time` does not cost the summary. Unknown keys (valence, arousal, ...) are dropped:
+    how it felt is never the side model's to answer."""
+    try:
+        parsed = json.loads(clean_llm_json(raw or ""))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    kinds = tuple(kinds or backfill_kinds())
+    ans = BackfillAnswer()
+
+    def text(key: str, cap: int) -> str:
+        v = parsed.get(key, "")
+        if v in (None, ""):
+            return ""
+        if not isinstance(v, str):
+            ans.problems.append(key)
+            return ""
+        return _clean_text(v)[:cap]
+
+    def strings(key: str, max_items: int, max_chars: int) -> list:
+        v = parsed.get(key, [])
+        if v in (None, ""):
+            return []
+        out = _string_list(v, max_items=max_items, max_chars=max_chars)
+        if out is None:
+            ans.problems.append(key)
+            return []
+        return out
+
+    def flag(key: str) -> bool:
+        v = parsed.get(key, False)
+        if v in (None, ""):
+            return False
+        if not isinstance(v, bool):
+            ans.problems.append(key)
+            return False
+        return v
+
+    ans.name = text("name", _NAME_MAX_CHARS)
+    ans.summary = text("summary", _SUMMARY_MAX_CHARS)
+    # Tags that merely point at the two people this store is about never get in: the
+    # whole store is about them, so their names and the bare pronouns in `_PRONOUN_TAGS`
+    # distinguish nothing. Only those two are blocked — anyone else's name does
+    # distinguish, and is kept. Blocked here in code; the model may output them all it
+    # likes.
+    person_stop = _person_tags()      # recomputed every time: a config change needs no restart
+    tags = [t for t in strings("tags", _TAGS_MAX * 2, _MAX_TAG_LEN)
+            if t in content and t not in person_stop]
+    aliases = [t for t in strings("aliases", _TAGS_MAX * 2, _MAX_TAG_LEN)
+               if t not in person_stop and t not in tags]
+    ans.domain = strings("domain", _DOMAIN_MAX, _MAX_TAG_LEN)
+
+    if parsed.get("subjects") not in (None, ""):
+        ans.subjects = _subjects_part(parsed.get("subjects"), kinds)
+        if ans.subjects is None:
+            ans.problems.append("subjects")
+    # A name already in subjects says nothing more as a label: it never reaches tags or
+    # aliases. This needs no configuration — it uses the names this answer extracted.
+    named = {n for n, _ in ans.subjects or []}
+    ans.tags = [t for t in tags if t not in named][:_TAGS_MAX]
+    ans.aliases = [t for t in aliases if t not in named][:_TAGS_MAX]
+    ans.bound = strings("bound", _BOUND_MAX, _SUBJECT_NAME_MAX)
+
+    t = parsed.get("time")
+    if isinstance(t, dict) and not set(t) - {"phrase", "yearly", "absolute"}:
+        phrase, yearly, absolute = t.get("phrase") or "", t.get("yearly") or False, \
+            t.get("absolute") or ""
+        if (isinstance(phrase, str) and isinstance(yearly, bool)
+                and isinstance(absolute, str) and len(phrase.strip()) <= _TIME_PHRASE_MAX
+                and (not absolute.strip() or _real_day(absolute.strip()))):
+            ans.time_phrase, ans.time_yearly = phrase.strip(), yearly
+            ans.time_absolute = absolute.strip()
+        else:
+            ans.problems.append("time")
+    elif t not in (None, "", {}):
+        ans.problems.append("time")
+
+    ans.internally_generated = flag("internally_generated")
+    ev = text("evidential", 16)
+    if ev and ev not in _EVIDENTIALS:
+        ans.problems.append("evidential")
+        ev = ""
+    ans.evidential = ev
+    ans.cue_phrasings = strings("cue_phrasings", _PHRASINGS_MAX, _PHRASING_MAX_CHARS)
+    ans.looks_like_promise = flag("looks_like_promise")
+    return ans if ans.says_anything() else None
 
 
 class Dehydrator:
     """
-    Data dehydrator + content analyzer.
-    Three capabilities: dehydration / merge / auto-tagging (domain + emotion).
+    Data dehydrator, merger and diary splitter.
+    Three capabilities: dehydration / merge / diary splitting. The backfill's one call
+    goes through `_chat` from tools/grow/rooms_path, with the prompt and the parser above.
     API-only: every public method requires a working LLM API.
     If the API is unavailable, methods raise RuntimeError so callers can
     surface the failure to the user instead of silently producing low-quality results.
@@ -530,7 +753,7 @@ class Dehydrator:
     def _require_api(self) -> None:
         """Raise a RuntimeError with one shared message when the API is unavailable.
 
-        dehydrate / merge / analyze / digest each used to repeat
+        dehydrate / merge / digest each used to repeat
         `if not self.api_available: raise RuntimeError("...")`. With this, a caller writes
         one line, `self._require_api()`, and the wording is changed in one place for all of
         them.
@@ -616,7 +839,7 @@ class Dehydrator:
 
         Parameters:
             system, user — the system/user messages of the chat completion
-            max_tokens   — override the default (analyze and digest each want their own)
+            max_tokens   — override the default (backfill and digest each want their own)
             temperature  — override the default (digest and plan_judge need 0.0)
             model        — another model on the same endpoint; None = self.model
         """
@@ -735,9 +958,9 @@ class Dehydrator:
     ) -> tuple[float, float]:
         """Read valence / arousal out of meta and clamp them to [0, 1].
 
-        Three places validate an LLM response the same way (_format_output /
-        _parse_analysis / _parse_digest); gathering it here guarantees all three behave
-        identically: a parse failure always returns (default V, default A).
+        Two places validate an LLM response the same way (_format_output /
+        _parse_digest); gathering it here guarantees both behave identically: a parse
+        failure always returns (default V, default A).
         """
         try:
             v = max(0.0, min(1.0, float(meta.get("valence", default_v))))
@@ -979,173 +1202,6 @@ class Dehydrator:
         if todos:
             lines.append("待办：" + "；".join(todos))
         return "\n".join(lines) if lines else content
-
-    # ---------------------------------------------------------
-    # Auto-tagging: analyze content for domain + emotion + tags
-    # Called by server.py when storing new memories
-    # ---------------------------------------------------------
-    async def analyze(self, content: str, for_mind: bool = False) -> dict:
-        """
-        Analyze content and return structured metadata.
-
-        for_mind=True: a MIND entry wants only aliases plus the summary, and no scene is
-        extracted — there are no photographs inside an insight, so its tags come back
-        empty. That is the design, not a defect.
-
-        Returns: {"domain", "valence", "arousal", "tags", "aliases", "suggested_name"}
-        """
-        if not content or not content.strip():
-            return self._default_analysis()
-
-        # --- API analyze (no local fallback) ---
-        self._require_api()
-        try:
-            result = await self._api_analyze(content, for_mind=for_mind)
-            if result:
-                return result
-            raise RuntimeError("API 打标返回空结果")
-        except RuntimeError:
-            raise
-        except Exception as e:
-            raise RuntimeError(f"API 打标失败，请检查 API 连接: {e}") from e
-
-    # ---------------------------------------------------------
-    # API call: auto-tagging
-    # ---------------------------------------------------------
-    async def _api_analyze(self, content: str, for_mind: bool = False) -> dict:
-        """
-        Call LLM API for content analysis / tagging.
-        """
-        raw = await self._chat(
-            ANALYZE_PROMPT_MIND if for_mind else ANALYZE_PROMPT,
-            content[:_ANALYZE_INPUT_LIMIT],
-            max_tokens=_ANALYZE_MAX_TOKENS,
-            temperature=_DEFAULT_TEMPERATURE,
-        )
-        if not raw.strip():
-            return self._default_analysis()
-        return self._parse_analysis(raw, content)
-
-    # ---------------------------------------------------------
-    # Parse API JSON response with safety checks
-    # Ensure valence/arousal in 0~1, domain/tags valid
-    # ---------------------------------------------------------
-    def _parse_analysis(self, raw: str, content: str = "") -> dict:
-        """
-        Parse and validate API tagging result.
-
-        `content` is the original text, used to **verify literally** that each scene anchor
-        really appears in it — see the comments below.
-        """
-        try:
-            cleaned = self._strip_md_fence(raw)
-            result = json.loads(cleaned)
-        except (json.JSONDecodeError, IndexError, ValueError):
-            logger.warning(f"API tagging JSON parse failed / JSON 解析失败: {raw[:_PARSE_ERR_PREVIEW]}")
-            return self._default_analysis()
-
-        if not isinstance(result, dict):
-            return self._default_analysis()
-
-        # --- Validate and clamp value ranges ---
-        valence, arousal = self._clamp_va(result)
-
-        # --- tags = scene only; expand moved out to aliases ---
-        # Why (three groups were defined, then cut to two): upstream had only the single
-        # `tags` dimension, so abstract distillations were moonlighting as a classifier.
-        # Loci has `room`, so classification already has an owner, and tags can concentrate
-        # on recording "what is inside this one" — a collapsed row then turns into picture
-        # words by itself, with not one line of the ordering logic changed, and the raw
-        # material for stringing pictures together comes for free.
-        #
-        # scene (the scene anchors): memory works like a series of photographs, and what
-        # surfaces first on recall is what was in the picture (a table, an institution,
-        # some materials, and so on).
-        # ⚠️ A scene word must appear literally in the body: the model occasionally
-        # substitutes a variant (turning a phrase into its near-opposite), measured at 4.3%.
-        # Blocking that here in code is more reliable than repeating the instruction in the
-        # prompt.
-        #
-        # aliases (formerly expand, the expansion words): they feed bm25 only, so a
-        # different phrasing still finds it. They never enter the vectors and never appear
-        # in a collapsed row or in chips — they are search's hidden rail, not a label meant
-        # for human eyes.
-        #
-        # Tags that merely point at the two people this store is about never get in: the
-        # entire store is about them, so their names, and the bare pronouns in
-        # `_PRONOUN_TAGS`, carry no distinguishing power under any circumstances.
-        # ⚠️ Only those two are blocked. Anyone else's name does distinguish, and is kept.
-        # ⚠️ Blocked in code, not lectured about in the prompt — the model may output them
-        # all it likes, they simply do not get in.
-        _person_stop = _person_tags()      # recomputed every time: a config change needs no restart
-        scene = [str(t) for t in (result.get("scene") or [])
-                 if str(t).strip() and str(t) in content]
-        tags = [t for t in scene if t not in _person_stop]
-        aliases = [str(t) for t in (result.get("expand") or [])
-                   if str(t).strip() and str(t) not in _person_stop]
-        if not tags and not aliases:
-            # Fallback: the model still returned pre-merged `tags` in the old format
-            # (during a prompt transition, or because it did not comply)
-            tags = [str(t) for t in (result.get("tags") or [])
-                    if str(t).strip() and str(t) not in _person_stop]
-        _seen: set[str] = set()
-        tags = [t for t in tags if not (t in _seen or _seen.add(t))]
-        _seen = set(tags)  # an alias duplicating a tag is pointless (bm25 already has it)
-        aliases = [t for t in aliases if not (t in _seen or _seen.add(t))]
-
-        # --- subjects: who. **A third, independent kind** — it enters neither tags nor aliases ---
-        # What the model extracts are the **forms of address** used in the body (things like
-        # 「我哥」 or 「老板」), and normalize_subjects then runs them through the alias table
-        # to reach a canonical name. Normalising is a gate, not a convention: without it a
-        # nickname and a full name split into two different subjects and retrieval breaks on
-        # the spot.
-        # ⚠️ There is deliberately **no** "must appear literally in the body" check here —
-        #    that guarantee belongs to tags, whereas the entire job of a subject is to
-        #    translate a form of address into the canonical name behind it. The two rules
-        #    point in opposite directions; do not copy one into the other.
-        subjects = normalize_subjects(result.get("subjects"))
-
-        # 🔴 **A subject extracted from this record may not also appear in its tags or
-        #    aliases.** "Who" already has a field of its own, and appearing once more as a
-        #    label carries zero information.
-        #    This rule **knows no names and holds for everyone** — unlike the stop-list
-        #    above it needs no configuration, because it uses the people this very record
-        #    extracted. So it is correct the moment anyone installs this, without filling in
-        #    their own name first.
-        #    (Both are kept: the stop-list blocks the two people who carry no distinguishing
-        #     power in ANY entry, even one that did not extract them as subjects; this rule
-        #     blocks whoever has already been named in THIS entry.)
-        if subjects:
-            _subj = {str(x).strip() for x in subjects if str(x).strip()}
-            tags = [t for t in tags if t not in _subj]
-            aliases = [t for t in aliases if t not in _subj]
-
-        return {
-            "domain": result.get("domain", ["未分类"])[:_DOMAIN_MAX],
-            "valence": valence,
-            "arousal": arousal,
-            "tags": tags[:_TAGS_MAX],
-            "aliases": aliases[:_TAGS_MAX],
-            "subjects": subjects,
-            "suggested_name": str(result.get("suggested_name", ""))[:_NAME_MAX_CHARS],
-        }
-
-    # ---------------------------------------------------------
-    # Default analysis result (empty content or total failure)
-    # ---------------------------------------------------------
-    def _default_analysis(self) -> dict:
-        """
-        Return default neutral analysis result.
-        """
-        return {
-            "domain": ["未分类"],
-            "valence": _DEFAULT_VALENCE,
-            "arousal": _DEFAULT_AROUSAL,
-            "tags": [],
-            "aliases": [],
-            "subjects": [],
-            "suggested_name": "",
-        }
 
     # ---------------------------------------------------------
     # Diary digest: split daily notes into independent memory entries

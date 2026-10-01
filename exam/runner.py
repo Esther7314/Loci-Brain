@@ -13,9 +13,11 @@ WHAT ONE ITEM DOES
        using Loci's own BucketManager so the files look exactly like real ones. An
        item's `slices:` batch (a day of a host's raw lines) is then handed to Loci's
        own intake, with the slicing written in the item standing in for the side model.
-    3. Start the real MCP server (exam/serve.py) over stdio with the fake clock.
+    3. Start the real MCP server (exam/serve.py) over stdio with the fake clock. An item's
+       `side_model:` ({phrase in the body: answer}) answers for the backfill's side model.
     4. Walk the `steps`: move the clock, call tools (a call may carry `write_key:`, the
-       key a host would send for that write), take snapshots, run checks.
+       key a host would send for that write), wait (`wait: seconds`, for background work
+       such as the backfill), take snapshots, run checks.
     5. Each check records pass / fail and one line of evidence read back from disk or
        from the tool's own output.
 
@@ -450,6 +452,7 @@ async def library(item: dict, keep: bool, tag: str = ""):
     clock_file = lib.parent / f"{lib.name}.clock"
     config_file = lib.parent / f"{lib.name}.config.yaml"
     config_file.write_text(yaml.safe_dump(exam_config()), encoding="utf-8")
+    side_model_file = lib.parent / f"{lib.name}.side_model.json"
     env = dict(os.environ)
     env.update({
         "LOCI_BUCKETS_DIR": str(lib),
@@ -461,6 +464,10 @@ async def library(item: dict, keep: bool, tag: str = ""):
         "EXAM_SEED": str(item.get("seed", 0)),
         "PYTHONIOENCODING": "utf-8",
     })
+    if item.get("side_model"):
+        side_model_file.write_text(json.dumps(item["side_model"], ensure_ascii=False),
+                                   encoding="utf-8")
+        env["EXAM_SIDE_MODEL_FILE"] = str(side_model_file)
     for k in ("OPENAI_API_KEY", "DEEPSEEK_API_KEY", "LOCI_DEHYDRATION_API_KEY",
               "LOCI_EMBEDDING_API_KEY", "GEMINI_API_KEY"):
         env.pop(k, None)
@@ -482,7 +489,7 @@ async def library(item: dict, keep: bool, tag: str = ""):
                 os.environ[k] = v
         if not keep:
             shutil.rmtree(lib, ignore_errors=True)
-            for suffix in (".clock", ".config.yaml", ".server.log"):
+            for suffix in (".clock", ".config.yaml", ".server.log", ".side_model.json"):
                 (lib.parent / f"{lib.name}{suffix}").unlink(missing_ok=True)
 
 
@@ -514,6 +521,8 @@ async def run_item(item: dict, keep: bool) -> ItemResult:
                                 L.set_clock(step["at"])
                             elif "call" in step:
                                 await run.call(step)
+                            elif "wait" in step:
+                                await asyncio.sleep(float(step["wait"]))
                             elif "snapshot" in step:
                                 run.snapshot(step)
                             elif "newest" in step:
@@ -546,7 +555,9 @@ def seams() -> tuple[str, ...]:
             "a call step's write_key is sent in _meta and set for that call (exam/serve.py; "
             "the request layer will set it from the host's turn)",
             "an item's slices: batch goes through Loci's intake in setup, its cut standing in "
-            "for the side model (exam/runner.py seed_slices)")
+            "for the side model (exam/runner.py seed_slices)",
+            "an item's side_model: answers the backfill's side-model call, picked by a phrase "
+            "in the body (exam/serve.py; no item without one is affected)")
 
 
 def require_search_deps() -> None:

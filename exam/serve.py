@@ -20,6 +20,11 @@ And a second seam: a call step may carry a write key (`write_key:` in the item),
 request's _meta and set for that call the way the request layer will set it from the
 host's turn header.
 
+And a third: an item's `side_model:` ({phrase: answer}, handed over in EXAM_SIDE_MODEL_FILE)
+answers the side model's chat — the backfill's one call — with the answer whose phrase
+appears in the request (the entry's body), and "" when none does. Without the file the
+chat is untouched: no key, so it answers "".
+
 Nothing else differs from a real start: same tools, same argument checks, same output.
 """
 
@@ -79,5 +84,21 @@ async def _call_tool_under_write_key(self, name, arguments):
 
 
 FastMCP.call_tool = _call_tool_under_write_key
+
+_side_model_file = os.environ.get("EXAM_SIDE_MODEL_FILE", "").strip()
+if _side_model_file:
+    import json  # noqa: E402
+
+    from core.dehydrator import Dehydrator  # noqa: E402
+
+    _side_answers = json.loads(Path(_side_model_file).read_text(encoding="utf-8"))
+
+    async def _side_model_chat(self, system, user, **_kwargs):
+        for phrase, answer in _side_answers.items():
+            if phrase in user:
+                return answer if isinstance(answer, str) else json.dumps(answer, ensure_ascii=False)
+        return ""
+
+    Dehydrator._chat = _side_model_chat
 
 runpy.run_path(str(ROOT / "src" / "server.py"), run_name="__main__")

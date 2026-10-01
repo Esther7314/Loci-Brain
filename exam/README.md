@@ -45,8 +45,12 @@ Needs no keys; nothing leaves the machine.
     - check: {segment: think, desc: "...", output: afternoon, lacks: b20001}
 ```
 
-Steps: `at` · `call` (+ `args`, `as`, `capture: {var: regex}`) · `snapshot` (+ `as`) ·
-`newest: <id>` (+ `as`: follow `superseded_by` to the latest version) · `check`.
+Steps: `at` · `call` (+ `args`, `as`, `capture: {var: regex}`) · `wait: seconds` (for
+background work such as the backfill) · `snapshot` (+ `as`) · `newest: <id>` (+ `as`:
+follow `superseded_by` to the latest version) · `check`.
+
+An item may carry `side_model: {phrase: answer}`: the backfill's side-model call is answered
+with the answer whose phrase appears in the entry's body (a seam, listed in the report).
 
 Checks, each tagged with the paper's segment (store / find / think / source / input / use):
 

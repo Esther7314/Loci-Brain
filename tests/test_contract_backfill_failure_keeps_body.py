@@ -3,8 +3,8 @@
 
 WHAT THIS FREEZES AND WHY IT IS FROZEN NOW
     Writing a memory happens in two moves. The body goes to disk immediately, by itself,
-    with neutral placeholder metadata. Then a background pass asks a model for tags,
-    subjects, a domain, a name and a summary, and writes those on top.
+    with neutral placeholder metadata. Then a background pass asks a side model, in one
+    call, for tags, subjects, a domain, a name and a summary, and writes those on top.
 
     The second move can fail — an expired key, a rate limit, a model that returns nothing,
     a network that is not there. The contract is about what the failure is allowed to cost:
@@ -42,12 +42,11 @@ WHAT THIS FREEZES AND WHY IT IS FROZEN NOW
 
 WHY THE FAKE RUNTIME
     `_backfill_one` reaches for the global runtime for its model, its store and its logger.
-    That is exactly what step two of this work order is about changing. These tests are
-    written BEFORE that change, on purpose: they are what tells us the change did not move
-    the semantics. So the runtime is faked rather than the function reshaped — and when the
-    signature does change, this file should keep passing with a smaller fake, not a bigger one.
+    So the runtime is faked rather than the function reshaped. The model is one `_chat`:
+    tagging and the summary are a single call, and the fake answers it with JSON.
 """
 import asyncio
+import json
 
 import pytest
 
@@ -58,30 +57,24 @@ BODY = "She said the panel stays in Chinese and the comments go. That is the who
 
 
 class FakeDehydrator:
-    """Stands in for the tagging model. Each knob is one way the real thing fails."""
+    """Stands in for the side model. Each knob is one way the real thing fails; an answer
+    is a dict (sent back as JSON) or a raw string, one per call."""
 
-    def __init__(self, *, analyze_raises=False, analyze_returns=None,
-                 chat_returns=None, chat_raises=False, has_chat=True):
-        self.analyze_raises = analyze_raises
-        self.analyze_returns = analyze_returns
-        self.chat_returns = list(chat_returns or [])
-        self.chat_raises = chat_raises
-        self.analyze_calls = 0
+    def __init__(self, *, answers=None, raises=False, has_chat=True):
+        self.answers = list(answers or [])
+        self.raises = raises
         self.chat_calls = 0
         if not has_chat:
             self._chat = None
 
-    async def analyze(self, text, for_mind=False):
-        self.analyze_calls += 1
-        if self.analyze_raises:
-            raise RuntimeError("upstream 401: your API key expired")
-        return self.analyze_returns
-
     async def _chat(self, system, user, max_tokens=0, temperature=0.0):
         self.chat_calls += 1
-        if self.chat_raises:
-            raise RuntimeError("connection reset")
-        return self.chat_returns.pop(0) if self.chat_returns else ""
+        if self.raises:
+            raise RuntimeError("upstream 401: your API key expired")
+        if not self.answers:
+            return ""
+        answer = self.answers.pop(0)
+        return answer if isinstance(answer, str) else json.dumps(answer, ensure_ascii=False)
 
 
 class FakeStore:
@@ -114,6 +107,14 @@ class FakeLogger:
     warning = info = debug = error = _record
 
 
+@pytest.fixture(autouse=True)
+def names_table(tmp_path, monkeypatch):
+    """A throwaway names table: the backfill may add names to it."""
+    from tools import _subjects as S
+    monkeypatch.setenv("LOCI_ALIAS_TABLE", str(tmp_path / "aliases.yaml"))
+    monkeypatch.setattr(S, "_cache", None)
+
+
 @pytest.fixture
 def runtime(monkeypatch):
     """Install fakes on the shared runtime and take them off again afterwards."""
@@ -132,23 +133,23 @@ def run(coro):
 
 # ───────────────────────── the model falls over ─────────────────────────
 
-def test_analyze_raising_does_not_propagate(runtime):
+def test_the_model_raising_does_not_propagate(runtime):
     # Criterion: backfill runs detached, behind the call that already returned success to
     # the caller. An exception escaping here is an unhandled task exception nobody sees,
     # and the caller has already been told the memory was saved — which it was.
-    d = FakeDehydrator(analyze_raises=True, chat_returns=["a summary"])
+    d = FakeDehydrator(raises=True)
     store = FakeStore()
     runtime(d, store)
     run(R._backfill_one("b1", BODY, "event"))       # must simply return
 
 
-def test_nothing_is_invented_when_analyze_fails(runtime):
+def test_nothing_is_invented_when_the_model_fails(runtime):
     # Criterion: THE assertion of this file. With no answer from the model, none of the
     # fields it would have filled may be written — not as empty, not as a placeholder.
     # An absent field can be retried; a field written empty looks answered forever.
     # `name` is no longer on this list (see the 2026-08-20 amendment at the top): it is
     # filled from the body, which is a quote, not a guess — and it is checked below.
-    d = FakeDehydrator(analyze_raises=True, chat_returns=["a real summary"])
+    d = FakeDehydrator(raises=True)
     store = FakeStore()
     runtime(d, store)
     run(R._backfill_one("b1", BODY, "event"))
@@ -162,7 +163,7 @@ def test_nothing_is_invented_when_analyze_fails(runtime):
 def test_a_failed_model_is_written_down_somewhere(runtime):
     # Criterion: silence is the thing that makes this class of failure expensive. It does
     # not have to interrupt anyone, but it does have to be findable afterwards.
-    d = FakeDehydrator(analyze_raises=True, chat_returns=["s"])
+    d = FakeDehydrator(raises=True)
     logger = runtime(d)
     run(R._backfill_one("b1", BODY, "event"))
     assert any("b1" in line for line in logger.lines), \
@@ -173,7 +174,7 @@ def test_the_body_is_never_written_by_backfill(runtime):
     # Criterion: backfill only ever adds metadata. The body reached disk before the model
     # was asked, so any write of content here would be backfill overwriting the one thing
     # that was already safe — with a value derived from a model that just failed.
-    d = FakeDehydrator(analyze_raises=True, chat_returns=["s"])
+    d = FakeDehydrator(raises=True)
     store = FakeStore()
     runtime(d, store)
     run(R._backfill_one("b1", BODY, "event"))
@@ -183,7 +184,7 @@ def test_the_body_is_never_written_by_backfill(runtime):
 def test_a_failed_write_does_not_propagate_either(runtime):
     # Criterion: the store can fail too (disk full, file locked). Same reasoning as the
     # model: the caller is long gone and the body is already safe.
-    d = FakeDehydrator(analyze_returns={"tags": ["x"]}, chat_returns=["s"])
+    d = FakeDehydrator(answers=[{"tags": ["panel"], "summary": "s"}])
     runtime(d, FakeStore(update_raises=True))
     run(R._backfill_one("b1", BODY, "event"))
 
@@ -199,7 +200,7 @@ def test_the_unfinished_marker_survives_a_total_model_outage(runtime):
     #    honest thing to write with the model down — a stamped fallback name, quoted from
     #    the body — so "no write at all" would now fail while the thing it was protecting
     #    is untouched. It is spelled out as the marker itself instead.
-    d = FakeDehydrator(analyze_raises=True, has_chat=False)
+    d = FakeDehydrator(raises=True, has_chat=False)
     store = FakeStore()
     runtime(d, store)
     run(R._backfill_one("b1", BODY, "event"))
@@ -217,7 +218,7 @@ def test_summary_falls_back_to_the_callers_own_words(runtime):
     # Criterion: the fallback quotes the body rather than inventing a line. The summary is
     # the hook that makes a memory visible in a zoomed-out view, so an empty one hides it —
     # but a made-up one would be worse, because it would read as something she wrote.
-    d = FakeDehydrator(analyze_returns=None, chat_returns=["", ""])
+    d = FakeDehydrator(answers=["", ""])
     store = FakeStore()
     runtime(d, store)
     run(R._backfill_one("b1", BODY, "event"))
@@ -231,7 +232,7 @@ def test_summary_is_absent_rather_than_empty_when_there_is_no_model_at_all(runti
     # Criterion: with no chat channel there is nothing to fall back *from* — the distinction
     # this file is about. Absent means `backfill_sweep` can still find this bucket and
     # finish the job once a model is configured.
-    d = FakeDehydrator(analyze_returns={"tags": ["t"]}, has_chat=False)
+    d = FakeDehydrator(answers=[{"tags": ["panel"]}], has_chat=False)
     store = FakeStore()
     runtime(d, store)
     run(R._backfill_one("b1", BODY, "event"))
@@ -242,7 +243,7 @@ def test_a_raising_chat_does_not_fall_back(runtime):
     # Criterion: an empty answer and a thrown exception are different. Empty means the model
     # answered and had nothing; a raise means it never answered, and the right record of
     # that is "not done yet", not a degraded stand-in that ends the retry.
-    d = FakeDehydrator(analyze_returns={"tags": ["t"]}, chat_raises=True)
+    d = FakeDehydrator(raises=True)
     store = FakeStore()
     runtime(d, store)
     run(R._backfill_one("b1", BODY, "event"))
@@ -256,11 +257,11 @@ def test_existing_tags_are_merged_not_replaced(runtime):
     # Criterion: system tags land on a bucket between the write and the backfill. The model
     # knows nothing about them, so replacing the list drops them — and a dropped system tag
     # is a memory that stops belonging to the thing it belonged to, silently.
-    d = FakeDehydrator(analyze_returns={"tags": ["evening", "panel"]}, chat_returns=["s"])
+    d = FakeDehydrator(answers=[{"tags": ["comments", "panel"], "summary": "s"}])
     store = FakeStore(existing_tags=["__archive_fact__"])
     runtime(d, store)
     run(R._backfill_one("b1", BODY, "event"))
-    assert store.updates[0]["tags"] == ["__archive_fact__", "evening", "panel"]
+    assert store.updates[0]["tags"] == ["__archive_fact__", "comments", "panel"]
 
 
 class FakeEmbeddings:
@@ -296,7 +297,7 @@ def test_a_similarity_hint_goes_on_top_of_the_tags_already_there(runtime, kind, 
     # being written. A regrown entry is always close to the version it replaced, so this
     # path runs on nearly every regrow — and a hint written on its own replaces the list,
     # taking __gist__ and the profile page's tag with it, with no sign.
-    d = FakeDehydrator(analyze_returns=None, chat_returns=["s"])
+    d = FakeDehydrator(answers=[{"summary": "s"}])
     store = NeighbourStore(existing_tags=["__gist__", "__档案事实__"])
     runtime(d, store)
     run(R._backfill_one("b1", BODY, kind))
@@ -311,7 +312,7 @@ class UnreadableStore(FakeStore):
 def test_tags_are_not_written_when_the_current_ones_cannot_be_read(runtime):
     # Criterion: without the current list, any write of tags is a replacement. Missing one
     # round of added tags can be retried; the system tags already there cannot be recovered.
-    d = FakeDehydrator(analyze_returns={"tags": ["evening"]}, chat_returns=["s"])
+    d = FakeDehydrator(answers=[{"tags": ["panel"], "summary": "s"}])
     store = UnreadableStore(existing_tags=["__gist__"])
     runtime(d, store)
     run(R._backfill_one("b1", BODY, "event"))
@@ -322,12 +323,12 @@ def test_tags_are_not_written_when_the_current_ones_cannot_be_read(runtime):
 def test_fields_the_model_left_out_are_not_written(runtime):
     # Criterion: a model that answers with tags but no subjects has not said "no subjects".
     # Only what came back gets written; the rest stays absent and retryable.
-    d = FakeDehydrator(analyze_returns={"tags": ["one"]}, chat_returns=["s"])
+    d = FakeDehydrator(answers=[{"tags": ["panel"], "summary": "s"}])
     store = FakeStore()
     runtime(d, store)
     run(R._backfill_one("b1", BODY, "event"))
     written = store.updates[0]
-    assert written["tags"] == ["one"]
+    assert written["tags"] == ["panel"]
     for absent in ("subjects", "domain", "aliases"):
         assert absent not in written
 
@@ -337,8 +338,7 @@ def test_valence_and_arousal_are_never_backfilled(runtime):
     # tagging pass is forbidden to touch even when it succeeds — a model-guessed v/a turns
     # the memory into someone else's account of the moment.
     d = FakeDehydrator(
-        analyze_returns={"tags": ["t"], "valence": 0.9, "arousal": 0.8},
-        chat_returns=["s"])
+        answers=[{"tags": ["panel"], "valence": 0.9, "arousal": 0.8, "summary": "s"}])
     store = FakeStore()
     runtime(d, store)
     run(R._backfill_one("b1", BODY, "event"))
@@ -351,7 +351,8 @@ def test_valence_and_arousal_are_never_backfilled(runtime):
 # forgotten: falling back is only allowed **because** the fallback leaves a mark a
 # re-tagging pass can find it by.
 
-NAMELESS = {"tags": ["t"], "subjects": ["Es"]}   # a model that answered, but named nothing
+# A model that answered, summary included, but named nothing.
+NAMELESS = {"tags": ["panel"], "subjects": [{"name": "Es", "kind": ""}], "summary": "s"}
 
 
 def _written(store):
@@ -363,7 +364,7 @@ def test_a_bucket_the_model_did_not_name_still_gets_a_name(runtime):
     # Criterion: the first half. Without this the bucket keeps the name it was born with
     # — `2026-08-20 01-05-33`, the second it happened to be written in — forever, because
     # nothing ever revisits it. That is what shows in every list a human reads.
-    d = FakeDehydrator(analyze_returns=NAMELESS, chat_returns=["s"])
+    d = FakeDehydrator(answers=[NAMELESS])
     store = FakeStore()
     runtime(d, store)
     run(R._backfill_one("b1", BODY, "event"))
@@ -374,7 +375,7 @@ def test_the_fallback_name_is_quoted_from_the_body_not_invented(runtime):
     # Criterion: the line that did not move in the 2026-08-20 amendment. The fallback is
     # allowed only because it is the caller's own words — a model-flavoured guess at a
     # title would be exactly the invention this whole file forbids.
-    d = FakeDehydrator(analyze_returns=NAMELESS, chat_returns=["s"])
+    d = FakeDehydrator(answers=[NAMELESS])
     store = FakeStore()
     runtime(d, store)
     run(R._backfill_one("b1", BODY, "event"))
@@ -385,7 +386,7 @@ def test_the_fallback_name_is_stamped(runtime):
     # Criterion: THE assertion of this section. The stamp is not decoration — it is the
     # only handle by which a bucket named this way can ever be found again, because the
     # act of naming it is precisely what stops it looking unfinished.
-    d = FakeDehydrator(analyze_returns=NAMELESS, chat_returns=["s"])
+    d = FakeDehydrator(answers=[NAMELESS])
     store = FakeStore()
     runtime(d, store)
     run(R._backfill_one("b1", BODY, "event"))
@@ -398,7 +399,7 @@ def test_the_fallback_name_fires_when_the_model_never_answered_at_all(runtime):
     # "we got an answer" branch it stops firing in exactly the case it was written for,
     # and it does so silently, because a bucket named after its birth-second looks like a
     # bucket rather than like a failure.
-    d = FakeDehydrator(analyze_raises=True, chat_returns=["s"])
+    d = FakeDehydrator(raises=True)
     store = FakeStore()
     runtime(d, store)
     run(R._backfill_one("b1", BODY, "event"))
@@ -411,8 +412,7 @@ def test_a_name_from_the_model_is_not_stamped(runtime):
     # Criterion: the stamp has to mean something. Stamp everything and it distinguishes
     # nothing, and the re-tagging pass it exists for would come back for buckets that are
     # already properly named — forever, on every run.
-    d = FakeDehydrator(analyze_returns={"tags": ["t"], "suggested_name": "面板留中文"},
-                       chat_returns=["s"])
+    d = FakeDehydrator(answers=[{"tags": ["panel"], "name": "面板留中文", "summary": "s"}])
     store = FakeStore()
     runtime(d, store)
     run(R._backfill_one("b1", BODY, "event"))
@@ -427,8 +427,7 @@ def test_a_real_name_takes_the_earlier_stamp_back_off(runtime):
     # given a fallback name and is later re-tagged successfully must come out of the
     # stamped set, or the re-tagging pass keeps finding it and the button never finishes.
     # `None` is how this store deletes a frontmatter field.
-    d = FakeDehydrator(analyze_returns={"tags": ["t"], "suggested_name": "真名"},
-                       chat_returns=["s"])
+    d = FakeDehydrator(answers=[{"tags": ["panel"], "name": "真名", "summary": "s"}])
     store = FakeStore()
     runtime(d, store)
     run(R._backfill_one("b1", BODY, "event"))
@@ -441,7 +440,7 @@ def test_a_real_name_takes_the_earlier_stamp_back_off(runtime):
 def test_an_empty_body_gets_no_name_and_no_stamp(runtime):
     # Criterion: there is nothing to quote, so there is nothing honest to write. An empty
     # name would be a fabricated field wearing a stamp that says it came from the body.
-    d = FakeDehydrator(analyze_returns=NAMELESS, chat_returns=["s"])
+    d = FakeDehydrator(answers=[NAMELESS])
     store = FakeStore()
     runtime(d, store)
     run(R._backfill_one("b1", "   \n  ", "event"))
@@ -454,7 +453,7 @@ def test_the_fallback_name_is_one_line_not_the_whole_body(runtime):
     # Criterion: a name is a label in a list. Multi-line bodies are the norm here, and
     # pasting a paragraph into the name field makes both the list and the filename it
     # derives from unusable.
-    d = FakeDehydrator(analyze_returns=NAMELESS, chat_returns=["s"])
+    d = FakeDehydrator(answers=[NAMELESS])
     store = FakeStore()
     runtime(d, store)
     run(R._backfill_one("b1", "第一行就是标题\n第二行不该进名字\n第三行也不该", "event"))
@@ -464,7 +463,7 @@ def test_the_fallback_name_is_one_line_not_the_whole_body(runtime):
 def test_a_very_long_first_line_is_cut(runtime):
     # Criterion: the cap is real. Bucket names become filenames, and an unbounded one
     # fails at the OS rather than anywhere this code can explain it.
-    d = FakeDehydrator(analyze_returns=NAMELESS, chat_returns=["s"])
+    d = FakeDehydrator(answers=[NAMELESS])
     store = FakeStore()
     runtime(d, store)
     run(R._backfill_one("b1", "长" * 500, "event"))
@@ -478,8 +477,7 @@ def test_the_fallback_summary_is_stamped(runtime):
     # degraded summary has been landing on disk looking exactly like a real one since
     # before the stamp existed — this is the half of the job that was already shipped and
     # never marked.
-    d = FakeDehydrator(analyze_returns={"tags": ["t"], "suggested_name": "n"},
-                       chat_returns=["", ""])
+    d = FakeDehydrator(answers=[{"tags": ["panel"], "name": "n"}])
     store = FakeStore()
     runtime(d, store)
     run(R._backfill_one("b1", BODY, "event"))
@@ -489,8 +487,8 @@ def test_the_fallback_summary_is_stamped(runtime):
 
 
 def test_a_summary_from_the_model_is_not_stamped(runtime):
-    d = FakeDehydrator(analyze_returns={"tags": ["t"], "suggested_name": "n"},
-                       chat_returns=["a real summary"])
+    d = FakeDehydrator(answers=[{"tags": ["panel"], "name": "n",
+                                 "summary": "a real summary"}])
     store = FakeStore()
     runtime(d, store)
     run(R._backfill_one("b1", BODY, "event"))
@@ -503,8 +501,7 @@ def test_no_summary_means_no_summary_stamp_either(runtime):
     # Criterion: absent and stood-in-for are different states, and the stamp must not
     # blur them. A stamp on a bucket with no summary would claim a stand-in is in place
     # when the field is simply still waiting.
-    d = FakeDehydrator(analyze_returns={"tags": ["t"], "suggested_name": "n"},
-                       chat_raises=True)
+    d = FakeDehydrator(raises=True)
     store = FakeStore()
     runtime(d, store)
     run(R._backfill_one("b1", BODY, "event"))
@@ -514,9 +511,9 @@ def test_no_summary_means_no_summary_stamp_either(runtime):
 
 
 def test_the_two_stamps_are_independent(runtime):
-    # Criterion: they record two different model calls (analyze and chat), which fail
-    # separately. One stamp standing in for both would misreport whichever half worked.
-    d = FakeDehydrator(analyze_returns=NAMELESS, chat_returns=["a real summary"])
+    # Criterion: they record two different slots, which one answer can fill one of and
+    # not the other. One stamp standing in for both would misreport whichever half worked.
+    d = FakeDehydrator(answers=[{**NAMELESS, "summary": "a real summary"}])
     store = FakeStore()
     runtime(d, store)
     run(R._backfill_one("b1", BODY, "event"))

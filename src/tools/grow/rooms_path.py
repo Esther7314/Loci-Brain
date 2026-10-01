@@ -13,7 +13,11 @@ Key behaviour:
   is searched for, judged or merged on the way in (merging was the root cause of
   the timeouts, and of "different things merged into one bucket")
 - The real list of bucket_ids comes back immediately (target: under 3 seconds);
-  tagging, gist and naming go to background backfill
+  tagging, gist and naming go to background backfill: one side-model call that only
+  fills blanks — a slot the caller filled is never changed, every slot it fills is
+  listed in `backfilled` — and also reads bound, a date, dreamt/imagined, evidential,
+  cue phrasings and "looks like a promise" off the sentence (the date arithmetic is
+  core/_dates.py's), and may add a name or a missing kind to the names table
 - mind: its own bucket + from (structure copied from feel), and v/a must
   be supplied by the caller
 - event's v/a became mandatory too; background backfill **never touches any
@@ -63,10 +67,13 @@ Exports: grow_event(items, direction_of_fit, bound, evidential, internally_gener
 
 import asyncio
 import uuid
-from datetime import timedelta
+from datetime import date, timedelta
 
+from core import _dates
 from core import _fold as _F       # a big event = fold's way of circling time
 from core import _holds as _H
+from core.dehydrator import (BACKFILL_MAX_TOKENS, BackfillAnswer, backfill_kinds,
+                             backfill_request, parse_backfill)
 from .. import _runtime as rt
 from core._bigevent import SPAN_RE, first_line as _F_first_line
 from .._common import check_content_size, resolve_bucket_id, resolve_bucket_ids
@@ -75,7 +82,7 @@ from core import _sources as _src
 from .. import _subjects as _S
 from .._subjects import normalize_bound, normalize_subjects
 from utils import (PROV_MAX_LINES, PROV_TARGET_MAX, WAS_DERIVED_FROM, WAS_QUOTED_FROM,
-                   is_bucket_id, parse_bool, prov_targets)
+                   is_bucket_id, is_telic, parse_bool, prov_targets)
 
 # A body longer than this earns a line in the response saying "this looks like
 # more than one thing".
@@ -94,14 +101,6 @@ _WHEN_RE = _re.compile(r"^\d{4}-\d{2}-\d{2}([ T].*)?$")
 # happened", where a duration marker means nothing, so that path still accepts
 # absolute dates only.
 _WANT_DURATION_RE = _re.compile(r"^\d+[dwmy]$")
-
-# The summary prompt used by background backfill. EVENT records "what happened",
-# MIND records "what I came to see".
-_SUMMARY_PROMPT = (
-    "你是记忆系统的摘要器。给下面这段记忆写一句话摘要，直接输出那一句，"
-    "不要引号不要前缀，中文，不超过60字。"
-    "如果是一件事，概括发生了什么；如果是一条认知/感受，概括认识到了什么。"
-)
 
 
 def _placeholder_meta() -> dict:
@@ -126,62 +125,229 @@ def _placeholder_meta() -> dict:
 # still standing in for an answer that never came", with no third state to interpret.
 _SOURCE_FALLBACK = "fallback"
 
-# How much of the opening line a fallback name may use. Not a new number: it is the
-# one `_make_summary`'s own degraded path already uses for "the opening of the body".
-_FALLBACK_NAME_MAX = 60
+# How much of the body a stand-in may quote: the opening line for a name, the opening
+# characters for a summary.
+_FALLBACK_MAX = 60
 
 
 def _fallback_name(text: str) -> str:
     """A stand-in title cut from the body's first line.
 
-    The same move `_make_summary` degrades to, and for the same reason: it quotes what
-    the caller wrote instead of inventing a line. A bucket with no title is not neutral
-    — it is called after the second it was born in (`2026-08-20 01-05-33`), which is a
-    row of digits carrying nothing, in a list read by eye.
+    It quotes what the caller wrote instead of inventing a line. A bucket with no title
+    is not neutral — it is called after the second it was born in (`2026-08-20
+    01-05-33`), which is a row of digits carrying nothing, in a list read by eye.
 
     Returns "" for a body with nothing in it, and an empty name is never written: there
     is no text to quote, so there is nothing honest to put there.
     """
-    return _F_first_line(text).strip()[:_FALLBACK_NAME_MAX].strip()
+    return _F_first_line(text).strip()[:_FALLBACK_MAX].strip()
 
 
-async def _make_summary(text: str) -> tuple[str, bool]:
-    """Write a one-sentence gist through the same LLM channel the dehydrator uses.
+def _fallback_summary(text: str) -> str:
+    """A stand-in gist: the start of the body, the caller's own text. Better than empty
+    — a gist is the hook by which you know an entry exists, and without it that memory
+    is invisible in the zoomed-out views. It is always written stamped, because from
+    then on it is indistinguishable from a real one by looking at it."""
+    return text[:_FALLBACK_MAX].strip()
 
-    Returns `(summary, came_from_fallback)`. The second half of that pair is the whole
-    reason this signature changed: the degraded path below produces a perfectly
-    ordinary-looking summary, and the caller could not previously tell it apart from one
-    the model wrote — so it could not stamp it either.
 
-    On failure it returns `("", False)` (never blocking the backfill of the other
-    fields); an empty summary is the marker `backfill_sweep` finds this bucket by, and
-    that is a different state from "a stand-in is in place".
+# ------------------------------------------------------------
+# The backfill: one side-model call, and it only fills blanks
+# ------------------------------------------------------------
+# Who fills which slot: the main model writes what cannot be read off the sentence
+# (wanted or not, how it felt, the room, the cue's condition); the side model reads what
+# can (core/dehydrator.BACKFILL_PROMPT); code works out what has a known origin (a date
+# from the phrase the model copied, core/_dates.py). A slot the main model filled is never
+# changed here, and every slot this fills is listed in `backfilled`, so the panel can show
+# it and the owner or the main model can change it.
+#
+# The names table may be written in exactly two ways: a name it does not have is added
+# with the kind the side model gave, and a name it has without a kind gets that kind. A
+# kind already there is never changed (the owner fixes kinds on the panel), and when the
+# names part of an answer is malformed the table is not touched at all — a different model
+# returning a bad shape must not pollute it.
+
+# A bucket is born named after the second it was written in (bucket_manager.create): a
+# name like that is a blank, not a title.
+_BIRTH_NAME_RE = _re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}-\d{2}-\d{2}$")
+_PLACEHOLDER_DOMAIN = "未分类"
+_YEARLY = "FREQ=YEARLY"
+_BACKFILL_TEMPERATURE = 0.1
+
+
+def _name_is_blank(meta: dict) -> bool:
+    """No name yet: absent, the birth-second name, or a stamped stand-in."""
+    name = str(meta.get("name") or "").strip()
+    return (not name or bool(_BIRTH_NAME_RE.match(name))
+            or meta.get("name_source") == _SOURCE_FALLBACK)
+
+
+def _summary_is_blank(meta: dict) -> bool:
+    return (not str(meta.get("summary") or "").strip()
+            or meta.get("summary_source") == _SOURCE_FALLBACK)
+
+
+async def _current_meta(bucket_id: str) -> dict:
+    """The entry's frontmatter as it is now. Unreadable reads as a fresh entry (nothing
+    filled yet), which is what the backfill finds right after a write."""
+    try:
+        cur = await rt.bucket_mgr.get(bucket_id)
+    except Exception as e:
+        rt.logger.warning(f"backfill 读不到 {bucket_id} 现在的样子，按刚存下的算: {e}")
+        return {}
+    return dict((cur or {}).get("metadata") or {})
+
+
+def _backfill_context(meta: dict, mind: bool) -> dict:
+    """What the side model is told about the entry: its room, whether it is wanted, the
+    day it was written, what it waits on, and the slots already filled, so it does not
+    fill them again (code would not take them anyway)."""
+    cue = meta.get("cue") if isinstance(meta.get("cue"), dict) else {}
+    existing = {
+        "name": "" if _name_is_blank(meta) else meta.get("name"),
+        "summary": "" if _summary_is_blank(meta) else meta.get("summary"),
+        "subjects": list(meta.get("subjects") or []),
+        "bound": list(meta.get("bound") or []),
+        "when": str(meta.get("when") or ""),
+        "evidential": str(meta.get("evidential") or ""),
+        "internally_generated": "true" if meta.get("internally_generated") else "",
+        "cue_phrasings": list(cue.get("phrasings") or []),
+    }
+    return {"room": str(meta.get("room") or ("MIND" if mind else "EVENT")),
+            "telic": is_telic(meta),
+            "created_day": _dates.local_day(meta.get("created")),
+            "cue_condition": str(cue.get("condition") or ""),
+            "existing": existing}
+
+
+async def _ask_backfill(bucket_id: str, text: str, context: dict,
+                        kinds) -> tuple[BackfillAnswer | None, bool]:
+    """One side-model call; an answer with nothing usable in it is asked once more.
+
+    Returns (answer, came_back_empty):
+      (answer, False)  the model answered
+      (None, False)    it never answered — no channel, or the call raised. The record of
+                       that is "not done yet": no stand-in, so the sweep comes back.
+      (None, True)     it answered twice with nothing usable (empty, not JSON, or no
+                       part holding up): stand-ins quoted from the body are used.
     """
     chat = getattr(rt.dehydrator, "_chat", None)
     if not callable(chat):
-        return "", False
-    # Give max_tokens plenty of room: a reasoning model spends tokens thinking, so
-    # a budget of 100 gets eaten entirely and content comes back empty
-    # (_chat_once returns an empty string for an empty response rather than
-    # raising). An empty result is retried once.
-    for _attempt in range(2):
+        return None, False
+    system, user = backfill_request(text, context, kinds)
+    for attempt in range(2):
         try:
-            raw = await chat(_SUMMARY_PROMPT, text[:2000], max_tokens=400, temperature=0.3)
+            raw = await chat(system, user, max_tokens=BACKFILL_MAX_TOKENS,
+                             temperature=_BACKFILL_TEMPERATURE)
         except Exception as e:
-            rt.logger.warning(f"summary 生成失败（正文已落盘，不影响）: {e}")
-            return "", False
-        out = (raw or "").strip().strip('"').strip()[:200]
-        if out:
-            return out, False
-        rt.logger.warning("summary 返回空，重试一次" if _attempt == 0 else
-                          "summary 两次为空（疑似内容过滤），降级用正文开头")
-    # Degraded path: use the start of the body as the gist — it is the caller's
-    # own text, not something invented. Better than leaving it empty: a gist is
-    # the hook by which you know an entry exists, and without the hook that
-    # memory is invisible in the zoomed-out views.
-    # It comes back stamped, because from here on it is indistinguishable from a
-    # real one by looking at it.
-    return text[:60].strip(), True
+            rt.logger.warning(f"backfill 回填调用失败 {bucket_id}（正文已落盘）: {e}")
+            return None, False
+        answer = parse_backfill(raw, text, kinds)
+        if answer is not None:
+            return answer, False
+        rt.logger.warning(f"backfill {bucket_id} 回填答案是空的或读不懂，重试一次" if attempt == 0
+                          else f"backfill {bucket_id} 两次都没有能用的答案，名字和摘要用正文开头顶上")
+    return None, True
+
+
+def _time_fill(ans: BackfillAnswer, meta: dict, *, mind: bool, telic: bool,
+               today) -> dict:
+    """`when` (and `recurrence`) from the copied time phrase, read against the day the
+    memory was written. Only into an empty `when`; a phrase core/_dates cannot read falls
+    back to the model's own date only when that is a real YYYY-MM-DD. A wanted thing's date
+    is not before that day and a lived event's is not after it — either would be a misread
+    — and a yearly date (a birthday) is this year's occurrence or the date as stated."""
+    if today is None or (mind and not telic):
+        return {}
+    resolved = (_dates.resolve_phrase(ans.time_phrase, today, yearly=ans.time_yearly)
+                if ans.time_phrase else None)
+    if resolved is None and ans.time_absolute:
+        resolved = _dates.ResolvedTime(date.fromisoformat(ans.time_absolute),
+                                       yearly=ans.time_yearly)
+    if resolved is None:
+        return {}
+    when = str(meta.get("when") or "").strip()
+    if resolved.yearly:
+        if meta.get("recurrence"):
+            return {}
+        if not when:
+            return {"when": resolved.stamp(), "recurrence": _YEARLY}
+        stored = _re.match(r"^\d{4}-(\d{2})-(\d{2})", when)
+        same_day = stored and (int(stored.group(1)), int(stored.group(2))) == \
+            (resolved.day.month, resolved.day.day)
+        return {"recurrence": _YEARLY} if same_day else {}
+    if when or (telic and resolved.day < today) or (not telic and resolved.day > today):
+        return {}
+    return {"when": resolved.stamp()}
+
+
+def _fills_from(ans: BackfillAnswer, meta: dict, *, mind: bool) -> dict:
+    """The update() keywords for every blank this answer can fill, name and summary
+    aside. Never a slot that already holds something; subjects only gain names."""
+    telic = is_telic(meta)
+    out: dict = {}
+    if ans.aliases and not meta.get("aliases"):
+        # Broadenings feed bm25 only (bm25_index.build consumes them); they never
+        # appear on the tag line a human reads
+        out["aliases"] = ans.aliases
+    if ans.subjects:
+        # Subjects (who or what), through the names table; kept as their own field — not
+        # in tags (that would break the literal-string guarantee) and not in aliases (who
+        # a memory is about must not move BM25 relevance). The main model's stay.
+        have = [str(s) for s in meta.get("subjects") or []]
+        added = [n for n in normalize_subjects([n for n, _ in ans.subjects]) if n not in have]
+        if added:
+            out["subjects"] = have + added
+    domain = [str(d) for d in meta.get("domain") or []]
+    if ans.domain and (not domain or domain == [_PLACEHOLDER_DOMAIN]):
+        # domain is used purely as a folder; retrieval does not consume it
+        out["domain"] = ans.domain
+    if telic and ans.bound and not meta.get("bound"):
+        names, err = normalize_bound(ans.bound)
+        if names and not err:
+            out["bound"] = names
+    out.update(_time_fill(ans, meta, mind=mind, telic=telic,
+                          today=_dates.local_day(meta.get("created"))))
+    if not mind and ans.internally_generated and not meta.get("internally_generated"):
+        out["internally_generated"] = True
+    if mind and ans.evidential and not meta.get("evidential"):
+        out["evidential"] = ans.evidential
+    cue = meta.get("cue") if isinstance(meta.get("cue"), dict) else {}
+    if cue.get("condition") and not cue.get("phrasings") and ans.cue_phrasings:
+        out["cue"] = {"condition": cue["condition"], "phrasings": ans.cue_phrasings}
+    if not telic and ans.looks_like_promise and not meta.get("looks_like_promise"):
+        # Telic is the main model's switch and stays as it is; this only leaves the mark
+        # the read side turns into a question.
+        out["looks_like_promise"] = True
+    return out
+
+
+def _backfilled_names(fills: dict) -> list[str]:
+    """The slot names `backfilled` lists for these update() keywords."""
+    names = []
+    for k in fills:
+        if k in ("name_source", "summary_source"):
+            continue
+        names.append("cue.phrasings" if k == "cue" else k)
+    return names
+
+
+def _record_kinds(bucket_id: str, pairs: list) -> None:
+    """Write what the side model said each name is into the names table, in the two ways
+    the backfill may: a name the table does not have is added with its kind, a name it
+    has without a kind gets one. A kind already there, a name the table lists under
+    several entries, and a name that is no subject at all (a pronoun, a word marked
+    "not a person") are left alone."""
+    for name, kind in pairs:
+        if not kind or not _S.canonical(name) or len(_S.candidates(name)) > 1:
+            continue
+        rec = _S.record_of(name)
+        if rec is not None and rec.instance_of:
+            continue
+        try:
+            _S.set_kind(rec.name if rec is not None else name, kind)
+        except (ValueError, OSError) as e:
+            rt.logger.warning(f"backfill {bucket_id}: 「{name}」的种类没写进人名表: {e}")
 
 
 # The similarity line for "possibly the same thing". It is **the same number** as
@@ -215,8 +381,8 @@ async def _merged_tags(bucket_id: str, additions: list[str]) -> list[str] | None
 
 
 async def _backfill_one(bucket_id: str, text: str, kind: str) -> None:
-    """Fill in one bucket's metadata in the background: tags / aliases / gist /
-    name.
+    """Fill in one bucket's blanks in the background, from one side-model call: name,
+    summary, tags, aliases, domain, subjects, and the slots read off the sentence.
 
     kind = "event" | "mind" | "big".
     🔴 v/a is never backfilled: an event's v/a is now set by the caller too —
@@ -225,58 +391,52 @@ async def _backfill_one(bucket_id: str, text: str, kind: str) -> None:
     mind extracts no scene (there are no photographs inside a piece of thinking),
     so its tags come out empty — that is normal and accepted.
     """
+    meta = await _current_meta(bucket_id)
+    mind = kind == "mind" or is_mind_room(meta.get("room"))
+    kinds = backfill_kinds()
+    answer, came_back_empty = await _ask_backfill(
+        bucket_id, text, _backfill_context(meta, mind), kinds)
+
     update_kwargs: dict = {}
     # Every tag this backfill wants to add. They are only ever added: the list goes on
     # top of the bucket's current tags right before the write (see _merged_tags).
     tag_additions: list[str] = []
-    try:
-        meta = await rt.dehydrator.analyze(text, for_mind=(kind == "mind"))
-    except Exception as e:
-        rt.logger.warning(f"backfill analyze 失败 {bucket_id}（正文已落盘）: {e}")
-        meta = None
-    if meta:
-        if meta.get("tags"):
-            tag_additions += [str(t) for t in meta["tags"]]
-        if meta.get("aliases"):
-            # Broadenings feed bm25 only (bm25_index.build consumes them); they
-            # never appear on the tag line a human reads
-            update_kwargs["aliases"] = meta["aliases"]
-        if meta.get("subjects"):
-            # Subjects (who). The third kind of tag: extracted by deepseek and
-            # normalised through the alias table, kept as its own field — not in
-            # tags (that would break the literal-string guarantee) and not in
-            # aliases (it must not enter BM25 scoring).
-            update_kwargs["subjects"] = normalize_subjects(meta["subjects"])
-        if meta.get("domain"):
-            # domain is now used purely as a folder; retrieval does not consume
-            # it, so whatever it gets filled with makes no difference
-            update_kwargs["domain"] = meta["domain"]
+    if answer is not None:
+        if answer.problems:
+            rt.logger.warning(
+                f"backfill {bucket_id}: 回填答案里这几块形状不对，没用上：{', '.join(answer.problems)}"
+                + ("（人名表这次一个字没写）" if "subjects" in answer.problems else ""))
+        if answer.tags and not mind:
+            tag_additions += answer.tags
+        update_kwargs.update(_fills_from(answer, meta, mind=mind))
     # --- Naming, and what happens when no name comes back ---
-    # 🔴 Deliberately OUTSIDE the `if meta:` block above: the case this exists for is
-    #    "the model call did not succeed", and the commonest shape of that is meta being
-    #    None altogether. Fold it back inside and the fallback stops firing in exactly
-    #    the situation it was written for — silently, since a bucket named after its own
+    # 🔴 Deliberately OUTSIDE the `if answer` block above: the case this exists for is
+    #    "the model call did not succeed", and the commonest shape of that is no answer
+    #    at all. Fold it back inside and the fallback stops firing in exactly the
+    #    situation it was written for — silently, since a bucket named after its own
     #    birth-second looks like a bucket, not like a failure.
     # She settled this on 2026-08-20: fall back, **but stamp it**.
-    if meta and meta.get("suggested_name"):
-        update_kwargs["name"] = meta["suggested_name"]
-        # The model named it, so any earlier stand-in is over. None deletes the field.
-        # Written only alongside a real name — never on its own, or a bucket that never
-        # had a stamp would get a pointless write (and, worse, `if not update_kwargs`
-        # below would stop being able to tell "nothing to do" from "something to do").
-        update_kwargs["name_source"] = None
-    else:
-        fallback = _fallback_name(text)
-        if fallback:
-            update_kwargs["name"] = fallback
-            update_kwargs["name_source"] = _SOURCE_FALLBACK
-
-    summary, summary_is_fallback = await _make_summary(text)
-    if summary:
-        update_kwargs["summary"] = summary
-        # Same two-state rule as the name: stamped while standing in, cleared the moment
-        # the model supplies a real one.
-        update_kwargs["summary_source"] = _SOURCE_FALLBACK if summary_is_fallback else None
+    if _name_is_blank(meta):
+        if answer is not None and answer.name:
+            update_kwargs["name"] = answer.name
+            # The model named it, so any earlier stand-in is over. None deletes the field.
+            update_kwargs["name_source"] = None
+        else:
+            fallback = _fallback_name(text)
+            if fallback:
+                update_kwargs["name"] = fallback
+                update_kwargs["name_source"] = _SOURCE_FALLBACK
+    # Same two-state rule for the summary — with one difference: a model that never
+    # answered leaves it absent, the marker `backfill_sweep` finds this bucket by.
+    if _summary_is_blank(meta):
+        if answer is not None and answer.summary:
+            update_kwargs["summary"] = answer.summary
+            update_kwargs["summary_source"] = None
+        elif came_back_empty or answer is not None:
+            fallback = _fallback_summary(text)
+            if fallback:
+                update_kwargs["summary"] = fallback
+                update_kwargs["summary_source"] = _SOURCE_FALLBACK
 
     # The "possibly the same thing" hint: nothing is merged and nothing is
     # blocked. Similarity is checked once in the background, and above the
@@ -337,24 +497,32 @@ async def _backfill_one(bucket_id: str, text: str, kind: str) -> None:
         except Exception:
             pass
 
+    filled = _backfilled_names(update_kwargs)
     if tag_additions:
         merged = await _merged_tags(bucket_id, tag_additions)
         if merged is not None:
             update_kwargs["tags"] = merged
-    if not update_kwargs:
-        return
-    try:
-        await rt.bucket_mgr.update(bucket_id, **update_kwargs)
-    except Exception as e:
-        rt.logger.warning(f"backfill update 失败 {bucket_id}（正文已落盘）: {e}")
+            if answer is not None and answer.tags and not mind:
+                filled.append("tags")
+    if filled:
+        have = [str(f) for f in meta.get("backfilled") or []]
+        update_kwargs["backfilled"] = have + [f for f in filled if f not in have]
+    if update_kwargs:
+        try:
+            await rt.bucket_mgr.update(bucket_id, **update_kwargs)
+        except Exception as e:
+            rt.logger.warning(f"backfill update 失败 {bucket_id}（正文已落盘）: {e}")
+    if answer is not None and answer.subjects:
+        _record_kinds(bucket_id, answer.subjects)
 
 
 async def _backfill_batch(pairs: list[tuple[str, str, str]]) -> None:
     """Concurrent backfill (each entry in pairs = (bucket_id, text, kind)). Run
-    serially, 5 items x (analyze + summary, about 14s each) would take over 70s.
-    analyze/_chat are read-only and side-effect free, so they can run concurrently
-    (the same precedent as the [LENTO PATCH] in grow_items), and each update
-    writes its own bucket under a per-bucket lock, so they do not collide."""
+    serially, 5 items x one side-model call (about 14s each) would take over 70s.
+    _chat is read-only and side-effect free, so the calls can run concurrently
+    (the same precedent as the [LENTO PATCH] in grow_items), each update writes its
+    own bucket under a per-bucket lock, and the names table is written under its
+    own lock, so they do not collide."""
     await asyncio.gather(
         *(_backfill_one(bucket_id, text, kind) for bucket_id, text, kind in pairs),
         return_exceptions=True,

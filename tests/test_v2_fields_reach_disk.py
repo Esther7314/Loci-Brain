@@ -133,3 +133,15 @@ def test_create_writes_sources_and_refuses_a_malformed_one(store, tmp_path):
     with pytest.raises(ValueError):
         run(store.create(BODY + " (2)", tags=["t"], sources=[{**record, "id": "m#1"}]))
     assert len(list(tmp_path.rglob("*.md"))) == 1
+
+
+def test_looks_like_promise_reaches_disk_and_false_removes_it(store, tmp_path):
+    bid = run(store.create(BODY, tags=["t"], looks_like_promise=True))
+    assert _disk(tmp_path, bid)["looks_like_promise"] is True
+    other = run(store.create(BODY + " (2)", tags=["t"], looks_like_promise=False))
+    assert "looks_like_promise" not in _disk(tmp_path, other)
+    assert run(store.update(other, looks_like_promise=True, backfilled=["looks_like_promise"]))
+    meta = _disk(tmp_path, other)
+    assert meta["looks_like_promise"] is True and meta["backfilled"] == ["looks_like_promise"]
+    assert run(store.update(other, looks_like_promise=False))
+    assert "looks_like_promise" not in _disk(tmp_path, other)

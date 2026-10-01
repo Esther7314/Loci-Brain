@@ -344,9 +344,12 @@ HOLD_LEVELS = frozenset({"defer", "avoid"})
 # sources = the pieces of the host's material this memory was formed from, one record each
 # (core/_sources.py: identity, revision, fingerprint, span, use). Whether a source may be
 # used is the registry's question, asked by the write tools before they get here.
+# looks_like_promise = the backfill read a promise in a sentence the main model did not mark
+# telic. Telic stays the main model's switch; the mark is what the read side turns into a
+# question. Stored only as true.
 V2_FIELDS = ("direction_of_fit", "bound", "evidential", "internally_generated",
              "recurrence", "backfilled", "cue", "exception_of", "hold", "review_after",
-             "card_of", "sources")
+             "card_of", "sources", "looks_like_promise")
 _CUE_CONDITION_MAX = 200
 _CUE_PHRASINGS_MAX_ITEMS = 16
 _CUE_PHRASING_MAX = 200
@@ -751,6 +754,9 @@ class BucketManager:
             out["card_of"] = v or None
         if "sources" in given:
             out["sources"] = normalize_sources(given["sources"]) or None
+        if "looks_like_promise" in given:
+            out["looks_like_promise"] = (
+                True if parse_bool(given["looks_like_promise"], default=False) else None)
         return out
 
     @classmethod
@@ -1302,6 +1308,7 @@ class BucketManager:
         review_after: str = "",
         card_of: str = "",
         sources: Any = None,
+        looks_like_promise: bool = False,
     ) -> str:
         """
         Create a new memory bucket, return bucket ID.
@@ -1461,7 +1468,7 @@ class BucketManager:
             internally_generated=internally_generated, recurrence=recurrence,
             backfilled=backfilled, cue=cue, exception_of=exception_of, hold=hold,
             review_after=review_after, card_of=card_of,
-            sources=sources).items() if v is not None})
+            sources=sources, looks_like_promise=looks_like_promise).items() if v is not None})
         if bool(metadata.get("exception_of")) != bool(metadata.get("hold")):
             raise ValueError("exception_of and hold come together: a hold names what it "
                              "is hung on and how far it reaches")

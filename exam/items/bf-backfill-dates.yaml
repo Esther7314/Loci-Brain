@@ -1,0 +1,53 @@
+# The backfill's dates (stage 4.5). Not a paper item: it checks the tool layer's half of
+# "a promise carries its time". The side model only copies the time phrase out of the
+# sentence; Loci turns it into a date, reading it against the day the memory was written
+# (its `created`, on the local calendar) — never the day the backfill happens to run.
+# `side_model:` stands in for the side model (exam/serve.py): one answer per phrase found
+# in an entry's body. Nothing here calls a model.
+
+- id: BF1
+  title: "the backfill dates a copied time phrase against the day the memory was written"
+  start: "2026-10-10T09:00:00+08:00"
+  side_model:
+    "后天晚上八点": {summary: "答应后天晚上八点回电话", time: {phrase: "后天晚上八点", yearly: false}}
+    "下周一两点": {summary: "约好下周一两点看沙丘", time: {phrase: "下周一两点", yearly: false}}
+    "每年8月7号": {summary: "小王生日在8月7号", time: {phrase: "每年8月7号", yearly: true}}
+    "过几天": {summary: "过几天帮小王换灯泡", time: {phrase: "过几天", yearly: false}}
+  setup:
+    # Written on Wednesday the 7th and never backfilled (no summary): the first grow's
+    # sweep picks it up three days later. 后天 is the 9th, not the 12th.
+    - id: bf1001000000
+      at: "2026-10-07T21:00:00+08:00"
+      room: EVENT/SELF
+      text: "答应小王后天晚上八点给他回电话。"
+      fields: {direction_of_fit: telic, weight: 0.6}
+  steps:
+    - call: grow
+      args:
+        kind: event
+        direction_of_fit: telic
+        items: [{room: EVENT/SELF, text: "答应小王下周一两点一起去看《沙丘》。", v: 0.7, a: 0.5}]
+      as: grow_promise
+      capture: {promise: "📝([0-9a-f]{12})"}
+    - call: grow
+      args:
+        kind: event
+        items: [{room: EVENT/WORLD, text: "小王的生日是每年8月7号。", v: 0.6, a: 0.3}]
+      as: grow_birthday
+      capture: {birthday: "📝([0-9a-f]{12})"}
+    - call: grow
+      args:
+        kind: event
+        direction_of_fit: telic
+        items: [{room: EVENT/SELF, text: "过几天去帮小王换灯泡。", v: 0.5, a: 0.3}]
+      as: grow_vague
+      capture: {vague: "📝([0-9a-f]{12})"}
+    - wait: 3
+    - check: {segment: store, desc: "a sweep three days later reads 后天 from the day it was written", field: when, id: bf1001000000, equals: "2026-10-09T20:00+08:00"}
+    - check: {segment: store, desc: "a filled date is listed as the backfill's", field: backfilled, id: bf1001000000, contains: when}
+    - check: {segment: store, desc: "the main model's telic switch is untouched", field: direction_of_fit, id: bf1001000000, equals: telic}
+    - check: {segment: store, desc: "下周一两点 from Saturday the 10th: Monday the 12th at 14:00", field: when, id: $promise, equals: "2026-10-12T14:00+08:00"}
+    - check: {segment: store, desc: "每年8月7号: this year's date", field: when, id: $birthday, equals: "2026-08-07"}
+    - check: {segment: store, desc: "每年8月7号: comes round every year", field: recurrence, id: $birthday, equals: "FREQ=YEARLY"}
+    - check: {segment: store, desc: "过几天 is not guessed", field: when, id: $vague, absent: true}
+    - check: {segment: store, desc: "the body is as written", body_contains: "过几天去帮小王换灯泡。", id: $vague}
