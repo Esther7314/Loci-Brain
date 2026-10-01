@@ -639,13 +639,23 @@ async def breath() -> str:
     #    Finding things is recall's job. breath only wakes up: one action, one screen.
     """Wake up. Call this once before you say anything. It takes no arguments.
 
-    It gives you the one screen you should see on waking, in four parts:
-    · Profile      names, what you call each other, and the principles you have pinned.
+    It gives you the one screen you should see on waking, in five parts:
+    · 核心         names, what you call each other, and the principles you have pinned.
                    What earns a place here: things there is no time to go and look up.
-    · Reminders    anything with a date inside the next thirty days, louder as it nears.
-    · Recent       the last three days collapsed into a single card, in plain words rather
+    · 惦记的事     what you want or owe and what is coming, each line saying why it is
+                   here now: how many days are left (or how long overdue), or that a
+                   promise has no time yet, or has hung so long it may not count any more.
+                   Questions to answer sit under it: a hold whose review day has come, a
+                   line that reads like a promise you never marked.
+    · 近三天       the last three days collapsed into a single card, in plain words rather
                    than machine readings.
-    · Out of the blue   one or two entries at random, with no relevance filter.
+    · 忽然想起     two older things coming back on their own — one because something from
+                   the last few days shares a name or a scene with it, one at random.
+    · 依据变了的   entries whose ground moved: corrected by a person on the panel, or
+                   standing on something that was overturned, revised or withdrawn.
+                   Rewrite (regrow), put away (trace delete=True), or keep as is
+                   (trace invalidation="confirmed").
+    Anything else is asleep: still there, found by recall, and finding it does not wake it.
 
     Waking up calls no model. Everything on the screen was written earlier: the rules
     word for word as you wrote them, and the rest assembled from templates and from the
@@ -1498,6 +1508,11 @@ async def trace(
         "Add pieces of the host's material this entry was formed from, as grow's sources "
         "takes them. Append only; a withdrawn or deleted source is refused."
     ))] = None,
+    invalidation: Annotated[str, _PydField(description=(
+        '"confirmed": an entry listed under 依据变了的 — you looked, what it stood on '
+        "changed, and it still stands as written. It leaves that block and keeps a dated "
+        "record of the check. Refused while a source it stands on is withdrawn or deleted."
+    ))] = "",
     slice: Annotated[str, _PydField(description=(
         "A pending slice of the host's raw lines (the \"sl_…\" id from "
         'recall(view="slices")). With bucket_id: this entry already records it, and the '
@@ -1595,6 +1610,11 @@ async def trace(
     Putting more under a gist:
       folds_append=[ids]  the line stays as written; only what it stands for grows.
 
+    When what an entry stood on changed (breath's 依据变了的 lists it):
+      rewrite it          regrow; the new version carries no mark
+      put it away         delete=True
+      keep it as it is    invalidation="confirmed"
+
     Naming more of where it came from:
       sources_append=[{system, instance, container, id, …}]  more of the host's material
                          this entry was formed from; append only.
@@ -1623,7 +1643,7 @@ async def trace(
             restore=restore,
             old_str=old_str, new_str=new_str,
             direction_of_fit=direction_of_fit, bound=bound, cue=cue, card_of=card_of,
-            sources_append=sources_append,
+            sources_append=sources_append, invalidation=invalidation,
             slice_id=slice, slice_span=slice_span, drop_slice=drop_slice,
         ),
         op="trace",
@@ -1638,6 +1658,7 @@ async def trace(
             "sources_append": (len(sources_append) if isinstance(sources_append, list)
                                else bool(sources_append)),
             "slice": slice, "slice_span": slice_span, "drop_slice": drop_slice,
+            "invalidation": invalidation,
             "hard_delete": hard_delete,
             "restore": restore,
             "delete_reason_len": len(str(delete_reason or "")),

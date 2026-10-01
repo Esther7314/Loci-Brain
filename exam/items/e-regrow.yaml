@@ -1,8 +1,8 @@
 # Paper section 戊: regrow as a supplement vs an overturn.
 # regrow takes mode="supplement" | "overturn" and refuses without it. An overturn
 # appends an `invalidation` record to every descendant, layer by layer; recall's read by
-# id shows it as 「依据变了」. The breath block that cards them is titled 「依据变了的」
-# and is stage 5 work: until it lands, the breath checks below stay red on purpose.
+# id shows it as 「依据变了」. breath's 「依据变了的」 block cards them one layer at a time:
+# a descendant comes up once what it stands on has been dealt with.
 
 - id: E1
   title: "a supplement leaves descendants alone"

@@ -33,23 +33,37 @@ with no new persisted field (the one tag convention below excepted):
    ⏰ reminders, 🫀 weighing on me and "something suddenly comes back"; a hold entry is
    never an item of its own on those roads — it belongs with the entry it is hung on.
 
-Which entries each block may show is the gate's (`core/visibility.py`): every block asks
-`visible_for()` with its own road — `remind` for ⏰ and 🫀, `door` for the rules and the
-profile page, `sudden` for "something suddenly comes back", `edited` for 人改过的 — and
-what stays here is each block's own business (an EVENT room, a want, a date).
+⑤ **Awake / asleep and breath's blocks** (`is_accessible`, `prospective`, `involuntary`):
+   below `edited_by_user`. Awake is computed on every read and never stored; 惦记的事 is
+   chosen from what is awake, 忽然想起 mostly from what sleeps. `door_note`'s reminders
+   and weighing-on-me lists stay for the profile page until it is redrawn.
 
-Exports: door_note(all_buckets, now) / event_pool(all_buckets, now=None) / edited_by_user(all_buckets)
+Which entries each block may show is the gate's (`core/visibility.py`): every block asks
+`visible_for()` with its own road — `remind` for 惦记的事 (and the profile page's ⏰ / 🫀),
+`review` for its one held line, `door` for the rules and the profile page, `sudden` for
+忽然想起, `edited` for the panel's corrections — and what stays here is each block's own
+business (an EVENT room, a want, a date).
+
+Exports: door_note(all_buckets, now) / event_pool(all_buckets, now=None) /
+         edited_by_user(all_buckets) / BreathSettings / breath_settings(config) /
+         due_day(meta, today) / awake_reasons(meta, now, …) / is_accessible(meta, now, …) /
+         prospective(all_buckets, now, …) / involuntary(all_buckets, now, …) /
+         entry_label(meta, content) / short_id(bucket_id)
 ========================================
 """
 
+import random
 import re
-from datetime import datetime
+from dataclasses import dataclass, fields
+from datetime import date, datetime, timedelta
 
-from utils import is_closed, is_telic
+from utils import get_ai_name, get_owner_name, is_closed, is_telic
 
 from . import _fold as _F         # anything covered stops surfacing on its own
 from . import _holds as _H        # a live hold keeps its entry off the three roads
+from . import _invalidation as _I  # a panel correction looked at and kept leaves 依据变了的
 from . import _when as _w          # "today" on the local calendar
+from ._muse import is_scene_word  # 忽然想起 links on the same scene words muse clusters on
 # is_mind_room is deliberately no longer imported: the secondary "a rule has to live in
 # MIND" filter at the door was taken out (see the long note further down)
 from ._rooms import is_event_room
@@ -372,12 +386,14 @@ def edited_by_user(all_buckets: list) -> list[dict]:
     something is done about it (folded, or deliberately left alone).
     Reviewing these in batches is not implemented here, but this pool is already the
     substrate for it — a future batch view in muse would draw from exactly this.
+    Keeping one as it is, without folding it, is the confirm gesture on trace
+    (core/_invalidation.py): the correction stays on disk with its tag, and leaves the pool.
     """
     pool: list[dict] = []
     for b in all_buckets:
         meta = b.get("metadata", {}) or {}
         tags = [str(t) for t in (meta.get("tags") or [])]
-        if _EDITED_BY_USER_TAG not in tags:
+        if _EDITED_BY_USER_TAG not in tags or _I.edit_confirmed(meta):
             continue
         if not _V.on_timeline(meta) or not _V.visible_for(meta, road=_V.EDITED):
             continue
@@ -387,3 +403,403 @@ def edited_by_user(all_buckets: list) -> list[dict]:
         pool.append({"id": bid, "meta": meta, "content": str(b.get("content") or "")})
     pool.sort(key=lambda e: str(e["meta"].get("created") or ""))
     return pool
+
+
+# ============================================================
+# Awake / asleep, and breath's blocks
+# ============================================================
+
+def short_id(bucket_id: str) -> str:
+    """The 6-character handle breath prints (a readable id stays whole)."""
+    return bucket_id[:6] if re.fullmatch(r"[0-9a-f]{12}", bucket_id) else bucket_id
+
+
+def entry_label(meta: dict, content: str) -> str:
+    """What a line shows of an entry: its summary, else its name without the timestamp,
+    else the start of its body — all written when the entry went in."""
+    s = str(meta.get("summary") or "").strip()
+    if not s:
+        name = re.sub(r"^[\d\- :]+", "", str(meta.get("name") or "")).strip()
+        s = name or re.sub(r"\s+", " ", content or "")[:40]
+    return s[:60]
+
+
+@dataclass(frozen=True)
+class BreathSettings:
+    """The numbers breath's reading rests on. Every one is a first guess from the plan,
+    to be tried against a real library; the host's config overrides each
+    (`breath_settings`, keys in `_SETTING_KEYS`)."""
+    date_days: int = _REMIND_DAYS     # a date this many days ahead keeps an entry awake
+    recent_days: int = 3              # written this recently: awake
+    cue_days: int = 7                 # a strong-reminder card delivered this recently: awake
+    prospective_lines: int = 5        # 惦记的事 shows this many; the rest are counted
+    hanging_days: int = 30            # an undated promise hanging this long is asked 「还算数吗」
+    promise_questions: int = 2        # 「像是答应过的」 questions under the list
+    backfill_mark_days: int = 3       # a backfilled date says 「补的」 for its first days listed
+    involuntary_lines: int = 2        # 忽然想起: one linked to the last few days, the rest random
+    invalidation_lines: int = 5       # 依据变了的 shows this many; the rest are counted
+
+
+_SETTING_KEYS = {
+    "date_days": "awake_date_days",
+    "recent_days": "awake_recent_days",
+    "cue_days": "awake_cue_days",
+    "prospective_lines": "prospective_lines",
+    "hanging_days": "prospective_hanging_days",
+    "promise_questions": "prospective_promise_questions",
+    "backfill_mark_days": "prospective_backfill_mark_days",
+    "involuntary_lines": "involuntary_lines",
+    "invalidation_lines": "invalidation_lines",
+}
+
+
+def breath_settings(config) -> BreathSettings:
+    """`surfacing.<key>` from the host's config; the default for a key that is absent or
+    unreadable, never below 0."""
+    sf = (config or {}).get("surfacing") or {}
+    values = {}
+    for f in fields(BreathSettings):
+        raw = sf.get(_SETTING_KEYS[f.name], f.default)
+        try:
+            values[f.name] = max(0, int(raw))
+        except (TypeError, ValueError):
+            values[f.name] = f.default
+    return BreathSettings(**values)
+
+
+_YEARLY = "FREQ=YEARLY"
+
+
+def _local_day(value) -> date | None:
+    stamp = _w.parse_stamp(value)
+    return stamp.date() if stamp else None
+
+
+def _next_yearly(d: date, today: date) -> date:
+    """A yearly date's occurrence on or after `today` (29 February is the 28th in a common
+    year)."""
+    for year in (today.year, today.year + 1):
+        try:
+            day = d.replace(year=year)
+        except ValueError:
+            day = date(year, 2, 28)
+        if day >= today:
+            return day
+    return d
+
+
+def due_day(meta: dict, today: date) -> date | None:
+    """The local day an entry is due: its `when`; a yearly one's next occurrence on or
+    after `today`; something wanted given a length ("3w") its created day plus that length.
+    None when it has no date — and for a hold or a period, whose days say when they hold or
+    what they span, not when anything is due."""
+    tags = [str(t) for t in (meta.get("tags") or [])]
+    if _H.is_hold(meta) or _BIGEVENT_TAG in tags:
+        return None
+    w = str(meta.get("when") or "").strip()
+    if not w:
+        return None
+    if is_telic(meta):
+        length = _magnitude_days(w)
+        if length is not None:
+            created = _local_day(meta.get("created"))
+            return created + timedelta(days=int(length)) if created else None
+    d = _local_day(w)
+    if d is None:
+        return None
+    if str(meta.get("recurrence") or "").strip().upper() == _YEARLY:
+        return _next_yearly(d, today)
+    return d
+
+
+# Why an entry is awake — `awake_reasons()`; one is enough.
+PROMISED = "promised"   # telic, someone bound by it, not closed
+DATED = "dated"         # due within `date_days`, or past due and still wanted
+RECENT = "recent"       # written within `recent_days`
+CUED = "cued"           # a strong-reminder card delivered within `cue_days`
+HOLD = "hold"           # a hold that holds today
+
+
+def awake_reasons(meta: dict, now: datetime, *, settings: BreathSettings | None = None,
+                  delivered_at=None) -> tuple[str, ...]:
+    """Which of the five conditions keep this entry awake at `now` (empty = asleep).
+
+    Awake is about how easily an entry is noticed, never about how often it was looked
+    up: being found by recall wakes nothing (recall never touches), or the more it was
+    searched the hotter it would get. An entry archived, deleted or replaced by a newer
+    version is not awake at all. `dont_surface` is not asleep — it closes the roads that
+    come up by themselves, and that is the gate's (core/visibility.py). Awake is separate
+    from decay: asleep is "not yet its time", not "forgotten".
+
+    `delivered_at`: the card ledger's lookup, `bucket_id -> datetime | None` (a callable
+    or a mapping) — when the strong-reminder card for this entry last reached the model.
+    The ledger is stage 5.5's; until it exists nothing passes one and condition 4 never
+    holds.
+    """
+    s = settings or BreathSettings()
+    if _V.state_of(meta) != _V.LIVE or str(meta.get("superseded_by") or "").strip():
+        return ()
+    today = now.date()
+    closed = is_closed(meta)
+    telic = is_telic(meta)
+    out: list[str] = []
+    if telic and not closed and meta.get("bound"):
+        out.append(PROMISED)
+    due = due_day(meta, today)
+    if due is not None and not closed:
+        days = (due - today).days
+        if 0 <= days <= s.date_days or (days < 0 and telic):
+            out.append(DATED)
+    created = _w.parse_stamp(meta.get("created"))
+    if created is not None and now - created <= timedelta(days=s.recent_days):
+        out.append(RECENT)
+    if delivered_at is not None:
+        bid = str(meta.get("id") or "")
+        seen = delivered_at(bid) if callable(delivered_at) else delivered_at.get(bid)
+        if seen is not None and now - seen <= timedelta(days=s.cue_days):
+            out.append(CUED)
+    if _H.hold_is_live(meta, now):
+        out.append(HOLD)
+    return tuple(out)
+
+
+def is_accessible(meta: dict, now: datetime, *, settings: BreathSettings | None = None,
+                  delivered_at=None) -> bool:
+    """Awake (`awake_reasons` names at least one condition) or asleep. Computed, never
+    stored."""
+    return bool(awake_reasons(meta, now, settings=settings, delivered_at=delivered_at))
+
+
+# ------------------------------------------------------------
+# 惦记的事 (prospective)
+# ------------------------------------------------------------
+# One list for what used to be two blocks (⏰ reminders and 🫀 weighing on me), chosen
+# from what is awake. Every line says why it is here now, and there are only two kinds of
+# reason:
+#   dated    N days left / today / N days overdue. A want, something heard about the
+#            future, a yearly day, a hold's review day.
+#   undated  a promise (someone bound) with no date: asked 「要不要定个时间或条件」, or
+#            once it has hung `hanging_days`, 「还算数吗」.
+# Order: dated first — overdue at the very top by how far overdue (not by weight), then
+# the nearest; undated after, the longest hanging first. Past `prospective_lines` nothing
+# is dropped: the rest are counted on one line.
+# Not on the list: a telic waiting on a `cue` with no date (it waits for the strong-
+# reminder card); a want nobody owes and nothing dates (asleep); anything a live hold is
+# on (the `remind` road), except the one question a `defer`'s review day asks.
+
+def _waits_on_cue(meta: dict) -> bool:
+    cue = meta.get("cue")
+    return isinstance(cue, dict) and bool(str(cue.get("condition") or "").strip())
+
+
+def _backfill_marked(meta: dict, today: date, s: BreathSettings) -> bool:
+    """Say 「补的」 while a date the backfill filled in is new on the list: for the first
+    `backfill_mark_days` from the day the entry first came onto it (its created day, or
+    `date_days` before the date it had then). Derived, nothing stored: a converted date
+    that came out wrong has to be seen when it first shows, not every day after."""
+    if "when" not in [str(f) for f in (meta.get("backfilled") or [])]:
+        return False
+    created = _local_day(meta.get("created"))
+    if created is None:
+        return False
+    first_due = due_day(meta, created)
+    first_listed = max(created, first_due - timedelta(days=s.date_days)) if first_due else created
+    return 0 <= (today - first_listed).days < s.backfill_mark_days
+
+
+def _current(by_id: dict, bid: str) -> dict | None:
+    """The newest version of an entry in the store, following `superseded_by`."""
+    seen: set[str] = set()
+    row = by_id.get(bid)
+    while row is not None:
+        nxt = str((row.get("metadata") or {}).get("superseded_by") or "").strip()
+        if not nxt or nxt in seen or nxt not in by_id:
+            return row
+        seen.add(nxt)
+        row = by_id[nxt]
+    return None
+
+
+def _review_line(hold: dict, content: str, by_id: dict, holds, now: datetime) -> dict | None:
+    """A `defer` hold whose review day has come and that has not been asked about since:
+    one line, the question with the original and the hold together. Answering is the
+    model's (it closes the hold or gives it a date); asked once is the hold's `last_asked`,
+    stamped when breath hands the question out (tools/breath/awaken.stamp_asked)."""
+    if hold.get("hold") != "defer" or not _H.hold_is_live(hold, now):
+        return None
+    review = _w.parse_date_or_none(str(hold.get("review_after") or ""))
+    today = now.date()
+    if review is None or review.date() > today:
+        return None
+    asked = _local_day(hold.get("last_asked"))
+    if asked is not None and asked >= review.date():
+        return None
+    target = _current(by_id, str(hold.get("exception_of") or "").strip())
+    if target is None:
+        return None
+    tmeta = target.get("metadata") or {}
+    if is_closed(tmeta):
+        return None
+    if not (_V.visible_for(hold, road=_V.REVIEW, now=now, holds=holds)
+            and _V.visible_for(tmeta, road=_V.REVIEW, now=now, holds=holds)):
+        return None
+    tid = str(tmeta.get("id") or target.get("id") or "")
+    hid = str(hold.get("id") or "")
+    return {"id": tid, "short": short_id(tid),
+            "text": entry_label(tmeta, str(target.get("content") or "")),
+            "kind": "review", "bound": list(tmeta.get("bound") or []),
+            "weight": 0.5 if tmeta.get("weight") in (None, "") else _f_weight(tmeta.get("weight")),
+            "reason": {"kind": "dated", "days": (review.date() - today).days,
+                       "date": review.date().isoformat(),
+                       "loud": "now" if review.date() == today else "overdue"},
+            "hold": {"id": hid, "short": short_id(hid), "text": entry_label(hold, content)}}
+
+
+def prospective(all_buckets: list, now: datetime, *, settings: BreathSettings | None = None,
+                delivered_at=None) -> dict:
+    """惦记的事: {"items": the lines shown, in order; "more": how many did not fit;
+    "questions": the 「像是答应过的」 questions under them}.
+
+    item: {id, short, text, kind: "dated" | "undated" | "review", bound: [...],
+           weight (how heavily a want sits, for a host's own use; None when not wanted),
+           reason: {kind: "dated", days, date, loud, yearly?, length?, backfilled?}
+                 | {kind: "undated", held, ask: "set_time" | "still_counts"},
+           hold?: {id, short, text}}   (review only: the hold the question is about)
+    `days` is negative when overdue. Weight orders nothing here. question: {id, short,
+    text}."""
+    s = settings or BreathSettings()
+    today = now.date()
+    holds = _H.hold_index(all_buckets)
+    by_id = {str((b.get("metadata") or {}).get("id") or b.get("id") or ""): b
+             for b in all_buckets}
+    dated: list[dict] = []
+    undated: list[dict] = []
+    questions: list[tuple[str, dict]] = []
+    for b in all_buckets:
+        meta = b.get("metadata", {}) or {}
+        bid = str(meta.get("id") or b.get("id") or "")
+        content = str(b.get("content") or "")
+        if not bid or not _V.timeline_kind(meta):
+            continue
+        if _H.is_hold(meta):
+            line = _review_line(meta, content, by_id, holds, now)
+            if line:
+                dated.append(line)
+            continue
+        if is_closed(meta) or not _V.visible_for(meta, road=_V.REMIND, now=now, holds=holds):
+            continue
+        telic = is_telic(meta)
+        _wt = meta.get("weight")
+        base = {"id": bid, "short": short_id(bid), "text": entry_label(meta, content),
+                "bound": list(meta.get("bound") or []),
+                "weight": (0.5 if _wt in (None, "") else _f_weight(_wt)) if telic else None}
+        # The backfill read a promise the main model did not mark: a question, asked once
+        # (its `last_asked`, stamped when breath hands it out). Answering is the model's.
+        if not telic and meta.get("looks_like_promise") and not meta.get("last_asked"):
+            questions.append((str(meta.get("created") or ""),
+                              {k: base[k] for k in ("id", "short", "text")}))
+        if not is_accessible(meta, now, settings=s, delivered_at=delivered_at):
+            continue
+        due = due_day(meta, today)
+        if due is not None:
+            days = (due - today).days
+            yearly = str(meta.get("recurrence") or "").strip().upper() == _YEARLY
+            if days > s.date_days:
+                continue
+            if not telic:
+                # Something that happened carries a date in the past, and an entry written
+                # today about today is a record of it: neither is a reminder.
+                if days < 0 or (days == 0 and not yearly
+                                and _local_day(meta.get("created")) == today):
+                    continue
+            reason = {"kind": "dated", "days": days, "date": due.isoformat(),
+                      "loud": "overdue" if days < 0 else _reminder_loudness(days)}
+            if yearly:
+                reason["yearly"] = True
+            w = str(meta.get("when") or "").strip()
+            if telic and _magnitude_days(w) is not None:
+                reason["length"] = w
+            if _backfill_marked(meta, today, s):
+                reason["backfilled"] = True
+            dated.append({**base, "kind": "dated", "reason": reason})
+        elif telic and meta.get("bound") and not _waits_on_cue(meta):
+            created = _local_day(meta.get("created"))
+            held = (today - created).days if created else 0
+            undated.append({**base, "kind": "undated",
+                            "reason": {"kind": "undated", "held": held,
+                                       "ask": ("still_counts" if held >= s.hanging_days
+                                               else "set_time")}})
+    dated.sort(key=lambda i: (i["reason"]["days"] >= 0, i["reason"]["days"]))
+    undated.sort(key=lambda i: -i["reason"]["held"])
+    ordered = dated + undated
+    shown = ordered[:s.prospective_lines]
+    questions.sort(key=lambda q: q[0], reverse=True)
+    return {"items": shown, "more": len(ordered) - len(shown),
+            "questions": [q for _created, q in questions[:s.promise_questions]]}
+
+
+# ------------------------------------------------------------
+# 忽然想起 (involuntary)
+# ------------------------------------------------------------
+# Old things coming back unbidden: one linked to the last few days — an older event
+# sharing a name (`subjects`) or a scene word with something written in them — and the
+# rest at random; with nothing to link, all at random. Each says how it came up. Drawn
+# from `event_pool` (the `sudden` road: nothing held, nothing covered, nothing put out of
+# mind), minus what is wanted — a want coming up is 惦记的事's to decide, and a light one
+# nobody owes is asleep — and minus what the last few days already show. Coming up is not
+# use: nothing here is touched or warmed.
+
+def _link_words(meta: dict, skip: set[str]) -> list[str]:
+    words = [str(n).strip() for n in (meta.get("subjects") or [])]
+    words += [str(t).strip() for t in (meta.get("tags") or [])
+              if is_scene_word(t) and str(t).strip() != _EDITED_BY_USER_TAG]
+    return [w for w in dict.fromkeys(words) if w and w not in skip]
+
+
+def involuntary(all_buckets: list, now: datetime, *, settings: BreathSettings | None = None,
+                rng=None) -> list[dict]:
+    """忽然想起: [{id, short, text, how: "linked" | "random", via: the shared word or None,
+    why: 「因为最近提到…」 / 「随手翻到的」}].
+
+    The two names on nearly everything — mine and the owner's — link nothing, so they are
+    not linking words."""
+    s = settings or BreathSettings()
+    rng = rng or random
+    cut = now - timedelta(days=s.recent_days)
+    skip = {n for n in (get_ai_name(), get_owner_name()) if n}
+
+    def created(meta: dict):
+        return _w.parse_stamp(meta.get("created"))
+
+    recent: list[str] = []
+    for b in all_buckets:
+        meta = b.get("metadata", {}) or {}
+        c = created(meta)
+        if c is not None and c >= cut and _V.on_timeline(meta):
+            recent.extend(_link_words(meta, skip))
+    recent_words = list(dict.fromkeys(recent))
+    pool = [e for e in event_pool(all_buckets, now)
+            if not is_telic(e["meta"]) and (created(e["meta"]) or now) < cut]
+
+    def line(e: dict, via: str | None) -> dict:
+        return {"id": e["id"], "short": short_id(e["id"]),
+                "text": entry_label(e["meta"], e["content"]),
+                "how": "linked" if via else "random", "via": via,
+                "why": f"因为最近提到{via}" if via else "随手翻到的"}
+
+    picks: list[dict] = []
+    if s.involuntary_lines > 0 and recent_words:
+        linked = []
+        for e in pool:
+            own = set(_link_words(e["meta"], skip))
+            shared = next((w for w in recent_words if w in own), None)
+            if shared:
+                linked.append((e, shared))
+        if linked:
+            e, via = rng.choice(linked)
+            picks.append(line(e, via))
+    taken = {p["id"] for p in picks}
+    rest = [e for e in pool if e["id"] not in taken]
+    n = max(0, s.involuntary_lines - len(picks))
+    picks.extend(line(e, None) for e in rng.sample(rest, min(n, len(rest))))
+    return picks

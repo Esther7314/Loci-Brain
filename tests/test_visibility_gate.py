@@ -13,9 +13,9 @@ WHY THIS FILE EXISTS
 THE TABLE
     hidden   the place leaves it out
     marked   a lookup shows it, with its state said out loud before anything else
-    shown    it comes up: a lookup hides nothing for dont_surface, and three surfacing
-             roads have never counted dont_surface (the rules by the door, 人改过的, muse)
-             — kept as they were, written down here so the choice is visible
+    shown    it comes up: a lookup hides nothing for dont_surface, and some surfacing
+             roads do not count dont_surface (the rules by the door, 依据变了的, muse)
+             — a choice, written down here so it is visible
 
     Two rows have no place to feed yet and are skipped with the stage that adds them:
     write tools' returns (stage 6) and strong-reminder / name cards (5.5).
@@ -36,7 +36,8 @@ from core import _muse as M
 from core import _when as W
 from core import visibility as V
 from core.bucket_manager import BucketManager
-from core.profile import door_note, edited_by_user, event_pool
+from core._invalidation import block as invalidation_block
+from core.profile import door_note, edited_by_user, event_pool, involuntary, prospective
 from tools import _runtime as rt
 from tools.letter.core import letter_read, letter_write
 from tools.recall import core as R
@@ -106,8 +107,24 @@ def breath_reminders(state, store):
     return "shown" if ids(out["reminders"]) + ids(out["heavy"]) else "hidden"
 
 
+def breath_prospective(state, store):
+    out = prospective([fed(state, "aaa", when=(NOW + timedelta(days=3)).strftime("%Y-%m-%d"),
+                           direction_of_fit="telic", bound=["AI"])], NOW)
+    return "shown" if out["items"] else "hidden"
+
+
 def breath_sudden(state, store):
     return "shown" if event_pool([fed(state, "aaa")], NOW) else "hidden"
+
+
+def breath_involuntary(state, store):
+    rows = [fed(state, "aaa", created=NOW - timedelta(days=30))]
+    return "shown" if involuntary(rows, NOW) else "hidden"
+
+
+def breath_invalidation(state, store):
+    rec = {"kind": "overturn", "of": "b" * 12, "by": "c" * 12, "at": "2026-08-20"}
+    return "shown" if invalidation_block([fed(state, "aaa", invalidation=[rec])], None) else "hidden"
 
 
 def breath_rules(state, store):
@@ -191,10 +208,13 @@ NOT_YET = pytest.mark.skip
 
 # (place, how to feed it, what it must do with: archived, deleted, dont_surface)
 PLACES = [
-    ("1 breath · ⏰ reminders / 🫀 weighing", breath_reminders, ("hidden", "hidden", "hidden")),
-    ("1 breath · 忽然想起 (leak closed)", breath_sudden, ("hidden", "hidden", "hidden")),
+    ("1 profile page · ⏰ reminders / 🫀 weighing", breath_reminders, ("hidden", "hidden", "hidden")),
+    ("1 breath · 惦记的事", breath_prospective, ("hidden", "hidden", "hidden")),
+    ("1 breath · 忽然想起's pool (leak closed)", breath_sudden, ("hidden", "hidden", "hidden")),
+    ("1 breath · 忽然想起", breath_involuntary, ("hidden", "hidden", "hidden")),
     ("1 breath · rules by the door", breath_rules, ("hidden", "hidden", "shown")),
-    ("1 breath · 人改过的", breath_edited, ("hidden", "hidden", "shown")),
+    ("1 breath · 依据变了的: panel edits", breath_edited, ("hidden", "hidden", "shown")),
+    ("1 breath · 依据变了的: changed bases", breath_invalidation, ("hidden", "hidden", "shown")),
     ("2 recall · time browsing", recall_browse, ("hidden", "hidden", "shown")),
     ("2 recall · search", recall_search, ("hidden", "hidden", "shown")),
     ("3 recall · read by id (hole 4)", recall_read_by_id, ("marked", "marked", "shown")),

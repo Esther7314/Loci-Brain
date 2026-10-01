@@ -398,13 +398,16 @@ _MEDIA_TYPE_MAX = 32
 _MEDIA_NOTE_MAX = 500
 
 # --- invalidation: marks that a basis of this memory changed under it (W3C PROV) ---
-# A list of records {kind, of, by, at}, appended by regrow(mode="overturn") on every
-# descendant of the overturned version; later kinds (a withdrawn source) append too. The
-# memory keeps surfacing; the mark is shown wherever it is read by id. Capped so a basis
-# overturned again and again cannot grow the frontmatter without bound: the newest stay.
+# A list of records {kind, of, by, at, confirmed_at?}, appended by regrow(mode="overturn")
+# on every descendant of the overturned version, and by the confirm gesture (core/
+# _invalidation.py) for a source revision or a panel edit looked at and kept. The memory
+# keeps surfacing; the mark is shown wherever it is read by id. `confirmed_at` (a day) =
+# looked at on that day and kept as it is: the record no longer counts as open. Capped so
+# a basis overturned again and again cannot grow the frontmatter without bound: the newest
+# stay. `of` / `by` hold a memory id or a source's string form (core/_sources.STRING_MAX).
 _INVALIDATION_MAX_ITEMS = 32
 _INVALIDATION_KIND_MAX = 32
-_INVALIDATION_ID_MAX = 64
+_INVALIDATION_ID_MAX = 128
 _INVALIDATION_AT_MAX = 32
 
 _METADATA_TEXT_LIMITS = {
@@ -833,8 +836,9 @@ class BucketManager:
 
     @classmethod
     def _normalize_invalidation(cls, records) -> list[dict]:
-        """Keep each record to its four short text fields; a record with no `kind` says
-        nothing and is dropped. Order is kept, the newest `_INVALIDATION_MAX_ITEMS` win."""
+        """Keep each record to its four short text fields, plus `confirmed_at` when it is
+        set; a record with no `kind` says nothing and is dropped. Order is kept, the newest
+        `_INVALIDATION_MAX_ITEMS` win."""
         if not records:
             return []
         if isinstance(records, dict):
@@ -848,12 +852,16 @@ class BucketManager:
             kind = cls._sanitize_text(str(rec.get("kind") or "")).strip()[:_INVALIDATION_KIND_MAX]
             if not kind:
                 continue
-            out.append({
+            row = {
                 "kind": kind,
                 "of": cls._sanitize_text(str(rec.get("of") or "")).strip()[:_INVALIDATION_ID_MAX],
                 "by": cls._sanitize_text(str(rec.get("by") or "")).strip()[:_INVALIDATION_ID_MAX],
                 "at": cls._sanitize_text(str(rec.get("at") or "")).strip()[:_INVALIDATION_AT_MAX],
-            })
+            }
+            confirmed = cls._sanitize_text(str(rec.get("confirmed_at") or "")).strip()
+            if confirmed:
+                row["confirmed_at"] = confirmed[:_INVALIDATION_AT_MAX]
+            out.append(row)
         return out[-_INVALIDATION_MAX_ITEMS:]
 
     @classmethod

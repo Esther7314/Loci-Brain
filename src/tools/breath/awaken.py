@@ -2,41 +2,36 @@
 """
 tools/breath/awaken.py — the waking screen
 
-The new implementation of breath()'s no-argument path, replacing surface.py's
-"pinned + weighted sampling, blurred into 20 entries".
-The subconscious has to be small and steady. A person does not keep their
-memories consciously hanging in front of them — their body remembers, and this
-system has no equivalent of that, which is exactly why what it puts on the
-waking screen has to be chosen so carefully.
+breath()'s one screen. The subconscious has to be small and steady. A person does not keep
+their memories consciously hanging in front of them — their body remembers, and this
+system has no equivalent of that, which is exactly why what it puts on the waking screen
+has to be chosen so carefully.
 
-Six parts:
-1. Profile — the thin sheet holds **only two things**: names and forms of address
-   (the __档案事实__ bucket, hand-maintained, each line carrying its provenance)
-   + principles (the pinned ones, computed live).
-   ⚠️ The "high-frequency MIND thinking" half was cut (the two blocks "what
-   recurs about me" / "what recurs about the other person") — the criterion is
-   now one of timing: **only what there is no time to search for before speaking
-   stays by the door**. The reasoning is written in place below.
-2. Short term — the gateway's job; nothing is emitted here
-3. Middle term — the overview from recall(when="3d"), free of charge
-4. Long term — ❌ **cut**: every memory entry is already a long-term memory, and
-   breath is live, so popping a few entries out of nowhere reads as strange. Big
-   events moved to recall, where they lay over a stretch of time.
-   The reasoning is written in place in section 4 below — no need to go looking
-   in another file
-5. Random — one or two event gists (something suddenly coming to mind)
-6. Reminders — memories with a when inside the next 30 days, louder the closer
-   they get (a plain list of dates is a database; growing louder as the day
-   approaches is what a mind does)
+Five blocks and a line, in this order:
+1. 核心 — the thin sheet holds **only two things**: names and forms of address (the
+   __档案事实__ bucket, hand-maintained, each line carrying its provenance) + principles
+   (the pinned ones, computed live). The criterion is one of timing: **only what there is
+   no time to search for before speaking stays by the door**. The reasoning is written in
+   place below.
+2. 惦记的事 (prospective) — what is wanted or coming, chosen from what is awake, each line
+   saying why it is here now (core/profile.prospective).
+3. 近三天 — the overview from recall(when="3d"), free of charge.
+4. 忽然想起 (involuntary) — two old things coming back unbidden, each saying how
+   (core/profile.involuntary).
+5. 依据变了的 (invalidation) — memories whose ground moved: a panel correction, an
+   overturned basis, a source revised, withdrawn or deleted (core/_invalidation.py).
+6. 📍 the earliest entry's day.
 
-Exports: surface_awaken() -> str
+One structured object, two skins: `build_breath()` makes it, `render_breath()` turns it
+into the text the model reads, and `GET /api/v2/breath` hands the same object out as JSON
+(web/loci.py) — the text cannot say what the object does not hold. The criteria all live in
+the contract sources (core/profile.py, core/_invalidation.py, the gate in
+core/visibility.py); this file only assembles and words them.
 
-⚠️ `door_note()` / `event_pool()`, the two contract-source functions, moved to
-`core/profile.py` — the criteria do not belong to breath alone, and the profile
-page in `web/loci.py` has to read the same ones. This file now only takes what
-the contract source computed and assembles breath()'s screen out of it; not one
-word of the criteria changed with the move, they are merely imported here rather
-than defined locally.
+Handing breath out has one write: a question asked once is stamped (`stamp_asked`).
+
+Exports: build_breath() -> dict · render_breath(breath) -> str · stamp_asked(breath) ·
+         surface_awaken() -> str
 ========================================
 """
 
@@ -44,9 +39,11 @@ import random
 import re
 
 from .. import _runtime as rt
+from core import _invalidation as _I
 from core import _when as _w          # "today" as the user lives it (local timezone)
-from ..recall.core import recall_core, _label_of, _short_id, _ts_of
-from core.profile import door_note, event_pool, edited_by_user, _PROFILE_TAG
+from core.profile import (_PROFILE_TAG, breath_settings, door_note, involuntary,
+                          prospective, short_id)
+from ..recall.core import recall_text_and_data, _ts_of
 
 # How many principle lines fit on the note by the door.
 # 📌 This was briefly raised to 12 once, as an **IOU**: removing the secondary
@@ -63,27 +60,19 @@ from core.profile import door_note, event_pool, edited_by_user, _PROFILE_TAG
 #    too small, or have I pinned too much.
 _RULES_ON_DOOR = 8
 
-
-def _line(e_meta: dict, content: str, bucket_id: str) -> str:
-    s = str(e_meta.get("summary") or "").strip()
-    if not s:
-        name = re.sub(r"^[\d\- :]+", "", str(e_meta.get("name") or "")).strip()
-        s = name or re.sub(r"\s+", " ", content)[:40]
-    return f"{s[:60]} ({_short_id(bucket_id)})"
+TITLES = {"core": "核心（门口那张纸）", "prospective": "惦记的事", "recent": "近三天",
+          "involuntary": "忽然想起", "invalidation": "依据变了的"}
 
 
-def _rule_line(content: str, bucket_id: str) -> str:
+def _rule_text(content: str) -> str:
     """The principles cell: **print the body verbatim, never the summary.**
 
-    🔴 Why this is its own function instead of just having `_line` read one field
-       fewer:
-       the other cells (something suddenly coming to mind, reminders) hang **long
-       memories**, where a gist is a hook, and that is right.
-       Principles are different — **a principle already is a summary**. It has
+    🔴 Why this is its own function instead of just reading the summary like every other
+       cell: the other cells hang **long memories**, where a gist is a hook, and that is
+       right. Principles are different — **a principle already is a summary**. It has
        been condensed once; summarising it again is a paraphrase of a paraphrase.
 
-    This cell used to print `summary`, which is backfilled by deepseek. The
-    evidence that ended that:
+    The evidence, from when this cell printed `summary` (backfilled by deepseek):
       · written: "I want to ask for what I want, fully, now — not hold back out
         of fear of losing it"
         printed by the door: "Recognises that one should fully strive for what one
@@ -92,50 +81,180 @@ def _rule_line(content: str, bucket_id: str) -> str:
         printed by the door: "**The other person** acts only on what is said in
         the moment" — **the subject flipped**, and that rule is a safety line
         against injection; with the subject flipped it no longer holds.
-    In other words: the line in the tool description saying "none of the text on
-    this screen goes through a model" was false for this one cell.
-    A whole evening was spent turning seven sentences into what they actually
-    needed to say, and what got read every day afterwards was another model's
-    paraphrase of them.
+    The tool description says none of the text on this screen goes through a model;
+    for this cell that has to stay literally true.
 
-    ⚠️ No truncation. If a principle is short, that is its own business (the
-       longest is currently 48 characters); if someone really pins a long passage,
-       the door should show how long it is rather than quietly cutting it in half
-       — silent truncation has already bitten once here.
+    ⚠️ No truncation. If a principle is short, that is its own business; if someone
+       really pins a long passage, the door should show how long it is rather than
+       quietly cutting it in half — silent truncation has already bitten once here.
     """
-    one_line = re.sub(r"\s+", " ", str(content or "")).strip()
-    return f"{one_line} ({_short_id(bucket_id)})"
+    return re.sub(r"\s+", " ", str(content or "")).strip()
 
 
-async def surface_awaken() -> str:
-    all_buckets = await rt.bucket_mgr.list_all(include_archive=False)
+def _core(door: dict) -> dict:
+    pages = door["facts"]
+    page = pages[0] if pages else None
+    covered = door["facts_covered"][0] if (not page and door["facts_covered"]) else None
+    rules = door["rules"]
+    return {
+        "facts": ({"id": page["id"], "short": short_id(page["id"]),
+                   "text": page["content"].strip()} if page else None),
+        "facts_extra": max(0, len(pages) - 1),
+        "facts_covered": ({"id": covered["id"], "by": list(covered["by"])} if covered else None),
+        "rules": [{"id": r["id"], "short": short_id(r["id"]), "text": _rule_text(r["content"])}
+                  for r in rules[:_RULES_ON_DOOR]],
+        "rules_more": max(0, len(rules) - _RULES_ON_DOOR),
+    }
+
+
+async def build_breath() -> dict:
+    """The waking screen as one object: {core, prospective, recent, involuntary,
+    invalidation, earliest}. Every item carries its id and short id; see each builder for
+    the rest of its shape."""
+    mgr = rt.bucket_mgr
+    all_buckets = await mgr.list_all(include_archive=False)
     now = _w.now()      # local timezone: the container runs UTC, so a 2 a.m. "today" looks like yesterday to it
+    settings = breath_settings(rt.config)
+
+    door = door_note(all_buckets, now)          # <- the name page, the rules, the timeline entries
+
+    slices = getattr(mgr, "slices", None)
+    plan = prospective(all_buckets, now, settings=settings)
+    plan["slices_pending"] = slices.pending_count() if slices is not None else 0
+
+    mid = await recall_text_and_data(when="3d", room="", tag="", query="", max_cells=1)
+    recent = {"text": str(mid.get("card") or "") if mid.get("ok") else "",
+              "items": [{"id": e["id"], "short": e["short"], "text": e["label"],
+                         "date": e["date"]} for e in (mid.get("entries") or [])]}
+
+    changed = _I.block(all_buckets, getattr(mgr, "sources", None))
+    cap = settings.invalidation_lines
+
+    # Same definition as recall: _ts_of(meta) = when first, created as fallback. Computed
+    # live, never a hard-coded date (see the 📍 note in render_breath).
+    ts_pool = [t for t in (_ts_of(e["meta"]) for e in door["entries"]) if t is not None]
+    return {
+        "core": _core(door),
+        "prospective": plan,
+        "recent": recent,
+        "involuntary": {"items": involuntary(all_buckets, now, settings=settings, rng=random)},
+        "invalidation": {"items": changed[:cap], "more": max(0, len(changed) - cap)},
+        "earliest": min(ts_pool).date().isoformat() if ts_pool else None,
+    }
+
+
+# ── the text skin ───────────────────────────────────────────────────────────
+
+def _owed(item: dict) -> str:
+    names = [str(n) for n in item.get("bound") or [] if str(n).strip()]
+    return f"（{'、'.join(names)} 欠着）" if names else ""
+
+
+# The wording of each loudness. Which loudness a date has is the contract source's
+# (core/profile._reminder_loudness: nearer is louder; overdue is louder still).
+_LOUD = {"overdue": "‼️ 过了 {ago} 天", "now": "⏰ 就是今天", "soon": "⏰ 马上（还有 {days} 天）",
+         "near": "⏰ 快到了（还有 {days} 天）", "far": "⏰ 记着（还有 {days} 天）"}
+
+
+def _dated_head(reason: dict) -> str:
+    return _LOUD[reason["loud"]].format(days=reason["days"], ago=-reason["days"])
+
+
+def _prospective_lines(p: dict) -> list[str]:
+    out: list[str] = []
+    undated_set_time = False
+    review = False
+    for it in p["items"]:
+        r = it["reason"]
+        if it["kind"] == "review":
+            review = True
+            hold = it["hold"]
+            out.append(f"❓ 之前说先放着的那件事，现在还放着吗？{it['text'][:30]} ({it['short']})"
+                       f" ← 条子 ({hold['short']})：{hold['text'][:30]}")
+        elif r["kind"] == "dated":
+            notes = ""
+            if r.get("yearly"):
+                notes += "（每年）"
+            if r.get("length"):
+                notes += f"（说的是 {r['length']} 内）"
+            if r.get("backfilled"):
+                notes += f"（日子是补的：{r['date']}，不对就 trace 改 when）"
+            out.append(f"{_dated_head(r)}：{it['text'][:30]}{_owed(it)}{notes} ({it['short']})")
+        elif r["ask"] == "still_counts":
+            out.append(f"🫀 挂了 {r['held']} 天——还算数吗？{it['text'][:30]}{_owed(it)} ({it['short']})")
+        else:
+            undated_set_time = True
+            out.append(f"🫀 答应了，没定时间——要不要定个时间或条件？{it['text'][:30]}{_owed(it)}"
+                       f" ({it['short']})")
+    if p["more"]:
+        out.append(f"…还有 {p['more']} 条排不下（recall 翻得到）")
+    if p["items"]:
+        hint = '   └ 做完了 trace(status="resolved")；不做了 trace(status="abandoned")'
+        if undated_set_time:
+            hint += '；定时间 trace(when="YYYY-MM-DD")，等某件事就 trace(cue={"condition": "…"})'
+        out.append(hint)
+    if review:
+        out.append('   └ 还放着：给条子定个到哪天 trace(bucket_id=条子, when="YYYY-MM-DD")；'
+                   '不放了：trace(bucket_id=条子, status="resolved")')
+    for q in p["questions"]:
+        out.append(f"❓ 这条像是答应过的，要挂上吗？{q['text'][:30]} ({q['short']})")
+    if p["questions"]:
+        out.append('   └ 是就 trace(bucket_id=…, direction_of_fit="telic", bound=["我"])；'
+                   "不是就不用管，不会再问")
+    if p.get("slices_pending"):
+        out.append(f"📥 有 {p['slices_pending']} 段原话切片等着认领：recall(view=\"slices\")")
+    return out
+
+
+def _invalidation_lines(block: dict) -> list[str]:
+    out: list[str] = []
+    edited = False
+    for it in block["items"]:
+        why: list[str] = []
+        if it["edited"]:
+            edited = True
+            why.append("人在面板上改过，你还没看")
+        for r in it["overturned"]:
+            why.append(f"它站着的 {short_id(r['of'])} 被 {short_id(r['by'])} 推翻了（{r['at'][5:10]}）")
+        for r in it["revised"]:
+            why.append(f"来源 {r['source']} 出了新版本（{r['revision'][:16]}）")
+        if it["failed"]:
+            failed = "、".join(f"{r['source']} {_I.state_word(r['state'])}" for r in it["failed"])
+            left = (f"还剩 {'、'.join(it['remaining'])}：只凭它们重写" if it["remaining"]
+                    else "一条来源都不剩：只能收起来")
+            why.append(f"依据 {failed}，正文不给了；{left}")
+        head = it["text"] if it["text"] is not None else "（正文不给）"
+        out.append(f"· {head} ({it['short']}) —— {'；'.join(why)}")
+    if block["more"]:
+        out.append(f"…还有 {block['more']} 条")
+    out.append('   └ 重写就 regrow（新版不带记号）；收起来就 trace(delete=True)；'
+               '看过了照留就 trace(bucket_id=…, invalidation="confirmed")')
+    if edited:
+        out.append("   └ 人改的认同也可以 fold（folds=[那几条], text=…）；不认同就说出来")
+    return out
+
+
+def render_breath(b: dict) -> str:
+    """The text the model reads, from `build_breath()`'s object and nothing else."""
     parts: list[str] = []
+    core = b["core"]
 
-    door = door_note(all_buckets, now)          # <- every criterion lives in the contract source
-    profile_pages = door["facts"]
-    pinned_mind = door["rules"]
-    reminders = door["reminders"]
-    heavy = door["heavy"]
-    entries = door["entries"]
-    heavy_q_id = door["heavy_question_id"]      # only the longest-hanging one gets asked
-
-    # ---- 1 Profile: two sides of a thin sheet ----
-    parts.append("═══ 档案（门口那张纸）═══")
-    if profile_pages:
-        page = profile_pages[0]
-        parts.append(page["content"].strip())
+    # ---- 1 核心: two sides of a thin sheet ----
+    parts.append(f"═══ {TITLES['core']} ═══")
+    if core["facts"]:
+        page = core["facts"]
+        parts.append(page["text"])
         # The page's own id, printed in full. The ids quoted inside the body are its
         # sources, and without this line they are the only ids in the cell — so "change
         # the page" gets read as "change one of those", and the edit lands on a bucket the
         # door never reads. Full rather than short because regrow looks up an exact id.
         parts.append(f"   └ 这张纸是 {page['id']}：改它就 regrow 这个 id（正文括号里的是来源，不是这张纸）")
-        if len(profile_pages) > 1:
-            parts.append(f"⚠️ 有 {len(profile_pages)} 个 {_PROFILE_TAG} 桶——只该有一个，去合并")
-    elif door["facts_covered"]:
+        if core["facts_extra"]:
+            parts.append(f"⚠️ 有 {core['facts_extra'] + 1} 个 {_PROFILE_TAG} 桶——只该有一个，去合并")
+    elif core["facts_covered"]:
         # Every page is covered and nothing took the tag over: the cell is empty because
         # of a change, not because there never was a page. Say which one, and the fix.
-        gone = door["facts_covered"][0]
+        gone = core["facts_covered"]
         by = "、".join(gone["by"]) or "?"
         parts.append(
             f"⚠️ 名字页 {gone['id']} 已经被 {by} 换掉，但新版没带 {_PROFILE_TAG}——门口这格现在是空的。"
@@ -143,177 +262,132 @@ async def surface_awaken() -> str:
         )
     else:
         parts.append(f"（事实格空着：存一条带 tag {_PROFILE_TAG} 的记忆当名字页，每行带来处）")
-    if pinned_mind:
+    if core["rules"]:
         parts.append("— 准则（钉着的）—")
-        for r in pinned_mind[:_RULES_ON_DOOR]:
-            parts.append("· " + _rule_line(r["content"], r["id"]))
-        if len(pinned_mind) > _RULES_ON_DOOR:
-            # If something was cut, say so: **silent truncation** is the same
-            # disease as the silent filter that was just removed.
+        for r in core["rules"]:
+            parts.append(f"· {r['text']} ({r['short']})")
+        if core["rules_more"]:
+            # If something was cut, say so: silent truncation hides a rule I believe is
+            # by the door.
             parts.append(
-                f"⚠️ 还有 {len(pinned_mind) - _RULES_ON_DOOR} 条钉着的没排上门口"
+                f"⚠️ 还有 {core['rules_more']} 条钉着的没排上门口"
                 f"（这儿只放得下 {_RULES_ON_DOOR} 行）——摘几条钉，或者合并成一条。"
             )
 
-    # ---- The two blocks "what recurs about me" / "what recurs about the other
-    # person" —— **cut** ----
+    # ---- What recurs about me / about the other person —— not on this screen ----
     #
     # Three reasons, each harder than the last:
-    # ① They were ordered by `activation_count` — **what gets mentioned most is
-    #    not what is truest**. With an automatic count as the primary key and
-    #    human judgement only as the tiebreak, the two entries it handed me were
-    #    never trustworthy to begin with.
-    # ② Reading a dossier of "what kind of person this is" on waking and then
-    #    treating them according to that dossier **turns a person into a character
-    #    sheet**. (The same goes for reading "what kind of person I am": I become
-    #    whatever I read, without the human layer of "I know this about myself and
-    #    want to change it" pushing back.)
-    # ③ It is the same philosophy as "report the count, never the content" — a
-    #    dossier **pushes the answer straight at me**, which is exactly backwards.
+    # ① Ordering by `activation_count` means **what gets mentioned most is not what is
+    #    truest**: an automatic count as the primary key is never trustworthy.
+    # ② Reading a dossier of "what kind of person this is" on waking and then treating
+    #    them according to that dossier **turns a person into a character sheet**. (The
+    #    same goes for reading "what kind of person I am": I become whatever I read,
+    #    without the human layer of "I know this about myself and want to change it"
+    #    pushing back.)
+    # ③ It is the same philosophy as "report the count, never the content" — a dossier
+    #    **pushes the answer straight at me**, which is exactly backwards.
     #
-    # 🔑 The criterion became one of **timing** (content criteria argue at the
-    #    boundary; timing criteria do not):
-    #        **only what there is no time to search for before speaking stays by
-    #        the door.**
+    # 🔑 The criterion is one of **timing** (content criteria argue at the boundary;
+    #    timing criteria do not): **only what there is no time to search for before
+    #    speaking stays by the door.**
     #    A name ✅ I need it in my first word; there is no time to recall first
     #    A principle ✅ it governs how I act, and acting comes before retrieval
-    #    Everything else is delegated to recall + reminders.
+    #    Everything else is delegated to recall + 惦记的事.
     #
-    # Flaws and self-knowledge are **not hidden, they are looked at somewhere
-    # else**: laid out in batches while musing (which is me sorting myself out,
-    # and healthy) rather than read as a verdict every time I open my eyes.
-    # ⚠️ Do not add this back. Read this passage before trying.
-    #
-    # Cut along with it: the "thoughts written down more than once" reminder. It
-    # hung off freq_mind, and its reason for existing (a hand-written warning that
-    # a recurring flaw must not be pinned) **disappeared by itself** once pin got
-    # its gate — a flaw cannot be pinned at all, because it is not an imperative.
-    # 📌 General rule: if a rule needs a hand-written warning to stop it being
-    #    misused, the box has the wrong thing in it.
+    # Flaws and self-knowledge are **not hidden, they are looked at somewhere else**: laid
+    # out in batches while musing (which is me sorting myself out, and healthy) rather than
+    # read as a verdict every time I open my eyes.
+    # ⚠️ Do not add these blocks. Read this passage before trying.
+    # 📌 General rule: if a rule needs a hand-written warning to stop it being misused,
+    #    the box has the wrong thing in it.
 
-    # ---- 6 Reminders: louder the closer they get (the thresholds live in the
-    # contract source's _reminder_loudness(); this only picks the wording) ----
-    if reminders:
-        parts.append("\n═══ 提醒 ═══")
-        _tone = {"now": "⏰ 就是今天！{head}", "soon": "⏰ 马上（还有 {days} 天）：{head}",
-                 "near": "⏰ 快到了（{days} 天后）：{head}",
-                 "far": "⏰ 记着（{days} 天后）：{head}"}
-        for r in reminders[:3]:
-            head = _label_of({"meta": r["meta"], "content": r["content"]})[:30]
-            parts.append(_tone[r["loud"]].format(head=head, days=r["days"])
-                         + f" ({_short_id(r['id'])})")
+    # ---- 2 惦记的事: shown when there is something, absent when there is not ----
+    lines = _prospective_lines(b["prospective"])
+    if lines:
+        parts.append(f"\n═══ {TITLES['prospective']} ═══")
+        parts.extend(lines)
 
-    # ---- Weighing on me: **a separate block** from "⏰ reminders" ----
-    #    That block is "the day is nearly here"; this one is "it has been sitting
-    #    on me". Merged together, neither one can be read.
-    #    Both follow the same rule: **shown when there is something, absent when
-    #    there is not**.
-    #    The ordering and the weight=0 pit both live in the contract source (fixed
-    #    while working on dreaming; not a word changed here).
-    # The longest-hanging one (`heavy_q_id`) turns from a statement into a
-    # question — "hanging for 5 days" can be ignored, "does this still count?"
-    # forces an answer. Only that one is asked; the rest stay listed as before
-    # (ask too many and it becomes another list you can skim straight past).
-    # `h['clock']` / `h['clock_note']` are the class decided by the three kinds of
-    # clock plus a note for legacy data; entries whose legacy data still needs
-    # review expose that note, as a nudge to refill them via trace/regrow in the
-    # current form.
-    if heavy:
-        parts.append("\n═══ 压在心头 ═══")
-        for h in heavy[:2]:
-            head = _label_of({"meta": h["meta"], "content": h["content"]})[:30]
-            note = f"（{h['clock_note']}）" if h["clock_note"] else ""
-            if h["id"] == heavy_q_id:
-                asked = (f"，上次问过是 {h['last_asked'][:10]}" if h["last_asked"]
-                         else "，从来没问过")
-                parts.append(f"🫀❓ 挂了 {h['held']} 天（重 {h['weight']:g}{asked}）："
-                             f"{head} ({_short_id(h['id'])}) —— 这条还算数吗？{note}")
-            else:
-                parts.append(f"🫀 挂了 {h['held']} 天（重 {h['weight']:g}）："
-                             f"{head} ({_short_id(h['id'])}){note}")
-        parts.append('   └ 放下了 trace(status="resolved")；不做了 trace(status="abandoned")')
+    # ---- 3 近三天: recall's three-day overview (free of charge) ----
+    parts.append(f"\n═══ {TITLES['recent']} ═══")
+    text = b["recent"]["text"]
+    parts.append(text if text and "没有东西" not in text else "（这三天没存东西）")
 
-    # ---- Edited by the user: which events the user changed that I have not
-    # looked at or folded yet ----
-    # The notification mechanism is this pool itself — the tag is both the mark
-    # and the notification; see core/profile.py.
-    edited = edited_by_user(all_buckets)
-    if edited:
-        parts.append("\n═══ 人改过的 ═══")
-        for e in edited[:3]:
-            parts.append("· " + _line(e["meta"], e["content"], e["id"]))
-        parts.append("   └ 认同就 fold（folds=[那几条], text=…）；不认同就说出来")
+    # ---- A long-term block —— not on this screen ----
+    # Every memory entry is already a long-term memory, so "long term" was never a block of
+    # older memories: what it showed was the current main thread, a period's theme. Waking
+    # is about what **floats up**; "what have I been doing lately" is something you **look
+    # up**, and pushing looked-up material into the subconscious is the root of reading
+    # two-day-stale content as fact. Big events are laid over a stretch of time in recall
+    # (tools/_bigevent.py plus the far end of recall's browse path), where I am looking
+    # back anyway.
+    # ⚠️ Do not add it. Read this passage before trying.
 
-    # ---- 3 Middle term: recall's three-day overview (free of charge) ----
-    parts.append("\n═══ 中期（这三天）═══")
-    mid = await recall_core(when="3d", room="", tag="", query="", max_cells=1)
-    parts.append(mid if "没有东西" not in mid else "（这三天没存东西）")
+    # ---- 4 忽然想起 ----
+    # The pool is the contract source's `event_pool()` (the `sudden` road), which the
+    # profile page reads too: what the page calls "suddenly coming to mind" and what I
+    # remember on waking have to be the same set, or there are two brains (and that failure
+    # is terrifyingly silent: both sides show something, they are just not the same
+    # something).
+    pick = b["involuntary"]["items"]
+    if pick:
+        parts.append(f"\n═══ {TITLES['involuntary']} ═══")
+        for e in pick:
+            parts.append(f"· {e['text']} ({e['short']}) —— {e['why']}")
 
-    # ---- 4 Long term —— **cut** ----
-    #
-    # Two observations, one killing the name and one killing the placement:
-    # ① Every memory entry is already a long-term memory — "long term" was the
-    #   wrong name from the start. That column was never holding "older
-    #   memories"; it held **the current main thread**. Because the name was
-    #   wrong, every attempted fix went in the wrong direction (adding an expiry
-    #   mechanism, adding fields, adding reminders).
-    # ② breath is live, so popping a few entries out reads as strange — what it
-    #   would actually be showing is a period's overall theme.
-    #   Waking is about what **floats up**; "what have I been doing lately" is
-    #   something you **look up**. Pushing looked-up material into the
-    #   subconscious is the root of reading two-day-stale content as fact.
-    #
-    # Big events did not disappear; they went back where they belong: **laid over
-    # a stretch of time in recall** (tools/_bigevent.py plus the far end of
-    # recall's browse path). At that moment I am looking back anyway.
-    # ⚠️ Do not add this back. Read this passage before trying.
+    # ---- 5 依据变了的 ----
+    if b["invalidation"]["items"]:
+        parts.append(f"\n═══ {TITLES['invalidation']} ═══")
+        parts.extend(_invalidation_lines(b["invalidation"]))
 
-    # ---- 5 Random: something suddenly coming to mind ----
-    # All four gates live in the contract source `event_pool()`: both old and new
-    # room names are recognised · tooling entries do not count · covered ones stay
-    # out · held ones (and holds themselves) stay out.
-    # The profile page imports the same function — what the page calls "suddenly
-    # coming to mind" and what I remember on waking have to be the same set, or
-    # there are two brains (and that failure is terrifyingly silent: both sides
-    # show something, they are just not the same something).
-    ev_pool = event_pool(all_buckets, now)
-    if ev_pool:
-        parts.append("\n═══ 忽然想起 ═══")
-        for e in random.sample(ev_pool, min(2, len(ev_pool))):
-            parts.append("· " + _line(e["meta"], e["content"], e["id"]))
-
-    # ---- 7 The boundary: what day the earliest entry falls on ----
+    # ---- 6 The boundary: what day the earliest entry falls on ----
     #
     # Why this line has to exist: when a search finds nothing I have exactly two
-    # explanations available ("I searched wrong" / "it really is not there"), and
-    # the rules train me to suspect my own reading first — so I slide all the way
-    # towards "it must be there, I just did not find it".
-    # **The end of that road is not trying a few more times, it is inventing
-    # something plausible to fill the gap** (which is exactly where three
-    # fabricated "facts" once came from).
-    # Give it a hard boundary and "suspect yourself" finally has a stopping point.
+    # explanations available ("I searched wrong" / "it really is not there"), and the rules
+    # train me to suspect my own reading first — so I slide all the way towards "it must be
+    # there, I just did not find it".
+    # **The end of that road is not trying a few more times, it is inventing something
+    # plausible to fill the gap** (which is exactly where three fabricated "facts" once came
+    # from). Give it a hard boundary and "suspect yourself" finally has a stopping point.
     #
-    # ⚠️ It must be **computed live** (the minimum of the time coordinates) and
-    # **never a hard-coded date**: memories get backfilled further into the past
-    # later on, and a hard-coded number would become **a falsehood shaped like a
-    # fact** — I would not question it on reading, I would use it to deny entries
-    # that genuinely exist.
+    # ⚠️ It must be **computed live** (the minimum of the time coordinates) and **never a
+    # hard-coded date**: memories get backfilled further into the past later on, and a
+    # hard-coded number would become **a falsehood shaped like a fact** — I would not
+    # question it on reading, I would use it to deny entries that genuinely exist.
     #
-    # ⚠️ The second half must not be shortened to "there is nothing in Loci before
-    # that" either. That is false: earlier events really are in the library, they
-    # just **have no entries of their own** — they were mentioned in passing by
-    # later ones.
-    # Both ends have to be blocked: finding nothing further back is no reason to
-    # doubt myself, but it is also not grounds for asserting that nothing happened
-    # in that stretch.
-    #
-    # Same definition as recall: _ts_of(meta) = when first, created as fallback.
-    # Do not write a second one of these.
-    # (The `by` parameter was cut — `_ts_of` now has exactly one definition, and
-    #  there is no second.)
-    ts_pool = [t for t in (_ts_of(e["meta"]) for e in entries) if t is not None]
-    if ts_pool:
-        parts.append(f"\n📍 最早的一条落在 {min(ts_pool).date().isoformat()}。"
+    # ⚠️ The second half must not be shortened to "there is nothing in Loci before that"
+    # either. That is false: earlier events really are in the library, they just **have no
+    # entries of their own** — they were mentioned in passing by later ones.
+    # Both ends have to be blocked: finding nothing further back is no reason to doubt
+    # myself, but it is also not grounds for asserting that nothing happened in that
+    # stretch.
+    if b["earliest"]:
+        parts.append(f"\n📍 最早的一条落在 {b['earliest']}。"
                      "再往前的事没有自己的条目，只可能被后来的记忆顺带提到。")
 
     return "\n".join(parts)
+
+
+async def stamp_asked(b: dict) -> None:
+    """A question in 惦记的事 is asked once: the review question on its hold, a
+    「像是答应过的」 question on its entry. Stamped with `last_asked` when breath is handed
+    out, so the next breath does not ask again. A stamp that fails only logs: the worst
+    case is one question asked twice."""
+    p = b["prospective"]
+    ids = [it["hold"]["id"] for it in p["items"] if it["kind"] == "review"]
+    ids += [q["id"] for q in p["questions"]]
+    if not ids:
+        return
+    stamp = _w.now().isoformat()
+    for bid in ids:
+        try:
+            if not await rt.bucket_mgr.update(bid, last_asked=stamp):
+                rt.logger.warning(f"breath: could not stamp last_asked on {bid}")
+        except Exception as e:  # noqa: BLE001 — breath must not fail on a stamp
+            rt.logger.warning(f"breath: could not stamp last_asked on {bid}: {e}")
+
+
+async def surface_awaken() -> str:
+    b = await build_breath()
+    text = render_breath(b)
+    await stamp_asked(b)
+    return text

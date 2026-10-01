@@ -34,7 +34,11 @@ What lives here:
   in `tools/breath/awaken.py`, but that rule is not breath's private property — the
   profile page in `web/loci.py` and the awakening in `tools/breath/awaken.py` have to
   read the same one, so it moved here and both sides import it instead of each
-  keeping its own copy.
+  keeping its own copy. Awake / asleep (`is_accessible`) and breath's 惦记的事 and
+  忽然想起 (`prospective`, `involuntary`) live beside them.
+- `_invalidation.py`: breath's 依据变了的 — which memories stand on ground that moved
+  (an overturned basis, a source revised or withdrawn, a panel correction), card them one
+  layer at a time, and the keep-as-is gesture trace writes.
 
 ⚠️ **Moved, not rewritten**: the contents of this layer are word for word what they
 were before the move; only import paths changed. Cracking open monoliths like

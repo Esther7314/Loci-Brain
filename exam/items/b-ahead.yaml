@@ -16,8 +16,8 @@
     - at: "2026-10-04T10:00:00+08:00"
     - call: breath
       as: day3
-    - check: {segment: think, desc: "day 3: not in the reminders", output: day3, section: 提醒, lacks: b10001}
-    - check: {segment: think, desc: "day 3: not weighing (light, not promised)", output: day3, section: 压在心头, lacks: b10001}
+    - check: {segment: think, desc: "day 3: not on the list (no date)", output: day3, section: 惦记的事, lacks: b10001}
+    - check: {segment: think, desc: "day 3: not on the list as hanging either (light, not promised)", output: day3, section: 惦记的事, lacks: b10001}
     - at: "2026-10-31T10:00:00+08:00"
     - call: breath
       as: day30
@@ -53,14 +53,14 @@
     - at: "2026-10-01T19:10:00+08:00"
     - call: breath
       as: evening
-    - check: {segment: think, desc: "19:10: in breath with a reason", output: evening, section: 提醒, contains: b20001}
+    - check: {segment: think, desc: "19:10: in breath with a reason", output: evening, section: 惦记的事, contains: b20001}
     - call: trace
       args: {bucket_id: b20001000000, status: resolved}
     - at: "2026-10-01T19:20:00+08:00"
     - call: breath
       as: after
-    - check: {segment: think, desc: "19:20: closed, gone from reminders", output: after, section: 提醒, lacks: b20001}
-    - check: {segment: think, desc: "19:20: closed, not weighing either", output: after, section: 压在心头, lacks: b20001}
+    - check: {segment: think, desc: "19:20: closed, gone from the list", output: after, section: 惦记的事, lacks: b20001}
+    - check: {segment: think, desc: "19:20: closed, not hanging there either", output: after, section: 惦记的事, lacks: b20001}
 
 - id: B3
   title: "rescheduling in the same window sends the card again"
@@ -81,8 +81,8 @@
       args: {bucket_id: b50001000000, status: abandoned}
     - check: {segment: store, desc: "closed as abandoned, not as done", field: status, id: b50001000000, equals: abandoned}
     - call: breath
-    - check: {segment: think, desc: "not weighing any more", output: breath, section: 压在心头, lacks: b50001}
-    - check: {segment: think, desc: "not in the reminders", output: breath, section: 提醒, lacks: b50001}
+    - check: {segment: think, desc: "not hanging on the list any more", output: breath, section: 惦记的事, lacks: b50001}
+    - check: {segment: think, desc: "not on the list with a date either", output: breath, section: 惦记的事, lacks: b50001}
     - call: recall
       args: {query: 夜航西飞}
     - check: {segment: find, desc: "search still finds it", output: recall, contains: b50001}
@@ -119,10 +119,11 @@
       at: "2026-10-01T10:00:00+08:00"
       room: EVENT/SELF
       text: "答应帮她把旧照片按年份理一下。"
-      fields: {direction_of_fit: telic, weight: 0.7}
+      # Promised = someone is bound by it (v2 `bound`); without it this is a wish, asleep.
+      fields: {direction_of_fit: telic, weight: 0.7, bound: [AI]}
   steps:
     - call: breath
-    - check: {segment: think, desc: "shows up in breath", output: breath, contains: b90001}
+    - check: {segment: think, desc: "shows up in breath", output: breath, section: 惦记的事, contains: b90001}
     - check: {segment: think, desc: "the reason is 'promised but no time'", output: breath, contains: 没定时间}
     - check: {segment: think, desc: "it asks for a time or condition", output: breath, contains: 定个时间}
 

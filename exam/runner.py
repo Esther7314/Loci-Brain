@@ -328,6 +328,18 @@ class Run:
                          if needle in breath_section(text, t.strip())]
                 return False, (f"{c['output']} has {needle!r}"
                                + (f" (in: {', '.join(where)})" if where else ""))
+            if "lines_with" in c:
+                # Every line naming `lines_with` also says `each_has` (and there is at least
+                # one): an entry that may show up only in one kind of line, such as a held
+                # promise that appears only inside the question about its hold.
+                needle, want = self.sub(c["lines_with"]), self.sub(c["each_has"])
+                hits = [ln for ln in text.splitlines() if needle in ln]
+                bad = [ln for ln in hits if want not in ln]
+                if not hits:
+                    return False, f"{c['output']}: no line has {needle!r}"
+                if bad:
+                    return False, f"{c['output']}: a line with {needle!r} lacks {want!r}: {bad[0][:120]}"
+                return True, f"{c['output']}: {len(hits)} line(s) with {needle!r}, each has {want!r}"
             if c.get("ok"):
                 bad = text.startswith("[tool error]") or text.startswith("[call failed]")
                 return not bad, first

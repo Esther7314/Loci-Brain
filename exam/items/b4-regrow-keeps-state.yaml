@@ -29,4 +29,4 @@ steps:
   - check: {segment: store, desc: "new version keeps user tags", field: tags, id: $new, contains: 面试}
   - check: {segment: find, desc: "old version still readable by id", field: superseded_by, id: b40001000000, equals: $new}
   - call: breath
-  - check: {segment: think, desc: "breath reminders still show the promise (new wording)", output: breath, section: 提醒, contains: 二面}
+  - check: {segment: think, desc: "breath's 惦记的事 still shows the promise (new wording)", output: breath, section: 惦记的事, contains: 二面}

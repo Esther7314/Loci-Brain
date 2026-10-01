@@ -25,6 +25,10 @@ produces data; all rendering lives in frontend/loci.html.
     GET  /api/logs                    -> the tail of server.log
     GET  /loci/vendor/{path:path}     -> three.js, served locally, which the starfield page needs
     GET  /api/v2/slices               -> the host's own read of the pending slices (hook key)
+    GET  /api/v2/breath               -> breath's waking screen for a host's window-opening hook:
+                                         the same text the tool returns, or `?format=json` for
+                                         its structured form (hook key). Like the tool, it
+                                         stamps a question it hands out as asked
 
 🔴 THE WRITE SURFACE — eight POST routes, and every one of them writes something.
 
@@ -2366,6 +2370,33 @@ def register(mcp) -> None:
         from starlette.responses import JSONResponse
         store = sh.bucket_mgr.slices
         return JSONResponse({"pending": store.pending_count(), "batches": store.open_batches()})
+
+    # ---------------------------------------------------------
+    # breath for a host's hook (tools/breath/awaken.py)
+    # ---------------------------------------------------------
+    @mcp.custom_route("/api/v2/breath", methods=["GET"])
+    async def api_v2_breath(request: Request) -> Response:
+        """The waking screen a host hands its model when a window opens — the second-tier
+        hook in the README. Plain text by default, exactly what breath() returns;
+        `?format=json` gives the object both are made from, under stable keys
+        {core, prospective, recent, involuntary, invalidation, earliest}. Either way it is
+        handed to a model, so a question in it counts as asked (stamp_asked), as it does
+        through the tool."""
+        from starlette.responses import JSONResponse, PlainTextResponse
+        from tools.breath.awaken import build_breath, render_breath, stamp_asked
+        fmt = str(request.query_params.get("format") or "text").strip().lower()
+        if fmt not in ("text", "json"):
+            return JSONResponse({"error": "format is text or json"}, status_code=400)
+        try:
+            b = await build_breath()
+            text = render_breath(b)
+            await stamp_asked(b)
+        except Exception as e:
+            logger.warning(f"[loci] breath failed: {e}")
+            return JSONResponse({"error": str(e)}, status_code=500)
+        if fmt == "json":
+            return JSONResponse(b)
+        return PlainTextResponse(text)
 
     # ---------------------------------------------------------
     # "Is it time to muse?" — the endpoint the host's wake-up leg asks

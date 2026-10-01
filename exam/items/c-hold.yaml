@@ -1,8 +1,11 @@
 # Paper section 丙: "don't nag" (two levels), "lately", temporary exceptions.
 # A hold is a second, shorter telic event hung on the agreement by `exception_of`, with
 # `hold: defer` (don't push / don't bring it up for now) or `hold: avoid` (don't touch).
-# The agreement itself is never edited. Cards (asking about a hold, lifting one on an
-# event) are the read side and come later; C2's "asks" check waits for them.
+# The agreement itself is never edited. A `defer` with no date is asked about once on its
+# review day, in breath's 惦记的事, together with what it is hung on. Cards (lifting a hold
+# on an event) are the read side and come later.
+# The agreements below are promises (v2 `bound`): unbound, an undated want is asleep and
+# never on 惦记的事 at all, held or not.
 
 - id: C1
   title: "'don't nag me this week': closes three roads, dreams still allowed, drops off by date"
@@ -14,11 +17,11 @@
       text: "她拖着不去健身的时候，拉她一把。"
       # A month-old entry has had its summary filled in; without one, the first grow's
       # backfill sweep would rename it, which is not what C5 is asking about.
-      fields: {direction_of_fit: telic, weight: 0.8, summary: "她拖着不去健身时拉她一把"}
+      fields: {direction_of_fit: telic, weight: 0.8, summary: "她拖着不去健身时拉她一把", bound: [AI]}
   steps:
     - call: breath
       as: before
-    - check: {segment: think, desc: "before the hold: it weighs on me", output: before, section: 压在心头, contains: c10001}
+    - check: {segment: think, desc: "before the hold: it is on my mind", output: before, section: 惦记的事, contains: c10001}
     - snapshot: c10001000000
       as: original
     # "don't nag me about the gym until Sunday" — a hold on the agreement
@@ -36,21 +39,20 @@
     - at: "2026-10-07T10:00:00+08:00"
     - call: breath
       as: held
-    - check: {segment: think, desc: "held: not weighing", output: held, section: 压在心头, lacks: c10001}
-    - check: {segment: think, desc: "held: not in reminders", output: held, section: 提醒, lacks: c10001}
+    - check: {segment: think, desc: "held: not on my mind (the list)", output: held, section: 惦记的事, lacks: c10001}
+    - check: {segment: think, desc: "held: not on the list with a date either", output: held, section: 惦记的事, lacks: c10001}
     - check: {segment: think, desc: "held: not 'suddenly remembered'", output: held, section: 忽然想起, lacks: c10001}
     - check:
         segment: think
         desc: "held: the hold is not an item of its own on those roads"
         all_of:
-          - {output: held, section: 压在心头, lacks: $hold6}
-          - {output: held, section: 提醒, lacks: $hold6}
+          - {output: held, section: 惦记的事, lacks: $hold6}
           - {output: held, section: 忽然想起, lacks: $hold6}
     - at: "2026-10-13T10:00:00+08:00"
     - call: breath
       as: next_week
-    - check: {segment: think, desc: "next Monday: the hold dropped off by itself", output: next_week, section: 压在心头, contains: c10001}
-    - check: {segment: think, desc: "next Monday: the spent hold does not weigh on its own", output: next_week, section: 压在心头, lacks: $hold6}
+    - check: {segment: think, desc: "next Monday: the hold dropped off by itself", output: next_week, section: 惦记的事, contains: c10001}
+    - check: {segment: think, desc: "next Monday: the spent hold is not on the list of its own", output: next_week, section: 惦记的事, lacks: $hold6}
     - check: {segment: store, desc: "the original item's text is untouched (C5)", unchanged: c10001000000, since: original, keys: [name, room, from, when]}
 
 - id: C2
@@ -61,11 +63,11 @@
       at: "2026-09-01T10:00:00+08:00"
       room: EVENT/SELF
       text: "找个机会跟她聊聊她爸住院的事。"
-      fields: {direction_of_fit: telic, weight: 0.7, summary: "找机会聊她爸住院的事"}
+      fields: {direction_of_fit: telic, weight: 0.7, summary: "找机会聊她爸住院的事", bound: [AI]}
   steps:
     - call: breath
       as: before
-    - check: {segment: think, desc: "before the hold: it weighs on me", output: before, section: 压在心头, contains: c20001}
+    - check: {segment: think, desc: "before the hold: it is on my mind", output: before, section: 惦记的事, contains: c20001}
     # "lately, don't bring it up" — a defer with no date: the host's default review day
     - call: grow
       args:
@@ -74,7 +76,7 @@
         hold: defer
         items:
           - {room: EVENT/SELF, text: "她说最近别再提她爸住院的事了。", v: 0.3, a: 0.4}
-      capture: {hold: "📝([0-9a-f]{12})"}
+      capture: {hold: "📝([0-9a-f]{12})", hold6: "📝([0-9a-f]{6})"}
     - check: {segment: store, desc: "the hold is a defer", field: hold, id: $hold, equals: defer}
     - check: {segment: store, desc: "no date: it does not end on one", field: when, id: $hold, absent: true}
     - check: {segment: store, desc: "the review falls a week out (the host's default)", field: review_after, id: $hold, equals: "2026-10-13"}
@@ -85,11 +87,20 @@
     - at: "2026-10-14T10:00:00+08:00"
     - call: breath
       as: after_week
-    # The card itself is the read side (later). Until then this is the proxy: past the
-    # review day the held entry shows up somewhere on breath, and only there.
-    - check: {segment: think, desc: "after a week: breath asks whether it is still aside", output: after_week, contains: c20001}
-    - check: {segment: think, desc: "after a week: still not weighing (it did not lift)", output: after_week, section: 压在心头, lacks: c20001}
+    # Past the review day 惦记的事 asks once, the original and its hold on one line.
+    - check:
+        segment: think
+        desc: "after a week: breath asks whether it is still aside, the hold beside the original"
+        all_of:
+          - {output: after_week, section: 惦记的事, contains: 现在还放着吗}
+          - {output: after_week, section: 惦记的事, contains: c20001}
+          - {output: after_week, section: 惦记的事, contains: $hold6}
+    - check: {segment: think, desc: "after a week: listed only as that question, not as an item (it did not lift)", output: after_week, section: 惦记的事, lines_with: c20001, each_has: 现在还放着吗}
     - check: {segment: store, desc: "after a week: the hold is still open", field: status, id: $hold, absent: true}
+    - at: "2026-10-15T10:00:00+08:00"
+    - call: breath
+      as: next_day
+    - check: {segment: think, desc: "asked once: the next day it does not come up again", output: next_day, lacks: c20001}
 
 - id: C3
   title: "'don't touch it': blocks dreams and my own recall; a passing mention does not lift it"

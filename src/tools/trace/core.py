@@ -32,7 +32,7 @@ Exports: trace_core(bucket_id, name, domain, valence, arousal, tags, pinned,
                     delete, status, weight, dont_surface, media_append,
                     media_replace, hard_delete, delete_reason, restore,
                     old_str, new_str, closed_by, mark_asked, direction_of_fit,
-                    bound, cue, card_of, sources_append) -> str
+                    bound, cue, card_of, sources_append, invalidation) -> str
 ⚰️ Seven dead parameters were removed: importance / resolved / digested /
    content / why_remembered / meaning_append / meaning_replace (see the epitaph
    at _retired below)
@@ -202,8 +202,15 @@ async def trace_core(
     cue: Optional[dict | str] = None,
     card_of: Optional[str] = None,
     sources_append: Optional[list | dict | str] = None,
+    invalidation: Optional[str] = "",
 ) -> str:
     bucket_id = "" if bucket_id is None else str(bucket_id)
+    # The keep-as-is gesture of 依据变了的 (core/_invalidation.py): the one value is
+    # "confirmed". Anything else is refused rather than read as something nearby.
+    invalidation = "" if invalidation is None else str(invalidation).strip().lower()
+    if invalidation and invalidation != "confirmed":
+        return ('invalidation 只认 "confirmed"：看过了，依据变了但这条照留。'
+                "要重写用 regrow，要收起来用 delete=True。")
     if name is None:
         name = ""
     if domain is None:
@@ -360,6 +367,7 @@ async def trace_core(
         cue_update is not None,
         card_of is not None,
         bool(sources_append),
+        bool(invalidation),
     ))
     if restore and restore_conflicts:
         return (
@@ -668,6 +676,26 @@ async def trace_core(
             if fold_err:
                 return fold_err
             updates["cover"] = new_cover
+        # invalidation="confirmed": looked at, the basis changed, this stands. Every open
+        # record gains confirmed_at (today); a source revision or a panel correction seen
+        # now is recorded as a confirmed record. Refused while a source it stands on is
+        # withdrawn or deleted: that one can only be rewritten or put away.
+        confirmed_on = ""
+        if invalidation:
+            from core import _invalidation as _I
+            from core._when import now as _now_local
+            from core.profile import _EDITED_BY_USER_TAG
+            confirmed_on = _now_local().date().isoformat()
+            records, refusal = _I.confirm(
+                meta, getattr(rt.bucket_mgr, "sources", None),
+                edited=_EDITED_BY_USER_TAG in [str(t) for t in (meta.get("tags") or [])],
+                today=confirmed_on)
+            if refusal:
+                return refusal
+            if not records:
+                return (f"{bucket_id} 没有待看的依据变化（不在「依据变了的」里），"
+                        "不用确认；本次未修改。")
+            updates["invalidation"] = records
         # sources_append: more of the host's material this entry was formed from. Append
         # only, like folds_append; each record is checked like a write's (the registry,
         # the grant) and brings its quoted prov line with it.
@@ -770,9 +798,12 @@ async def trace_core(
     _display_updates = {
         k: v for k, v in updates.items()
         if k not in ("content", "meaning_append", "meaning", "media_append", "media",
-                     "sources", PROV_FIELD)
+                     "sources", PROV_FIELD, "invalidation")
     }
     changed = ", ".join(f"{k}={v}" for k, v in _display_updates.items())
+    if confirmed_on:
+        changed += ((", " if changed else "")
+                    + f"依据变化已确认照留（{confirmed_on}）→ 离开「依据变了的」，记录留在它自己身上")
     if patch_args_supplied:
         changed += (", content=已局部替换" if changed else "content=已局部替换")
     if "media_append" in updates:

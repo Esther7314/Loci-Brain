@@ -37,9 +37,11 @@ The roads
 | road            | kind    | dont_surface | old version | covered | holds        | hold entry |
 |-----------------|---------|--------------|-------------|---------|--------------|------------|
 | remind          | surface | ✔            | ✔           |         | defer, avoid | ✔          |
+| review          | surface | ✔            | ✔           |         | avoid        |            |
 | door            | surface |              |             | ✔       |              |            |
 | sudden          | surface | ✔            | ✔           | ✔       | defer, avoid | ✔          |
 | edited          | surface |              |             | ✔       |              |            |
+| invalidation    | surface |              | ✔           |         |              |            |
 | muse            | surface |              |             |         |              |            |
 | dream           | surface | ✔            | ✔           |         | avoid        | ✔          |
 | dream_handout   | surface | ✔            |             |         | avoid        |            |
@@ -48,11 +50,21 @@ The roads
 | read            | lookup  | (any state shown, with its mark)                                |
 
 Every road but `read` shows live entries only.
-- remind: breath's ⏰ reminders and 🫀 weighing on me (core/profile.door_note).
+- remind: breath's 惦记的事 (core/profile.prospective: its dated and undated lines and the
+  「像是答应过的」 questions), and the profile page's reminders and weighing-on-me lists
+  (core/profile.door_note).
+- review: the one 惦记的事 line that shows a held entry on purpose — a `defer` hold whose
+  review day has come, asked about together with what it is hung on. Asked of the hold and
+  of the original alike: a `defer` is the thing being asked about, an `avoid` still closes.
 - door: the pinned rules and the profile page by the door (door_note). A rule is only
   ever one already on the timeline (`on_timeline`), so old versions never reach it.
-- sudden: 「忽然想起」 (core/profile.event_pool).
-- edited: 人改过的 (core/profile.edited_by_user).
+- sudden: 「忽然想起」 (core/profile.event_pool, which breath's involuntary block draws from).
+- edited: the panel edits in 依据变了的 (core/profile.edited_by_user).
+- invalidation: the rest of 依据变了的 — an overturned basis, a source revised, withdrawn
+  or deleted (core/_invalidation.py). A basis that changed is told whatever else the entry
+  asked for: neither `dont_surface`, a hold nor a cover keeps it off. What the block may
+  not hand back — the body of an entry standing on a withdrawn or deleted source — is that
+  block's own rule.
 - muse: muse's pools (core/_muse.in_pool). Which pool counts a cover is that pool's own
   spec (`POOL_SPECS`), so covers are not a road rule here.
 - dream: dream material, both pools (core/_dream.want_pool / unclear_pool). The
@@ -124,9 +136,11 @@ HELD = "held"
 HOLD_ENTRY = "hold_entry"
 
 REMIND = "remind"
+REVIEW = "review"
 DOOR = "door"
 SUDDEN = "sudden"
 EDITED = "edited"
+INVALIDATION = "invalidation"
 MUSE = "muse"
 DREAM = "dream"
 DREAM_HANDOUT = "dream_handout"
@@ -152,10 +166,12 @@ _BOTH_LEVELS = frozenset(_H.HOLD_LEVELS)
 ROADS: dict[str, Road] = {
     REMIND: Road(SURFACE, dont_surface=True, superseded=True, holds=_BOTH_LEVELS,
                  hold_entry=True),
+    REVIEW: Road(SURFACE, dont_surface=True, superseded=True, holds=frozenset({"avoid"})),
     DOOR: Road(SURFACE, covered=True),
     SUDDEN: Road(SURFACE, dont_surface=True, superseded=True, covered=True,
                  holds=_BOTH_LEVELS, hold_entry=True),
     EDITED: Road(SURFACE, covered=True),
+    INVALIDATION: Road(SURFACE, superseded=True),
     MUSE: Road(SURFACE),
     DREAM: Road(SURFACE, dont_surface=True, superseded=True, holds=frozenset({"avoid"}),
                 hold_entry=True),

@@ -83,14 +83,16 @@ PUBLIC_PATHS = frozenset([
 #    WARNING: **the key travels in a header, not in the URL** — URLs leak through logs,
 #    Referer, and browser history.
 #
-# The host's intake of raw lines for slicing (`/api/v2/slices`, core/_slicer.py) is a
-# bridge-facing route on the same terms: the host's process calls it, with the key.
+# The host's intake of raw lines for slicing (`/api/v2/slices`, core/_slicer.py) and its
+# window-opening read of breath (`/api/v2/breath`) are bridge-facing routes on the same
+# terms: the host's process calls them, with the key.
 HOOK_PATHS = frozenset([
     "/api/loci/dream/wake",
     "/api/muse/pending",
     "/api/dream/current",
     "/api/loci/poke",
     "/api/v2/slices",
+    "/api/v2/breath",
 ])
 HOOK_HEADER = "x-loci-hook-token"
 

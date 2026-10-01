@@ -1491,7 +1491,8 @@ async def _linked(bucket_id: str) -> tuple[dict | None, str, str]:
 
 async def recall_text_and_data(when: str, room: str, tag: str, query: str,
                                floor=None, view: str = "", max_cells: int = 0) -> dict:
-    """Collect once, serve both skins. **For the panel only.**
+    """Collect once, serve both skins. For the panel, and for breath's 近三天, whose text
+    and JSON skins are these two.
 
     🔴 The panel's endpoint used to call `recall_data()` and `recall_core()`
        separately, and each of those runs its own `_collect` — meaning **the same
@@ -1686,9 +1687,16 @@ async def recall_core(when: str, room: str, tag: str, query: str,
             lines.append(" · ".join(info))
             # A basis this memory grew out of was overturned (regrow's overturn marks
             # every descendant). The entry still counts; whoever reads it has to know
-            # which ground moved, and to what.
+            # which ground moved, and to what. One looked at and kept as it is
+            # (core/_invalidation.py, `confirmed_at`) is no longer a warning, only a note.
             for rec in (meta.get("invalidation") or []):
-                if isinstance(rec, dict) and rec.get("kind") == "overturn":
+                if not isinstance(rec, dict) or rec.get("kind") != "overturn":
+                    continue
+                confirmed = str(rec.get("confirmed_at") or "")
+                if confirmed:
+                    lines.append(f"依据变过，{confirmed[5:10]} 确认照留"
+                                 f"（{rec.get('of')} 被 {rec.get('by')} 推翻过）。")
+                else:
                     lines.append(f"⚠️依据变了：{rec.get('of')} 被 {rec.get('by')} 推翻了"
                                  f"（{str(rec.get('at') or '')[:10]}）——这条站在它上面，看的时候记着。")
             if src_lines:

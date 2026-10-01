@@ -186,6 +186,28 @@ surfacing:
   # that day breath asks once whether it is still aside. It does not lift by itself. 0 = never ask.
   # 「先放一放」的条子（defer、没写日子）过这么多天问一次还放不放着；不会自己放下。0 = 不问。
   hold_review_days: 7
+  # Awake / asleep (computed on every read, never stored). An entry is awake while one holds:
+  # promised and open · a date this many days ahead, or past and still open · written in the
+  # last awake_recent_days · touched by a strong-reminder card in the last awake_cue_days ·
+  # a live hold itself. The rest sleeps: still there, searchable, it just does not come up.
+  # 醒着 / 睡着：现算不存。答应了没关 · 日子在这么多天内或过了还开着 · 近几天写的 · 卡递过几天内 · 正挂着的条子。
+  awake_date_days: 30
+  awake_recent_days: 3
+  awake_cue_days: 7
+  # breath's 惦记的事: how many lines, after how many days an undated promise is asked whether
+  # it still counts, how many 「像是答应过的」 questions, and for how many days a date the
+  # backfill filled in is marked 「补的」 once the entry is on the list.
+  # 惦记的事：摆几条 · 没日子的挂多少天问「还算数吗」· 像答应过的问几条 · 补的日子标几天。
+  prospective_lines: 5
+  prospective_hanging_days: 30
+  prospective_promise_questions: 2
+  prospective_backfill_mark_days: 3
+  # 忽然想起: how many (one linked to the last few days, the rest at random).
+  # 忽然想起几条（一条跟最近沾边，其余随机）。
+  involuntary_lines: 2
+  # 依据变了的: how many entries before the rest are counted in one line.
+  # 依据变了的摆几条，多的数一行。
+  invalidation_lines: 5
   # iter 1.8: weighted sampling for breath surfacing mode（无参数浮现）
   # 加权采样：从 top_k 候选里按 score**(1/temperature) 抽 sample_k 个，让"想起"带轻微随机性。
   # 测试 fixture 里默认关 (enabled=false)，保证排序确定。生产可以开。

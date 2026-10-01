@@ -1,0 +1,236 @@
+"""
+========================================
+core/_invalidation.py — 依据变了的: what a memory stood on changed under it
+========================================
+
+A memory stands on things: the memories it grew out of (`prov`), the host's material it
+was formed from (`sources`), and — for a correction written from the panel — a person's
+word. When one of those changes, the memory is not wrong by itself, but whoever reads it
+next has to know which ground moved. breath's 「依据变了的」 block lists those memories
+until each has been dealt with, in one of three ways the owner decided (10-01):
+
+  rewrite      regrow the memory: the new version carries no mark (regrow never carries
+               `invalidation` across, core/_fold._CARRIED_FIELDS), the old one is an old
+               version and leaves every road.
+  put away     archive it (trace delete=True).
+  keep as is   trace(bucket_id=…, invalidation="confirmed"): looked at today, the basis
+               changed but this stands. Every open record gains `confirmed_at` (the day);
+               a source revision or a panel edit seen and kept is recorded the same way, as
+               a record already confirmed. A confirmed record no longer counts as open
+               anywhere.
+
+What puts a memory in the block:
+
+  edited     a correction a person wrote on the panel (the 人改的 tag, core/profile.
+             edited_by_user) that has not been folded or confirmed.
+  overturn   an open `{kind: overturn, of, by, at}` record: regrow(mode="overturn")
+             appends one to every descendant of the overturned version at once — trust is
+             withdrawn from the whole line immediately — but the block cards them **one
+             layer at a time**: a memory is carded only once none of the memories it stands
+             on is itself still waiting (live, current, an open overturn record). A parent
+             confirmed, regrown or archived has been dealt with, and its children come up
+             next. Looking at a grandchild before its parent is settled would be judging it
+             on ground that may still move.
+  sources    a source the registry (core/_sources.SourceRegistry) now reports withdrawn or
+             deleted, or revised past the revision this memory recorded (and not confirmed
+             at that revision).
+
+🔴 The body of a memory standing on a withdrawn or deleted source is **never handed back**
+   here: only its id, each failed basis and its state, and the sources that are still
+   good. With some left, it can be rewritten from those; with none, it can only be put
+   away. Asking the model to review it must not put the material it may no longer use back
+   in front of it. "Keep as is" is refused for such a memory for the same reason. (The read
+   gate that withholds these memories on the other roads is stages 5.2 / 5.7.)
+
+Which memories the block may show at all is the gate's: the `edited` road for panel
+corrections, the `invalidation` road for the rest (core/visibility.py).
+
+Exports: FIELD · OVERTURN · SOURCE_REVISED · EDITED · CONFIRMED · CONFIRMED_AT · records ·
+         is_open · open_records · edit_confirmed · SourceFindings · source_findings ·
+         waiting_on_overturn · state_word · confirm · block
+========================================
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+from utils import now_iso, read_from_ids
+
+from . import _sources as _src
+from . import visibility as _V
+
+FIELD = "invalidation"
+OVERTURN = "overturn"
+SOURCE_REVISED = "source_revised"
+EDITED = "edited"
+CONFIRMED = "confirmed"          # the one value trace's `invalidation=` takes
+CONFIRMED_AT = "confirmed_at"
+
+_STATE_WORD = {_src.WITHDRAWN: "已撤回", _src.DELETED: "已删除"}
+
+
+def records(meta) -> list[dict]:
+    """The memory's invalidation records, as stored (dicts only)."""
+    raw = (meta or {}).get(FIELD) or []
+    return [r for r in raw if isinstance(r, dict)] if isinstance(raw, list) else []
+
+
+def is_open(rec: dict) -> bool:
+    return not str(rec.get(CONFIRMED_AT) or "").strip()
+
+
+def open_records(meta, kind: str | None = None) -> list[dict]:
+    """The records not yet confirmed, of one kind when `kind` is given."""
+    return [r for r in records(meta) if is_open(r) and (kind is None or r.get("kind") == kind)]
+
+
+def _confirmed(meta, kind: str, of: str, by: str | None = None) -> bool:
+    return any(r.get("kind") == kind and str(r.get("of") or "") == of
+               and (by is None or str(r.get("by") or "") == by) and not is_open(r)
+               for r in records(meta))
+
+
+def edit_confirmed(meta) -> bool:
+    """A panel correction looked at and kept as it is."""
+    return _confirmed(meta, EDITED, str((meta or {}).get("id") or ""))
+
+
+def state_word(state: str) -> str:
+    return _STATE_WORD.get(state, state)
+
+
+@dataclass
+class SourceFindings:
+    """What the registry says about a memory's sources.
+
+    failed     [(string form, state)] — withdrawn or deleted: may no longer be used
+    revised    [(identity string, the newer revision)] — not confirmed at that revision
+    remaining  [string form] — the sources still good to stand on"""
+    failed: list = field(default_factory=list)
+    revised: list = field(default_factory=list)
+    remaining: list = field(default_factory=list)
+
+    def __bool__(self) -> bool:
+        return bool(self.failed or self.revised)
+
+
+def _newer_revision(rec: dict, registry) -> str:
+    """The revision (or fingerprint) the host announced past the one this record holds,
+    or ""."""
+    revisions = registry.revisions_of(_src.record_id(rec))
+    if not revisions:
+        return ""
+    latest = revisions[-1]
+    if latest.get("revision"):
+        return str(latest["revision"]) if latest["revision"] != rec.get("revision") else ""
+    if latest.get("fingerprint"):
+        return str(latest["fingerprint"]) if latest["fingerprint"] != rec.get("fingerprint") else ""
+    return ""
+
+
+def source_findings(meta, registry) -> SourceFindings:
+    """Each of the memory's source records, read against the registry. A record that no
+    longer reads as one is skipped (it names nothing the registry could answer for)."""
+    out = SourceFindings()
+    if registry is None:
+        return out
+    for raw in (meta or {}).get(_src.SOURCES_FIELD) or []:
+        try:
+            [rec] = _src.normalize_sources([raw])
+        except (_src.SourceRecordError, ValueError):
+            continue
+        text = _src.record_string(rec)
+        state = registry.state_of(_src.record_id(rec))
+        if state in (_src.WITHDRAWN, _src.DELETED):
+            out.failed.append((text, state))
+            continue
+        out.remaining.append(text)
+        newer = _newer_revision(rec, registry)
+        identity = str(_src.record_id(rec))
+        if newer and not _confirmed(meta, SOURCE_REVISED, identity, newer):
+            out.revised.append((identity, newer))
+    return out
+
+
+def waiting_on_overturn(meta) -> bool:
+    """Live, current, and carrying an open overturn record: this memory itself still has
+    to be dealt with, and what stands on it waits."""
+    return (_V.state_of(meta) == _V.LIVE and not str(meta.get("superseded_by") or "").strip()
+            and bool(open_records(meta, OVERTURN)))
+
+
+def confirm(meta, registry, *, edited: bool, today: str) -> tuple[list[dict], str]:
+    """The records `trace(invalidation="confirmed")` writes: every open record with
+    `confirmed_at` = `today`, and one confirmed record for each source revision and for a
+    panel correction (`edited`) looked at now. Returns (the whole new list, refusal). The
+    list is empty when there was nothing to confirm."""
+    found = source_findings(meta, registry)
+    if found.failed:
+        failed = "、".join(f"{s}（{state_word(st)}）" for s, st in found.failed)
+        tail = ("只凭还剩的来源重写（regrow），或者收起来（trace delete=True）"
+                if found.remaining else "一条来源都不剩，只能收起来（trace delete=True）")
+        return [], f"这条站着的来源已经不能用了：{failed}。照留不行——{tail}。"
+    bid = str((meta or {}).get("id") or "")
+    stamp = now_iso()
+    changed = False
+    out: list[dict] = []
+    for rec in records(meta):
+        if is_open(rec):
+            rec = {**rec, CONFIRMED_AT: today}
+            changed = True
+        out.append(rec)
+    for identity, newer in found.revised:
+        out.append({"kind": SOURCE_REVISED, "of": identity, "by": newer, "at": stamp,
+                    CONFIRMED_AT: today})
+        changed = True
+    if edited and not edit_confirmed(meta):
+        out.append({"kind": EDITED, "of": bid, "by": "", "at": stamp, CONFIRMED_AT: today})
+        changed = True
+    return (out if changed else []), ""
+
+
+def block(all_buckets: list, registry) -> list[dict]:
+    """依据变了的, in order: panel corrections (oldest first), then the rest in store
+    order. One item per memory, every reason it is here on it:
+
+        {id, short, text, edited, overturned: [{of, by, at}], failed: [{source, state}],
+         revised: [{source, revision}], remaining: [source]}
+
+    `text` is None for a memory standing on a withdrawn or deleted source; `remaining` is
+    filled in only then (the sources a rewrite may stand on)."""
+    from .profile import edited_by_user, entry_label, short_id  # lazy: profile imports this module
+
+    items: dict[str, dict] = {}
+
+    def item(bid: str, meta: dict, content: str) -> dict:
+        if bid not in items:
+            items[bid] = {"id": bid, "short": short_id(bid), "text": entry_label(meta, content),
+                          "edited": False, "overturned": [], "failed": [], "revised": [],
+                          "remaining": []}
+        return items[bid]
+
+    for e in edited_by_user(all_buckets):
+        item(e["id"], e["meta"], e["content"])["edited"] = True
+
+    rows = [(str((b.get("metadata") or {}).get("id") or b.get("id") or ""),
+             b.get("metadata") or {}, str(b.get("content") or "")) for b in all_buckets]
+    waiting = {bid for bid, meta, _c in rows if bid and waiting_on_overturn(meta)}
+    for bid, meta, content in rows:
+        if not bid or not _V.on_timeline(meta) or not _V.visible_for(meta, road=_V.INVALIDATION):
+            continue
+        overturned = open_records(meta, OVERTURN)
+        if overturned and any(src in waiting for src in read_from_ids(meta)):
+            overturned = []          # what it stands on is still waiting: that comes first
+        found = source_findings(meta, registry)
+        if not overturned and not found:
+            continue
+        it = item(bid, meta, content)
+        it["overturned"] = [{"of": str(r.get("of") or ""), "by": str(r.get("by") or ""),
+                             "at": str(r.get("at") or "")} for r in overturned]
+        it["failed"] = [{"source": s, "state": st} for s, st in found.failed]
+        it["revised"] = [{"source": s, "revision": rv} for s, rv in found.revised]
+        if found.failed:
+            it["text"] = None
+            it["remaining"] = list(found.remaining)
+    return list(items.values())
