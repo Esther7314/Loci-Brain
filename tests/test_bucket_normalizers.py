@@ -198,6 +198,55 @@ def test_media_list_is_capped():
     assert len(out) == 20
 
 
+# ───────────────────────── the prov normalizer: refuse, never cut ─────────────────────────
+
+def _line(rel, target):
+    return {"rel": rel, "target": target}
+
+
+def test_prov_keeps_order_and_writes_identical_lines_once():
+    out = BucketManager._normalize_prov([
+        _line("wasDerivedFrom", "aaaaaaaaaaaa"), _line("wasQuotedFrom", "m_0931"),
+        _line("wasDerivedFrom", "aaaaaaaaaaaa"), _line("wasRevisionOf", "aaaaaaaaaaaa")])
+    # Criterion: the same target under two relations is two facts; the same line twice
+    # is one.
+    assert out == [_line("wasDerivedFrom", "aaaaaaaaaaaa"), _line("wasQuotedFrom", "m_0931"),
+                   _line("wasRevisionOf", "aaaaaaaaaaaa")]
+
+
+def test_prov_knows_exactly_the_four_relations():
+    for rel in ("wasDerivedFrom", "wasRevisionOf", "wasQuotedFrom", "hadPrimarySource"):
+        assert BucketManager._normalize_prov([_line(rel, "aaaaaaaaaaaa")])
+    # Criterion: a fifth name would be a relation no reader knows how to show or follow.
+    with pytest.raises(ValueError):
+        BucketManager._normalize_prov([_line("inspiredBy", "aaaaaaaaaaaa")])
+
+
+def test_prov_refuses_a_target_it_would_have_to_cut():
+    # Criterion: a shortened target is half an id pointing at nothing, which is the
+    # failure the old 64-character `from` produced silently.
+    assert BucketManager._normalize_prov([_line("wasQuotedFrom", "m" * 128)])
+    for bad in ("m" * 129, "", "two words"):
+        with pytest.raises(ValueError):
+            BucketManager._normalize_prov([_line("wasQuotedFrom", bad)])
+
+
+def test_prov_refuses_the_sixty_fifth_line_instead_of_dropping_it():
+    lines = [_line("wasDerivedFrom", f"{i:012x}") for i in range(65)]
+    assert len(BucketManager._normalize_prov(lines[:64])) == 64
+    with pytest.raises(ValueError):
+        BucketManager._normalize_prov(lines)
+
+
+def test_prov_treats_nothing_as_empty_and_junk_as_an_error():
+    assert BucketManager._normalize_prov(None) == []
+    assert BucketManager._normalize_prov([]) == []
+    with pytest.raises(ValueError):
+        BucketManager._normalize_prov("aaaaaaaaaaaa,bbbbbbbbbbbb")
+    with pytest.raises(ValueError):
+        BucketManager._normalize_prov(["aaaaaaaaaaaa"])
+
+
 # ───────────────────────── the text sanitizer (F-04) ─────────────────────────
 
 def test_sanitize_text_strips_the_invisible_characters():

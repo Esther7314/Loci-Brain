@@ -143,7 +143,7 @@ def read_entry(lib: Path, bucket_id: str) -> tuple[dict, str] | None:
 
 async def seed(lib: Path, clock_file: Path, entries: list[dict]) -> None:
     """Write setup entries with Loci's own BucketManager, each at its own fake time."""
-    from utils import load_config
+    from utils import WAS_DERIVED_FROM, load_config
     from core.bucket_manager import BucketManager
     from core.embedding_engine import EmbeddingEngine
 
@@ -163,7 +163,7 @@ async def seed(lib: Path, clock_file: Path, entries: list[dict]) -> None:
             valence=e.get("v", 0.5),
             arousal=e.get("a", 0.3),
             name=e.get("name"),
-            from_ids=",".join(e.get("from", [])),
+            prov=[{"rel": WAS_DERIVED_FROM, "target": i} for i in e.get("from", [])],
             room=e.get("room", ""),
             when=e.get("when", ""),
             subjects=e.get("subjects"),
@@ -340,8 +340,8 @@ class Run:
           body_has     body (name included) contains each of these
           body_any     body contains at least one of these
           body_lacks   body contains none of these
-          from_has     `from` lists each of these ids
-          from_room    `from` lists at least one entry whose room starts with this
+          from_has     its sources (read_from_ids) include each of these ids
+          from_room    one of those sources has a room starting with this
           fields       frontmatter values, compared as text ("" = absent)
           new          true = not one of the item's setup entries
         Superseded versions are skipped unless `versions: all`."""

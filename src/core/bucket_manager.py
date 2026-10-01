@@ -241,7 +241,11 @@ from typing import Any, Optional
 import frontmatter
 
 from utils import (
-    FROM_FIELD,
+    LEGACY_FROM_FIELD,
+    PROV_FIELD,
+    PROV_MAX_LINES,
+    PROV_RELS,
+    PROV_TARGET_MAX,
     atomic_write_text,
     generate_bucket_id,
     is_closed,
@@ -333,7 +337,9 @@ V2_FIELDS = ("direction_of_fit", "bound", "evidential", "internally_generated",
 _SOURCE_TOOL_MAX = 32
 _GROW_BATCH_ID_MAX = 64
 _WHY_REMEMBERED_MAX = 500
-_TRIGGERED_BY_MAX = 64
+# prov (where this came from) is not truncated: a cut target is half an id pointing at
+# nothing. PROV_MAX_LINES lines of at most PROV_TARGET_MAX characters (utils), and
+# anything past either is refused by _normalize_prov.
 # --- Truncation lengths for three later fields ---
 # room    = the room. The caller decides it and tools/_rooms.py validates it; this file
 #           only stores it and has no opinion on its meaning.
@@ -396,7 +402,6 @@ _METADATA_TEXT_LIMITS = {
     "title": 120,
     "letter_date": 64,
     "why_remembered": _WHY_REMEMBERED_MAX,
-    FROM_FIELD: _TRIGGERED_BY_MAX,
     "source_tool": _SOURCE_TOOL_MAX,
     "grow_batch_id": _GROW_BATCH_ID_MAX,
     "last_merged_by": _SOURCE_TOOL_MAX,
@@ -768,6 +773,38 @@ class BucketManager:
                 "at": cls._sanitize_text(str(rec.get("at") or "")).strip()[:_INVALIDATION_AT_MAX],
             })
         return out[-_INVALIDATION_MAX_ITEMS:]
+
+    @classmethod
+    def _normalize_prov(cls, lines) -> list[dict]:
+        """The stored form of `prov`: [{rel, target}], order kept, identical lines once.
+        Raises ValueError on a rel outside PROV_RELS, a target that is empty, holds
+        whitespace or is longer than PROV_TARGET_MAX, or more than PROV_MAX_LINES lines.
+        Nothing is cut to fit: a shortened target or a dropped line would be a chain that
+        silently says less than it was given. Whether a target exists is the tools'
+        question, not this one."""
+        if not lines:
+            return []
+        if isinstance(lines, dict):
+            lines = [lines]
+        if not isinstance(lines, (list, tuple)):
+            raise ValueError(f"prov must be a list of {{rel, target}}, got {type(lines).__name__}")
+        out: list[dict] = []
+        for line in lines:
+            if not isinstance(line, dict):
+                raise ValueError(f"prov line must be {{rel, target}}, got {type(line).__name__}")
+            rel = str(line.get("rel") or "").strip()
+            if rel not in PROV_RELS:
+                raise ValueError(f"prov rel must be one of {', '.join(PROV_RELS)}, got {rel!r}")
+            target = cls._sanitize_text(str(line.get("target") or "")).strip()
+            if not target or len(target) > PROV_TARGET_MAX or re.search(r"\s", target):
+                raise ValueError(f"prov target must be one id of at most {PROV_TARGET_MAX} "
+                                 f"characters, got {target[:PROV_TARGET_MAX + 1]!r}")
+            entry = {"rel": rel, "target": target}
+            if entry not in out:
+                out.append(entry)
+        if len(out) > PROV_MAX_LINES:
+            raise ValueError(f"prov holds at most {PROV_MAX_LINES} lines, got {len(out)}")
+        return out
 
     @classmethod
     def _normalize_media(cls, media) -> list[dict]:
@@ -1162,10 +1199,9 @@ class BucketManager:
         pinned: bool = False,
         protected: bool = False,
         why_remembered: str = "",
-        # Both the parameter and the persisted field are called `from`. `from` is a Python
-        # keyword, so the parameter has to be named from_ids; the key written into the
-        # frontmatter is the real "from".
-        from_ids: str = "",
+        # Where this came from: [{rel, target}] (utils, `prov`). The caller has already
+        # picked each rel from its route and checked what has to exist.
+        prov: Optional[list[dict]] = None,
         weight: Optional[float] = None,
         source_tool: str = "",
         grow_batch_id: str = "",
@@ -1302,9 +1338,10 @@ class BucketManager:
         # An empty string means no reason was given, and the dashboard simply omits the row.
         if why_remembered:
             metadata["why_remembered"] = str(why_remembered).strip()[:_WHY_REMEMBERED_MAX]
-        # --- The source chain: `from` ---
-        if from_ids:
-            metadata[FROM_FIELD] = str(from_ids).strip()[:_TRIGGERED_BY_MAX]
+        # --- Where this came from: `prov` (refused whole, before anything is written) ---
+        prov_lines = self._normalize_prov(prov)
+        if prov_lines:
+            metadata[PROV_FIELD] = prov_lines
         # --- room / summary / when ---
         # The semantic validation of `room` lives in tools/_rooms.py and the caller decides
         # it; this file only stores it and has no opinion on its meaning.
@@ -2033,6 +2070,14 @@ class BucketManager:
         if "invalidation" in kwargs:
             # The whole list is written each time; the caller appends to what it read.
             kwargs["invalidation"] = self._normalize_invalidation(kwargs["invalidation"])
+        if PROV_FIELD in kwargs:
+            # The whole list is written each time, like invalidation. A bad line refuses
+            # the whole update rather than reaching disk.
+            try:
+                kwargs[PROV_FIELD] = self._normalize_prov(kwargs[PROV_FIELD])
+            except ValueError as exc:
+                logger.warning(f"update() refused {bucket_id}: {exc}")
+                return False
 
         try:
             post = frontmatter.load(file_path)
@@ -2207,7 +2252,11 @@ class BucketManager:
                   # weight only means anything on something wanted; its type is not checked in this
                   # loop, and server.py above guarantees the range it passes in.
                   "why_remembered", "dont_surface", "first_of_kind",
-                  "weight", FROM_FIELD,
+                  "weight",
+                  # prov: where this came from, normalised above. Writing it retires the
+                  # older `from` string on the same entry, so the two can never disagree;
+                  # an empty list removes the field.
+                  PROV_FIELD,
                   # subjects. The dehydrator's backfill comes through this path.
                   "subjects",
                   # anchor: a bool that takes no part in scoring, hard-capped at 24.
@@ -2295,6 +2344,12 @@ class BucketManager:
                 if k == "weight" and kwargs[k] is not None:
                     post[k] = _clamp01(kwargs[k], _DEFAULT_VALENCE)
                 elif k == "invalidation":
+                    if kwargs[k]:
+                        post[k] = kwargs[k]
+                    else:
+                        post.metadata.pop(k, None)
+                elif k == PROV_FIELD:
+                    post.metadata.pop(LEGACY_FROM_FIELD, None)
                     if kwargs[k]:
                         post[k] = kwargs[k]
                     else:
@@ -2585,15 +2640,15 @@ class BucketManager:
             return {"ok": True, "restored": bucket_id, "type": original_kind}
 
     # ---------------------------------------------------------
-    # The reverse chain: who has this memory in their `from`.
-    # The forward chain is `from`; the reverse one is computed on the
-    # spot by scanning the parse cache — the store holds a few hundred entries, so with a warm
-    # cache it is one in-memory pass, and no separate index is built (building one would be a
-    # second source of truth).
+    # The reverse chain: whose sources include this memory.
+    # The forward chain is `prov` (its sources read through utils.read_from_ids); the
+    # reverse one is computed on the spot by scanning the parse cache — the store holds a
+    # few hundred entries, so with a warm cache it is one in-memory pass, and no separate
+    # index is built (building one would be a second source of truth).
     # ---------------------------------------------------------
     async def referenced_by(self, bucket_id: str) -> list[str]:
-        """Whose `from` points at this memory. This is what "cited by" in a direct id lookup
-        uses."""
+        """Who stands on this memory: whose sources (utils.read_from_ids) include it.
+        This is what "cited by" in a direct id lookup and regrow's overturn walk use."""
         out: list[str] = []
         for b in await self.list_all(include_archive=False):
             meta = b.get("metadata", {}) or {}
@@ -2602,8 +2657,8 @@ class BucketManager:
         return out
 
     async def mind_from_ids(self) -> set[str]:
-        """The set of ids pointed at by the `from` of any insight-type bucket (the MIND
-        branch, or the older type=feel/i).
+        """The set of ids among the sources of any insight-type bucket (the MIND branch, or
+        the older type=feel/i).
 
         This is the "not digested" test: once an insight has been distilled out of
         something, that thing is digested; only what refuses to distil keeps turning over in

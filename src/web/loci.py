@@ -68,7 +68,7 @@ from starlette.responses import Response
 
 from . import _shared as sh
 from core import _when as _w      # "today" in the user's local timezone — never call datetime.now() directly
-from utils import read_from
+from utils import read_from_ids
 
 logger = sh.logger
 
@@ -356,8 +356,8 @@ _SEED_NAMES = frozenset({
 
 
 def _split_ids(raw) -> list[str]:
-    """`from` is persisted as a comma-separated string; early buckets stored a list,
-    which is still accepted."""
+    """An id field persisted as a comma-separated string (`supersedes`); a list is
+    accepted too."""
     if isinstance(raw, (list, tuple)):
         items = [str(x) for x in raw]
     else:
@@ -672,8 +672,10 @@ async def build_graph() -> dict:
     unresolved: Counter = Counter()
     for bid, r in raw.items():
         meta, content = r["meta"], r["content"]
-        # The edge kind carries the field's name, `from`.
-        for src in _split_ids(read_from(meta)):
+        # The edge kind carries the tools' word, `from`: the memories this one stands
+        # on. Its own previous version is drawn once, by the supersedes edge below, and
+        # a quoted line points outside the library, where there is no star.
+        for src in read_from_ids(meta):
             _add(src, bid, "from")
         for old in _split_ids(meta.get("supersedes")):
             _add(bid, old, "supersedes")
@@ -903,10 +905,9 @@ async def build_profile() -> dict:
               "is_question": h["id"] == heavy_q_id}
              for h in door["heavy"]]
     # The notification pool: entries the user edited that have not yet been read or folded.
-    from utils import read_from_ids as _read_from_ids
     edited = [{"id": e["id"], "short": _short_id(e["id"]),
                "label": _label(e), "content": e["content"].strip(),
-               "corrects": (_read_from_ids(e["meta"]) or [""])[0]}
+               "corrects": (read_from_ids(e["meta"]) or [""])[0]}
               for e in edited_by_user(all_buckets)]
     rules = []
     for r in door["rules"]:
@@ -1622,7 +1623,7 @@ async def build_health() -> dict:
             all_ids = live_ids                       # if the archive cannot be read, fall back to the old measure
         sunk = gone = 0
         for m in metas:
-            for src in _split_ids(read_from(m)):
+            for src in read_from_ids(m):
                 if src in live_ids:
                     continue
                 if src in all_ids:
@@ -2646,7 +2647,7 @@ def register(mcp) -> None:
                 # Subjects are a third kind of tag, sitting alongside tags and aliases and
                 # never mixed with them.
                 "subjects": [str(s) for s in (meta.get("subjects") or [])],
-                "from": _split_ids(read_from(meta)),
+                "from": read_from_ids(meta),
                 "supersedes": _split_ids(meta.get("supersedes")),
                 "superseded_by": str(meta.get("superseded_by") or ""),
                 "archived": archived,

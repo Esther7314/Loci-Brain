@@ -42,7 +42,8 @@ def test_a_deleted_source_is_marked_and_a_live_one_is_not(store):
         gone = await store.create("She dropped the blue mug.", tags=["t"])
         kept = await store.create("She bought a new mug.", tags=["t"])
         thought = await store.create("She replaces things quickly.", tags=["t"])
-        assert await store.update(thought, **{"from": f"{gone},{kept}"})
+        assert await store.update(thought, prov=[{"rel": "wasDerivedFrom", "target": gone},
+                                                 {"rel": "wasDerivedFrom", "target": kept}])
         assert await store.delete(gone)
 
         out = await R.recall_core(when="", room="", tag="", query=thought)

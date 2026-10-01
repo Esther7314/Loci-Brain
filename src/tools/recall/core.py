@@ -20,7 +20,12 @@ from .._common import resolve_bucket_id
 from core import _when as _w          # "today" as the user lives it (local timezone) — never call datetime.now() directly
 from core._rooms import (ALL_ROOMS, check_gate, is_mind_room, normalize_room,
                       room_matches)
-from utils import read_from_ids
+from utils import (HAD_PRIMARY_SOURCE, WAS_DERIVED_FROM, WAS_QUOTED_FROM, WAS_REVISION_OF,
+                   read_prov)
+
+# What each provenance line is, in the read by id's 「来源:」 block.
+_PROV_WORD = {WAS_DERIVED_FROM: "派生", WAS_REVISION_OF: "新版本",
+              WAS_QUOTED_FROM: "引原话", HAD_PRIMARY_SOURCE: "一手来源"}
 
 # The zoom target: how many cells each call returns (12-20; at or below _LIST_MAX
 # entries it does not zoom at all and simply lists them)
@@ -1594,12 +1599,17 @@ async def recall_core(when: str, room: str, tag: str, query: str,
             tags_ = [str(t) for t in (meta.get("tags") or []) if not str(t).startswith("__")]
             if tags_:
                 info.append("标签:" + ",".join(tags_[:6]))
-            # from must never be reduced to bare ids: a mind holds only the
-            # product of thinking, the events live in from, and reading it has to
-            # bring the sources' gists along or the thinking has nothing to stand
-            # on.
+            # Sources must never be reduced to bare ids: a mind holds only the
+            # product of thinking, the events live in its provenance, and reading it
+            # has to bring the sources' gists along or the thinking has nothing to
+            # stand on. Each line says what kind of source it is; a quoted line is the
+            # host's conversation, not a memory, so nothing is looked up for it.
             src_lines: list[str] = []
-            for fid in read_from_ids(meta):
+            for line in read_prov(meta):
+                fid, word = line["target"], _PROV_WORD[line["rel"]]
+                if line["rel"] == WAS_QUOTED_FROM:
+                    src_lines.append(f"  ← {fid}  [{word}] （宿主对话里的原话，不在库里）")
+                    continue
                 src = await rt.bucket_mgr.get_including_archive(fid)
                 if src:
                     smeta = src.get("metadata", {}) or {}
@@ -1610,10 +1620,10 @@ async def recall_core(when: str, room: str, tag: str, query: str,
                     # current would be wrong.
                     archived = (str(smeta.get("type") or "") == "archived"
                                 or smeta.get("tombstone") or smeta.get("deleted_at"))
-                    src_lines.append(f"  ← {fid}  {hint}"
+                    src_lines.append(f"  ← {fid}  [{word}] {hint}"
                                      + ("  ⚠️在归档区" if archived else ""))
                 else:
-                    src_lines.append(f"  ← {fid}  （查无此桶——源可能被硬删过）")
+                    src_lines.append(f"  ← {fid}  [{word}] （查无此桶——源可能被硬删过）")
             if meta.get("supersedes"):
                 info.append(f"换掉了:{meta['supersedes']}")
             if meta.get("superseded_by"):
@@ -1684,8 +1694,8 @@ async def recall_core(when: str, room: str, tag: str, query: str,
                 if len(cov) > 30:
                     lines.append(f"  …… 还有 {len(cov) - 30} 条")
             # The reverse chain: what thinking has grown out of this entry —
-            # "being pointed at by from" is direct evidence of how far something
-            # has been digested
+            # being one of another entry's sources is direct evidence of how far
+            # something has been digested
             try:
                 refs = await rt.bucket_mgr.referenced_by(q)
             except Exception:

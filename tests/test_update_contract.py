@@ -405,6 +405,24 @@ def test_invalidation_reaches_disk(store):
     run(go())
 
 
+def test_prov_reaches_disk(store):
+    async def go():
+        bid = await store.create(BODY)
+        lines = [{"rel": "wasDerivedFrom", "target": "aaaaaaaaaaaa"},
+                 {"rel": "wasQuotedFrom", "target": "m_0931"}]
+        assert await store.update(bid, prov=lines) is True
+        # Criterion: the same trap a fifth time. Every source a memory names goes
+        # through this field; dropped here, a thought reads as made up out of nothing.
+        assert (await _meta(store, bid))["prov"] == lines
+        # A bad line refuses the whole write instead of reaching disk in part.
+        assert await store.update(bid, prov=lines + [{"rel": "inspiredBy", "target": "x"}]) is False
+        assert (await _meta(store, bid))["prov"] == lines
+        # An empty list clears the field.
+        assert await store.update(bid, prov=[]) is True
+        assert "prov" not in await _meta(store, bid)
+    run(go())
+
+
 def test_none_deletes_a_field_instead_of_writing_the_word_none(store):
     async def go():
         bid = await store.create(BODY)

@@ -103,14 +103,9 @@ async def dispatch(text: str = "", room: str = "", v=-1, a=-1,
 
     # ---- from: which entries this grew out of (optional; a different meaning
     # from cover, and the two must never be merged) ----
-    from_ids, from_err = await _normalize_from(from_)
+    prov, from_err = await _normalize_from(from_)
     if from_err:
         return from_err
-    if from_ids:
-        missing = [fid for fid in from_ids
-                   if not await rt.bucket_mgr.get_including_archive(fid)]
-        if missing:
-            return f"from 里这些 id 不存在：{', '.join(missing)}。"
 
     # ---- The folded ids may be the handles breath prints; from here on every
     # gate and every message speaks of the full ids, which are what get stored ----
@@ -197,7 +192,7 @@ async def dispatch(text: str = "", room: str = "", v=-1, a=-1,
     supersedes = ""
 
     new_id, report = await F.save_gist(
-        text, room, v, a, cover, when=when, from_ids=from_ids,
+        text, room, v, a, cover, when=when, prov=prov,
         supersedes=supersedes, test_data=bool(test_data))
 
     # ---- Say it plainly. A period and a snapshot get two different sentences,

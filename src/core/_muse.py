@@ -315,8 +315,7 @@ def item_of(meta: dict, text: str) -> Item | None:
         from utils import read_from_ids
         froms = read_from_ids(meta)
     except Exception:                      # noqa: BLE001 - the engine must not die just because a chain would not read
-        raw = str(meta.get("from") or "")
-        froms = [s.strip() for s in raw.split(",") if s.strip()]
+        froms = []
     return Item(
         id=bid,
         room=str(meta.get("room") or ""),

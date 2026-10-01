@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -37,7 +38,7 @@ import frontmatter
 
 from utils import atomic_write_text, now_iso, sanitize_name
 
-CURRENT_VERSION = 4
+CURRENT_VERSION = 5
 
 STATE_FILE = Path("_state") / "schema.json"
 BACKUP_DIR = "_backups"
@@ -256,13 +257,60 @@ class _V3ToV4:
         return ["gist_tag"], None
 
 
+# 4 -> 5: where a memory came from becomes typed (W3C PROV). The comma string under
+# `from` turns into `prov: [{rel, target}]`, one line per entry, kept verbatim and in
+# order: a memory's id (12 hex, or a `feel_…` id) is wasDerivedFrom, and anything else
+# names something outside the library and is wasQuotedFrom. A new version (`supersedes`)
+# gains a wasRevisionOf line for the version it replaced, which before this lived only in
+# the chain field. `supersedes` itself stays: the version chain still runs on it. The
+# names and the id shape are copied here so the step stays frozen.
+_V4_PROV = "prov"
+_V4_DERIVED = "wasDerivedFrom"
+_V4_QUOTED = "wasQuotedFrom"
+_V4_REVISION = "wasRevisionOf"
+_V4_BUCKET_ID = re.compile(r"[0-9a-f]{12}|feel_\S+")
+
+
+def _v4_to_v5(meta: dict, rel: PurePosixPath) -> tuple[list[str], str | None]:
+    changed: list[str] = []
+    lines = [dict(ln) for ln in (meta.get(_V4_PROV) or []) if isinstance(ln, dict)]
+    if "from" in meta:
+        old = meta.pop("from")
+        ids = old if isinstance(old, (list, tuple)) else str(old or "").split(",")
+        for target in (str(s).strip() for s in ids):
+            kind = _V4_DERIVED if _V4_BUCKET_ID.fullmatch(target) else _V4_QUOTED
+            line = {"rel": kind, "target": target}
+            if target and line not in lines:
+                lines.append(line)
+        changed.append("from")
+    previous = str(meta.get("supersedes") or "").strip()
+    if previous:
+        line = {"rel": _V4_REVISION, "target": previous}
+        if line not in lines:
+            lines.append(line)
+            changed.append("revision_of")
+    if changed:
+        if lines:
+            meta[_V4_PROV] = lines
+        else:
+            meta.pop(_V4_PROV, None)
+    return changed, None
+
+
+# Wanted entries only change shape at 2 -> 3; this step touches them for their sources,
+# and listing them for `bound` would ask for work it did not create.
+_v4_to_v5.lists_telic = False
+
+
 # version it upgrades FROM -> what it does to one file: (fields changed, where the file
 # moves to relative to the library, or None to stay). A step with a `prepare(buckets_dir)`
-# is given the library once before its first file.
+# is given the library once before its first file; one with `lists_telic = False` keeps
+# the entries it touches off the report's list of wanted entries.
 STEPS: dict[int, Callable[[dict, PurePosixPath], tuple[list[str], str | None]]] = {
     1: _v1_to_v2,
     2: _v2_to_v3,
     3: _V3ToV4(),
+    4: _v4_to_v5,
 }
 
 
@@ -317,7 +365,8 @@ def migrate(buckets_dir: str | Path, *, apply: bool = False) -> dict:
                     raise RuntimeError(f"cannot move {rel} to {new_rel}: a file is already there")
                 moved += 1
             meta = post.metadata
-            if str(meta.get("direction_of_fit") or "") == "telic":
+            if (str(meta.get("direction_of_fit") or "") == "telic"
+                    and getattr(step, "lists_telic", True)):
                 report["telic"].append({
                     "id": str(meta.get("id") or ""),
                     "path": new_rel or str(rel),

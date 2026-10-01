@@ -120,7 +120,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from tools import _runtime as rt
-from utils import is_closed
+from utils import is_closed, prov_targets
 from ._bigevent import BIGEVENT_TAG, SPAN_RE
 from .bucket_manager import V2_FIELDS
 
@@ -382,7 +382,7 @@ async def span_members(t0: datetime | None, t1: datetime | None) -> list[str]:
 
 
 async def save_gist(text: str, room: str, v: float, a: float,
-                    cover: list[str], *, when: str = "", from_ids: list[str] | None = None,
+                    cover: list[str], *, when: str = "", prov: list[dict] | None = None,
                     supersedes: str = "", test_data: bool = False) -> tuple[str, dict]:
     """The moment it actually hits disk. **All three entry points (fold / regrow /
     grow(kind="big")) share this one function.**
@@ -391,6 +391,9 @@ async def save_gist(text: str, room: str, v: float, a: float,
     one word of it passes through a model.** There is no LLM summarisation path in this
     function and there must never be one. Background backfill only adds tags, a summary
     and a name; that is derived metadata, not the body.
+
+    prov: the provenance lines as the entry point built them (`_normalize_from`; regrow
+      adds the wasRevisionOf line to the old version itself). Stored as given.
 
     supersedes: for n=1 (a version change) pass the old id, and the version chain
       supersedes / superseded_by plus dont_surface gets written, and the old version's
@@ -455,7 +458,7 @@ async def save_gist(text: str, room: str, v: float, a: float,
         valence=v,
         arousal=a,
         name=None,
-        from_ids=",".join(from_ids or []),
+        prov=prov,
         source_tool="fold",
         room=room,
         when=when,                       # the time-circle: the span goes into the existing `when`, there is no second field
@@ -570,7 +573,7 @@ async def save_gist(text: str, room: str, v: float, a: float,
     # The covered entries have in effect "been recalled once more" (the same reasoning
     # behind regrow touching its sources)
     try:
-        await rt.bucket_mgr.touch_many(list(from_ids or []))
+        await rt.bucket_mgr.touch_many(prov_targets(prov or []))
     except Exception:
         pass
 

@@ -53,14 +53,8 @@ from core._bigevent import SPAN_RE, first_line as _F_first_line
 from .._common import check_content_size, resolve_bucket_ids
 from core._rooms import check_room, is_mind_room
 from .._subjects import normalize_bound, normalize_subjects
-from utils import parse_bool
-
-# from (a 64-character ceiling): five 12-hex-digit ids plus four
-# commas = 64, which fits exactly; from the sixth on it would be silently
-# truncated into half an id pointing at a bucket that does not exist. So it is
-# stopped dead here.
-_FROM_MAX = 5
-_TRIGGERED_BY_LIMIT = 64      # matches bucket_manager._TRIGGERED_BY_MAX
+from utils import (PROV_MAX_LINES, PROV_TARGET_MAX, WAS_DERIVED_FROM, WAS_QUOTED_FROM,
+                   is_bucket_id, parse_bool, prov_targets)
 
 # A body longer than this earns a line in the response saying "this looks like
 # more than one thing".
@@ -481,35 +475,66 @@ async def backfill_sweep() -> int:
 # kind="event"
 # ------------------------------------------------------------
 
-async def _normalize_from(from_ids) -> tuple[list[str] | None, str]:
-    """Normalise the from list, resolve short handles to full ids, and check its
-    count and total length. Returns (ids, error message); ids=None means nothing
-    was passed. grow, regrow and fold all take `from` through here, so this is
-    the one place a 6-character handle in `from` turns into the full id that
-    gets stored — the length check below measures the full ids, which are what
-    land on disk."""
+async def _check_quoted_source(target: str) -> str:
+    """Whether an id from outside the library may be quoted as a source; returns the
+    refusal, or "" to accept. This is the one place that decides it: the source
+    registry (stage 4.4) plugs its check in here, and every write tool that takes
+    `from` comes through _normalize_from. Until then only the shape is checked — one
+    token, short enough to store whole."""
+    if _re.search(r"\s", target):
+        return (f"from 里「{target[:40]}」不像 id（带空格）——填 bucket_id，"
+                "或宿主那句话自己的 id（如 m_0931）。")
+    if len(target) > PROV_TARGET_MAX:
+        return (f"from 里 {target[:40]}… 有 {len(target)} 字符，超过 {PROV_TARGET_MAX} 上限"
+                "——不截断，换成它的短 id。")
+    return ""
+
+
+async def _normalize_from(from_ids, missing_hint: str = "") -> tuple[list[dict] | None, str]:
+    """Turn the `from` argument into provenance lines. Returns (lines, error
+    message); lines=None means nothing was passed. grow, regrow and fold all take
+    `from` through here, so this is the one place that decides what a source is:
+
+    - a short handle resolves to the full id it names (the same resolver every
+      write tool uses), so what lands on disk is always the full id;
+    - a memory's id (12 hex, or a `feel_…` id) has to exist, archive included, and
+      becomes a wasDerivedFrom line;
+    - anything else is the host's own id for a line of the conversation (`m_0931`):
+      it is not in the library, so nothing is looked up, and it becomes a
+      wasQuotedFrom line once _check_quoted_source lets it through.
+
+    More than PROV_MAX_LINES distinct sources is refused outright, never cut.
+    `missing_hint` is appended to the "these ids do not exist" refusal."""
     if from_ids is None:
         return None, ""
     if isinstance(from_ids, str):
         from_ids = [s.strip() for s in from_ids.split(",") if s.strip()]
     if not isinstance(from_ids, list):
-        return None, "from 要传 bucket_id 列表。"
-    ids = [str(s).strip() for s in from_ids if str(s).strip()]
+        return None, "from 要传 id 列表。"
+    ids = list(dict.fromkeys(str(s).strip() for s in from_ids if str(s).strip()))
     if not ids:
         return None, ""
-    if len(ids) > _FROM_MAX:
-        return None, (f"from 最多 {_FROM_MAX} 条（收到 {len(ids)} 条）。"
-                      "底层字段 64 字符上限，多了会被静默截断成半截 id——拆开分别存。")
+    if len(ids) > PROV_MAX_LINES:
+        return None, (f"from 最多 {PROV_MAX_LINES} 条（收到 {len(ids)} 条）"
+                      "——一条记忆挂不了这么多来源，拆开分别存。")
     ids, id_err = await resolve_bucket_ids(ids, "from")
     if id_err:
         return None, id_err
-    joined = ",".join(ids)
-    if len(joined) > _TRIGGERED_BY_LIMIT:
-        # Few enough entries but individually long ids (historical readable ones
-        # like feel_...) still get truncated
-        return None, (f"from 拼起来 {len(joined)} 字符，超过底层 {_TRIGGERED_BY_LIMIT} 上限，"
-                      "会被静默截断——减少条数或拆开存。")
-    return ids, ""
+    lines: list[dict] = []
+    missing: list[str] = []
+    for fid in dict.fromkeys(ids):
+        if is_bucket_id(fid):
+            if not await rt.bucket_mgr.get_including_archive(fid):
+                missing.append(fid)
+            lines.append({"rel": WAS_DERIVED_FROM, "target": fid})
+            continue
+        quote_err = await _check_quoted_source(fid)
+        if quote_err:
+            return None, quote_err
+        lines.append({"rel": WAS_QUOTED_FROM, "target": fid})
+    if missing:
+        return None, f"from 里这些 id 不存在：{', '.join(missing)}。{missing_hint}"
+    return lines, ""
 
 
 async def grow_event(items: list, direction_of_fit: str = "", bound=None,
@@ -525,18 +550,11 @@ async def grow_event(items: list, direction_of_fit: str = "", bound=None,
     # from is optional for an event (a want should carry a from where possible,
     # but it is not enforced — otherwise it becomes something invented out of
     # nothing).
-    # If passed, it is checked for existence and written into each entry's
-    # from.
-    from_ids, from_err = await _normalize_from(from_ids)
+    # If passed, it is checked (_normalize_from) and written into each entry's
+    # prov.
+    prov, from_err = await _normalize_from(from_ids)
     if from_err:
         return from_err
-    if from_ids:
-        missing = []
-        for fid in from_ids:
-            if not await rt.bucket_mgr.get_including_archive(fid):
-                missing.append(fid)
-        if missing:
-            return f"from 里这些 id 不存在：{', '.join(missing)}。"
 
     # --- Validation first: if any item is invalid, reject everything and create
     # no bucket at all ---
@@ -638,7 +656,7 @@ async def grow_event(items: list, direction_of_fit: str = "", bound=None,
             grow_batch_id=batch_id,
             room=item["room"],
             when=item["when"],
-            from_ids=",".join(from_ids) if from_ids else "",
+            prov=prov,
             test_data=test_data,
             **v2,
         )
@@ -718,19 +736,14 @@ async def grow_mind(room: str, text: str, from_ids, v, a,
 
     # --- from is mandatory, every single one of them: a piece of self-knowledge
     # with no provenance reads exactly like one that was invented ---
-    from_ids, from_err = await _normalize_from(from_ids)
+    prov, from_err = await _normalize_from(
+        from_ids, missing_hint="填 grow(kind=\"event\") 返回的真 id。")
     if from_err:
         return from_err
-    if not from_ids:
+    if not prov:
         return ("from 必填：这条认知是从哪几条记忆看出来的？填真 bucket_id 列表。"
                 "确实凭空想的，就在正文里老实标「凭空想的」，并把来源指到相关的事件上。")
-    missing = []
-    for fid in from_ids:
-        found = await rt.bucket_mgr.get_including_archive(fid)
-        if not found:
-            missing.append(fid)
-    if missing:
-        return f"from 里这些 id 不存在：{', '.join(missing)}。填 grow(kind=\"event\") 返回的真 id。"
+    source_ids = prov_targets(prov)
 
     # --- v/a is mandatory, set by the caller, never outsourced to a model ---
     try:
@@ -750,14 +763,14 @@ async def grow_mind(room: str, text: str, from_ids, v, a,
         valence=v,
         arousal=a,
         name=None,
-        from_ids=",".join(from_ids),
+        prov=prov,
         source_tool="grow",
         room=room,
         test_data=test_data,
         **v2,
     )
     try:
-        await rt.bucket_mgr.touch_many(from_ids)  # distilling a thought = remembering its sources
+        await rt.bucket_mgr.touch_many(source_ids)  # distilling a thought = remembering its sources
     except Exception:
         pass
 
@@ -765,7 +778,8 @@ async def grow_mind(room: str, text: str, from_ids, v, a,
     # v/a is never touched)
     asyncio.create_task(_backfill_batch([(bucket_id, text, "mind")]))
 
-    head = f"🧠mind→{bucket_id} {room} ←{{{','.join(from_ids)}}} V{v:.2f}/A{a:.2f}"
+    head = (f"🧠mind→{bucket_id} {room} ←{{{','.join(ln['target'] for ln in prov)}}}"
+            f" V{v:.2f}/A{a:.2f}")
     if v2["direction_of_fit"] == "telic":
         head += " [telic]"
     return head + "（标签/摘要后台回填中）"

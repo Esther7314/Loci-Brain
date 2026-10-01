@@ -1135,26 +1135,84 @@ def now_iso() -> str:
 
 
 # ============================================================
-# `from` — the provenance chain
+# `prov` — where a memory came from, one typed line per source
 # ------------------------------------------------------------
-# The field is `from` on disk and in the tools. (The library migration, core/schema.py step
-# 1 -> 2, moved every older `triggered_by` into it.)
+# On disk: `prov: [{rel, target}, ...]`. `rel` is one of four W3C PROV relations, and the
+# write path picks it from the route taken, never from the caller:
+#   wasDerivedFrom    grew out of another memory (grow / fold `from`)
+#   wasRevisionOf     the previous version of this same memory (regrow)
+#   wasQuotedFrom     a line of the host's conversation (an `m_…` id), not a memory
+#   hadPrimarySource  defined so the reader knows it; nothing writes it yet
+# The tools still take the argument as `from`, which is the word a caller thinks in.
 #
-# WARNING: `from` is a Python keyword, so it can only be used as a string key; `meta.from`
-# is a syntax error.
+# A library before schema 5 stored a comma string under `from`; the migration
+# (core/schema.py, step 4 -> 5) turns each memory id in it into a wasDerivedFrom line and
+# anything else into a wasQuotedFrom line. The readers below read it the same way, so a
+# library that was not migrated keeps its chains.
 # ============================================================
-FROM_FIELD = "from"
+PROV_FIELD = "prov"
+LEGACY_FROM_FIELD = "from"
+
+WAS_DERIVED_FROM = "wasDerivedFrom"
+WAS_REVISION_OF = "wasRevisionOf"
+WAS_QUOTED_FROM = "wasQuotedFrom"
+HAD_PRIMARY_SOURCE = "hadPrimarySource"
+PROV_RELS = (WAS_DERIVED_FROM, WAS_REVISION_OF, WAS_QUOTED_FROM, HAD_PRIMARY_SOURCE)
+# The memories in this library a memory stands on. A revision line names the previous
+# version of the same memory, not a source (the chain is read from `supersedes`), and a
+# quoted line points outside the library.
+SOURCE_RELS = frozenset({WAS_DERIVED_FROM, HAD_PRIMARY_SOURCE})
+
+PROV_MAX_LINES = 64      # per memory; more is refused at the door, never cut
+PROV_TARGET_MAX = 128    # one target, in characters; a longer one is refused
+
+# A memory's own id: 12 hex characters, or the readable `feel_…` ids feel once wrote.
+_BUCKET_ID_RE = re.compile(r"[0-9a-f]{12}|feel_\S+")
 
 
-def read_from(meta: Optional[dict]) -> str:
-    """A memory's raw provenance chain: comma-separated ids."""
-    return str((meta or {}).get(FROM_FIELD) or "").strip()
+def is_bucket_id(value) -> bool:
+    """Is this shaped like the id of a memory in this library (as opposed to the host's
+    own line id)? Shape only; whether it exists is the caller's question."""
+    return bool(_BUCKET_ID_RE.fullmatch(str(value or "").strip()))
+
+
+def read_prov(meta: Optional[dict]) -> list[dict]:
+    """Every provenance line, typed and in stored order: [{"rel", "target"}].
+
+    Read from `prov`; an entry that carries only the older `from` string reads the way
+    the migration converts it — a memory id as wasDerivedFrom, anything else as
+    wasQuotedFrom. A line with an unknown rel or no target is skipped, so a hand-edited
+    file cannot stop a sweep over the library."""
+    m = meta if isinstance(meta, dict) else {}
+    raw = m.get(PROV_FIELD)
+    if raw:
+        out: list[dict] = []
+        for line in raw if isinstance(raw, list) else []:
+            if not isinstance(line, dict):
+                continue
+            rel = str(line.get("rel") or "").strip()
+            target = str(line.get("target") or "").strip()
+            if rel in PROV_RELS and target:
+                out.append({"rel": rel, "target": target})
+        return out
+    legacy = m.get(LEGACY_FROM_FIELD)
+    ids = legacy if isinstance(legacy, (list, tuple)) else str(legacy or "").split(",")
+    targets = [str(s).strip() for s in ids if str(s).strip()]
+    return [{"rel": WAS_DERIVED_FROM if is_bucket_id(t) else WAS_QUOTED_FROM, "target": t}
+            for t in targets]
+
+
+def prov_targets(lines: list[dict], rels=SOURCE_RELS) -> list[str]:
+    """The targets of the lines whose rel is in `rels` (the sources, by default), in
+    order, each once."""
+    return list(dict.fromkeys(ln["target"] for ln in lines if ln["rel"] in rels))
 
 
 def read_from_ids(meta: Optional[dict]) -> list[str]:
-    """The provenance chain split into a list of ids: whitespace trimmed, empties dropped,
-    order preserved."""
-    return [s.strip() for s in read_from(meta).split(",") if s.strip()]
+    """The memories in this library this one stands on — derived-from and
+    primary-source — in order. Its own previous version (wasRevisionOf) and quoted lines
+    are not sources in the library and are left out."""
+    return prov_targets(read_prov(meta))
 
 
 def is_closed(meta: Optional[dict]) -> bool:

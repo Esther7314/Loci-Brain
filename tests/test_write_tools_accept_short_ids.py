@@ -151,8 +151,10 @@ def test_regrow_resolves_short_ids_in_from_and_stores_full_ones(store, tmp_path)
                            v=0.5, a=0.4, mode="supplement", from_=[LONE[:6]])
         new = _disk(tmp_path, a)["superseded_by"]
         assert new in out
-        # Criterion: what the from chain holds on disk is the full id, not the handle.
-        assert _disk(tmp_path, new)["from"] == LONE
+        # Criterion: what the prov holds on disk is the full id, not the handle — beside
+        # the line naming the version it replaced.
+        assert _disk(tmp_path, new)["prov"] == [
+            {"rel": "wasDerivedFrom", "target": LONE}, {"rel": "wasRevisionOf", "target": a}]
     run(go())
 
 
@@ -189,7 +191,7 @@ def test_grow_mind_takes_a_short_id_in_from(store, tmp_path):
                          from_=[LONE[:6]], v=0.5, a=0.4)
         assert out.startswith("🧠mind→")
         new = out.split("🧠mind→", 1)[1].split()[0]
-        assert _disk(tmp_path, new)["from"] == LONE
+        assert _disk(tmp_path, new)["prov"] == [{"rel": "wasDerivedFrom", "target": LONE}]
     run(go())
 
 
@@ -202,7 +204,8 @@ def test_grow_event_takes_a_short_id_in_from(store, tmp_path):
                                  "v": 0.6, "a": 0.2, "when": "2026-09-27"}])
         assert "不存在" not in out and "查无此桶" not in out
         [added] = set(_files(tmp_path)) - before
-        assert dict(frontmatter.load(added).metadata)["from"] == LONE
+        assert dict(frontmatter.load(added).metadata)["prov"] == [
+            {"rel": "wasDerivedFrom", "target": LONE}]
     run(go())
 
 

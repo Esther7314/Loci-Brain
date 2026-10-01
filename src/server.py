@@ -765,7 +765,9 @@ async def grow(
     # so the signature spells it from_ and pydantic's public validation_alias catches it.
     # This deliberately avoids reaching into FastMCP's private structures.
     from_: Annotated[list, _PydField(validation_alias="from", description=(
-        "The entries this one grew out of. Real bucket_ids, at most 5.\n"
+        "The entries this one grew out of: real bucket_ids, or the host's own id for a "
+        "line of the conversation (like m_0931) when it came straight from what was said. "
+        "At most 64.\n"
         'Required for kind="mind": a realization does not come from nowhere. If it '
         "genuinely did, say so plainly in the text and point from at whatever events "
         "are nearest. Events may pass it as well (which thought this one came out of), "
@@ -1089,7 +1091,7 @@ async def fold(
     # Python keyword, so the signature spells it from_ and pydantic's public
     # validation_alias catches it.
     from_: Annotated[list, _PydField(validation_alias="from", description=(
-        "What this line grew out of, at most 5.\n"
+        "What this line grew out of, at most 64.\n"
         "⚠️ Not the same thing as folds:\n"
         "   from   what it grew out of. Those entries go on surfacing normally.\n"
         "   folds  what it covers. Those entries stop surfacing on their own.\n"
@@ -1245,7 +1247,8 @@ async def regrow(
         "means you weighed it again, so weigh the feeling again too."
     ))] = -1,
     from_: Annotated[list, _PydField(validation_alias="from", description=(
-        "Any new sources this version came out of, at most 5. The old version's "
+        "Any new sources this version came out of (bucket_ids or the host's line ids); "
+        "at most 64 in all, counting the ones carried over. The old version's "
         "sources carry over on their own, so only name what is new."
     ))] = [],
     mode: Annotated[str, _PydField(description=(

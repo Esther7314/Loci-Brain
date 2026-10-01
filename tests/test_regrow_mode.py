@@ -56,10 +56,14 @@ def _disk(tmp_path, bid) -> dict:
     return dict(frontmatter.load(path).metadata)
 
 
+def _derived(*ids) -> list[dict]:
+    return [{"rel": "wasDerivedFrom", "target": i} for i in ids]
+
+
 async def _family(store):
     root = await store.create(ROOT, room="EVENT/SELF")
-    child = await store.create(CHILD, room="MIND/TRAITS", from_ids=root)
-    grandchild = await store.create(GRANDCHILD, room="MIND/VIEWS", from_ids=child)
+    child = await store.create(CHILD, room="MIND/TRAITS", prov=_derived(root))
+    grandchild = await store.create(GRANDCHILD, room="MIND/VIEWS", prov=_derived(child))
     return root, child, grandchild
 
 
@@ -124,10 +128,10 @@ def test_an_overturn_marks_every_descendant_with_the_record(store, tmp_path):
             assert rec["of"] == root
             assert rec["by"] == new
             assert rec["at"]
-        # The versions themselves carry no mark; the descendants' from is untouched.
+        # The versions themselves carry no mark; the descendants' prov is untouched.
         assert "invalidation" not in _disk(tmp_path, root)
         assert "invalidation" not in _disk(tmp_path, new)
-        assert _disk(tmp_path, child)["from"] == root
+        assert _disk(tmp_path, child)["prov"] == _derived(root)
     run(go())
 
 
@@ -139,13 +143,13 @@ def test_a_second_overturn_appends_and_never_overwrites(store, tmp_path):
         await regrow(bucket_id=v2, text="Wrong twice.", v=0.5, a=0.3, mode="overturn")
         v3 = await _new_version_of(store, v2)
         recs = _disk(tmp_path, child)["invalidation"]
-        # The child's from still names the root, so the second walk starts at v2 and
+        # The child's prov still names the root, so the second walk starts at v2 and
         # reaches the child through nothing: it is only marked for what it stands on.
         assert [r["of"] for r in recs] == [root]
         assert v3 != v2
         # Now a child of v2 exists: its mark says v2, and the root's child keeps its one.
         later = await store.create("Grew out of the second version.", room="MIND/VIEWS",
-                                   from_ids=v2)
+                                   prov=_derived(v2))
         await regrow(bucket_id=v3, text="Wrong three times.", v=0.5, a=0.3, mode="overturn")
         assert [r["of"] for r in _disk(tmp_path, child)["invalidation"]] == [root]
         assert "invalidation" not in _disk(tmp_path, later)
@@ -158,7 +162,7 @@ def test_a_descendant_standing_on_two_overturned_versions_keeps_both_records(sto
         await regrow(bucket_id=root, text="Wrong once.", v=0.5, a=0.3, mode="overturn")
         v2 = await _new_version_of(store, root)
         # The thought is re-based onto the new version, which is then overturned too.
-        assert await store.update(child, **{"from": f"{root},{v2}"})
+        assert await store.update(child, prov=_derived(root, v2))
         await regrow(bucket_id=v2, text="Wrong twice.", v=0.5, a=0.3, mode="overturn")
         recs = _disk(tmp_path, child)["invalidation"]
         assert [r["of"] for r in recs] == [root, v2]
@@ -169,11 +173,11 @@ def test_a_from_loop_ends_and_marks_each_once(store, tmp_path):
     async def go():
         root, child, grandchild = await _family(store)
         # A cycle written by hand: the root cites its own grandchild.
-        assert await store.update(root, **{"from": grandchild})
+        assert await store.update(root, prov=_derived(grandchild))
         await regrow(bucket_id=root, text="Wrong.", v=0.5, a=0.3, mode="overturn")
         for bid in (child, grandchild):
             assert len(_disk(tmp_path, bid)["invalidation"]) == 1
-        # The new version inherits root's from and so cites the grandchild; it is not
+        # The new version inherits root's prov and so cites the grandchild; it is not
         # walked into and not marked.
         new = await _new_version_of(store, root)
         assert "invalidation" not in _disk(tmp_path, new)

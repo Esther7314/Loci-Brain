@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
-"""CONTRACT: `from`, `cover`/`covered_by` and `supersedes`/`superseded_by` are three
+"""CONTRACT: `prov`, `cover`/`covered_by` and `supersedes`/`superseded_by` are three
 different things, and none of them loses the older material.
 
 WHAT THIS FREEZES AND WHY IT IS FROZEN NOW
     Three fields, all of them pointing from one memory to another, all of them written by
     a different verb:
 
-        from          where this grew out of        → the sources KEEP surfacing
+        prov          where this came from          → the sources KEEP surfacing
         cover         what this gist stands for     → the members STOP surfacing alone
         supersedes    which version this replaces    → the old version STOPS surfacing
 
@@ -15,6 +15,11 @@ WHAT THIS FREEZES AND WHY IT IS FROZEN NOW
     simplification and passes anything that only checks "does the list come back". What it
     destroys is the distinction between *I thought about those* and *those are now this*,
     and nothing raises when it goes.
+
+    `prov` is typed (W3C PROV): each line names its relation. A new version records the
+    version it replaced as a wasRevisionOf line *as well as* in `supersedes` — the line is
+    the typed record, the chain field is what surfacing runs on, and the line must never
+    start suppressing anything.
 
     So: one test per field for what it suppresses, one per field for what it must NOT
     suppress, and one for the walk back down to the material underneath.
@@ -27,7 +32,7 @@ THE PART THAT MATTERS MOST
 """
 from core import _bigevent as B
 from core import _fold as F
-from utils import read_from_ids
+from utils import read_from_ids, read_prov
 
 
 def meta(**kw) -> dict:
@@ -35,28 +40,88 @@ def meta(**kw) -> dict:
     return {"id": kw.pop("id", "bucket1"), **kw}
 
 
-# ───────────────────────── `from`: sources go on surfacing ─────────────────────────
+def line(rel: str, target: str) -> dict:
+    return {"rel": rel, "target": target}
 
-def test_from_does_not_suppress_anything():
+
+def derived(*ids) -> list[dict]:
+    return [line("wasDerivedFrom", i) for i in ids]
+
+
+# ───────────────────────── `prov`: sources go on surfacing ─────────────────────────
+
+def test_prov_does_not_suppress_anything():
     # Criterion: a realization pointing at the three events it grew out of must not push
     # those events out of view. They are still things that happened; the thought about
-    # them is an addition, not a replacement. If `from` ever started suppressing, a busy
-    # week of thinking would quietly empty out that week's timeline.
-    m = meta(**{"from": "e1,e2,e3"})
+    # them is an addition, not a replacement. If provenance ever started suppressing, a
+    # busy week of thinking would quietly empty out that week's timeline.
+    m = meta(prov=derived("e1", "e2", "e3"))
     assert F.is_covered(m) is False
     assert B._usable(m) is True
 
 
-def test_from_reads_as_an_ordered_list_of_ids():
-    # Criterion: order is kept (it is the order they were handed in) and blanks are dropped.
-    assert read_from_ids({"from": "e1, e2 ,,e3"}) == ["e1", "e2", "e3"]
+def test_a_revision_line_does_not_suppress_the_new_version():
+    # Criterion: the new version names the old one in prov. That line is a record, not a
+    # cover: read the wrong way, every regrow would hide the version it just wrote.
+    m = meta(prov=[line("wasRevisionOf", "v1")], supersedes="v1")
+    assert F.is_covered(m) is False
+    assert B._usable(m) is True
+
+
+def test_prov_reads_as_typed_lines_in_order():
+    m = meta(prov=[line("wasDerivedFrom", "e1"), line("wasQuotedFrom", "m_0931"),
+                   line("wasRevisionOf", "v1"), line("hadPrimarySource", "e2")])
+    assert read_prov(m) == m["prov"]
+
+
+def test_the_source_reader_returns_sources_only():
+    # Criterion: read_from_ids answers "what does this stand on", which is what `from`
+    # always meant. Its callers walk the library with it — the reverse chain, the
+    # overturn walk, the sources an insight digested. A revision line there would make
+    # every new version "grown out of" its predecessor; a quoted `m_…` id would be a
+    # lookup that can only fail.
+    m = meta(prov=[line("wasDerivedFrom", "e1"), line("wasQuotedFrom", "m_0931"),
+                   line("wasRevisionOf", "v1"), line("hadPrimarySource", "e2")])
+    assert read_from_ids(m) == ["e1", "e2"]
+
+
+def test_an_unmigrated_from_string_reads_the_way_the_migration_converts_it():
+    # Criterion: a library before schema 5 keeps its chains until it is migrated. Order is
+    # kept (it is the order they were handed in) and blanks are dropped; a memory's id is
+    # a source, anything else (a placeholder, a host line id) points outside the library.
+    m = {"from": "aaaaaaaaaaaa, TBD ,,feel_202607041917_V050"}
+    assert read_prov(m) == [line("wasDerivedFrom", "aaaaaaaaaaaa"), line("wasQuotedFrom", "TBD"),
+                            line("wasDerivedFrom", "feel_202607041917_V050")]
+    assert read_from_ids(m) == ["aaaaaaaaaaaa", "feel_202607041917_V050"]
+
+
+def test_prov_wins_when_both_shapes_are_present():
+    # Criterion: writing prov retires `from` on the same entry; a file edited by hand that
+    # still carries both is read from the field the code writes.
+    m = meta(prov=derived("e9"), **{"from": "aaaaaaaaaaaa,bbbbbbbbbbbb"})
+    assert read_from_ids(m) == ["e9"]
+
+
+def test_a_line_the_reader_cannot_understand_is_skipped_not_fatal():
+    # Criterion: these readers run over the whole library; one hand-edited line must not
+    # stop the sweep, and must not be read as some other relation either.
+    m = meta(prov=[line("inspiredBy", "e1"), "e2", {"rel": "wasDerivedFrom"},
+                   line("wasDerivedFrom", "e3")])
+    assert read_prov(m) == derived("e3")
 
 
 def test_the_old_field_name_is_not_read_any_more():
     # Criterion: the library migration (core/schema.py, step 1 -> 2) moves every
     # `triggered_by` into `from`, so reading it too would only hide a library that was
     # never migrated (the health page says so instead).
-    assert read_from_ids({"triggered_by": "e1,e2"}) == []
+    assert read_from_ids({"triggered_by": "aaaaaaaaaaaa,bbbbbbbbbbbb"}) == []
+
+
+def test_eight_sources_survive_the_read():
+    # Criterion: the old field held five ids and silently cut the sixth in half. The
+    # ceiling is now a count of lines, and nothing under it is lost.
+    ids = [f"e{i}" for i in range(8)]
+    assert read_from_ids(meta(prov=derived(*ids))) == ids
 
 
 # ───────────────────────── `covered_by`: folded away, not gone ─────────────────────────
@@ -147,7 +212,7 @@ def test_the_three_fields_are_independent():
     # Criterion: the summary of this whole file. Setting one must not imply another. Written
     # as one table because the failure this guards against is a refactor that "simplifies"
     # them into one field — and that failure shows up as a whole row changing at once.
-    sources_only = meta(**{"from": "e1,e2"})
+    sources_only = meta(prov=derived("e1", "e2"))
     folded_only = meta(covered_by=["gist1"])
     revised_only = meta(superseded_by="v2")
 
@@ -167,9 +232,11 @@ def test_the_three_fields_are_independent():
 
 
 def test_a_memory_can_be_all_three_at_once_without_them_interfering():
-    # Criterion: real buckets are like this — grown out of events, later folded, later
-    # revised. Each field still answers only its own question.
-    m = meta(**{"from": "e1,e2", "covered_by": ["gist1"], "superseded_by": "v2"})
+    # Criterion: real buckets are like this — grown out of events, a new version of an
+    # older one, later folded, later revised again. Each field still answers only its own
+    # question: the revision line is the typed record of the chain, not a source.
+    m = meta(prov=derived("e1", "e2") + [line("wasRevisionOf", "v0")], supersedes="v0",
+             covered_by=["gist1"], superseded_by="v2")
     assert read_from_ids(m) == ["e1", "e2"]
     assert F._covered_list(m) == ["gist1"]
     assert F.covers_of(m) == ["gist1", "v2"]
@@ -180,6 +247,7 @@ def test_none_of_the_readers_choke_on_a_bucket_that_has_none_of_them():
     # Criterion: the ordinary case is a memory with no links at all. Every reader here has
     # to answer "nothing" rather than raise, because these run over the whole library.
     plain = meta()
+    assert read_prov(plain) == []
     assert read_from_ids(plain) == []
     assert F.covers_of(plain) == []
     assert F.cover_ids(plain) == []
@@ -194,3 +262,5 @@ def test_the_readers_survive_a_non_dict():
     assert F.covers_of("not a dict") == []
     assert F.cover_ids(None) == []
     assert read_from_ids(None) == []
+    assert read_prov("not a dict") == []
+    assert read_prov(meta(prov="e1,e2")) == []

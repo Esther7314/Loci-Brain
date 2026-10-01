@@ -23,7 +23,7 @@ The boundary with the other two acts (never mix them):
 🔴 **The caller says what kind of change it is** (`mode`, required; nothing is written
 without it):
 - `supplement`: the old version was right as far as it went. Whatever grew out of it
-  (`from` pointing at it) still stands and is not touched.
+  (`prov` pointing at it) still stands and is not touched.
 - `overturn`: the old version was wrong. Everything that grew out of it, and out of
   that, gets an `invalidation` record (`{kind: "overturn", of: old id, by: new id, at}`)
   appended — the walk follows `referenced_by` layer by layer. The descendants keep
@@ -35,8 +35,9 @@ Four things fixed during review:
   lock): two concurrent regrows of the same entry can no longer fork it
 - Archived buckets are rejected outright (update() will not write an archived
   bucket, so forcing it would leave half a chain — trace restore first)
-- Sources appended via from are each checked for existence; when the chain is
-  full they go in one at a time and however many fit, fit
+- Sources appended via from go through grow's _normalize_from (a memory has to
+  exist, the host's line ids are quoted); when the chain is full they go in one
+  at a time and however many fit, fit
 - Backfill self-healing: backfill_sweep also recognises source_tool=regrow (that
   change lives over in rooms_path)
 
@@ -51,10 +52,8 @@ from .._common import _keyed_turn, resolve_bucket_id
 # is_mind_room is no longer used to keep events out (that gate was removed; see
 # the epitaph inside regrow below)
 # from core._rooms import is_mind_room
-from utils import now_iso, read_from_ids
+from utils import PROV_MAX_LINES, WAS_REVISION_OF, now_iso, prov_targets, read_prov
 from ..grow.rooms_path import _normalize_from
-
-_CHAIN_LIMIT = 64  # the underlying ceiling on from
 
 MODES = ("supplement", "overturn")
 _MODE_WORD = {"supplement": "补充", "overturn": "推翻"}
@@ -65,9 +64,9 @@ _MODE_HELP = ('mode 必填：这次换版是补充还是推翻？mode="supplemen
 
 async def _mark_overturned(old_id: str, new_id: str) -> tuple[list[str], list[str]]:
     """Append one `invalidation` record to every memory that grew out of `old_id`,
-    and out of those, layer by layer (`referenced_by`, the reverse of `from`).
+    and out of those, layer by layer (`referenced_by`, the reverse of `prov`).
     Returns (marked, could not write). The walk never enters the new version or a
-    memory it has already seen, so a `from` loop ends."""
+    memory it has already seen, so a `prov` loop ends."""
     record = {"kind": "overturn", "of": old_id, "by": new_id, "at": now_iso()}
     seen = {old_id, new_id}
     frontier = [old_id]
@@ -118,17 +117,10 @@ async def dispatch(bucket_id: str = "", text: str = "", v=-1, a=-1, from_=None,
     if id_err:
         return id_err
 
-    # Appended sources: normalise first, then check each one exists
+    # Appended sources: resolved, checked and typed by the one normaliser
     extra, from_err = await _normalize_from(from_)
     if from_err:
         return from_err
-    if extra:
-        missing = []
-        for fid in extra:
-            if not await rt.bucket_mgr.get_including_archive(fid):
-                missing.append(fid)
-        if missing:
-            return f"from 里这些 id 不存在：{', '.join(missing)}。"
 
     # ---- check -> create -> write both link directions, all inside a
     # cross-process lock on the old id ----
@@ -182,18 +174,21 @@ async def dispatch(bucket_id: str = "", text: str = "", v=-1, a=-1, from_=None,
             return (f"{bucket_id} 已经被 {old_meta.get('superseded_by')} 换过版了——"
                     "在最新版上 regrow，别从旧版分叉。")
 
-        # The source chain: inherit the old chain, then append new sources one at
-        # a time — however many fit, fit
-        inherited = read_from_ids(old_meta)
-        sources = list(dict.fromkeys(inherited))
-        dropped: list[str] = []
-        for fid in (extra or []):
-            if fid in sources:
-                continue
-            if len(",".join(sources + [fid])) <= _CHAIN_LIMIT:
-                sources.append(fid)
-            else:
-                dropped.append(fid)
+        # Where the new version came from: the old version's sources and quotes come
+        # across, then the new ones one at a time — however many fit, fit — and one
+        # wasRevisionOf line names the old version, with its place kept so a full chain
+        # can never push it out. The old version's own revision line is its link in the
+        # chain, not something it came from, so it is not carried: each version names
+        # only the one it replaced. The chain fields (supersedes / superseded_by) are
+        # written by save_gist as always; the revision line is the typed record beside
+        # them.
+        revision = {"rel": WAS_REVISION_OF, "target": bucket_id}
+        carried = [ln for ln in read_prov(old_meta) if ln["rel"] != WAS_REVISION_OF]
+        lines = list({(ln["rel"], ln["target"]): ln
+                      for ln in carried + list(extra or [])}.values())
+        room_left = PROV_MAX_LINES - 1
+        dropped = [ln["target"] for ln in lines[room_left:]]
+        prov = lines[:room_left] + [revision]
 
         # Re-versioning a period: the marker and the span both have to come
         # along, or the new version stops being a period — **the span is copied
@@ -235,7 +230,7 @@ async def dispatch(bucket_id: str = "", text: str = "", v=-1, a=-1, from_=None,
                 return span_err
         new_id, report = await _F.save_gist(
             text, room, v, a, cover, when=new_when if is_big else "",
-            from_ids=sources, supersedes=bucket_id, test_data=is_test)
+            prov=prov, supersedes=bucket_id, test_data=is_test)
 
         # Overturned: whatever grew out of the old version is told so, still under the
         # lock on the old id, so the marks land before anyone else can re-version it.
@@ -246,7 +241,7 @@ async def dispatch(bucket_id: str = "", text: str = "", v=-1, a=-1, from_=None,
             marked, unmarked = await _mark_overturned(bucket_id, new_id)
 
     try:
-        await rt.bucket_mgr.touch_many(sources)  # a new version = remembering its sources again
+        await rt.bucket_mgr.touch_many(prov_targets(prov))  # a new version = remembering its sources again
     except Exception:
         pass
 

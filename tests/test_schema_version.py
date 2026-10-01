@@ -76,7 +76,9 @@ def test_apply_backs_up_first_then_migrates(old_library):
     assert _meta(old_library / "dynamic" / "a_aaaaaaaaaaaa.md")["room"] == "EVENT/SELF"
     assert _meta(old_library / "archive" / "c_cccccccccccc.md")["room"] == "MIND/VIEWS"
     b = _meta(old_library / "dynamic" / "b_bbbbbbbbbbbb.md")
-    assert "triggered_by" not in b and b["from"] == "aaaaaaaaaaaa"
+    # triggered_by -> from at 1 -> 2, and from -> prov at 4 -> 5.
+    assert "triggered_by" not in b and "from" not in b
+    assert b["prov"] == [{"rel": "wasDerivedFrom", "target": "aaaaaaaaaaaa"}]
 
     state = json.loads((old_library / "_state" / "schema.json").read_text(encoding="utf-8"))
     assert state["schema_version"] == S.CURRENT_VERSION
@@ -95,7 +97,8 @@ def test_an_existing_from_wins_over_triggered_by(tmp_path):
             "from": "111111111111", "triggered_by": "222222222222"})
     S.migrate(tmp_path, apply=True)
     meta = _meta(tmp_path / "dynamic" / "e_eeeeeeeeeeee.md")
-    assert meta["from"] == "111111111111" and "triggered_by" not in meta
+    assert meta["prov"] == [{"rel": "wasDerivedFrom", "target": "111111111111"}]
+    assert "triggered_by" not in meta and "from" not in meta
 
 
 def test_a_later_backup_does_not_contain_earlier_ones(old_library):
@@ -216,7 +219,7 @@ def v3_library(tmp_path):
 def test_a_dry_run_counts_the_tags_to_strip_and_writes_nothing(v3_library):
     before = {p: p.read_bytes() for p in v3_library.rglob("*.md")}
     report = S.migrate(v3_library)
-    [step] = report["steps"]
+    step = report["steps"][0]
     assert (step["from"], step["to"], step["files"]) == (3, 4, 2)
     assert step["fields"] == {"gist_tag": 2}
     assert {p: p.read_bytes() for p in v3_library.rglob("*.md")} == before
@@ -233,7 +236,7 @@ def test_apply_strips_the_tag_only_where_the_chain_began_as_an_ordinary_memory(v
     assert GIST in _meta(v3_library / "dynamic" / "g_bbbbbbbbbbbb.md")["tags"]
     period = _meta(v3_library / "permanent" / "p_cccccccccccc.md")
     assert set(period["tags"]) == {GIST, PERIOD}
-    assert S.library_version(v3_library) == 4
+    assert S.library_version(v3_library) == S.CURRENT_VERSION
 
 
 def test_a_second_run_finds_nothing_left_to_strip(v3_library):
@@ -262,3 +265,98 @@ def test_a_supersedes_loop_or_a_missing_root_does_not_hang_the_walk(tmp_path):
     # A loop of tagged versions and a chain whose root is gone are judged by the last
     # version the walk could read, which carries the tag: nothing is stripped.
     assert report["steps"][0]["files"] == 0
+
+
+# ───────────────────────── 4 -> 5: `from` becomes typed `prov` lines ─────────────────────────
+
+DERIVED = "wasDerivedFrom"
+REVISION = "wasRevisionOf"
+QUOTED = "wasQuotedFrom"
+
+
+@pytest.fixture
+def v4_library(tmp_path):
+    """A library at version 4 with every shape the step has to tell apart: a thought with
+    two sources and a placeholder that is no memory's id, a new version with a source of its own, an entry already written in the
+    new shape, a deleted thought, a want with a source, and an entry with no links."""
+    _write(tmp_path / "dynamic" / "m_aaaaaaaaaaaa.md",
+           {"id": "aaaaaaaaaaaa", "room": "MIND/VIEWS", "from": "111111111111, TBD, 222222222222"},
+           body="Walks reset the week.")
+    _write(tmp_path / "dynamic" / "m_aaaaaaaaaaa2.md",
+           {"id": "aaaaaaaaaaa2", "room": "MIND/VIEWS", "from": "111111111111",
+            "supersedes": "aaaaaaaaaaaa", "cover": ["aaaaaaaaaaaa"]},
+           body="Walks reset the week, rain or not.")
+    _write(tmp_path / "dynamic" / "m_bbbbbbbbbbbb.md",
+           {"id": "bbbbbbbbbbbb", "room": "MIND/VIEWS", "supersedes": "aaaaaaaaaaa2",
+            "prov": [{"rel": DERIVED, "target": "111111111111"},
+                     {"rel": REVISION, "target": "aaaaaaaaaaa2"}]},
+           body="Already in the new shape.")
+    _write(tmp_path / "archive" / "m_cccccccccccc.md",
+           {"id": "cccccccccccc", "room": "MIND/TRAITS", "from": "333333333333",
+            "deleted_at": "2026-09-01T00:00:00"}, body="A thought, dropped.")
+    _write(tmp_path / "dynamic" / "w_dddddddddddd.md",
+           {"id": "dddddddddddd", "room": "EVENT/SELF", "direction_of_fit": "telic",
+            "from": "111111111111"}, body="Walk on Saturday.")
+    _write(tmp_path / "dynamic" / "e_eeeeeeeeeeee.md",
+           {"id": "eeeeeeeeeeee", "room": "EVENT/SELF"}, body="Saturday we went up the hill.")
+    (tmp_path / "_state").mkdir()
+    (tmp_path / "_state" / "schema.json").write_text(
+        json.dumps({"schema_version": 4, "history": []}), encoding="utf-8")
+    return tmp_path
+
+
+def test_a_dry_run_counts_the_sources_to_type_and_writes_nothing(v4_library):
+    before = {p: p.read_bytes() for p in v4_library.rglob("*.md")}
+    report = S.migrate(v4_library)
+    [step] = report["steps"]
+    assert (step["from"], step["to"], step["files"]) == (4, 5, 4)
+    assert step["fields"] == {"from": 4, "revision_of": 1}
+    # The want's shape did not change, so it is not put on the list for `bound`.
+    assert report["telic"] == []
+    assert {p: p.read_bytes() for p in v4_library.rglob("*.md")} == before
+
+
+def test_apply_types_each_old_source_and_names_the_replaced_version(v4_library):
+    S.migrate(v4_library, apply=True)
+    thought = _meta(v4_library / "dynamic" / "m_aaaaaaaaaaaa.md")
+    assert "from" not in thought
+    # Criterion: only a memory's id is a source in the library. Anything else in the old
+    # string names something outside it, so it is quoted, kept verbatim and in place.
+    assert thought["prov"] == [{"rel": DERIVED, "target": "111111111111"},
+                               {"rel": QUOTED, "target": "TBD"},
+                               {"rel": DERIVED, "target": "222222222222"}], "order kept"
+
+    revised = _meta(v4_library / "dynamic" / "m_aaaaaaaaaaa2.md")
+    assert revised["prov"] == [{"rel": DERIVED, "target": "111111111111"},
+                               {"rel": REVISION, "target": "aaaaaaaaaaaa"}]
+    assert revised["supersedes"] == "aaaaaaaaaaaa", "the chain field stays; the chain runs on it"
+
+    already = _meta(v4_library / "dynamic" / "m_bbbbbbbbbbbb.md")
+    assert already["prov"] == [{"rel": DERIVED, "target": "111111111111"},
+                               {"rel": REVISION, "target": "aaaaaaaaaaa2"}], "nothing added twice"
+    dropped = _meta(v4_library / "archive" / "m_cccccccccccc.md")
+    assert dropped["prov"] == [{"rel": DERIVED, "target": "333333333333"}], "archive counts"
+    assert "prov" not in _meta(v4_library / "dynamic" / "e_eeeeeeeeeeee.md")
+    assert S.library_version(v4_library) == 5
+
+
+def test_the_compat_reader_and_the_migration_agree(v4_library):
+    # Criterion: a library that was never migrated reads the same chains the migrated one
+    # stores, so nothing downstream changes on the day the migration runs.
+    from utils import read_from_ids, read_prov
+    path = v4_library / "dynamic" / "m_aaaaaaaaaaaa.md"
+    legacy = dict(_meta(path))
+    S.migrate(v4_library, apply=True)
+    migrated = dict(_meta(path))
+    assert read_prov(legacy) == read_prov(migrated)
+    assert read_from_ids(legacy) == read_from_ids(migrated) == ["111111111111", "222222222222"]
+
+
+def test_a_second_run_finds_nothing_left_to_type(v4_library):
+    S.migrate(v4_library, apply=True)
+    again = S.migrate(v4_library, apply=True)
+    assert again["steps"] == []
+    # And the step itself, run again over the result, changes no file.
+    for path in v4_library.rglob("*.md"):
+        meta = _meta(path)
+        assert S.STEPS[4](meta, S.PurePosixPath(path.relative_to(v4_library).as_posix())) == ([], None)
