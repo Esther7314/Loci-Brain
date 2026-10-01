@@ -2331,9 +2331,11 @@ def register(mcp) -> None:
     async def api_v2_slices_take(request: Request) -> Response:
         """The host hands over a stretch of raw lines before it lets go of them:
         {source: {system, instance, container}, day, lines: [{id, text, at?, speaker?}],
-        revision?, fingerprint_by?}. The side model slices them; the slices wait for the
-        main model (recall(view="slices")). 400 for a malformed batch, 502 when the side
-        model fails — then nothing is stored, and the host may send the same batch again."""
+        revision?}. The side model slices them; the slices wait for the main model
+        (recall(view="slices")). A `fingerprint_by` in the body is accepted and not used:
+        a slice's fingerprint is Loci's own (core/_slicer.py). 400 for a malformed batch,
+        502 when the side model fails — then nothing is stored, and the host may send the
+        same batch again."""
         from starlette.responses import JSONResponse
         from core import _slicer as _sl
         try:

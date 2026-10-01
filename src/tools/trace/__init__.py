@@ -9,8 +9,8 @@ call's write key, so a resent trace is answered with the first reply instead of
 appending twice (core/_sources.SourceRegistry.run_once).
 
 A pending slice of the host's raw lines (`slice="sl_…"`) is handled here before
-core.py sees the call (tools/_slices.py): with bucket_id its lines are appended to
-that memory's sources; `slice_span` re-cuts it and `drop_slice` drops it, both
+core.py sees the call (tools/_slices.py): with bucket_id the slice is appended to
+that memory's sources as one record; `slice_span` re-cuts it and `drop_slice` drops it, both
 without a bucket.
 
 Exports: dispatch(...) -> str (parameters match the trace tool in server.py)

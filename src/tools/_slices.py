@@ -7,16 +7,16 @@ The host's raw lines of a day were sliced by the side model (core/_slicer.py); e
 slice waits for the main model, who decides what it is:
 
     recall(view="slices")                          the slices waiting, with guesses
-    grow(..., slice="sl_…")                        not recorded yet: write it; the slice's
-                                                   lines become the new memory's sources
-    trace(bucket_id=…, slice="sl_…")               already recorded: append its lines to
-                                                   that memory's sources
+    grow(..., slice="sl_…")                        not recorded yet: write it; the slice
+                                                   becomes one of the new memory's sources
+    trace(bucket_id=…, slice="sl_…")               already recorded: append it to that
+                                                   memory's sources
     trace(slice="sl_…", slice_span="m_a..m_b")     sliced wrong: move its span
     trace(slice="sl_…", drop_slice=True)           nothing worth keeping: drop it
 
-A slice stands for one source record per line of its span (records_for), checked like
-any write's (the registry, the grant). It is closed only on what the write actually
-put on disk carrying those records, so a refused or deduplicated write leaves it open.
+A slice of any length stands for one source record, `first..last` (record_for), checked
+like any write's (the registry, the grant). It is closed only on what the write actually
+put on disk carrying that record, so a refused or deduplicated write leaves it open.
 One slice is handled at a time (a lease on its id), and a closed one is refused by name.
 
 Exports: render_pending · write_from_slice · with_records · trace_slice
@@ -114,8 +114,8 @@ async def _carrying(written: list[str], record: dict) -> list[str]:
 
 async def write_from_slice(slice_id: str, how: str,
                            write: Callable[[list[dict]], Awaitable[str]]) -> str:
-    """Run `write(records)` with the slice's records and close the slice on the memories
-    it wrote carrying them. The write's own receipt comes back, plus one line saying
+    """Run `write(records)` with the slice's record and close the slice on the memories
+    it wrote carrying it. The write's own receipt comes back, plus one line saying
     where the slice went; a write that put nothing on disk leaves the slice open."""
     from core.bucket_manager import _filesystem_turn      # the lease, as the registry takes it
 
@@ -128,14 +128,10 @@ async def write_from_slice(slice_id: str, how: str,
         if why:
             return why.zh + "本次什么都没写。"
         info = store.get(sid)
-        if info["span"]["count"] > _src.SOURCES_MAX:
-            return (f"切片 {sid} 有 {info['span']['count']} 行，一条记忆最多挂 "
-                    f"{_src.SOURCES_MAX} 行来源——先 trace(slice=\"{sid}\", slice_span=…) "
-                    "切细一点。本次什么都没写。")
-        records = store.records_for(sid)
+        record = store.record_for(sid)
         with _src.collect_written() as written:
-            out = await write(records)
-        carried = await _carrying(written, records[0])
+            out = await write([record])
+        carried = await _carrying(written, record)
         if not carried:
             return out
         try:

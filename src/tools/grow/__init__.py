@@ -16,8 +16,8 @@ What this file deliberately does not do:
 - No token-level budgeting (grow cares about "how many pieces", not "how much to show")
 - Returns no structured data; always one short sentence
 
-`slice="sl_…"` writes from a pending slice of the host's raw lines: its lines become
-the entry's sources and the slice is closed (tools/_slices.py).
+`slice="sl_…"` writes from a pending slice of the host's raw lines: the slice becomes
+one of the entry's sources and the slice is closed (tools/_slices.py).
 
 Exports: dispatch(items=... / kind+text) -> str
 ========================================

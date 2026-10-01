@@ -661,10 +661,11 @@ async def _check_quoted_source(target: str) -> str:
     """Whether a target from outside the library may be quoted as a source; returns the
     refusal, or "" to accept. Every write tool that takes `from` comes through
     _normalize_from, so this is the one place that decides it. A target is either a
-    source's string form (`lento:home/private:U#m_0142`, `#` marks it), which has to
-    parse and must not be withdrawn or deleted in the registry, or the host's bare id
-    for a line (`m_0931`), whose identity is not known yet: shape only — one token,
-    short enough to store whole."""
+    source's string form (`lento:home/private:U#m_0142`, or `…#m_0142..m_0160` for a run
+    of lines; `#` marks it), which has to parse and must not be withdrawn or deleted in
+    the registry (a run is read by its own identity, else its first line's), or the
+    host's bare id for a line (`m_0931`), whose identity is not known yet: shape only —
+    one token, short enough to store whole."""
     if _re.search(r"\s", target):
         return (f"from 里「{target[:40]}」不像 id（带空格）——填 bucket_id，"
                 "或宿主那句话自己的 id（如 m_0931）。")
@@ -745,7 +746,8 @@ async def check_sources(raw, prov: list[dict] | None, exclude=(), *,
         records = _src.normalize_sources(_src.coerce_sources_arg(raw))
     except _src.SourceRecordError as e:
         return [], prov, [], (f"sources 不对：{e.zh}。每条写 {{system, instance, container, "
-                              "id}，可选 revision / fingerprint / fingerprint_by / span / use。")
+                              "id}，可选 through / revision / fingerprint / fingerprint_by / "
+                              "span / use。")
     lines = list(prov or [])
     strings = [_src.record_string(r) for r in records]
     for i, line in enumerate(lines):
@@ -760,6 +762,7 @@ async def check_sources(raw, prov: list[dict] | None, exclude=(), *,
                     return [], prov, [], f"from 里「{target[:40]}」像来源的全称，但{e.zh}。"
                 records.append({"system": sid.system, "instance": sid.instance,
                                 "container": sid.container, "id": sid.id,
+                                **({"through": sid.through} if sid.through else {}),
                                 "revision": revision, "fingerprint": None,
                                 "fingerprint_by": None, "use": None})
                 strings.append(target)

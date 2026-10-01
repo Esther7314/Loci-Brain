@@ -201,6 +201,44 @@ def test_the_write_check(reg):
     assert "删除" in reg.check_writable([rec])[0]
 
 
+RUN = {**REC, "through": "m_0160"}
+RUN_SRC = SRC + "..m_0160"
+
+
+def test_a_run_is_read_by_its_own_identity_then_its_first_line(reg):
+    [run_rec] = S.normalize_sources(RUN)
+    assert reg.describe(RUN_SRC) is None and reg.check_writable([run_rec]) == ("", [])
+    apply(reg, "c1", "withdrawn", 1)                       # the first line, as the host says it
+    assert reg.state_of(RUN_SRC) == "withdrawn"
+    refusal, _ = reg.check_writable([run_rec])
+    assert RUN_SRC in refusal and "撤回" in refusal
+    # The run's own identity, once the registry knows it, is what counts.
+    run(reg.apply_change({"change_id": "c2", "source": RUN_SRC, "kind": "restored",
+                          "host_seq": 1}, may_restore=True))
+    assert reg.state_of(RUN_SRC) == "active" and reg.state_of(SRC) == "withdrawn"
+    # A line inside the run, past its first, does not reach it.
+    run(reg.apply_change({"change_id": "c3", "source": "lento:home/private:U#m_0150",
+                          "kind": "deleted", "host_seq": 1}))
+    assert reg.check_writable([run_rec]) == ("", [])
+
+
+def test_a_run_is_granted_by_itself_or_its_first_line(reg):
+    [run_rec] = S.normalize_sources(RUN)
+    assert reg.check_writable([run_rec], grant=[SRC]) == ("", [])
+    assert reg.check_writable([run_rec], grant=[RUN_SRC]) == ("", [])
+    refusal, _ = reg.check_writable([run_rec], grant=["lento:home/private:U#m_0160"])
+    assert "不在这一轮" in refusal
+
+
+def test_memories_of_a_line_finds_the_runs_starting_there(tmp_path):
+    store = BucketManager({"buckets_dir": str(tmp_path)})
+    bid = run(store.create("A talk formed from twenty lines.", sources=[RUN]))
+    assert run(S.memories_of(store, SRC)) == [bid]
+    assert run(S.memories_of(store, RUN_SRC)) == [bid]
+    assert run(S.memories_of(store, SRC + "..m_0150")) == []
+    assert run(S.memories_of(store, "lento:home/private:U#m_0160")) == []
+
+
 def test_the_state_machine_alone():
     assert S.next_state("active", "restored", False) == ("active", "")
     assert S.next_state("withdrawn", "restored", False) == (None, "may_restore_required")

@@ -6,9 +6,10 @@ The side model is always a stub here: it answers with the slicing the test wants
 fails the way the test wants), so nothing leaves the machine. Through take_batch and the
 tools' dispatch against a real BucketManager, read back from the files: a day's lines
 become slices; one is written as a new memory, one appended to a memory already there,
-one dropped; all three end with sources matching their spans and nothing is pending.
-Then the edges: a resend replaces, a failing side model writes nothing, spans are
-repaired or refused, a re-cut moves the records, a closed slice is refused by name, and
+one dropped; each slice that was kept is one source record, first..last, and nothing is
+pending. Then the edges: a resend replaces, a failing side model writes nothing, spans
+are repaired or refused, a re-cut moves the record and recomputes its fingerprint, a
+closed slice is refused by name, and
 the two HTTP routes answer through the real handlers and the hook lock.
 """
 
@@ -122,8 +123,9 @@ def _disk(tmp_path, bid) -> dict:
     return dict(frontmatter.load(path).metadata)
 
 
-def _ids(meta) -> list[str]:
-    return [r["id"] for r in meta.get("sources") or []]
+def _runs(meta) -> list[tuple]:
+    """Each stored record as (first line, last line or None)."""
+    return [(r["id"], r.get("through")) for r in meta.get("sources") or []]
 
 
 def _fp(text) -> str:
@@ -157,15 +159,20 @@ def test_a_day_sliced_then_written_appended_and_dropped(store, tmp_path, monkeyp
     out, new = run(_event("Slept well for once.", slice_id=a["slice_id"]))
     assert new and "挂上了" in out, out
     meta = _disk(tmp_path, new)
-    assert _ids(meta) == IDS[0:4]
-    assert [r["fingerprint"] for r in meta["sources"]] == [_fp(t) for t in TEXTS[0:4]]
-    assert meta["sources"][0]["fingerprint_by"] == "adapter"
-    assert "lento:home/private:U#m_0001" in [ln["target"] for ln in meta["prov"]]
+    assert _runs(meta) == [("m_0001", "m_0004")], "one record per slice"
+    [rec] = meta["sources"]
+    assert rec["fingerprint"] == SL.slice_fingerprint([_fp(t) for t in TEXTS[0:4]])
+    assert rec["fingerprint"] == "sha256:" + hashlib.sha256(
+        "\n".join(_fp(t) for t in TEXTS[0:4]).encode("utf-8")).hexdigest()
+    assert rec["fingerprint_by"] == "loci"
+    assert "lento:home/private:U#m_0001..m_0004" in [ln["target"] for ln in meta["prov"]]
+    shown = run(R.recall_core(when="", room="", tag="", query=new))
+    assert "lento:home/private:U#m_0001..m_0004（4 行）" in shown.split("来源:", 1)[1]
 
     # Already recorded: the lines are appended to that memory.
     out = run(trace(bucket_id=beach[:6], slice_id=b["slice_id"]))
     assert out.startswith("已修改记忆桶") and "挂上了" in out, out
-    assert _ids(_disk(tmp_path, beach)) == IDS[4:8]
+    assert _runs(_disk(tmp_path, beach)) == [("m_0005", "m_0008")]
 
     # Sliced wrong / nothing to keep: dropped.
     out = run(trace(slice_id=c["slice_id"], drop_slice=True))
@@ -193,7 +200,7 @@ def test_append_to_an_existing_memory_keeps_what_it_had(store, tmp_path):
     _out, bid = run(_event("Something said last week.", sources=[rec]))
     sid = take(store, stub(THREE))["slices"][1]["slice_id"]
     run(trace(bucket_id=bid, slice_id=sid))
-    assert _ids(_disk(tmp_path, bid)) == ["m_0900", *IDS[4:8]]
+    assert _runs(_disk(tmp_path, bid)) == [("m_0900", None), ("m_0005", "m_0008")]
 
 
 # ───────────────────────── resend, failure ─────────────────────────
@@ -268,14 +275,18 @@ def test_lines_in_no_slice_are_counted_and_gists_are_cut(store):
     assert got["unsliced"] == 10 and len(s["gist"]) == SL.GIST_MAX
 
 
-def test_a_slice_over_the_record_cap_is_cut_in_even_parts(store):
+def test_a_slice_of_a_hundred_lines_is_one_record(store, tmp_path):
     texts = [f"line {i}" for i in range(100)]
     ids = [f"m_{i:04d}" for i in range(100)]
     got = take(store, stub([{"from": 1, "to": 100, "gist": "one long talk"}]),
                b=body(texts=texts, ids=ids))
-    assert [s["span"]["count"] for s in got["slices"]] == [50, 50]
-    assert got["slices"][1]["span"]["first"] == "m_0050"
-    assert got["slices"][0]["gist"].endswith("（1/2）")
+    [s] = got["slices"]
+    assert s["span"] == {"first": "m_0000", "last": "m_0099", "count": 100}
+    assert s["gist"] == "one long talk"
+    _out, bid = run(_event("One long talk about everything.", slice_id=s["slice_id"]))
+    meta = _disk(tmp_path, bid)
+    assert _runs(meta) == [("m_0000", "m_0099")]
+    assert meta["sources"][0]["fingerprint"] == SL.slice_fingerprint([_fp(t) for t in texts])
 
 
 def test_a_big_batch_is_sliced_in_chunks(store, monkeypatch):
@@ -288,14 +299,19 @@ def test_a_big_batch_is_sliced_in_chunks(store, monkeypatch):
 
 # ───────────────────────── handling ─────────────────────────
 
-def test_a_recut_moves_the_records_and_keeps_the_gist(store, tmp_path):
+def test_a_recut_moves_the_record_recomputes_its_fingerprint_keeps_the_gist(store, tmp_path):
     s = take(store, stub(THREE))["slices"][1]
+    before = store.slices.record_for(s["slice_id"])
+    assert before["fingerprint"] == SL.slice_fingerprint([_fp(t) for t in TEXTS[4:8]])
     out = run(trace(slice_id=s["slice_id"], slice_span="m_0006..m_0007"))
     assert "m_0006..m_0007（2 行）" in out and s["gist"] in out, out
     shown = run(R.recall_core(when="", room="", tag="", query="", view="slices"))
     assert "改切过" in shown
     _out, bid = run(_event("Going to the beach early.", slice_id=s["slice_id"]))
-    assert _ids(_disk(tmp_path, bid)) == ["m_0006", "m_0007"]
+    [rec] = _disk(tmp_path, bid)["sources"]
+    assert (rec["id"], rec["through"]) == ("m_0006", "m_0007")
+    assert rec["fingerprint"] == SL.slice_fingerprint([_fp(t) for t in TEXTS[5:7]])
+    assert rec["fingerprint"] != before["fingerprint"]
 
 
 @pytest.mark.parametrize("span, word", [
@@ -307,13 +323,18 @@ def test_a_recut_outside_the_batch_or_backwards_is_refused(store, span, word):
     assert store.slices.get(sid)["span"]["first"] == "m_0005"
 
 
-def test_a_recut_over_the_record_cap_is_refused(store):
+def test_a_recut_of_any_length_is_taken_and_a_one_line_one_has_no_through(store):
     texts = [f"line {i}" for i in range(100)]
     ids = [f"m_{i:04d}" for i in range(100)]
     sid = take(store, stub([{"from": 1, "to": 3, "gist": "short"}]),
                b=body(texts=texts, ids=ids))["slices"][0]["slice_id"]
     out = run(trace(slice_id=sid, slice_span="m_0000..m_0080"))
-    assert "切细一点" in out
+    assert "m_0000..m_0080（81 行）" in out, out
+    assert store.slices.record_for(sid)["through"] == "m_0080"
+    run(trace(slice_id=sid, slice_span="m_0007"))
+    rec = store.slices.record_for(sid)
+    assert rec["id"] == "m_0007" and "through" not in rec
+    assert rec["fingerprint"] == SL.slice_fingerprint([_fp("line 7")])
 
 
 def test_a_closed_slice_is_refused_naming_what_handled_it(store, tmp_path):
@@ -335,10 +356,10 @@ def test_a_refused_write_leaves_the_slice_open(store, tmp_path):
     assert store.slices.get(sid)["state"] == SL.OPEN and store.slices.pending_count() == 3
 
 
-def test_a_withdrawn_line_refuses_the_write_and_the_slice_waits(store, tmp_path):
+def test_a_withdrawn_first_line_refuses_the_write_and_the_slice_waits(store, tmp_path):
     sid = take(store, stub(THREE))["slices"][0]["slice_id"]
     run(store.sources.apply_change({"change_id": "w1", "kind": "withdrawn", "host_seq": 1,
-                                    "source": "lento:home/private:U#m_0002"}))
+                                    "source": "lento:home/private:U#m_0001"}))
     out, bid = run(_event("Slept well for once.", slice_id=sid))
     assert not bid and "撤回" in out
     assert store.slices.get(sid)["state"] == SL.OPEN
@@ -369,7 +390,8 @@ def test_the_pending_store_survives_a_restart(store, tmp_path, monkeypatch):
     fresh = BucketManager({"buckets_dir": str(tmp_path)})
     assert fresh.slices.pending_count() == 3
     assert fresh.slices.get(sid)["span"] == {"first": "m_0005", "last": "m_0006", "count": 2}
-    assert [r["id"] for r in fresh.slices.records_for(sid)] == ["m_0005", "m_0006"]
+    rec = fresh.slices.record_for(sid)
+    assert (rec["id"], rec["through"]) == ("m_0005", "m_0006")
 
 
 def test_view_slices_stands_alone(store):

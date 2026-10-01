@@ -238,6 +238,36 @@ def test_trace_links_a_bare_line_the_entry_already_had(store, tmp_path):
     assert _quoted(_disk(tmp_path, bid)) == [SRC]
 
 
+# ───────────────────────── a run of lines ─────────────────────────
+
+RUN = {**REC, "through": "m_0160"}
+RUN_SRC = SRC + "..m_0160"
+
+
+def test_a_run_is_stored_and_quoted_by_its_range_form(store, tmp_path):
+    _out, bid = run(_event(sources=[RUN]))
+    meta = _disk(tmp_path, bid)
+    assert meta["sources"][0]["through"] == "m_0160" and _quoted(meta) == [RUN_SRC]
+    out, other = run(_event("Something else said that morning.", from_=[SRC + "..m_0170"]))
+    assert other and _disk(tmp_path, other)["sources"][0]["through"] == "m_0170", out
+
+
+def test_a_run_whose_first_line_is_withdrawn_refuses_the_write(store, tmp_path):
+    _withdraw(store)
+    out, bid = run(_event(sources=[RUN]))
+    assert not bid and RUN_SRC in out and "撤回" in out
+    out, bid = run(_event(from_=[RUN_SRC]))
+    assert not bid and "撤回" in out and _files(tmp_path) == []
+
+
+def test_the_same_run_is_a_hint_and_another_run_from_its_first_line_is_not(store, tmp_path):
+    _out, first = run(_event(sources=[RUN]))
+    out, second = run(_event("The second thing said in that talk.", sources=[RUN]))
+    assert second and f"这条来源已经记过 {first}" in out
+    out, third = run(_event("A third thing.", sources=[{**RUN, "through": "m_0150"}]))
+    assert third and "已经记过" not in out
+
+
 # ───────────────────────── reading by id ─────────────────────────
 
 def test_recall_by_id_marks_a_withdrawn_or_revised_source(store, tmp_path):

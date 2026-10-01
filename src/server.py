@@ -855,7 +855,8 @@ async def grow(
     sources: Annotated[Optional[list | dict | str], _PydField(description=(
         "The host's own material this came from, when the host gave you its address: one "
         "record per message (or piece of one) — {system, instance, container, id}, plus "
-        "revision / fingerprint / fingerprint_by / span / use when the host gave them. "
+        "revision / fingerprint / fingerprint_by / span / use when the host gave them; a "
+        "run of consecutive messages is one record with through = the last one's id. "
         "Every entry of the call carries them. A withdrawn or deleted source is refused. "
         "A bare line id in from (m_0142) is linked to the record with that id. e.g. "
         'sources=[{"system": "lento", "instance": "home", "container": "private:U", '
@@ -863,8 +864,8 @@ async def grow(
     ))] = None,
     slice: Annotated[str, _PydField(description=(
         "A pending slice of the host's raw lines that nothing records yet (the \"sl_…\" id "
-        "from recall(view=\"slices\")). Write what it was about as usual; the slice's lines "
-        "become this entry's sources and the slice is done. A slice already handled is "
+        "from recall(view=\"slices\")). Write what it was about as usual; the slice becomes "
+        "one of this entry's sources and the slice is done. A slice already handled is "
         "refused."
     ))] = "",
 ) -> str:
@@ -1499,7 +1500,7 @@ async def trace(
     slice: Annotated[str, _PydField(description=(
         "A pending slice of the host's raw lines (the \"sl_…\" id from "
         'recall(view="slices")). With bucket_id: this entry already records it, and the '
-        "slice's lines are appended to its sources. Without one: slice_span re-cuts it, "
+        "slice is appended to its sources as one record. Without one: slice_span re-cuts it, "
         "drop_slice drops it."
     ))] = "",
     slice_span: Annotated[str, _PydField(description=(
@@ -1598,8 +1599,8 @@ async def trace(
                          this entry was formed from; append only.
 
     A pending slice of the host's raw lines (recall(view="slices") lists them):
-      bucket_id + slice="sl_…"        this entry already records it: its lines join the
-                                       entry's sources
+      bucket_id + slice="sl_…"        this entry already records it: the slice joins the
+                                       entry's sources as one record
       slice="sl_…", slice_span="m_0012..m_0031"   it was cut wrong: move its span
       slice="sl_…", drop_slice=True   nothing in it to keep
       (Not recorded anywhere yet: grow(..., slice="sl_…").)

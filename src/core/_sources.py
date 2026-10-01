@@ -13,18 +13,28 @@ from that":
         instance: home           # which installation of it
         container: "private:U"   # where in it (a chat, a channel)
         id: m_20260925_0142      # the host's own stable id for the piece
+        through: m_20260925_0160 # a run of lines only: the last line's id (id is the first)
         revision: null           # the host's version / edit number; never the read time
         fingerprint: "sha256:…"  # says same / different, never which came first
         fingerprint_by: adapter  # who computed the fingerprint
         span: {unit: utf16, start: 120, end: 188}   # a fragment only; half-open
         use: null                # permission; null inherits the material's
 
-Identity is system + instance + container + id. Revision, fingerprint, span and the
-window it was read in are not identity. The string form (logs, the registry, prov
-lines) is `lento:home/private:U#m_20260925_0142`, plus `@<revision>` when there is one.
+Identity is system + instance + container + id, plus `through` for a run of lines: two
+runs starting at the same line and ending at different ones are two sources. Revision,
+fingerprint, span and the window it was read in are not identity. `span` is a fragment
+of one piece and `through` a run of whole pieces, so a record has one or the other; a
+`through` equal to `id` is that one line and is not written. The string form (logs, the
+registry, prov lines) is `lento:home/private:U#m_20260925_0142`, or
+`…#m_20260925_0142..m_20260925_0160` for a run, plus `@<revision>` when there is one.
 One message can support several memories and several messages one memory; the source
 side never records which memory it belongs to (that is `memories_of`, a reverse lookup).
 A `wasQuotedFrom` prov line names a source by its string form.
+
+The host announces changes per piece, never per run. A run is looked up in the registry
+by its own identity first and, when the registry has never heard of it, by its first
+line's (`describe`); `memories_of` a single line likewise finds the runs starting there.
+A change to a line inside a run, past its first, does not reach the run.
 
 The registry holds each source's own state, which cannot be read back from the md
 files: active / unreadable / withdrawn / deleted, the revisions the host announced,
@@ -78,13 +88,15 @@ SOURCES_MAX = 64                # records per memory; more is refused, never cut
 STRING_MAX = 128                # a record's string form; it is a prov target (PROV_TARGET_MAX)
 SPAN_UNITS = ("utf16", "utf8", "char")
 
-_FIELD_MAX = {"system": 32, "instance": 64, "container": 64, "id": 64, "revision": 64,
-              "fingerprint": 128, "fingerprint_by": 32, "use": 64}
+_FIELD_MAX = {"system": 32, "instance": 64, "container": 64, "id": 64, "through": 64,
+              "revision": 64, "fingerprint": 128, "fingerprint_by": 32, "use": 64}
 _IDENTITY = ("system", "instance", "container", "id")
 # The characters that delimit the string form, refused inside the part they would split.
 _DELIMITERS = {"system": ":/#@", "instance": "/#@", "container": "#@", "id": "#@",
-               "revision": "#@"}
-_RECORD_KEYS = (*_IDENTITY, "revision", "fingerprint", "fingerprint_by", "span", "use")
+               "through": "#@", "revision": "#@"}
+_RANGE_MARK = ".."              # between id and through in the string form
+_RECORD_KEYS = (*_IDENTITY, "through", "revision", "fingerprint", "fingerprint_by", "span",
+                "use")
 
 
 class SourceRecordError(ValueError):
@@ -98,34 +110,43 @@ class SourceRecordError(ValueError):
 
 @dataclass(frozen=True)
 class SourceId:
-    """The identity of one piece of outside material."""
+    """The identity of one piece of outside material, or of a run of consecutive pieces
+    (`through` = the last one's id)."""
     system: str
     instance: str
     container: str
     id: str
+    through: Optional[str] = None
 
     def to_string(self, revision: Optional[str] = None) -> str:
         head = f"{self.system}:{self.instance}/{self.container}#{self.id}"
+        if self.through:
+            head = f"{head}{_RANGE_MARK}{self.through}"
         return f"{head}@{revision}" if revision not in (None, "") else head
 
     def __str__(self) -> str:
         return self.to_string()
 
+    def first(self) -> "SourceId":
+        """The identity of the first piece (itself when it is not a run)."""
+        return SourceId(self.system, self.instance, self.container, self.id)
+
     @classmethod
     def parse(cls, text: str) -> tuple["SourceId", Optional[str]]:
-        """`system:instance/container#id[@revision]` -> (identity, revision or None).
-        Raises SourceRecordError on anything else."""
+        """`system:instance/container#id[..through][@revision]` -> (identity, revision or
+        None). Raises SourceRecordError on anything else."""
         raw = str(text or "").strip()
         left, hash_, right = raw.partition("#")
         system, colon, rest = left.partition(":")
         instance, slash, container = rest.partition("/")
-        sid, at, revision = right.partition("@")
-        if not (hash_ and colon and slash):
+        pieces, at, revision = right.partition("@")
+        sid, dots, through = pieces.partition(_RANGE_MARK)
+        if not (hash_ and colon and slash) or (dots and not through):
             raise SourceRecordError(
                 f"not a source string form (system:instance/container#id): {raw[:STRING_MAX]!r}",
                 f"「{raw[:40]}」不是来源的写法（system:instance/container#id）")
         record = {"system": system, "instance": instance, "container": container, "id": sid,
-                  "revision": revision if at else None}
+                  "through": through if dots else None, "revision": revision if at else None}
         norm = _normalize_record(record, where="")
         return record_id(norm), norm["revision"]
 
@@ -152,6 +173,8 @@ def _text_field(raw: dict, key: str, where: str, *, required: bool) -> Optional[
         raise SourceRecordError(f"source{where} {key} is more than one line",
                                 f"来源{where}的 {key} 只能一行")
     bad = [ch for ch in _DELIMITERS.get(key, "") if ch in text]
+    if key in ("id", "through") and _RANGE_MARK in text:
+        bad.append(_RANGE_MARK)
     if bad:
         raise SourceRecordError(f"source{where} {key} holds {''.join(bad)!r}, which splits "
                                 "the string form", f"来源{where}的 {key} 里不能有 {''.join(bad)}")
@@ -192,9 +215,17 @@ def _normalize_record(raw, where: str) -> dict:
         raise SourceRecordError(f"source{where} has unknown keys {extra}",
                                 f"来源{where}不认识 {', '.join(extra)}")
     out: dict = {k: _text_field(raw, k, where, required=True) for k in _IDENTITY}
+    through = _text_field(raw, "through", where, required=False)
+    if through and through != out["id"]:
+        out["through"] = through
     for k in ("revision", "fingerprint", "fingerprint_by"):
         out[k] = _text_field(raw, k, where, required=False)
     span = _span(raw.get("span"), where)
+    if span and through:
+        raise SourceRecordError(f"source{where} has both span and through: a span is a "
+                                "fragment of one piece, through a run of whole ones",
+                                f"来源{where}的 span 和 through 不能一起用：span 是一条里的一段，"
+                                "through 是连着的好几条")
     if span:
         out["span"] = span
     out["use"] = _text_field(raw, "use", where, required=False)
@@ -207,10 +238,11 @@ def _normalize_record(raw, where: str) -> dict:
 
 
 def normalize_sources(raw) -> list[dict]:
-    """The stored form of `sources`: one record per piece, order kept. A record repeated
-    with the same identity, revision and span is kept once. Raises SourceRecordError on a
-    record that is malformed (identity missing, a field too long or holding a delimiter,
-    a bad span) or on more than SOURCES_MAX records; nothing is cut to fit."""
+    """The stored form of `sources`: one record per piece or run, order kept. A record
+    repeated with the same identity, revision and span is kept once. Raises
+    SourceRecordError on a record that is malformed (identity missing, a field too long or
+    holding a delimiter, a bad span, span with through) or on more than SOURCES_MAX
+    records; nothing is cut to fit."""
     if raw is None or raw == "" or raw == []:
         return []
     if isinstance(raw, dict):
@@ -234,7 +266,9 @@ def normalize_sources(raw) -> list[dict]:
 
 
 def record_id(record: dict) -> SourceId:
-    return SourceId(*(str(record[k]) for k in _IDENTITY))
+    through = record.get("through")
+    return SourceId(*(str(record[k]) for k in _IDENTITY),
+                    through=str(through) if through not in (None, "") else None)
 
 
 def record_string(record: dict) -> str:
@@ -253,29 +287,38 @@ def same_delivery(a: dict, b: dict) -> bool:
     return a.get("revision") == b.get("revision")
 
 
-def _identity_key(identity) -> str:
+def _identity(identity) -> SourceId:
     """Accept a SourceId, a record, or a string form (a revision on it is dropped)."""
     if isinstance(identity, SourceId):
-        return identity.to_string()
+        return identity
     if isinstance(identity, dict):
-        return record_id(_normalize_record(identity, where="")).to_string()
-    return SourceId.parse(str(identity))[0].to_string()
+        return record_id(_normalize_record(identity, where=""))
+    return SourceId.parse(str(identity))[0]
+
+
+def _identity_key(identity) -> str:
+    return _identity(identity).to_string()
 
 
 async def memories_of(store, identity) -> list[str]:
     """The memories (archive included) whose `sources` name this identity, by scanning
-    the library. The source side never stores this; an index of it is stage 5's."""
-    want = _identity_key(identity)
+    the library; a single piece also finds the runs that start at it (the registry reads
+    a run by its first line when it knows nothing of the run). The source side never
+    stores this; an index of it is stage 5's."""
+    want = _identity(identity)
     out: list[str] = []
     for b in await store.list_all(include_archive=True):
         meta = b.get("metadata") or {}
         for rec in meta.get(SOURCES_FIELD) or []:
             try:
-                if isinstance(rec, dict) and record_id(rec).to_string() == want:
-                    out.append(str(meta.get("id") or b.get("id") or ""))
-                    break
+                if not isinstance(rec, dict):
+                    continue
+                have = record_id(rec)
             except KeyError:
                 continue
+            if have == want or (want.through is None and have.first() == want):
+                out.append(str(meta.get("id") or b.get("id") or ""))
+                break
     return [i for i in dict.fromkeys(out) if i]
 
 
@@ -441,9 +484,10 @@ def _change_from(record) -> dict:
     elif isinstance(source, str):
         sid = SourceId.parse(source)[0]
     else:
-        sid = record_id(_normalize_record({k: record.get(k) for k in _IDENTITY}, where=""))
+        sid = record_id(_normalize_record({k: record.get(k) for k in (*_IDENTITY, "through")},
+                                          where=""))
     fields = {"system": sid.system, "instance": sid.instance, "container": sid.container,
-              "id": sid.id}
+              "id": sid.id, "through": sid.through}
     for k in ("revision", "fingerprint", "fingerprint_by", "use"):
         fields[k] = record.get(k)
     norm = _normalize_record(fields, where="")
@@ -549,11 +593,14 @@ class SourceRegistry:
 
     def describe(self, identity) -> Optional[dict]:
         """What the registry knows of a source: {state, host_seq, use, revisions}, or
-        None when it has never heard of it."""
-        key = _identity_key(identity)
+        None when it has never heard of it. A run it has never heard of is read by its
+        first line, which is what the host announces changes for."""
+        sid = _identity(identity)
         self._fresh()
         with self._guard:
-            entry = self._by_source.get(key)
+            entry = self._by_source.get(sid.to_string())
+            if entry is None and sid.through:
+                entry = self._by_source.get(sid.first().to_string())
             if entry is None:
                 return None
             return {"state": entry["state"], "host_seq": entry["host_seq"],
@@ -641,15 +688,17 @@ class SourceRegistry:
         notes for the receipt). Each source has to be in the turn's grant when one is
         given (None = not enforced), and not withdrawn or deleted. An unreadable source
         is taken (the host just handed its text over) with a note; one the registry has
-        never seen is simply active."""
+        never seen is simply active. A run is granted when it or its first line is, and
+        its state is read as `describe` reads it."""
         granted = None if grant is None else {_identity_key(g) for g in grant}
         notes: list[str] = []
         for rec in sources or []:
-            key = record_id(rec).to_string()
-            if granted is not None and key not in granted:
+            sid = record_id(rec)
+            key = sid.to_string()
+            if granted is not None and not {key, sid.first().to_string()} & granted:
                 return (f"来源 {key} 不在这一轮宿主交过来的材料里——只能用这一轮给的来源写。"
                         "本次什么都没写。"), []
-            state = self.state_of(key)
+            state = self.state_of(sid)
             if state == WITHDRAWN:
                 return (f"来源 {key} 已经被撤回了，不能再拿它写记忆。本次什么都没写。"), []
             if state == DELETED:

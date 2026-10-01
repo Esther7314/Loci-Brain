@@ -2,7 +2,8 @@
 """
 tests/test_source_records.py — the stored form of a source record and its string form.
 
-A record names one piece of the host's material by system + instance + container + id;
+A record names one piece of the host's material by system + instance + container + id,
+or a run of pieces with `through` (the last one's id) as part of its identity;
 revision, fingerprint and span ride along but are not identity. The string form is what
 a prov line, the registry and the host's change feed all use, so it has to round-trip
 and must never be cut. Malformed records are refused whole, never trimmed to fit.
@@ -108,6 +109,62 @@ def test_same_delivery_is_identity_plus_fingerprint():
     plain = {**REC, "fingerprint": None, "revision": "1"}
     assert S.same_delivery(plain, dict(plain))
     assert not S.same_delivery(plain, {**plain, "revision": "2"})
+
+
+# ───────────────────────── a run of lines ─────────────────────────
+
+RUN = {**REC, "id": "m_0012", "through": "m_0031"}
+
+
+def test_a_run_normalises_and_round_trips_through_the_string_form():
+    [rec] = S.normalize_sources([{**RUN, "revision": "2", "fingerprint": "sha256:ab",
+                                  "fingerprint_by": "loci"}])
+    assert rec["id"] == "m_0012" and rec["through"] == "m_0031"
+    assert list(rec)[:5] == ["system", "instance", "container", "id", "through"]
+    text = S.record_string(rec)
+    assert text == "lento:home/private:U#m_0012..m_0031@2"
+    sid, revision = S.SourceId.parse(text)
+    assert (sid, revision) == (S.record_id(rec), "2") and sid.through == "m_0031"
+    assert sid.first() == S.SourceId("lento", "home", "private:U", "m_0012")
+    assert S.SourceId.parse(str(sid)) == (sid, None)
+
+
+def test_a_single_line_keeps_the_old_form_and_writes_no_through():
+    [rec] = S.normalize_sources([{**REC, "through": REC["id"]}])
+    assert "through" not in rec
+    assert S.record_string(rec) == "lento:home/private:U#m_20260925_0142"
+    [plain] = S.normalize_sources([REC])
+    assert "through" not in plain and S.record_id(plain).through is None
+
+
+def test_through_with_a_span_is_refused():
+    with pytest.raises(S.SourceRecordError) as exc:
+        S.normalize_sources([{**RUN, "span": {"unit": "char", "start": 0, "end": 3}}])
+    assert "through" in exc.value.zh
+
+
+@pytest.mark.parametrize("bad", ["lento:home/c#m_1..", "lento:home/c#m_1..m_2..m_3",
+                                 "lento:home/c#..m_2"])
+def test_a_malformed_run_string_is_refused(bad):
+    with pytest.raises(S.SourceRecordError):
+        S.SourceId.parse(bad)
+
+
+@pytest.mark.parametrize("field", ["id", "through"])
+def test_the_run_mark_inside_an_id_is_refused(field):
+    with pytest.raises(S.SourceRecordError):
+        S.normalize_sources([{**RUN, field: "m..1"}])
+
+
+def test_two_runs_from_the_same_first_line_are_two_identities():
+    shorter = {**RUN, "through": "m_0020"}
+    out = S.normalize_sources([RUN, shorter, RUN, {**REC, "id": "m_0012"}])
+    assert [r.get("through") for r in out] == ["m_0031", "m_0020", None]
+    assert len({S.record_id(r) for r in out}) == 3
+    assert not S.same_delivery({**RUN, "fingerprint": "sha256:ab"},
+                               {**shorter, "fingerprint": "sha256:ab"})
+    assert S.same_delivery({**RUN, "fingerprint": "sha256:ab"},
+                           {**RUN, "fingerprint": "sha256:ab", "revision": "3"})
 
 
 def test_a_json_string_argument_is_read_as_records():

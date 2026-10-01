@@ -47,6 +47,21 @@ def _source_strings(meta: dict) -> list[str]:
     return out
 
 
+def _source_label(target: str) -> str:
+    """A quoted source as the 「来源:」 block names it: its string form, and for a run of
+    lines (`…#m_0012..m_0031`) how many lines it spans when the slice store still holds
+    the batch it was cut from."""
+    slices = getattr(rt.bucket_mgr, "slices", None)
+    if slices is None or "#" not in target:
+        return target
+    try:
+        sid, _revision = _src.SourceId.parse(target)
+    except _src.SourceRecordError:
+        return target
+    count = slices.run_length(sid) if sid.through else None
+    return f"{target}（{count} 行）" if isinstance(count, int) else target
+
+
 def _source_mark(target: str) -> str:
     """The registry's word for a quoted source, and a note when the host has revised it
     since (the entry keeps pointing at the revision it was formed on). A bare host id
@@ -1664,8 +1679,8 @@ async def recall_core(when: str, room: str, tag: str, query: str,
                 fid, word = line["target"], _PROV_WORD[line["rel"]]
                 if line["rel"] == WAS_QUOTED_FROM:
                     quoted.add(fid)
-                    src_lines.append(f"  ← {fid}  [{word}] （宿主对话里的原话，不在库里）"
-                                     + _source_mark(fid))
+                    src_lines.append(f"  ← {_source_label(fid)}  [{word}] "
+                                     "（宿主对话里的原话，不在库里）" + _source_mark(fid))
                     continue
                 src = await rt.bucket_mgr.get_including_archive(fid)
                 if src:
@@ -1683,8 +1698,8 @@ async def recall_core(when: str, room: str, tag: str, query: str,
                     src_lines.append(f"  ← {fid}  [{word}] （查无此桶——源可能被硬删过）")
             for text in _source_strings(meta):
                 if text not in quoted:
-                    src_lines.append(f"  ← {text}  [来源记录] （宿主的材料，不在库里）"
-                                     + _source_mark(text))
+                    src_lines.append(f"  ← {_source_label(text)}  [来源记录] "
+                                     "（宿主的材料，不在库里）" + _source_mark(text))
             if meta.get("supersedes"):
                 info.append(f"换掉了:{meta['supersedes']}")
             if meta.get("superseded_by"):

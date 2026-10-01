@@ -11,22 +11,30 @@ sentence of what it is. Code then guesses which memory written that day already
 covers it (vector similarity against memories created that day). The slices wait as
 **pending**: not in the library, not merged into anything. The main model handles
 each one itself (tools/_slices.py): not recorded yet -> it writes the memory with
-grow and the slice's lines become its `sources`; already recorded -> they are
+grow and the slice becomes one of its `sources`; already recorded -> the slice is
 appended to that memory's `sources`; sliced wrong -> it re-cuts the span or drops it.
 The side model only slices; it never writes, merges or decides.
 
     POST /api/v2/slices  -> take_batch(): check the batch, slice_lines(), guesses,
                             PendingSlices.record_batch()
 
-The raw text is not kept anywhere. The only thing kept from a line is its fingerprint
-(`sha256:` of its UTF-8 text), so a record built from it reads as the same delivery as
-one the host's adapter built from the same text (core/_sources.same_delivery). The host
-can hand the lines over again: a batch is named by source + day + line ids, and the same
-batch resent replaces its pending slices instead of doubling them.
+A slice of any length is one source record (record_for): `id` its first line, `through`
+its last (left out for a one-line slice), the batch's `revision`, and a fingerprint Loci
+computes, so `fingerprint_by: loci`:
+
+    line hash    = "sha256:" + sha256(the line's UTF-8 text)       (fingerprint_of)
+    slice record = "sha256:" + sha256(its line hashes, in order, joined by "\\n")
+                                                                   (slice_fingerprint)
+
+The raw text is not kept anywhere. The only thing kept from a line is its hash, in the
+pending store, so a re-cut slice gets its fingerprint computed again over its new lines,
+and the same lines handed over again give the same fingerprint. The host can hand the
+lines over again: a batch is named by source + day + line ids, and the same batch resent
+replaces its pending slices instead of doubling them.
 
 The pending store is `<buckets>/_sources/pending_slices.jsonl`, append-only like the
 source registry beside it: a `batch` line carries the batch (source, day, revision,
-each line's id and fingerprint) and its slices; `close` and `recut` lines change one
+each line's id and hash) and its slices; `close` and `recut` lines change one
 slice. A closed slice stays in the file as what handled it, so a second use of its id
 is refused by name. The index is rebuilt from the file on first use and whenever it
 has grown. An append-only log rather than a file per batch: every change is one whole
@@ -38,9 +46,9 @@ its lines to the same take_batch.
 
 Exports: SLICER_PROMPT_VERSION · SLICER_PROMPT · GIST_MAX · Slice · SlicerError ·
          BatchError · SliceError · slice_lines · parse_slices · side_model ·
-         read_batch · batch_id_of · fingerprint_of · guess_covering · take_batch ·
-         PendingSlices (record_batch · get · records_for · close · recut ·
-         open_batches · pending_count · rebuild_index)
+         read_batch · batch_id_of · fingerprint_of · slice_fingerprint · FINGERPRINT_BY ·
+         guess_covering · take_batch · PendingSlices (record_batch · get · record_for ·
+         run_length · close · recut · open_batches · pending_count · rebuild_index)
 ========================================
 """
 
@@ -48,7 +56,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import re
 import threading
 from dataclasses import dataclass
@@ -223,23 +230,6 @@ def parse_slices(raw: str, n: int) -> list[tuple[int, int, str]]:
     return out
 
 
-def _split_long(first: int, last: int, gist: str) -> list[tuple[int, int, str]]:
-    """A slice over SOURCES_MAX lines is cut into even consecutive parts: a memory
-    carries at most that many source records, so a longer slice could never be handled."""
-    count = last - first + 1
-    if count <= _src.SOURCES_MAX:
-        return [(first, last, _cut_gist(gist))]
-    parts = math.ceil(count / _src.SOURCES_MAX)
-    size = math.ceil(count / parts)
-    out = []
-    for p in range(parts):
-        a = first + p * size
-        b = min(last, a + size - 1)
-        mark = f"（{p + 1}/{parts}）"
-        out.append((a, b, _cut_gist(gist, GIST_MAX - len(mark)) + mark))
-    return out
-
-
 async def slice_lines(lines: list[dict], *, model: ModelCall) -> list[Slice]:
     """Slice lines ([{id, text, at?, speaker?}], in order) with the side model.
 
@@ -259,9 +249,8 @@ async def slice_lines(lines: list[dict], *, model: ModelCall) -> list[Slice]:
         if not str(raw or "").strip():
             raise SlicerError("the side model returned nothing")
         for a, b, gist in parse_slices(str(raw), len(chunk)):
-            for x, y, g in _split_long(a, b, gist):
-                out.append(Slice(first=str(chunk[x - 1]["id"]), last=str(chunk[y - 1]["id"]),
-                                 count=y - x + 1, gist=g))
+            out.append(Slice(first=str(chunk[a - 1]["id"]), last=str(chunk[b - 1]["id"]),
+                             count=b - a + 1, gist=_cut_gist(gist)))
     return out
 
 
@@ -292,9 +281,19 @@ _SOURCE_KEYS = ("system", "instance", "container")
 _DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
+# Who computed a slice record's fingerprint: Loci, from the line hashes it kept.
+FINGERPRINT_BY = "loci"
+
+
 def fingerprint_of(text: str) -> str:
+    """One line's hash."""
     return "sha256:" + hashlib.sha256(
         str(text).encode("utf-8", errors="surrogatepass")).hexdigest()
+
+
+def slice_fingerprint(line_hashes: list[str]) -> str:
+    """A slice record's fingerprint: over its lines' hashes, in order, one per line."""
+    return "sha256:" + hashlib.sha256("\n".join(line_hashes).encode("utf-8")).hexdigest()
 
 
 def batch_id_of(source: dict, day: str, ids: list[str]) -> str:
@@ -316,9 +315,10 @@ def _short_text(value, key: str, limit: int, where: str) -> Optional[str]:
 
 
 def read_batch(body, *, max_lines: int = DEFAULT_MAX_LINES_PER_BATCH) -> dict:
-    """The intake body -> {source, day, revision, fingerprint_by, lines, batch_id}.
-    Every line id has to make a valid source record (core/_sources); ids are unique.
-    Raises BatchError."""
+    """The intake body -> {source, day, revision, lines, batch_id}. Every line id has to
+    make a valid source record (core/_sources); ids are unique. A `fingerprint_by` in
+    the body is taken as text and not used: the fingerprints are Loci's own
+    (FINGERPRINT_BY). Raises BatchError."""
     if not isinstance(body, dict):
         raise BatchError("the body must be a JSON object")
     extra = sorted(set(map(str, body)) - _BODY_KEYS)
@@ -336,9 +336,9 @@ def read_batch(body, *, max_lines: int = DEFAULT_MAX_LINES_PER_BATCH) -> dict:
     if len(lines) > max_lines:
         raise BatchError(f"{len(lines)} lines is over the {max_lines}-line cap of one "
                          "batch; send the day in parts")
-    fingerprint_by = body.get("fingerprint_by", "adapter")
+    _short_text(body.get("fingerprint_by"), "fingerprint_by", 32, "body")
     template = {k: source.get(k) for k in _SOURCE_KEYS}
-    template.update(revision=body.get("revision"), fingerprint_by=fingerprint_by)
+    template.update(revision=body.get("revision"), fingerprint_by=FINGERPRINT_BY)
     out_lines: list[dict] = []
     seen: set[str] = set()
     for i, line in enumerate(lines):
@@ -366,7 +366,7 @@ def read_batch(body, *, max_lines: int = DEFAULT_MAX_LINES_PER_BATCH) -> dict:
                                                  _SPEAKER_MAX, where)})
     norm_source = {k: record[k] for k in _SOURCE_KEYS}
     return {"source": norm_source, "day": day, "revision": record["revision"],
-            "fingerprint_by": record["fingerprint_by"], "lines": out_lines,
+            "lines": out_lines,
             "batch_id": batch_id_of(norm_source, day, [ln["id"] for ln in out_lines])}
 
 
@@ -430,7 +430,7 @@ async def take_batch(store, body, *, model: ModelCall,
                                    threshold=threshold)
     row, replaced = await store.slices.record_batch(
         batch_id=batch["batch_id"], source=batch["source"], day=batch["day"],
-        revision=batch["revision"], fingerprint_by=batch["fingerprint_by"],
+        revision=batch["revision"],
         lines=[(ln["id"], ln["fingerprint"]) for ln in batch["lines"]],
         slices=[{"first": s.first, "last": s.last, "gist": s.gist, "guesses": g}
                 for s, g in zip(slices, guesses)],
@@ -510,8 +510,7 @@ class PendingSlices:
                     st["state"] = REPLACED
             self._batches[bid] = {
                 "batch_id": bid, "seq": seq, "source": dict(row.get("source") or {}),
-                "day": row.get("day"), "revision": row.get("revision"),
-                "fingerprint_by": row.get("fingerprint_by"), "lines": lines,
+                "day": row.get("day"), "revision": row.get("revision"), "lines": lines,
                 "order": {lid: i for i, (lid, _fp) in enumerate(lines)},
                 "slice_ids": [str(s.get("slice_id")) for s in slices],
                 "recorded_at": row.get("recorded_at")}
@@ -574,6 +573,21 @@ class PendingSlices:
                     "state": st["state"],
                     "closed": dict(st["closed"]) if st["closed"] else None}
 
+    def run_length(self, sid: _src.SourceId) -> Optional[int]:
+        """How many lines a run of lines spans, when a batch here holds both its ends in
+        order; None otherwise (a run the host recorded itself, or a single line)."""
+        if not sid.through:
+            return None
+        source = {"system": sid.system, "instance": sid.instance, "container": sid.container}
+        self._fresh()
+        with self._guard:
+            for b in self._batches.values():
+                order = b["order"]
+                if b["source"] == source and sid.id in order and sid.through in order:
+                    if order[sid.id] <= order[sid.through]:
+                        return order[sid.through] - order[sid.id] + 1
+            return None
+
     def pending_count(self) -> int:
         """How many slices wait to be handled."""
         self._fresh()
@@ -617,22 +631,28 @@ class PendingSlices:
                               "recall(view=\"slices\") 看现在的。")
         return None
 
-    def records_for(self, slice_id: str) -> list[dict]:
-        """The source records a slice stands for: one per line of its span, carrying the
-        batch's source, revision and fingerprint_by and the line's fingerprint."""
+    def record_for(self, slice_id: str) -> dict:
+        """The one source record a slice stands for, computed from its span as it is now
+        (a re-cut gets its own fingerprint): id = the first line, through = the last
+        (none for one line), the batch's source and revision, slice_fingerprint over the
+        span's line hashes."""
         self._fresh()
         with self._guard:
             st = self._slices[str(slice_id).strip()]
             b = self._batches[st["batch_id"]]
             a, z = self._span(st)
-            return [{**b["source"], "id": lid, "revision": b["revision"],
-                     "fingerprint": fp, "fingerprint_by": b["fingerprint_by"]}
-                    for lid, fp in b["lines"][a:z + 1]]
+            span = b["lines"][a:z + 1]
+            record = {**b["source"], "id": span[0][0], "revision": b["revision"],
+                      "fingerprint": slice_fingerprint([fp for _lid, fp in span]),
+                      "fingerprint_by": FINGERPRINT_BY}
+            if z > a:
+                record["through"] = span[-1][0]
+            return record
 
     # ---------- writing ----------
 
     async def record_batch(self, *, batch_id: str, source: dict, day: str,
-                           revision: Optional[str], fingerprint_by: Optional[str],
+                           revision: Optional[str],
                            lines: list[tuple[str, str]], slices: list[dict],
                            model: str = "") -> tuple[dict, int]:
         """Append a batch and its slices (each gets its slice_id here). The same batch_id
@@ -652,7 +672,7 @@ class PendingSlices:
                     named.append({"slice_id": sid, **s})
                 row = self._append({
                     "kind": "batch", "batch_id": batch_id, "source": dict(source),
-                    "day": day, "revision": revision, "fingerprint_by": fingerprint_by,
+                    "day": day, "revision": revision,
                     "lines": [[i, fp] for i, fp in lines], "slices": named,
                     "model": model, "prompt_version": SLICER_PROMPT_VERSION})
                 return row, replaced
@@ -672,9 +692,8 @@ class PendingSlices:
                                      "how": how, "by": list(dict.fromkeys(by))})
 
     async def recut(self, slice_id: str, first: str, last: str) -> dict:
-        """Move an open slice's span to first..last, both ids of its batch, in order, at
-        most SOURCES_MAX lines. The gist stays (the text is gone) and is marked edited.
-        Raises SliceError."""
+        """Move an open slice's span to first..last, both ids of its batch, in order. The
+        gist stays (the text is gone) and is marked edited. Raises SliceError."""
         sid = str(slice_id or "").strip()
         first, last = str(first or "").strip(), str(last or "").strip()
         async with self._turn():
@@ -695,10 +714,5 @@ class PendingSlices:
                 if order[first] > order[last]:
                     raise SliceError("first comes after last",
                                      f"{first} 在 {last} 后面——写成 前..后。")
-                count = order[last] - order[first] + 1
-                if count > _src.SOURCES_MAX:
-                    raise SliceError(f"{count} lines is over {_src.SOURCES_MAX}",
-                                     f"{first}..{last} 有 {count} 行，一条记忆最多挂 "
-                                     f"{_src.SOURCES_MAX} 行来源——切细一点。")
                 return self._append({"kind": "recut", "slice_id": sid,
                                      "first": first, "last": last})
