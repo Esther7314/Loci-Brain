@@ -27,6 +27,9 @@ Forms read (today = Wednesday 2026-10-07 in the examples):
   clock      两点 · 下午两点 · 晚上八点 · 十一点半 · 九点一刻 · 9:30
              A clock alone is today's. Without 上午/下午, 1-6 o'clock is afternoon
              (「两点开会」 is two in the afternoon) and 7-12 is as written.
+             A part of the day with no hour is a conventional one (`_DAY_PART_CLOCK`):
+             今晚 / 晚上 19:00 · 今早 / 早上 08:00 · 中午 12:00 · 下午 15:00; 半夜 / 凌晨
+             stay a day.
   tail       前 / 之前 / 以前 / 左右 are read as the same day (「月底前」 = 月底)
 
 Numbers may be digits or Chinese numerals (两、十一、二十三). An impossible day
@@ -75,6 +78,14 @@ _CLOCK_RE = re.compile(
 _COLON_RE = re.compile("^" + _PERIOD + r"?(\d{1,2})[:：](\d{2})")
 _PERIOD_ONLY_RE = re.compile("^" + _PERIOD)
 _TAIL_RE = re.compile(r"(之前|以前|前|左右)$")
+
+# The clock a part of the day stands for when no hour is said: 今晚 is 19:00, 明早 08:00.
+# These are conventions, not readings — the backfill lists `when` in `backfilled`, and
+# breath marks such a date 「补的」, so the model sees the hour it was given and can correct
+# it. An hour that is said always wins (晚上八点 is 20:00). 半夜 / 凌晨 have no
+# convention and stay a day.
+_DAY_PART_CLOCK = {"早上": time(8, 0), "中午": time(12, 0), "下午": time(15, 0),
+                   "晚上": time(19, 0)}
 
 
 @dataclass(frozen=True)
@@ -196,7 +207,8 @@ def _hour_of(period: str, hour: int) -> int | None:
 
 def _read_clock(s: str, implied: str) -> tuple[time | None, str, bool]:
     """Read a clock time off the front of s. Returns (time, the rest, ok); ok False
-    means something that looks like a clock but is not a real one."""
+    means something that looks like a clock but is not a real one. A part of the day with
+    no hour — said (明天晚上) or implied by the day (今晚) — is its `_DAY_PART_CLOCK`."""
     m = _COLON_RE.match(s)
     if m:
         hour = _hour_of(m.group(1) or implied, int(m.group(2)))
@@ -219,8 +231,8 @@ def _read_clock(s: str, implied: str) -> tuple[time | None, str, bool]:
         return time(hour, minute), s[m.end():], True
     m = _PERIOD_ONLY_RE.match(s)
     if m:
-        return None, s[m.end():], True
-    return None, s, True
+        return _DAY_PART_CLOCK.get(m.group(1)), s[m.end():], True
+    return (None if s else _DAY_PART_CLOCK.get(implied)), s, True
 
 
 def resolve_phrase(phrase, today, *, tz: tzinfo | None = None,

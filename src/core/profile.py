@@ -39,14 +39,17 @@ with no new persisted field (the one tag convention below excepted):
    and weighing-on-me lists stay for the profile page until it is redrawn.
 
 Which entries each block may show is the gate's (`core/visibility.py`): every block asks
-`visible_for()` with its own road — `remind` for 惦记的事 (and the profile page's ⏰ / 🫀),
-`review` for its one held line, `door` for the rules and the profile page, `sudden` for
-忽然想起, `edited` for the panel's corrections — and what stays here is each block's own
-business (an EVENT room, a want, a date).
+`visible_for()` with its own road — `prospective` for 惦记的事, `review` for its one held
+line, `remind` for the profile page's ⏰ / 🫀, `door` for the rules and the profile page,
+`sudden` for 忽然想起, `edited` for the panel's corrections — and what stays here is each
+block's own business (an EVENT room, a want, a date). A clock time later today holds an
+entry back on every breath road (the gate's `later_today`); `due_now` is the moment it
+comes due.
 
 Exports: door_note(all_buckets, now) / event_pool(all_buckets, now=None) /
          edited_by_user(all_buckets) / BreathSettings / breath_settings(config) /
          due_day(meta, today) / awake_reasons(meta, now, …) / is_accessible(meta, now, …) /
+         due_now(meta, now) /
          prospective(all_buckets, now, …) / involuntary(all_buckets, now, …) /
          entry_label(meta, content) / short_id(bucket_id)
 ========================================
@@ -570,6 +573,21 @@ def is_accessible(meta: dict, now: datetime, *, settings: BreathSettings | None 
     return bool(awake_reasons(meta, now, settings=settings, delivered_at=delivered_at))
 
 
+def due_now(meta: dict, now: datetime) -> bool:
+    """Open, current, and the clock time its `when` names today has come — the moment the
+    gate stops holding it back (`later_today`, core/visibility.py).
+
+    Seam for stage 5.5: in a window already open when that moment passes, breath has been
+    read; the entry reaches the model as a "time is up" card from the cue endpoint, with
+    the owner's next message."""
+    moment = _V.clock_moment(meta)
+    if (moment is None or is_closed(meta) or _V.state_of(meta) != _V.LIVE
+            or str(meta.get("superseded_by") or "").strip()):
+        return False
+    local = _w.to_local(now)
+    return moment.date() == local.date() and moment <= local
+
+
 # ------------------------------------------------------------
 # 惦记的事 (prospective)
 # ------------------------------------------------------------
@@ -585,7 +603,8 @@ def is_accessible(meta: dict, now: datetime, *, settings: BreathSettings | None 
 # is dropped: the rest are counted on one line.
 # Not on the list: a telic waiting on a `cue` with no date (it waits for the strong-
 # reminder card); a want nobody owes and nothing dates (asleep); anything a live hold is
-# on (the `remind` road), except the one question a `defer`'s review day asks.
+# on, and anything whose clock time today has not come yet (the `prospective` road),
+# except the one question a `defer`'s review day asks.
 
 def _waits_on_cue(meta: dict) -> bool:
     cue = meta.get("cue")
@@ -686,7 +705,7 @@ def prospective(all_buckets: list, now: datetime, *, settings: BreathSettings | 
             if line:
                 dated.append(line)
             continue
-        if is_closed(meta) or not _V.visible_for(meta, road=_V.REMIND, now=now, holds=holds):
+        if is_closed(meta) or not _V.visible_for(meta, road=_V.PROSPECTIVE, now=now, holds=holds):
             continue
         telic = is_telic(meta)
         _wt = meta.get("weight")

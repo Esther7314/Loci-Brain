@@ -1490,9 +1490,11 @@ async def _linked(bucket_id: str) -> tuple[dict | None, str, str]:
 
 
 async def recall_text_and_data(when: str, room: str, tag: str, query: str,
-                               floor=None, view: str = "", max_cells: int = 0) -> dict:
+                               floor=None, view: str = "", max_cells: int = 0,
+                               road: str = "") -> dict:
     """Collect once, serve both skins. For the panel, and for breath's 近三天, whose text
-    and JSON skins are these two.
+    and JSON skins are these two. `road`: what was collected also has to pass that road
+    of the gate (breath's `recent`), so both skins are made from what it lets through.
 
     🔴 The panel's endpoint used to call `recall_data()` and `recall_core()`
        separately, and each of those runs its own `_collect` — meaning **the same
@@ -1509,6 +1511,8 @@ async def recall_text_and_data(when: str, room: str, tag: str, query: str,
     """
     collection = await _collect(when, room, tag, query)
     entries, err, ledger = collection
+    if road:
+        entries = [e for e in entries if _V.visible_for(e["meta"], road=road)]
     data = await recall_data(when, room, tag, query, floor=floor, view=view,
                              collected=(list(entries), err, dict(ledger)))
     if data.get("ok") and data.get("total"):

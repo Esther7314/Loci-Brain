@@ -34,37 +34,56 @@ What an entry's state is (`state_of`) is the same on every road:
 ------------------------------------------------------------
 The roads
 ------------------------------------------------------------
-| road            | kind    | dont_surface | old version | covered | holds        | hold entry |
-|-----------------|---------|--------------|-------------|---------|--------------|------------|
-| remind          | surface | ✔            | ✔           |         | defer, avoid | ✔          |
-| review          | surface | ✔            | ✔           |         | avoid        |            |
-| door            | surface |              |             | ✔       |              |            |
-| sudden          | surface | ✔            | ✔           | ✔       | defer, avoid | ✔          |
-| edited          | surface |              |             | ✔       |              |            |
-| invalidation    | surface |              | ✔           |         |              |            |
-| muse            | surface |              |             |         |              |            |
-| dream           | surface | ✔            | ✔           |         | avoid        | ✔          |
-| dream_handout   | surface | ✔            |             |         | avoid        |            |
-| list            | lookup  |              | ✔           |         |              |            |
-| letter          | lookup  |              |             |         |              |            |
-| read            | lookup  | (any state shown, with its mark)                                |
+| road            | kind    | dont_surface | old version | covered | holds        | hold entry | later today |
+|-----------------|---------|--------------|-------------|---------|--------------|------------|-------------|
+| prospective     | surface | ✔            | ✔           |         | defer, avoid | ✔          | ✔           |
+| review          | surface | ✔            | ✔           |         | avoid        |            | ✔           |
+| recent          | surface |              | ✔           |         |              |            | ✔           |
+| sudden          | surface | ✔            | ✔           | ✔       | defer, avoid | ✔          | ✔           |
+| edited          | surface |              |             | ✔       |              |            | ✔           |
+| invalidation    | surface |              | ✔           |         |              |            | ✔           |
+| door            | surface |              |             | ✔       |              |            |             |
+| remind          | surface | ✔            | ✔           |         | defer, avoid | ✔          |             |
+| muse            | surface |              |             |         |              |            |             |
+| dream           | surface | ✔            | ✔           |         | avoid        | ✔          |             |
+| dream_handout   | surface | ✔            |             |         | avoid        |            |             |
+| list            | lookup  |              | ✔           |         |              |            |             |
+| letter          | lookup  |              |             |         |              |            |             |
+| read            | lookup  | (any state shown, with its mark)                                              |
 
 Every road but `read` shows live entries only.
-- remind: breath's 惦记的事 (core/profile.prospective: its dated and undated lines and the
-  「像是答应过的」 questions), and the profile page's reminders and weighing-on-me lists
-  (core/profile.door_note).
+
+later today: an open entry whose `when` names a clock time later today (`waits_for_clock`)
+stays off until that time has passed — 「今晚回来说面试结果」 written in the morning is not
+talked about over lunch. From that moment it is due today like anything else. Only a
+clock time waits: a `when` that is a day alone has no hour to wait for and counts from the
+morning, and a later day is simply "N days left". Every road that lists an entry on breath
+counts it; the entry is still awake (core/profile.is_accessible), and the lookup roads find
+it as always. In a window already open when the time comes, the entry reaches the model
+through the strong-reminder card with the owner's next message, not through breath
+(core/profile.due_now; stage 5.5).
+
+- prospective: breath's 惦记的事 (core/profile.prospective: its dated and undated lines
+  and the 「像是答应过的」 questions).
 - review: the one 惦记的事 line that shows a held entry on purpose — a `defer` hold whose
   review day has come, asked about together with what it is hung on. Asked of the hold and
   of the original alike: a `defer` is the thing being asked about, an `avoid` still closes.
-- door: the pinned rules and the profile page by the door (door_note). A rule is only
-  ever one already on the timeline (`on_timeline`), so old versions never reach it.
-- sudden: 「忽然想起」 (core/profile.event_pool, which breath's involuntary block draws from).
+- recent: breath's 近三天 — recall's three-day overview (tools/recall/core.
+  recall_text_and_data with this road), which is the `list` road's set less what waits
+  for a clock time today.
+- sudden: 「忽然想起」 (core/profile.event_pool, which breath's involuntary block draws
+  from, and the profile page's list of the same name).
 - edited: the panel edits in 依据变了的 (core/profile.edited_by_user).
 - invalidation: the rest of 依据变了的 — an overturned basis, a source revised, withdrawn
   or deleted (core/_invalidation.py). A basis that changed is told whatever else the entry
   asked for: neither `dont_surface`, a hold nor a cover keeps it off. What the block may
   not hand back — the body of an entry standing on a withdrawn or deleted source — is that
   block's own rule.
+- door: the pinned rules and the profile page by the door (door_note). A rule is only
+  ever one already on the timeline (`on_timeline`), so old versions never reach it. Rules
+  and the name page are not things that come due, so no clock time holds them back.
+- remind: the profile page's reminders and weighing-on-me lists (core/profile.door_note):
+  the panel, not breath.
 - muse: muse's pools (core/_muse.in_pool). Which pool counts a cover is that pool's own
   spec (`POOL_SPECS`), so covers are not a road rule here.
 - dream: dream material, both pools (core/_dream.want_pool / unclear_pool). The
@@ -102,14 +121,16 @@ built once by the caller and passed in, and a caller that already knows whether 
 is covered passes that too.
 
 Exports: SURFACE · LOOKUP · LIVE · ARCHIVED · DELETED · the road names · Verdict ·
-         state_of() · visible_for() · timeline_kind() · on_timeline()
+         state_of() · clock_moment() · waits_for_clock() · visible_for() · timeline_kind() ·
+         on_timeline()
 ========================================
 """
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from utils import parse_bool
+from utils import is_closed, parse_bool
 
 from . import _fold as _F
 from . import _holds as _H
@@ -134,7 +155,10 @@ SUPERSEDED = "superseded"
 COVERED = "covered"
 HELD = "held"
 HOLD_ENTRY = "hold_entry"
+LATER_TODAY = "later_today"
 
+PROSPECTIVE = "prospective"
+RECENT = "recent"
 REMIND = "remind"
 REVIEW = "review"
 DOOR = "door"
@@ -158,20 +182,25 @@ class Road:
     covered: bool = False           # a live cover (`_fold.is_covered`) keeps it off
     holds: frozenset = frozenset()  # the live hold levels that keep the held entry off
     hold_entry: bool = False        # a hold itself stays off: it rides with its target
+    later_today: bool = False       # a clock time later today keeps an open entry off until then
     states: frozenset = field(default_factory=lambda: frozenset({LIVE}))
 
 
 _BOTH_LEVELS = frozenset(_H.HOLD_LEVELS)
 
 ROADS: dict[str, Road] = {
+    PROSPECTIVE: Road(SURFACE, dont_surface=True, superseded=True, holds=_BOTH_LEVELS,
+                      hold_entry=True, later_today=True),
+    REVIEW: Road(SURFACE, dont_surface=True, superseded=True, holds=frozenset({"avoid"}),
+                 later_today=True),
+    RECENT: Road(SURFACE, superseded=True, later_today=True),
+    SUDDEN: Road(SURFACE, dont_surface=True, superseded=True, covered=True,
+                 holds=_BOTH_LEVELS, hold_entry=True, later_today=True),
+    EDITED: Road(SURFACE, covered=True, later_today=True),
+    INVALIDATION: Road(SURFACE, superseded=True, later_today=True),
+    DOOR: Road(SURFACE, covered=True),
     REMIND: Road(SURFACE, dont_surface=True, superseded=True, holds=_BOTH_LEVELS,
                  hold_entry=True),
-    REVIEW: Road(SURFACE, dont_surface=True, superseded=True, holds=frozenset({"avoid"})),
-    DOOR: Road(SURFACE, covered=True),
-    SUDDEN: Road(SURFACE, dont_surface=True, superseded=True, covered=True,
-                 holds=_BOTH_LEVELS, hold_entry=True),
-    EDITED: Road(SURFACE, covered=True),
-    INVALIDATION: Road(SURFACE, superseded=True),
     MUSE: Road(SURFACE),
     DREAM: Road(SURFACE, dont_surface=True, superseded=True, holds=frozenset({"avoid"}),
                 hold_entry=True),
@@ -227,6 +256,29 @@ def _faded(m: dict) -> bool:
     return parse_bool(m.get("dont_surface"), default=False) and not _superseded(m)
 
 
+# A `when` that names a clock time: the day, then a T or a space and hh:mm.
+_CLOCK_WHEN = re.compile(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}")
+
+
+def clock_moment(meta) -> datetime | None:
+    """The local moment an entry's `when` names when it carries a clock time; None for a
+    day alone, a span, a length, or anything unreadable."""
+    w = str(_meta_of(meta).get("when") or "").strip()
+    if not _CLOCK_WHEN.match(w) or ".." in w:
+        return None
+    return _w.parse_stamp(w)
+
+
+def waits_for_clock(meta, now: datetime) -> bool:
+    """Open, and its `when` names a clock time later today: the `later_today` column."""
+    m = _meta_of(meta)
+    moment = clock_moment(m)
+    if moment is None or is_closed(m):
+        return False
+    local_now = _w.to_local(now)
+    return moment.date() == local_now.date() and moment > local_now
+
+
 def visible_for(meta, scope=None, mode: str = "open", *, road: str,
                 now: datetime | None = None, holds: "_H.HoldIndex | None" = None,
                 covered: bool | None = None) -> Verdict:
@@ -235,7 +287,7 @@ def visible_for(meta, scope=None, mode: str = "open", *, road: str,
     meta     the entry's metadata, or the store bucket carrying it.
     scope / mode   5.2's read scope; only `None` / `"open"` (today's behaviour) until then.
     road     one of `ROADS`; its kind (surfacing or lookup) comes with it.
-    now      the day holds are read against (local now when omitted).
+    now      the moment holds and clock times are read against (local now when omitted).
     holds    the hold index (`_holds.hold_index`) over the store — required on a road that
              counts holds, built once by the caller.
     covered  whether the entry is covered, when the caller already knows (muse's Items
@@ -265,6 +317,8 @@ def visible_for(meta, scope=None, mode: str = "open", *, road: str,
             raise ValueError(f"road {road!r} counts holds: pass the hold index")
         if _H.is_held(m, now or _w.now(), holds) in r.holds:
             reasons.append(HELD)
+    if r.later_today and waits_for_clock(m, now or _w.now()):
+        reasons.append(LATER_TODAY)
     return Verdict(shown=not reasons, state=state, reasons=tuple(reasons))
 
 

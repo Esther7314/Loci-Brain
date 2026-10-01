@@ -40,7 +40,8 @@ import re
 
 from .. import _runtime as rt
 from core import _invalidation as _I
-from core import _when as _w          # "today" as the user lives it (local timezone)
+from core import visibility as _V      # the gate's `recent` road for 近三天
+from core import _when as _w         # "today" as the user lives it (local timezone)
 from core.profile import (_PROFILE_TAG, breath_settings, door_note, involuntary,
                           prospective, short_id)
 from ..recall.core import recall_text_and_data, _ts_of
@@ -122,7 +123,8 @@ async def build_breath() -> dict:
     plan = prospective(all_buckets, now, settings=settings)
     plan["slices_pending"] = slices.pending_count() if slices is not None else 0
 
-    mid = await recall_text_and_data(when="3d", room="", tag="", query="", max_cells=1)
+    mid = await recall_text_and_data(when="3d", room="", tag="", query="", max_cells=1,
+                                     road=_V.RECENT)
     recent = {"text": str(mid.get("card") or "") if mid.get("ok") else "",
               "items": [{"id": e["id"], "short": e["short"], "text": e["label"],
                          "date": e["date"]} for e in (mid.get("entries") or [])]}

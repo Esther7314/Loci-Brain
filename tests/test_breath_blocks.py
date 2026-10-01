@@ -30,8 +30,9 @@ import pytest
 
 from core import _invalidation as I
 from core import _when as W
+from core import visibility as V
 from core.bucket_manager import BucketManager
-from core.profile import BreathSettings, involuntary, prospective
+from core.profile import BreathSettings, due_now, involuntary, is_accessible, prospective
 from tools import _runtime as rt
 from tools.breath import awaken as A
 from tools.grow import rooms_path
@@ -157,6 +158,51 @@ def test_a_looks_like_promise_entry_is_a_question_below_the_items_at_most_two():
     lines = A._prospective_lines({**p, "slices_pending": 0})
     q = [n for n, line in enumerate(lines) if "这条像是答应过的" in line]
     assert len(q) == 2 and q[0] > 0
+
+
+# ── a clock time later today waits for its time ─────────────────────────────
+
+def at(hour: int, minute: int = 0) -> datetime:
+    return NOW.replace(hour=hour, minute=minute)
+
+
+TONIGHT = f"{day(0)}T19:00+08:00"
+
+
+def test_a_promise_for_tonight_waits_all_day_and_is_due_once_its_time_has_passed():
+    rows = [owed("t", when=TONIGHT, created_days_ago=0)]
+    assert prospective(rows, at(14))["items"] == []
+    [it] = prospective(rows, at(19, 10))["items"]
+    assert it["reason"]["days"] == 0 and it["reason"]["loud"] == "now"
+    # Still awake all day: only the roads that list it on breath wait.
+    assert is_accessible(rows[0]["metadata"], at(14))
+
+
+def test_a_day_alone_counts_from_the_morning_and_a_later_day_is_unchanged():
+    morning = at(8)
+    p = prospective([owed("d", when=day(0)), owed("f", when=f"{day(2)}T19:00+08:00")], morning)
+    assert {i["id"][:1]: i["reason"]["days"] for i in p["items"]} == {"d": 0, "f": 2}
+
+
+def test_every_breath_road_waits_and_the_lookup_roads_do_not():
+    meta = owed("t", when=TONIGHT)["metadata"]
+    idx = V._H.hold_index([])
+    for road in (V.PROSPECTIVE, V.REVIEW, V.RECENT, V.SUDDEN, V.EDITED, V.INVALIDATION):
+        verdict = V.visible_for(meta, road=road, now=at(14), holds=idx)
+        assert V.LATER_TODAY in verdict.reasons, road
+        assert V.LATER_TODAY not in V.visible_for(meta, road=road, now=at(19), holds=idx).reasons
+    for road in (V.LIST, V.READ, V.LETTER):
+        assert V.visible_for(meta, road=road, now=at(14))
+    # Closed, there is nothing to wait for.
+    assert not V.waits_for_clock({**meta, "status": "resolved"}, at(14))
+
+
+def test_due_now_is_the_moment_the_wait_ends():
+    meta = owed("t", when=TONIGHT)["metadata"]
+    assert not due_now(meta, at(14))
+    assert due_now(meta, at(19)) and due_now(meta, at(22))
+    assert not due_now({**meta, "status": "resolved"}, at(20))
+    assert not due_now(owed("d", when=day(0))["metadata"], at(20))   # no clock to come due
 
 
 # ── the review question, asked once (with a store: the stamp reaches disk) ──

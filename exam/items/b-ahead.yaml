@@ -42,10 +42,11 @@
       at: "2026-10-01T10:00:00+08:00"
       room: EVENT/SELF
       text: "答应今晚回来告诉她面试结果。"
-      when: "2026-10-01"
+      # 今晚, as core/_dates resolves it: a part of the day with no hour is 19:00.
+      when: "2026-10-01T19:00+08:00"
       fields: {direction_of_fit: telic, weight: 0.8}
   steps:
-    - check: {segment: store, desc: "the time is on disk", field: when, id: b20001000000, equals: "2026-10-01"}
+    - check: {segment: store, desc: "the time is on disk", field: when, id: b20001000000, equals: "2026-10-01T19:00+08:00"}
     - at: "2026-10-01T14:00:00+08:00"
     - call: breath
       as: afternoon
