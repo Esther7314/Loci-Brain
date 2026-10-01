@@ -109,5 +109,38 @@
 
 - id: C4
   title: "an event-dated exception is lifted only after the model confirms"
-  interface: none
-  needs: "cards and model confirmation. A hold can already carry the event as its cue (4.2); nothing lifts on it yet"
+  start: "2026-10-06T10:00:00+08:00"
+  setup:
+    - id: c40001000000
+      at: "2026-09-01T10:00:00+08:00"
+      room: EVENT/SELF
+      text: "周末找机会带她出去玩一趟。"
+      fields: {direction_of_fit: telic, weight: 0.6, summary: "周末带她出去玩", bound: [AI]}
+  steps:
+    # 「考完之前别跟我说出去玩的事」: a hold that ends on an event, carried as its cue.
+    - call: grow
+      args:
+        kind: event
+        exception_of: c40001000000
+        hold: defer
+        cue: {condition: "考完", phrasings: ["考完", "考完了"]}
+        items:
+          - {room: EVENT/SELF, text: "她说考完之前别跟她说出去玩的事。", v: 0.4, a: 0.4}
+      capture: {hold: "📝([0-9a-f]{12})", hold6: "📝([0-9a-f]{6})"}
+    - check: {segment: store, desc: "the hold waits on the event", field: cue, id: $hold, contains: 考完}
+    # Path A: not yet.
+    - cue: {text: "还没考完，好累", window: a, turn: t1}
+      as: path_a
+    - check: {segment: think, desc: "path A: a card about the hold", output: path_a, contains: $hold6}
+    - check: {segment: think, desc: "path A: the card leaves lifting to the model", output: path_a, contains: 撤条子}
+    - check: {segment: store, desc: "path A: code did not lift the hold", field: status, id: $hold, absent: true}
+    # Path B: it happened.
+    - cue: {text: "考完了，终于解放", window: b, turn: t1}
+      as: path_b
+    - check: {segment: think, desc: "path B: a card about the hold", output: path_b, contains: $hold6}
+    - check: {segment: store, desc: "path B: code did not lift the hold either", field: status, id: $hold, absent: true}
+    - check: {segment: think, desc: "the held agreement itself is not carded", output: path_b, lacks: "(c40001)"}
+    # The model read it and confirms: only now is it lifted.
+    - call: trace
+      args: {bucket_id: $hold, status: resolved}
+    - check: {segment: store, desc: "lifted by the model's confirmation", field: status, id: $hold, equals: resolved}

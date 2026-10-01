@@ -19,10 +19,12 @@ WHAT ONE ITEM DOES
        its request: `host:` its credential, `scope:` its Loci-Scope, `turn:` / `write_key:`
        its Loci-Turn; an item's `hosts:` is the deployment's hosts table), wait
        (`wait: seconds`, for background work such as the backfill), take snapshots, run
-       checks. Two host routes that are not tools run in this process against the same
+       checks. Host routes that are not tools run in this process against the same
        library, as a second entry point does: `source_change:` (what POST
-       /api/v2/source/change runs) and `changes:` (GET /api/v2/changes). `concurrent:`
-       runs tool calls at once with writer processes beside them.
+       /api/v2/source/change runs), `changes:` (GET /api/v2/changes), and the strong
+       reminder's `cue:` / `cue_delivered:` / `cue_dropped:` (POST /api/v2/cue and its
+       two acknowledgements). `concurrent:` runs tool calls at once with writer
+       processes beside them. An item's `names:` is written as the names table.
     5. Each check records pass / fail and one line of evidence read back from disk or
        from the tool's own output.
 
@@ -372,6 +374,29 @@ class Run:
                    json.dumps({"http": status, **out}, ensure_ascii=False))
         await asyncio.sleep(SETTLE_SECONDS + 1.0)   # the server notices changed files
 
+    def _request(self, step: dict):
+        """The request a host's call carries, resolved the way the hook guard resolves it
+        (core/scope.RequestScope): `host:` its credential, `scope:` its Loci-Scope."""
+        from core import scope as _scope
+        host = self._host(str(self.sub(step.get("host") or "")))
+        header = None
+        if "scope" in step:
+            scope = self.sub(step["scope"])
+            header = scope if isinstance(scope, str) else json.dumps(scope, ensure_ascii=False)
+        return _scope.RequestScope.resolve(host, header)
+
+    async def cue(self, step: dict) -> None:
+        """What POST /api/v2/cue and its two acknowledgements run (core/_cue.handle_cue /
+        handle_delivered / handle_dropped), in this process, on the same library: the reply
+        as JSON text under `as`."""
+        from core import _cue
+        kind = next(k for k in ("cue", "cue_delivered", "cue_dropped") if k in step)
+        handler = {"cue": _cue.handle_cue, "cue_delivered": _cue.handle_delivered,
+                   "cue_dropped": _cue.handle_dropped}[kind]
+        status, out = await handler(self._store(), self.sub(step[kind]), self._request(step))
+        self._keep(step, step.get("as") or kind,
+                   json.dumps({"http": status, **out}, ensure_ascii=False))
+
     async def changes(self, step: dict) -> None:
         """What GET /api/v2/changes runs (core/_ledger.changes_since): JSON text."""
         from core import _ledger
@@ -696,6 +721,12 @@ async def library(item: dict, keep: bool, tag: str = ""):
               "LOCI_EMBEDDING_API_KEY", "GEMINI_API_KEY"):
         env.pop(k, None)
     saved_env = {k: os.environ.get(k) for k in ("LOCI_BUCKETS_DIR", "LOCI_CONFIG_PATH")}
+    if item.get("names"):
+        # The names table, where Loci looks for it in the data volume.
+        (lib / "aliases.yaml").write_text(
+            yaml.safe_dump(item["names"], allow_unicode=True, sort_keys=False), encoding="utf-8")
+    env.pop("LOCI_ALIAS_TABLE", None)
+    saved_env["LOCI_ALIAS_TABLE"] = os.environ.pop("LOCI_ALIAS_TABLE", None)
     try:
         os.environ["LOCI_BUCKETS_DIR"] = str(lib)
         os.environ["LOCI_CONFIG_PATH"] = str(config_file)
@@ -751,6 +782,8 @@ async def run_item(item: dict, keep: bool) -> ItemResult:
                                 await run.source_change(step)
                             elif "changes" in step:
                                 await run.changes(step)
+                            elif {"cue", "cue_delivered", "cue_dropped"} & set(step):
+                                await run.cue(step)
                             elif "concurrent" in step:
                                 await run.concurrent(step)
                             elif "wait" in step:
@@ -796,6 +829,11 @@ def seams() -> tuple[str, ...]:
             "/api/v2/changes run (core/_source_change.handle, core/_ledger.changes_since) in "
             "the runner's process on the same library, a second entry point beside the "
             "server; the HTTP layer and the hook guard are tests/test_source_change.py's",
+            "cue:, cue_delivered: and cue_dropped: steps run what POST /api/v2/cue and its two "
+            "acknowledgements run (core/_cue.handle_*) the same way, the host credential and "
+            "Loci-Scope resolved as the hook guard resolves them; the HTTP layer is "
+            "tests/test_cue.py's",
+            "an item's names: is written to the library as aliases.yaml before setup",
             "an item's dreams: and dehydration_cache: are written in setup through Loci's own "
             "_dream.save_record and Dehydrator cache")
 

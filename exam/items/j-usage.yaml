@@ -41,7 +41,7 @@
   steps:
     - check: {segment: from, desc: "where the material came from: in from", field: prov, id: a20002000000, contains: a20001000000}
     - call: trace
-      args: {bucket_id: a20001000000, cue: {condition: "下次一起做甜点的时候"}}
+      args: {bucket_id: a20001000000, cue: {condition: "下次一起做甜点的时候", phrasings: ["做甜点"]}}
     - check: {segment: signpost, desc: "why the signpost stays: on the signpost itself", field: cue, id: a20001000000, contains: "下次一起做甜点"}
     - snapshot: a20001000000
       as: before
@@ -50,6 +50,13 @@
       args: {query: 坚果}
     - check: {segment: turn, desc: "why this turn picked it is not written back to the memory", unchanged: a20001000000, since: before, keys: [last_active, activation_count, tags, meaning, why_remembered, invalidation, last_asked, cue]}
     - check: {segment: turn, desc: "it goes with the turn: the road it went out on, in the usage log", usage: {kind: shown, id: a20001000000, road: breath.}}
+    # The card half: a message meets the signpost.
+    - cue: {text: "周末想一起做甜点", window: w1, turn: t1}
+      as: card
+    - check: {segment: turn, desc: "why this turn picked it: on the card, what matched and which entry", all_of: [{output: card, contains: "对上「做甜点」"}, {output: card, contains: "(a20001)"}]}
+    - cue_delivered: {window: w1, turn: t1}
+    - check: {segment: turn, desc: "the card's reason is not written back to the memory", unchanged: a20001000000, since: before, keys: [last_active, activation_count, tags, meaning, why_remembered, invalidation, last_asked, cue]}
+    - check: {segment: turn, desc: "the card went out on its own road, in the usage log", usage: {kind: shown, id: a20001000000, road: cue.}}
 
 - id: J3
   title: "changes since number N"

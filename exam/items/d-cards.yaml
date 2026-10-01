@@ -1,21 +1,152 @@
-# Paper section 丁: how cards count. 1.4.0 has no cards and no idea of a window.
+# Paper section 丁: how cards count. A card is handed by POST /api/v2/cue (the `cue:`
+# step), counts as delivered only when the host says it reached the model's input
+# (`cue_delivered:`), is not handed to that window again at the same version, and is
+# handed again when the entry changes or the host strikes it (`cue_dropped:`).
+# The agreement below waits on an event and carries the ways it might be said (the
+# backfill writes phrasings; here they are written in setup).
+
 - id: D1
   title: "once per window"
-  interface: none
-  needs: "cards; window id from the host"
+  start: "2026-10-01T10:00:00+08:00"
+  setup:
+    - id: d10001000000
+      at: "2026-09-28T10:00:00+08:00"
+      room: EVENT/SELF
+      text: "考完试一起去吃那家甜品。"
+      fields: {direction_of_fit: telic, bound: [AI],
+               cue: {condition: "考完试", phrasings: ["考完", "甜品店"]}}
+  steps:
+    - cue: {text: "路过那家甜品店了", window: w1, turn: t1}
+      as: first
+    - check: {segment: input, desc: "window 1, first mention: a card", output: first, contains: d10001}
+    - cue_delivered: {window: w1, turn: t1}
+      as: loaded
+    - check: {segment: input, desc: "the host says it reached the model", output: loaded, contains: '"delivered": ["d10001'}
+    - cue: {text: "好想去那家甜品店", window: w1, turn: t2}
+      as: second
+    - check: {segment: input, desc: "window 1, second mention: no card", output: second, lacks: d10001}
+    - cue: {text: "甜品店今天开门吗", window: w2, turn: t1}
+      as: other
+    - check: {segment: input, desc: "window 2: a card again", output: other, contains: d10001}
+
 - id: D2
   title: "a changed entry is carded again in the same window"
-  interface: none
-  needs: "cards; entry version"
+  start: "2026-10-01T10:00:00+08:00"
+  hosts:
+    legacy: {token: t-life, scope_mode: open, may_restore: true}
+  setup:
+    - id: d20001000000
+      at: "2026-09-28T10:00:00+08:00"
+      room: EVENT/SELF
+      text: "考完试一起去吃那家甜品。"
+      fields: {direction_of_fit: telic, bound: [AI],
+               cue: {condition: "考完试", phrasings: ["甜品店"]}}
+    - id: d20002000000
+      at: "2026-09-28T11:00:00+08:00"
+      room: EVENT/WORLD
+      text: "小周说下个月要搬去海边住。"
+      sources: [{system: lento, instance: home, container: "private:U", id: m_20260928_0100}]
+      fields: {cue: {condition: "小周搬家", phrasings: ["搬家"]}}
+  steps:
+    # The hold is lifted: the entry's version moved.
+    - cue: {text: "甜品店", window: w1, turn: t1}
+      as: before
+    - check: {segment: input, desc: "a card", output: before, contains: d20001}
+    - cue_delivered: {window: w1, turn: t1}
+    - call: grow
+      args:
+        kind: event
+        exception_of: d20001000000
+        hold: defer
+        items:
+          - {room: EVENT/SELF, text: "先别提甜品的事。", v: 0.4, a: 0.3}
+      capture: {hold: "📝([0-9a-f]{12})"}
+    - cue: {text: "甜品店", window: w1, turn: t2}
+      as: held
+    - check: {segment: input, desc: "held: no card", output: held, lacks: d20001}
+    - call: trace
+      args: {bucket_id: $hold, status: resolved}
+    - cue: {text: "甜品店", window: w1, turn: t3}
+      as: lifted
+    - check: {segment: input, desc: "the hold lifted: carded again in the same window", output: lifted, contains: d20001}
+    # The source is corrected: a new revision of the material it stands on.
+    - cue: {text: "小周要搬家了", window: w1, turn: t4}
+      as: src_before
+    - check: {segment: input, desc: "a card", output: src_before, contains: d20002}
+    - cue_delivered: {window: w1, turn: t4}
+    - cue: {text: "搬家的事", window: w1, turn: t5}
+      as: src_same
+    - check: {segment: input, desc: "same version: no card", output: src_same, lacks: d20002}
+    - source_change: {change_id: c-d2-1, host_seq: 1, change: revised, revision: r2,
+                      source: "lento:home/private:U#m_20260928_0100"}
+      host: t-life
+    - cue: {text: "搬家的事", window: w1, turn: t6}
+      as: src_after
+    - check: {segment: input, desc: "the source corrected: carded again in the same window", output: src_after, contains: d20002}
+    - check: {segment: input, desc: "and the card says the source has a new version", output: src_after, contains: 来源出了新版本}
+
 - id: D3
   title: "a card counts only once it reached the model input"
-  interface: none
-  needs: "cards; the host reports 'delivered'"
+  start: "2026-10-01T10:00:00+08:00"
+  setup:
+    - id: d30001000000
+      at: "2026-09-28T10:00:00+08:00"
+      room: EVENT/SELF
+      text: "考完试一起去吃那家甜品。"
+      fields: {direction_of_fit: telic, bound: [AI],
+               cue: {condition: "考完试", phrasings: ["甜品店"]}}
+  steps:
+    # The card is made, but the turn breaks before the host hands it to the model: the
+    # host never says delivered.
+    - cue: {text: "甜品店", window: w1, turn: t1}
+      as: lost
+    - check: {segment: input, desc: "a card was made", output: lost, contains: d30001}
+    - cue: {text: "那家甜品店", window: w1, turn: t2}
+      as: retry
+    - check: {segment: input, desc: "not delivered: handed again", output: retry, contains: d30001}
+    - cue_delivered: {window: w1, turn: t2}
+    - cue: {text: "甜品店", window: w1, turn: t3}
+      as: after
+    - check: {segment: input, desc: "delivered now: not again", output: after, lacks: d30001}
+
 - id: D4
   title: "a card does not change the entry"
-  interface: none
-  needs: "cards"
+  start: "2026-10-01T10:00:00+08:00"
+  setup:
+    - id: d40001000000
+      at: "2026-09-28T10:00:00+08:00"
+      room: EVENT/SELF
+      text: "考完试一起去吃那家甜品。"
+      fields: {direction_of_fit: telic, bound: [AI],
+               cue: {condition: "考完试", phrasings: ["考完"]}}
+  steps:
+    - snapshot: d40001000000
+      as: before
+    - cue: {text: "终于考完了！！", window: w1, turn: t1}
+      as: card
+    - check: {segment: input, desc: "a card", output: card, contains: d40001}
+    - cue_delivered: {window: w1, turn: t1}
+    - check: {segment: store, desc: "no field moved", unchanged: d40001000000, since: before, keys: [status, when, bound, cue, weight, last_active, activation_count, invalidation, last_asked, tags]}
+    - check: {segment: store, desc: "the body is as it was", body_contains: "考完试一起去吃那家甜品。", id: d40001000000}
+
 - id: D5
   title: "the card says why this one, and that reason is not written back"
-  interface: none
-  needs: "cards; the turn input record"
+  start: "2026-10-01T10:00:00+08:00"
+  setup:
+    - id: d50001000000
+      at: "2026-09-28T10:00:00+08:00"
+      room: EVENT/SELF
+      text: "考完试一起去吃那家甜品。"
+      fields: {direction_of_fit: telic, bound: [AI],
+               cue: {condition: "考完试", phrasings: ["甜品店"]}}
+  steps:
+    - snapshot: d50001000000
+      as: before
+    - cue: {text: "楼下新开了一家甜品店", window: w1, turn: t1}
+      as: card
+    - check: {segment: input, desc: "the card names the word that matched", output: card, contains: "对上「甜品店」"}
+    - check: {segment: input, desc: "and which entry", output: card, contains: "(d50001)"}
+    - check: {segment: input, desc: "the reason travels with the turn's record", output: card, contains: '"why": "甜品店"'}
+    - check: {segment: store, desc: "not written back into the fields", unchanged: d50001000000, since: before, keys: [tags, meaning, why_remembered, cue, last_active, activation_count, last_asked]}
+    - check: {segment: store, desc: "not written back into the body", body_lacks: "对上", id: d50001000000}
+    - check: {segment: use, desc: "recorded as handed out, on the card's own road", usage: {kind: shown, id: d50001000000, road: cue.memory}}

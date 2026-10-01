@@ -51,7 +51,7 @@ Exports: door_note(all_buckets, now) / event_pool(all_buckets, now=None) /
          due_day(meta, today) / awake_reasons(meta, now, …) / is_accessible(meta, now, …) /
          is_open_promise(meta) / written_days_ago(meta, today) / due_now(meta, now) /
          prospective(all_buckets, now, …) / involuntary(all_buckets, now, …) /
-         entry_label(meta, content) / short_id(bucket_id)
+         entry_label(meta, content) / short_id(bucket_id) / owed_names(bound)
 ========================================
 """
 
@@ -418,6 +418,31 @@ def short_id(bucket_id: str) -> str:
     return bucket_id[:6] if re.fullmatch(r"[0-9a-f]{12}", bucket_id) else bucket_id
 
 
+# What `bound` holds for the AI when nothing better is known: the placeholder, and the
+# first-person words a bound list may still carry from before they were normalised
+# (tools/_subjects.normalize_bound turns 我 / 自己 into the AI's name).
+_AI_PLACEHOLDERS = frozenset({"AI", "我", "自己"})
+
+
+def owed_names(bound) -> str:
+    """Who owes it, as the AI reads it: a bound name that denotes the AI (the placeholder,
+    the configured AI name, or a spelling the names table files under it) is 「我」, every
+    other name as stored; 「我、小林」. "" when nobody is bound. Text only: the stored names
+    and every JSON skin keep the names as they are."""
+    from tools._subjects import canonical  # lazy: tools imports core
+    ai = get_ai_name()
+    mine = set(_AI_PLACEHOLDERS) | {ai, canonical(ai) or ai}
+    out: list[str] = []
+    for raw in bound or []:
+        n = str(raw or "").strip()
+        if not n:
+            continue
+        shown = "我" if (n in mine or (canonical(n) or n) in mine) else n
+        if shown not in out:
+            out.append(shown)
+    return "、".join(out)
+
+
 def entry_label(meta: dict, content: str) -> str:
     """What a line shows of an entry: its summary, else its name without the timestamp,
     else the start of its body — all written when the entry went in."""
@@ -552,9 +577,9 @@ def awake_reasons(meta: dict, now: datetime, *, settings: BreathSettings | None 
     from decay: asleep is "not yet its time", not "forgotten".
 
     `delivered_at`: the card ledger's lookup, `bucket_id -> datetime | None` (a callable
-    or a mapping) — when the strong-reminder card for this entry last reached the model.
-    The ledger is stage 5.5's; until it exists nothing passes one and condition 4 never
-    holds.
+    or a mapping) — when a strong-reminder card for this entry last reached the model, as
+    the host confirmed (core/_cue_ledger.CueLedger.delivered_at). Without one, condition 4
+    never holds.
     """
     s = settings or BreathSettings()
     if _V.state_of(meta) != _V.LIVE or str(meta.get("superseded_by") or "").strip():
@@ -594,9 +619,8 @@ def due_now(meta: dict, now: datetime) -> bool:
     """Open, current, and the clock time its `when` names today has come — the moment the
     gate stops holding it back (`later_today`, core/visibility.py).
 
-    Seam for stage 5.5: in a window already open when that moment passes, breath has been
-    read; the entry reaches the model as a "time is up" card from the cue endpoint, with
-    the owner's next message."""
+    In a window already open when that moment passes, breath has been read; the entry
+    reaches the model as a "time is up" card with the owner's next message (core/_cue.py)."""
     moment = _V.clock_moment(meta)
     if (moment is None or is_closed(meta) or _V.state_of(meta) != _V.LIVE
             or str(meta.get("superseded_by") or "").strip()):

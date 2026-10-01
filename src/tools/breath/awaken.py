@@ -49,7 +49,7 @@ from core import _usage
 from core import visibility as _V      # the gate's `recent` road for 近三天
 from core import _when as _w         # "today" as the user lives it (local timezone)
 from core.profile import (_PROFILE_TAG, breath_settings, door_note, involuntary,
-                          prospective, short_id)
+                          owed_names, prospective, short_id)
 from ..recall.core import recall_text_and_data, _ts_of
 
 # How many principle lines fit on the note by the door.
@@ -128,7 +128,11 @@ async def build_breath() -> dict:
 
     door = door_note(all_buckets, now, scope=scope)  # <- the name page, the rules, the timeline entries
 
-    plan = prospective(all_buckets, now, settings=settings, scope=scope)
+    # A card that reached the model within `cue_days` keeps its entry awake (the card
+    # ledger, core/_cue_ledger.py).
+    cues = getattr(mgr, "cues", None)
+    plan = prospective(all_buckets, now, settings=settings, scope=scope,
+                       delivered_at=cues.delivered_at if cues is not None else None)
     plan["slices_pending"] = await _slices.pending_seen()
 
     mid = await recall_text_and_data(when="3d", room="", tag="", query="", max_cells=1,
@@ -157,8 +161,9 @@ async def build_breath() -> dict:
 # ── the text skin ───────────────────────────────────────────────────────────
 
 def _owed(item: dict) -> str:
-    names = [str(n) for n in item.get("bound") or [] if str(n).strip()]
-    return f"（{'、'.join(names)} 欠着）" if names else ""
+    """「（我、小林欠着）」: the same words the strong-reminder cards use (owed_names)."""
+    names = owed_names(item.get("bound"))
+    return f"（{names}欠着）" if names else ""
 
 
 # The wording of each loudness. Which loudness a date has is the contract source's

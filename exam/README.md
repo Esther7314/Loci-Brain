@@ -58,10 +58,16 @@ follow `superseded_by` to the latest version) · `check` · `source_change: {bod
 library — a second entry point, a declared seam; the reply is JSON text) · `changes:
 {since, limit?}` (+ `host:`, `as`, `capture`; what GET /api/v2/changes runs) ·
 `concurrent: {calls: [call steps], processes: N, each: M, text}` (the calls at once, with
-N writer processes creating M entries each through BucketManager). `$var` takes a
+N writer processes creating M entries each through BucketManager) · `cue: {text, window,
+turn}` (+ `host:`, `scope:`, `as`, `capture`; what POST /api/v2/cue runs, the same kind of
+declared seam as `source_change:`; the reply is JSON text holding the cards) ·
+`cue_delivered: {window, turn | cards}` and `cue_dropped: {window, cards | turns | all}`
+(the host's two acknowledgements: a card reached the model's input / left it). `$var` takes a
 captured value; `${var:6}` its first six characters, the handle tools print.
 
-Setup extras: an entry's `sink: true` sinks it after its fields (it needs a summary); an
+Setup extras: an item's `names:` is the names table ({name: {aliases, instance_of,
+present_in, member_of}}), written as the library's aliases.yaml; an entry's `sink: true`
+sinks it after its fields (it needs a summary); an
 item's `dreams: [{id, text, ingredients}]` are saved as woven dream records and its
 `dehydration_cache: [{text, summary}]` cached by Loci's own dehydrator.
 

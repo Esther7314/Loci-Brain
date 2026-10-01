@@ -104,8 +104,10 @@ def test_the_two_kinds_of_reason_and_who_owes_it():
     assert reasons["f"] == {"kind": "undated", "held": 40, "ask": "still_counts"}
     text = "\n".join(A._prospective_lines({**p, "slices_pending": 0}))
     for words in ("过了 3 天", "就是今天", "还有 2 天", "还有 20 天", "没定时间", "定个时间或条件",
-                  "挂了 40 天——还算数吗", "AI 欠着"):
+                  "挂了 40 天——还算数吗", "（我欠着）"):
         assert words in text, words
+    assert "AI欠着" not in text, "the AI reads its own debt as 我"
+    assert all(i["bound"] == ["AI"] for i in p["items"]), "the object keeps the stored names"
 
 
 def test_off_the_list_a_cue_waiting_promise_a_light_wish_and_anything_held():

@@ -47,6 +47,7 @@ The roads
 | muse            | surface |              |             |         |              |            |             |
 | dream           | surface | ✔            | ✔           |         | avoid        | ✔          |             |
 | dream_handout   | surface | ✔            |             |         | avoid        |            |             |
+| cue             | surface | ✔            | ✔           |         | defer, avoid |            |             |
 | list            | lookup  |              | ✔           |         |              |            |             |
 | read            | lookup  | (any state shown, with its mark)                                              |
 
@@ -68,7 +69,7 @@ morning, and a later day is simply "N days left". Every road that lists an entry
 counts it; the entry is still awake (core/profile.is_accessible), and the lookup roads find
 it as always. In a window already open when the time comes, the entry reaches the model
 through the strong-reminder card with the owner's next message, not through breath
-(core/profile.due_now; stage 5.5).
+(core/profile.due_now, core/_cue.py).
 
 - prospective: breath's 惦记的事 (core/profile.prospective: its dated and undated lines
   and the 「像是答应过的」 questions).
@@ -97,6 +98,12 @@ through the strong-reminder card with the owner's next message, not through brea
   undigested pool's cover rule is muse's dream spec.
 - dream_handout: each ingredient a woven dream recorded, when the dream is handed out
   (core/_dream.withheld_ingredients). One that may not be seen withholds the whole dream.
+- cue: the strong-reminder cards and name cards that ride with the owner's message
+  (core/_cue.py). A hold itself may be carded — one waiting on an event is lifted only by
+  the model, after a card — while what a live hold covers is not. A clock time later today
+  does not hold a card back: the owner's own words brought the entry up, which is not
+  breath's unprompted screen. A memory in 依据变了的 is carded on the `invalidation` road,
+  by id and status.
 - list: what recall lists and counts — search, time browsing, a period's members, the
   earliest-entry line in breath (`on_timeline`).
 - read: recall's read by id — the entry itself and every entry it links to (sources,
@@ -110,7 +117,6 @@ leaks (`dont_surface` on 「忽然想起」 and on the undigested dream pool).
 Callers still to come, and the road each will ask:
 - stage 6's write tools return memories (回望 / 场景常来): a return is surfacing — they
   will ask with a road of their own added to this table.
-- 5.5's strong-reminder cards and name cards: surfacing on breath, same.
 
 ------------------------------------------------------------
 Read scope
@@ -180,6 +186,7 @@ INVALIDATION = "invalidation"
 MUSE = "muse"
 DREAM = "dream"
 DREAM_HANDOUT = "dream_handout"
+CUE = "cue"
 LIST = "list"
 READ = "read"
 
@@ -216,6 +223,7 @@ ROADS: dict[str, Road] = {
     DREAM: Road(SURFACE, dont_surface=True, superseded=True, holds=frozenset({"avoid"}),
                 hold_entry=True),
     DREAM_HANDOUT: Road(SURFACE, dont_surface=True, holds=frozenset({"avoid"})),
+    CUE: Road(SURFACE, dont_surface=True, superseded=True, holds=_BOTH_LEVELS),
     LIST: Road(LOOKUP, superseded=True),
     READ: Road(LOOKUP, states=_ALL_STATES),
 }

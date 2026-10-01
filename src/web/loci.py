@@ -34,7 +34,7 @@ produces data; all rendering lives in frontend/loci.html.
                                          "was merely touched"; only what the host's credential
                                          reaches (hook key; core/_ledger.py)
 
-🔴 THE WRITE SURFACE — nine POST routes, and every one of them writes something.
+🔴 THE WRITE SURFACE — twelve POST routes, and every one of them writes something.
 
     POST /api/loci/similar/action     -> a human verdict on a suspected duplicate: keep
                                          both, or sink one (trace delete=True — a soft
@@ -53,6 +53,16 @@ produces data; all rendering lives in frontend/loci.html.
                                          source registry, the block on what stood on it, and
                                          for withdrawn / deleted the clearing of every place
                                          its text reached (host credential; core/_source_change.py)
+    POST /api/v2/cue                  -> the owner's message as it arrives ({text, window,
+                                         turn}): at most three cards to paste after it. Writes
+                                         the card ledger (the window's opening, the offer) and
+                                         the usage log (hook key; core/_cue.py)
+    POST /api/v2/cue/delivered        -> the host's word that cards reached the model's input
+                                         ({window, turn} / {window, cards}); only then are
+                                         they not handed to that window again (hook key)
+    POST /api/v2/cue/dropped          -> the host's word that cards left the input ({window,
+                                         cards} / {window, turns} / {window, all: true}); they
+                                         may be handed again (hook key)
 
 ⚠️ This header used to say the file was "read-only, with a single write endpoint", and
    listed two of the seven. That was true when it was written and then five routes were
@@ -2497,6 +2507,48 @@ def register(mcp) -> None:
             logger.warning(f"[loci] source change failed: {e}")
             return JSONResponse({"error": str(e)}, status_code=500)
         return JSONResponse(out, status_code=status)
+
+    # ---------------------------------------------------------
+    # The strong reminder: cards with the owner's message, and the host's word on what
+    # reached the model (core/_cue.py, core/_cue_ledger.py)
+    # ---------------------------------------------------------
+    async def _cue_route(request: Request, handler) -> Response:
+        from starlette.responses import JSONResponse
+        try:
+            body = await sh._read_json_object(request)
+        except (ValueError, json.JSONDecodeError) as e:
+            return JSONResponse({"error": f"body: {e}"}, status_code=400)
+        try:
+            status, out = await handler(sh.bucket_mgr, body, _request_of(request))
+        except Exception as e:
+            logger.warning(f"[loci] cue failed: {e}")
+            return JSONResponse({"error": str(e)}, status_code=500)
+        return JSONResponse(out, status_code=status)
+
+    @mcp.custom_route("/api/v2/cue", methods=["POST"])
+    async def api_v2_cue(request: Request) -> Response:
+        """{text, window, turn} -> {window, turn, cards: [{card, kind, id, short, why,
+        text}], text, scope}. `text` is the cards to paste after the owner's message, one
+        line each; `card` is what the host confirms or strikes. Nothing counts as delivered
+        until the host says so. A refused request gets its refusal, as every read does."""
+        from core import _cue
+        return await _cue_route(request, _cue.handle_cue)
+
+    @mcp.custom_route("/api/v2/cue/delivered", methods=["POST"])
+    async def api_v2_cue_delivered(request: Request) -> Response:
+        """{window, turn} (every card that turn was offered) and/or {window, cards: [card]}
+        -> {window, delivered, unknown}. A card the window was never offered is unknown and
+        not recorded."""
+        from core import _cue
+        return await _cue_route(request, _cue.handle_delivered)
+
+    @mcp.custom_route("/api/v2/cue/dropped", methods=["POST"])
+    async def api_v2_cue_dropped(request: Request) -> Response:
+        """{window, cards: [card]} / {window, turns: [turn]} / {window, all: true} ->
+        {window, dropped, cleared}. `all` also forgets what the window's breath listed in
+        依据变了的 when it opened."""
+        from core import _cue
+        return await _cue_route(request, _cue.handle_dropped)
 
     @mcp.custom_route("/api/v2/changes", methods=["GET"])
     async def api_v2_changes(request: Request) -> Response:

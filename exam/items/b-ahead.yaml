@@ -47,11 +47,30 @@
       fields: {direction_of_fit: telic, weight: 0.8}
   steps:
     - check: {segment: store, desc: "the time is on disk", field: when, id: b20001000000, equals: "2026-10-01T19:00+08:00"}
+    # A window already open in the morning (it asked for cards with its first message).
+    - cue: {text: "早上好", window: day, turn: t1}
     - at: "2026-10-01T14:00:00+08:00"
     - call: breath
       as: afternoon
     - check: {segment: think, desc: "14:00: awake but not in breath yet", output: afternoon, lacks: b20001}
+    - cue: {text: "下午好", window: day, turn: t2}
+      as: afternoon_card
+    - check: {segment: input, desc: "14:00: no card in the open window either", output: afternoon_card, lacks: b20001}
     - at: "2026-10-01T19:10:00+08:00"
+    # The window open since the morning: the next message brings it, whatever it says.
+    - cue: {text: "回来了", window: day, turn: t3}
+      as: due_card
+    - check: {segment: input, desc: "19:10, the open window: a time-is-up card with the next message", output: due_card, contains: b20001}
+    - check: {segment: input, desc: "and it says the time has come", output: due_card, contains: 【提醒】}
+    - cue_delivered: {window: day, turn: t3}
+    - cue: {text: "嗯嗯", window: day, turn: t4}
+      as: due_again
+    - check: {segment: input, desc: "delivered is not done, and not sent twice to the window", output: due_again, lacks: b20001}
+    - check: {segment: store, desc: "delivered is not done: the promise is still open", field: status, id: b20001000000, absent: true}
+    # A window opened now reads it in breath, not as a card.
+    - cue: {text: "回来了", window: night, turn: t1}
+      as: new_window
+    - check: {segment: input, desc: "a new window: no card (its breath lists it)", output: new_window, lacks: b20001}
     - call: breath
       as: evening
     - check: {segment: think, desc: "19:10: in breath with a reason", output: evening, section: 惦记的事, contains: b20001}
@@ -65,8 +84,32 @@
 
 - id: B3
   title: "rescheduling in the same window sends the card again"
-  interface: none
-  needs: "cards (strong reminder), a version number per entry, a window id from the host"
+  start: "2026-10-01T10:00:00+08:00"
+  setup:
+    - id: b30001000000
+      at: "2026-10-01T10:00:00+08:00"
+      room: EVENT/SELF
+      text: "答应今晚回来告诉她面试结果。"
+      when: "2026-10-01T19:00+08:00"
+      fields: {direction_of_fit: telic, weight: 0.8, bound: [AI],
+               cue: {condition: "面试结果出来", phrasings: ["面试"]}}
+  steps:
+    - at: "2026-10-01T10:30:00+08:00"
+    - cue: {text: "面试是今天下午", window: w1, turn: t1}
+      as: first
+    - check: {segment: input, desc: "before the change: a card", output: first, contains: b30001}
+    - cue_delivered: {window: w1, turn: t1}
+    - snapshot: b30001000000
+      as: before
+    # 「今晚我有事，明天中午再说吧」: the model moves the day (trace takes a day for a want).
+    - call: trace
+      args: {bucket_id: b30001000000, when: "2026-10-02"}
+    - check: {segment: store, desc: "the time is tomorrow", field: when, id: b30001000000, equals: "2026-10-02"}
+    - check: {segment: store, desc: "still promised and open", unchanged: b30001000000, since: before, keys: [bound, status, direction_of_fit]}
+    - cue: {text: "面试的事明天说", window: w1, turn: t2}
+      as: second
+    - check: {segment: input, desc: "the version moved: the same window gets the card again", output: second, contains: b30001}
+    - check: {segment: input, desc: "with the new day on it", output: second, contains: "时间 10-02"}
 
 - id: B5
   title: "'never mind, not doing it' really closes it"
@@ -90,8 +133,23 @@
 
 - id: B6
   title: "a negated mention sends a card but changes nothing"
-  interface: none
-  needs: "cards (strong reminder) on message intake; event-waited ahead items with trigger words"
+  start: "2026-10-01T10:00:00+08:00"
+  setup:
+    - id: b60001000000
+      at: "2026-09-25T10:00:00+08:00"
+      room: EVENT/SELF
+      text: "考完试一起去吃那家甜品。"
+      fields: {direction_of_fit: telic, weight: 0.6, bound: [AI],
+               cue: {condition: "考完试", phrasings: ["考完", "考完试"]}}
+  steps:
+    - snapshot: b60001000000
+      as: before
+    - cue: {text: "还没考完呢，烦死了", window: w1, turn: t1}
+      as: card
+    - check: {segment: think, desc: "「考完」 matched: a card", output: card, contains: b60001}
+    - check: {segment: think, desc: "the card quotes the clause and says it is negated", output: card, contains: 否定}
+    - cue_delivered: {window: w1, turn: t1}
+    - check: {segment: store, desc: "code changed nothing on the entry", unchanged: b60001000000, since: before, keys: [status, when, bound, cue, weight, last_active, activation_count]}
 
 - id: B7
   title: "searching a sleeping item does not warm it"

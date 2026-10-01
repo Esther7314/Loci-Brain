@@ -25,8 +25,9 @@
     - check: {segment: source, desc: "the descendant can still reach its source", output: child, contains: f10001}
 
 # The host's signal arrives through POST /api/v2/source/change (the `source_change:` step
-# runs what that route runs). Dream weaving and strong-reminder cards are out of the tool
-# layer's reach (H items; stage 5.5): the dream record itself is checked in F4.
+# runs what that route runs). Dream weaving is out of the tool layer's reach (H items):
+# the dream record itself is checked in F4. The strong-reminder card for what stood on a
+# withdrawn source is D12's.
 - id: F2
   title: "a deleted source stops its descendants on every road"
   start: "2026-10-01T10:00:00+08:00"

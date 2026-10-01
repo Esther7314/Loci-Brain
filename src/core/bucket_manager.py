@@ -259,6 +259,7 @@ from ._rooms import is_event_room, is_mind_room
 from ._sources import SourceRegistry, normalize_sources, note_written
 from . import _ledger
 from . import _usage
+from ._cue_ledger import CueLedger
 from ._slicer import PendingSlices
 from locibrain.storage.media_store import MediaStore
 from locibrain.eventsourcing.ledger_mirror import LedgerMirror
@@ -539,6 +540,9 @@ class BucketManager:
         # What was shown, found and used as a source (core/_usage.py); not the ledger.
         self.usage = _usage.UsageLog(self.base_dir,
                                      (config.get("usage") or {}).get("retain_days"))
+        # Which strong-reminder cards each host's window was offered and really loaded
+        # (core/_cue_ledger.py).
+        self.cues = CueLedger(self.base_dir)
 
         # The sparse BM25 index (marked dirty after a write, rebuilt lazily on search())
         self._bm25: "_BM25Index | None" = _BM25Index() if _BM25Index is not None else None

@@ -1,0 +1,211 @@
+# Paper section 丁 (and 言's tool-layer half): which words bring a card. Matching is code
+# only — a cue's phrasings and the names table (core/_cue.py) — so the five classes the
+# plan asks for are each one item: the original wording, an alias or another phrasing,
+# negation, a hypothetical, and the thing never mentioned. Then what must never come out
+# of a card: short spellings, words cut in half, anything out of scope, the text of a
+# memory standing on a withdrawn source; and the time-is-up card on a backfilled clock.
+
+- id: D6
+  title: "the original wording brings the card"
+  start: "2026-10-01T10:00:00+08:00"
+  setup:
+    - id: d60001000000
+      at: "2026-09-25T10:00:00+08:00"
+      room: EVENT/SELF
+      text: "考完试一起去吃那家甜品。"
+      fields: {direction_of_fit: telic, bound: [AI],
+               cue: {condition: "考完试", phrasings: ["考完", "考试结束"]}}
+  steps:
+    - cue: {text: "终于考完了！！", window: w1, turn: t1}
+      as: card
+    - check: {segment: think, desc: "a related-memory card", output: card, contains: 【相关记忆】}
+    - check: {segment: think, desc: "for that entry, saying what matched", all_of: [{output: card, contains: "(d60001)"}, {output: card, contains: "对上「考完」"}]}
+    - check: {segment: think, desc: "it says the promise is owed, by me as the AI reads it", all_of: [{output: card, contains: "答应了的（我欠着）"}, {output: card, lacks: "AI欠着"}]}
+
+- id: D7
+  title: "another phrasing, and a name by its alias"
+  start: "2026-10-01T10:00:00+08:00"
+  names:
+    小林:
+      aliases: [林林子]
+      instance_of: 人
+  setup:
+    - id: d70001000000
+      at: "2026-09-25T10:00:00+08:00"
+      room: EVENT/SELF
+      text: "考完试一起去吃那家甜品。"
+      fields: {direction_of_fit: telic, bound: [AI],
+               cue: {condition: "考完试", phrasings: ["考完", "考试结束"]}}
+    - id: d70002000000
+      at: "2026-09-20T10:00:00+08:00"
+      room: MIND/TRAITS
+      text: "小林是大学同学，最近在找工作。"
+      fields: {card_of: 小林}
+    - id: d70003000000
+      at: "2026-09-21T10:00:00+08:00"
+      room: EVENT/WORLD
+      text: "小林来家里吃饭。"
+      subjects: [小林]
+  steps:
+    - cue: {text: "今天考试结束了，林林子也来了", window: w1, turn: t1}
+      as: card
+    - check: {segment: think, desc: "another of its phrasings: the memory card", all_of: [{output: card, contains: "(d70001)"}, {output: card, contains: "对上「考试结束」"}]}
+    - check: {segment: think, desc: "the alias: the name's card", all_of: [{output: card, contains: "【相关名字】小林"}, {output: card, contains: "(d70002)"}]}
+    - check: {segment: think, desc: "the name card counts what mentions the name", output: card, contains: 相关 1 条}
+    - check: {segment: think, desc: "the memory comes before the name", output: card, in_order: ["【相关记忆】", "【相关名字】"]}
+
+- id: D8
+  title: "a negated mention: the card, marked, and nothing changed"
+  start: "2026-10-01T10:00:00+08:00"
+  setup:
+    - id: d80001000000
+      at: "2026-09-25T10:00:00+08:00"
+      room: EVENT/SELF
+      text: "不去面试了的话，就一起出去旅行。"
+      fields: {direction_of_fit: telic, bound: [AI],
+               cue: {condition: "面试结束", phrasings: ["面试"]}}
+  steps:
+    - snapshot: d80001000000
+      as: before
+    - cue: {text: "我不去面试了", window: w1, turn: t1}
+      as: card
+    - check: {segment: think, desc: "the card comes", output: card, contains: "(d80001)"}
+    - check: {segment: think, desc: "quoting the clause, marked as negated", all_of: [{output: card, contains: "「我不去面试了」"}, {output: card, contains: 否定}]}
+    - check: {segment: store, desc: "nothing on the entry moved", unchanged: d80001000000, since: before, keys: [status, when, cue, bound]}
+
+- id: D9
+  title: "a hypothetical: the card, marked as one"
+  start: "2026-10-01T10:00:00+08:00"
+  setup:
+    - id: d90001000000
+      at: "2026-09-25T10:00:00+08:00"
+      room: EVENT/SELF
+      text: "面试过了就请她吃火锅。"
+      fields: {direction_of_fit: telic, bound: [AI],
+               cue: {condition: "面试通过", phrasings: ["面试过了", "面试"]}}
+  steps:
+    - snapshot: d90001000000
+      as: before
+    - cue: {text: "要是去面试的话穿什么好", window: w1, turn: t1}
+      as: card
+    - check: {segment: think, desc: "the card comes", output: card, contains: "(d90001)"}
+    - check: {segment: think, desc: "marked as a hypothetical", output: card, contains: 假设}
+    - check: {segment: store, desc: "nothing on the entry moved", unchanged: d90001000000, since: before, keys: [status, when, cue, bound]}
+
+- id: D10
+  title: "never mentioned, a short alias, a word cut in half: no card"
+  start: "2026-10-01T10:00:00+08:00"
+  names:
+    阿明:
+      aliases: [明明]
+      instance_of: 人
+  setup:
+    - id: da0001000000
+      at: "2026-09-25T10:00:00+08:00"
+      room: EVENT/SELF
+      text: "考完试一起去吃那家甜品。"
+      fields: {direction_of_fit: telic, bound: [AI],
+               cue: {condition: "考完试", phrasings: ["考完"]}}
+    - id: da0002000000
+      at: "2026-09-20T10:00:00+08:00"
+      room: MIND/TRAITS
+      text: "阿明是楼下的邻居。"
+      fields: {card_of: 阿明}
+  steps:
+    # The exam is over but the words are not said: the known miss (dates, breath and
+    # recall cover it).
+    - cue: {text: "今天终于解放了，出去走了走", window: w1, turn: t1}
+      as: unsaid
+    - check: {segment: think, desc: "never mentioned: no card", output: unsaid, contains: '"cards": []'}
+    - cue: {text: "我阿明白了", window: w1, turn: t2}
+      as: cut
+    - check: {segment: think, desc: "a name cut in half by a word: no card", output: cut, lacks: da0002}
+    - cue: {text: "明明说好的", window: w1, turn: t3}
+      as: short
+    - check: {segment: think, desc: "a two-character alias: no card", output: short, lacks: da0002}
+    - cue: {text: "阿明来了", window: w1, turn: t4}
+      as: named
+    - check: {segment: think, desc: "the name itself: its card", output: named, contains: "(da0002)"}
+
+- id: D11
+  title: "out of scope: no card, and nothing says one was withheld"
+  start: "2026-10-01T10:00:00+08:00"
+  hosts:
+    legacy: {token: t-life, scope_mode: open}
+    bot: {token: t-bot, max_grant: [{system: telegram}]}
+  setup:
+    - id: db0001000000
+      at: "2026-09-25T10:00:00+08:00"
+      room: EVENT/SELF
+      text: "考完试一起去吃那家甜品。"
+      fields: {direction_of_fit: telic, bound: [AI],
+               cue: {condition: "考完试", phrasings: ["考完"]}}
+  steps:
+    - cue: {text: "考完了", window: g1, turn: t1}
+      host: t-bot
+      scope: {v: 1, entry: {system: telegram, instance: bot-a, container: "group:1"},
+              venue: group, audience: ["user:U"],
+              grant: [{system: telegram, instance: bot-a, container: "group:1"}]}
+      as: scoped
+    - check: {segment: think, desc: "no card", output: scoped, contains: '"cards": []'}
+    - check: {segment: think, desc: "and no word of the entry", output: scoped, lacks: db0001}
+    - check: {segment: think, desc: "the scope line, as every read opens with", output: scoped, contains: 〔范围：受限}
+    - cue: {text: "考完了", window: g1, turn: t2}
+      host: t-bot
+      as: unscoped
+    - check: {segment: think, desc: "a restricted host without a scope is refused", output: unscoped, contains: '"http": 403'}
+    - cue: {text: "考完了", window: home, turn: t1}
+      host: t-life
+      as: open
+    - check: {segment: think, desc: "the open life line gets it", output: open, contains: "(db0001)"}
+
+- id: D12
+  title: "a withdrawn source: never its text on a card; what stood on it gets a review card"
+  start: "2026-10-01T10:00:00+08:00"
+  hosts:
+    legacy: {token: t-life, scope_mode: open, may_restore: true}
+  setup:
+    - id: dc0001000000
+      at: "2026-09-25T10:00:00+08:00"
+      room: EVENT/WORLD
+      text: "小周说考完那天告诉她一个暗号青柠汽水。"
+      sources: [{system: lento, instance: home, container: "private:U", id: m_20260925_0101}]
+      fields: {cue: {condition: "考完", phrasings: ["考完"]}}
+    - id: dc0002000000
+      at: "2026-09-26T10:00:00+08:00"
+      room: MIND/VIEWS
+      text: "小周考完会想放松一下。"
+      from: [dc0001000000]
+  steps:
+    - cue: {text: "早", window: w1, turn: t1}
+    - source_change: {change_id: c-d12-1, host_seq: 1, change: withdrawn,
+                      source: "lento:home/private:U#m_20260925_0101"}
+      host: t-life
+    - cue: {text: "考完了", window: w1, turn: t2}
+      as: card
+    - check: {segment: source, desc: "never the withdrawn material's words", all_of: [{output: card, lacks: 青柠汽水}, {output: card, lacks: 暗号}]}
+    - check: {segment: source, desc: "what stood on it: a review card by id", all_of: [{output: card, contains: 【依据变了】}, {output: card, contains: "(dc0002)"}]}
+    - check: {segment: source, desc: "status only, its text withheld", all_of: [{output: card, contains: （正文不给）}, {output: card, lacks: 想放松}]}
+    - cue: {text: "考完了", window: w2, turn: t1}
+      as: fresh
+    - check: {segment: source, desc: "a window opened after the change: its breath lists it, no card", output: fresh, lacks: dc0002}
+
+- id: D13
+  title: "a backfilled clock: the time-is-up card says it is a reference time"
+  start: "2026-10-01T10:00:00+08:00"
+  setup:
+    - id: dd0001000000
+      at: "2026-10-01T10:00:00+08:00"
+      room: EVENT/SELF
+      text: "答应今晚回来告诉她面试结果。"
+      when: "2026-10-01T19:00+08:00"
+      fields: {direction_of_fit: telic, weight: 0.8, bound: [AI], backfilled: [when]}
+  steps:
+    - cue: {text: "早上好", window: w1, turn: t1}
+    - at: "2026-10-01T19:05:00+08:00"
+    - cue: {text: "回来啦", window: w1, turn: t2}
+      as: card
+    - check: {segment: think, desc: "the time-is-up card", all_of: [{output: card, contains: 【提醒】}, {output: card, contains: "(dd0001)"}, {output: card, contains: 大约到时候了}]}
+    - check: {segment: think, desc: "it shows the original words", output: card, contains: 原话「今晚」}
+    - check: {segment: think, desc: "and says the hour is a reference, not agreed", all_of: [{output: card, contains: 参考时间}, {output: card, contains: 不是说好的点}, {output: card, lacks: 约的是}]}
+    - check: {segment: think, desc: "past the reference hour it is not overdue", output: card, lacks: 过了}
