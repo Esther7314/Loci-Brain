@@ -562,7 +562,7 @@ def seams() -> tuple[str, ...]:
             "imports, utils.datetime (utc_now), datetime.now in bucket_manager)",
             "random seeded per item", "no model keys",
             embeddings_label(),
-            "BM25 rebuilt before a search when stale (exam/serve.py; live Loci rebuilds "
+            "first BM25 build before the first search (exam/serve.py; live Loci builds "
             "it in the background)",
             "a call step's write_key is sent in _meta and set for that call (exam/serve.py; "
             "the request layer will set it from the host's turn)",

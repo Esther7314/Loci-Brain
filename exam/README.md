@@ -106,8 +106,9 @@ python exam/turn.py exam/turns/*.yaml                      # 3 runs per item
 - `random` is seeded per item (`seed:`, default 0).
 - Without embeddings, search is BM25 plus whole-query substrings. Both runners stop
   at start if `rank_bm25` or `jieba` is missing, because Loci would otherwise drop BM25
-  without a word. `serve.py` rebuilds a stale BM25 index before each search instead of
-  in the background, so an item's first search does not score against an empty index.
+  without a word. `serve.py` makes the first BM25 build before the first search instead
+  of in the background, so an item's first search does not score without BM25; after
+  that, keeping it level with writes is Loci's own (the next search syncs it).
 
 ## Limits worth knowing
 

@@ -22,8 +22,9 @@ from .._common import resolve_bucket_id
 from core import _when as _w          # "today" as the user lives it (local timezone) — never call datetime.now() directly
 from core._rooms import (ALL_ROOMS, check_gate, is_mind_room, normalize_room,
                       room_matches)
+from core import profile as _P        # what counts as an open promise; days since written
 from utils import (HAD_PRIMARY_SOURCE, WAS_DERIVED_FROM, WAS_QUOTED_FROM, WAS_REVISION_OF,
-                   read_prov)
+                   read_from_ids, read_prov)
 
 # What each provenance line is, in the read by id's 「来源:」 block.
 _PROV_WORD = {WAS_DERIVED_FROM: "派生", WAS_REVISION_OF: "新版本",
@@ -128,7 +129,7 @@ _SEARCH_TOPK = 30
 #   final line (how many, the highest score, the earliest entry) — visible, and
 #   drillable.
 # ⚠️ This is the **combined score** (0-100), not a cosine; the underlying
-# _VECTOR_RECALL_THRESHOLD=0.65 is the **admission threshold for vectors**, a
+# _VECTOR_RECALL_THRESHOLD=0.65 is the **cosine line for the 意思 mark**, a
 # different thing. Entries with a literal hit are floored at max(score, line) and
 # are never blocked by this.
 # The LOCI_RELEVANCE_FLOOR environment variable overrides it (the slider on the
@@ -460,6 +461,7 @@ async def _collect(when, room, tag, query, all_buckets=None) -> tuple[list[dict]
     # memory at rank k+1 disappeared forever.)
     scores: dict[str, float] = {}
     literals: set[str] = set()   # buckets with a literal hit: the relevance floor treats them as max(score, floor)
+    how: dict[str, tuple[bool, bool]] = {}   # id -> (some query words appear, close in meaning)
     if query.strip():
         try:
             hits = await rt.bucket_mgr.search(query.strip(), limit=300)
@@ -476,6 +478,7 @@ async def _collect(when, room, tag, query, all_buckets=None) -> tuple[list[dict]
                     scores[hid] = 0.0
                 if h.get("literal_hit"):
                     literals.add(hid)
+                how[hid] = (bool(h.get("bm25_hit")), bool(h.get("vector_match")))
                 pool.append(full)
     else:
         # 🔴 Browsing needs the whole library, and the caller hands it in rather than this
@@ -523,11 +526,13 @@ async def _collect(when, room, tag, query, all_buckets=None) -> tuple[list[dict]
         if t1 and ts >= t1:
             continue
         bid = str(meta.get("id") or b.get("id") or "")
+        words, meaning = how.get(bid, (False, False))
         out.append({"id": bid, "meta": meta, "ts": ts,
                     "content": str(b.get("content") or ""),
                     # score exists only when the query gate ran; None = this entry came in via when/room/tag
                     "score": scores.get(bid),
-                    "literal": bid in literals})
+                    "literal": bid in literals,
+                    "words": words, "meaning": meaning})
     if scores and len(out) > _SEARCH_TOPK:
         # Only after every gate does relevance close it down: keep the k
         # highest-scoring entries, then return to the timeline.
@@ -537,7 +542,70 @@ async def _collect(when, room, tag, query, all_buckets=None) -> tuple[list[dict]
         ledger["topk砍掉"] = len(out) - _SEARCH_TOPK
         out = out[:_SEARCH_TOPK]
     out.sort(key=lambda x: x["ts"])
+    if scores:
+        ledger["roots"] = await _find_roots(out)
     return out, "", ledger
+
+
+# ------------------------------------------------------------
+# Roots: what a search hit grew out of
+# ------------------------------------------------------------
+# A hit's roots are where its sources (wasDerivedFrom / hadPrimarySource, `read_from_ids`)
+# lead when followed all the way back: the entries with no source in the library. An entry
+# with no source is its own root. A newer version of a root stands for it (a revision is
+# the same entry, not a source). A source the `read` road of the gate would not show is not
+# followed — the walk does not see what the reader may not, so nothing hidden is counted,
+# named or used to group. Hits with the same roots are one line in the search view: the same
+# origin found several times is still one origin.
+_ROOT_DEPTH = 32
+
+
+async def _find_roots(entries: list[dict]) -> dict[str, dict | None]:
+    """Set `e["roots"]` (a frozenset of ids) on each entry and return the store's bucket
+    for every root reached (id -> bucket), for the line to say what state it is in."""
+    cache: dict[str, dict | None] = {
+        e["id"]: {"id": e["id"], "metadata": e["meta"], "content": e["content"]} for e in entries}
+
+    get = getattr(rt.bucket_mgr, "get_including_archive", None) or rt.bucket_mgr.get
+
+    async def fetch(bid: str) -> dict | None:
+        if bid not in cache:
+            b = await get(bid)
+            cache[bid] = b if b and _V.visible_for(b.get("metadata") or {}, road=_V.READ) else None
+        return cache[bid]
+
+    async def newest(bid: str) -> str:
+        seen = {bid}
+        while True:
+            nxt = str(((await fetch(bid)) or {}).get("metadata", {}).get("superseded_by") or "").strip()
+            if not nxt or nxt in seen or not await fetch(nxt):
+                return bid
+            seen.add(nxt)
+            bid = nxt
+
+    memo: dict[str, frozenset] = {}
+
+    async def roots_of(bid: str, path: frozenset) -> frozenset:
+        if bid in memo:
+            return memo[bid]
+        meta = ((await fetch(bid)) or {}).get("metadata") or {}
+        sources = [s for s in read_from_ids(meta) if s not in path and await fetch(s)]
+        if not sources or len(path) >= _ROOT_DEPTH:
+            found = frozenset({await newest(bid)})
+        else:
+            acc: set[str] = set()
+            for s in sources:
+                acc |= await roots_of(s, path | {bid})
+            found = frozenset(acc)
+        memo[bid] = found
+        return found
+
+    reached: dict[str, dict | None] = {}
+    for e in entries:
+        e["roots"] = await roots_of(e["id"], frozenset())
+        for r in e["roots"]:
+            reached[r] = cache.get(r)
+    return reached
 
 
 # ------------------------------------------------------------
@@ -1323,12 +1391,91 @@ def _eff_score(e: dict, floor: float) -> float:
     return max(s, floor) if e.get("literal") else s
 
 
+def _how_mark(e: dict) -> str:
+    """How a search hit matched, said right after its score — the two sides the score is
+    made of, never a third number:
+      字面   the whole query appears in it as written
+      意思   its vector is close to the query's (cosine at or above the vector line)
+    Both when both hold. A hit with neither got over the line on some of the query's words
+    (部分字面) or on a weaker closeness in meaning alone (意思)."""
+    marks = [word for word, on in (("字面", e.get("literal")), ("意思", e.get("meaning"))) if on]
+    if marks:
+        return "+".join(marks)
+    return "部分字面" if e.get("words") else "意思"
+
+
+def _written(e: dict) -> str:
+    """「N天前写的」 from `created` on the local calendar: an old line was true the day it
+    was written, not necessarily now."""
+    days = _P.written_days_ago(e["meta"], _w.now().date())
+    if days is None:
+        return ""
+    return "今天写的" if days <= 0 else f"{days}天前写的"
+
+
+_PROMISE_MARK = "⏳答应了还没关 · "
+
+
+def _lead_of(key: frozenset, members: list[dict], floor: float) -> dict:
+    """Which hit of one root's group the line shows: an open promise (the best-scoring, if
+    several), else the root itself when it matched, else the best-scoring hit."""
+    def best(es: list[dict]) -> dict:
+        return max(es, key=lambda m: (_eff_score(m, floor), m["ts"]))
+    promised = [m for m in members if _P.is_open_promise(m["meta"])]
+    if promised:
+        return best(promised)
+    root = next(iter(key)) if len(key) == 1 else None
+    return next((m for m in members if m["id"] == root), None) or best(members)
+
+
+def _root_tail(lead: dict, key: frozenset, members: list[dict], listed: set[str],
+               below: set[str], roots: dict) -> str:
+    """What the line says about the rest of its root's group. Every other hit is named by
+    its id (collapsing is for reading, not hiding); a root the search did not list says why
+    (under the line, not in this listing, or in the archive)."""
+    others = sorted((m for m in members if m is not lead and m["id"] not in key),
+                    key=lambda m: m["ts"], reverse=True)
+    ids = " · ".join(("⏳" if _P.is_open_promise(m["meta"]) else "") + _short_id(m["id"])
+                     for m in others)
+    if key == {lead["id"]}:
+        return f"＋{len(others)} 条派生：{ids}" if others else ""
+    refs = []
+    for r in sorted(key):
+        if r in listed:
+            note = "（也搜中了）"
+        elif r in below:
+            note = "（在线下）"
+        else:
+            mark = _V.visible_for((roots.get(r) or {}).get("metadata") or {}, road=_V.READ).mark
+            note = f" {mark}" if mark else "（这次没列）"
+        refs.append(_short_id(r) + note)
+    head = f"派生自 {refs[0]}" if len(refs) == 1 else f"派生自 {len(refs)} 个根：{'、'.join(refs)}"
+    return head + (f"，同根另有 {len(others)} 条：{ids}" if others else "")
+
+
+def _search_rows(hit: list[dict], floor: float) -> list[tuple[dict, frozenset, list[dict]]]:
+    """The search view's lines: one per root (`_find_roots`), as (lead, roots, hits).
+
+    Order: lines holding an open promise first, then the rest; newest first within each
+    (by the date the line shows). Only what this search matched is ordered — a promise that
+    did not match is not brought in."""
+    groups: dict[frozenset, list[dict]] = {}
+    for e in hit:
+        groups.setdefault(e.get("roots") or frozenset({e["id"]}), []).append(e)
+    rows = [(_lead_of(key, members, floor), key, members) for key, members in groups.items()]
+    rows.sort(key=lambda r: (any(_P.is_open_promise(m["meta"]) for m in r[2]), r[0]["ts"]),
+              reverse=True)
+    return rows
+
+
 def _render_search(entries, gates, floor: float = None, ledger: dict | None = None) -> str:
     """Searching: I am looking for something and I know what. **This is the
     default view whenever there is a query.**
 
     Whatever clears the line is ordered by time (newest first) with its score
-    attached.
+    attached, how it matched (`_how_mark`) and how long ago it was written. Hits that
+    grew from the same root are one line (`_search_rows`), and lines holding an open
+    promise go first.
     🔴 **The default view was turned back to this one**: a bare query used to
     switch to scene clusters, so "find that one thing" had to take a detour. The
     rule: **order by time plus score by default, and ask for scene clusters
@@ -1360,23 +1507,41 @@ def _render_search(entries, gates, floor: float = None, ledger: dict | None = No
                 "都只是沾边，不弹出来。\n"
                 "真觉得该有：换当时说过的原话当 query（别造词），或者用 when/room 直接翻。")
 
-    lines = [f"〔{gates}〕{len(hit)} 条 · 按时间 新→旧（线 {floor:.0f}，分数只管过滤）"]
-    for e in sorted(hit, key=lambda x: x["ts"], reverse=True):
+    rows = _search_rows(hit, floor)
+    listed = {e["id"] for e in hit}
+    below_ids = {e["id"] for e in below}
+    roots = (ledger or {}).get("roots") or {}
+    all_roots = set().union(*(key for _lead, key, _m in rows))
+    head = f"〔{gates}〕{len(hit)} 条"
+    if all_roots != listed:
+        # The same origin found several times is still one origin: say how many there are.
+        head += f"，出自 {len(all_roots)} 个根（同一个根收成一行）"
+    promised_first = any(_P.is_open_promise(m["meta"]) for _l, _k, ms in rows for m in ms)
+    head += (" · " + ("答应了还没关的在最前，其余" if promised_first else "")
+             + f"按时间 新→旧（线 {floor:.0f}，分数只管过滤）")
+    lines = [head]
+    for lead, key, members in rows:
         # The search path **never cuts the gist**: cut it and you cannot tell
         # whether this is the entry you were after, and telling is the entire
         # point of searching. The browse path still cuts — there the goal is an
         # impression, not content.
         # 🧠 = thinking; wearing no badge means it is something that happened (the
         # room code is gone).
-        lines.append(f"{_eff_score(e, floor):5.1f}  {kind_badge(e['meta'])}{_label_of(e)}"
-                     f"  ({_short_id(e['id'])})  {e['ts'].strftime('%m-%d')}")
+        written = _written(lead)
+        line = (f"{_eff_score(lead, floor):5.1f} {_how_mark(lead)}  "
+                f"{_PROMISE_MARK if _P.is_open_promise(lead['meta']) else ''}"
+                f"{kind_badge(lead['meta'])}{_label_of(lead)}"
+                f"  ({_short_id(lead['id'])})  {lead['ts'].strftime('%m-%d')}"
+                + (f" · {written}" if written else ""))
+        tail = _root_tail(lead, key, members, listed, below_ids, roots)
+        lines.append(line + (f" ▏{tail}" if tail else ""))
     if below:
         earliest = min(below, key=lambda x: x["ts"])
         lines.append(f"── 另有 {len(below)} 条在线下（最高 {top_below:.1f}，"
                      f"最早 {earliest['ts'].strftime('%m-%d')}：「{_label_of(earliest)[:40]}」）——"
                      "多半只是沾边，没列")
     lines.append(_topk_line(ledger))
-    lines.append("（看原文：拿 id 搜；换个说法再搜：用当时的原话，别造词）")
+    lines.append("（看原文、看收起来的派生：拿 id 搜；换个说法再搜：用当时的原话，别造词）")
     return chr(10).join(x for x in lines if x)
 
 
@@ -1443,12 +1608,16 @@ def _render_scene_clusters(entries, gates, floor: float = None, ledger: dict | N
         kids = sorted((e for e in c if e is not rep), key=lambda e: e["ts"])
         shared = set.intersection(*(_vis_tags(e) for e in c)) if len(c) > 1 else set()
         label = ("·".join(sorted(shared)[:2]) + " ") if shared else ""
+        written = _written(rep)
         lines.append(f"■ {rep['ts'].strftime('%m-%d')} {label}"
-                     f"{_eff_score(rep, floor):5.1f}  {kind_badge(rep['meta'])}{_label_of(rep)}"
-                     f"  ({_short_id(rep['id'])})")
+                     f"{_eff_score(rep, floor):5.1f} {_how_mark(rep)}  "
+                     f"{kind_badge(rep['meta'])}{_label_of(rep)}"
+                     f"  ({_short_id(rep['id'])})" + (f" · {written}" if written else ""))
         for e in kids[:3]:
+            written = _written(e)
             lines.append(f"   └ {e['ts'].strftime('%m-%d')}  {kind_badge(e['meta'])}"
-                         f"{_label_of(e)[:56]}  ({_short_id(e['id'])})")
+                         f"{_label_of(e)[:56]}  ({_short_id(e['id'])})"
+                         + (f" · {written}" if written else ""))
         if len(kids) > 3:
             lines.append(f"   └ …还有 {len(kids) - 3} 条同画面的")
     if len(clusters) > 8:
@@ -1554,13 +1723,22 @@ async def recall_data(when: str, room: str, tag: str, query: str,
     # chosen before seeing the real distribution is a guess.
     fl = RELEVANCE_FLOOR if floor is None else float(floor)
     payload = []
+    today = _w.now().date()
     for e in reversed(entries):  # newest first, the same direction as the text skin
         j = entry_json(e)
+        j["written_days"] = _P.written_days_ago(e["meta"], today)
         if e.get("score") is not None:
             # The literal-hit floor: max(score, floor), so what the front end sees
             # is the score that actually took effect
             j["score"] = round(_eff_score(e, fl), 2)
             j["literal"] = bool(e.get("literal"))
+            # The text skin's line facts, unrendered: how it matched, its roots (hits
+            # sharing them are one line there), and whether it is a promise still open.
+            j["meaning"] = bool(e.get("meaning"))
+            j["words"] = bool(e.get("words"))
+            j["how"] = _how_mark(e)
+            j["roots"] = sorted(e.get("roots") or ())
+            j["open_promise"] = _P.is_open_promise(e["meta"])
         payload.append(j)
     return {
         "ok": True,

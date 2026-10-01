@@ -49,7 +49,7 @@ comes due.
 Exports: door_note(all_buckets, now) / event_pool(all_buckets, now=None) /
          edited_by_user(all_buckets) / BreathSettings / breath_settings(config) /
          due_day(meta, today) / awake_reasons(meta, now, …) / is_accessible(meta, now, …) /
-         due_now(meta, now) /
+         is_open_promise(meta) / written_days_ago(meta, today) / due_now(meta, now) /
          prospective(all_buckets, now, …) / involuntary(all_buckets, now, …) /
          entry_label(meta, content) / short_id(bucket_id)
 ========================================
@@ -478,6 +478,13 @@ def _local_day(value) -> date | None:
     return stamp.date() if stamp else None
 
 
+def written_days_ago(meta: dict, today: date) -> int | None:
+    """How many local days before `today` the entry was written (its `created`); 0 for
+    today, None when it has no readable `created`."""
+    created = _local_day(meta.get("created"))
+    return (today - created).days if created else None
+
+
 def _next_yearly(d: date, today: date) -> date:
     """A yearly date's occurrence on or after `today` (29 February is the 28th in a common
     year)."""
@@ -523,6 +530,15 @@ CUED = "cued"           # a strong-reminder card delivered within `cue_days`
 HOLD = "hold"           # a hold that holds today
 
 
+def is_open_promise(meta: dict) -> bool:
+    """Promised and not closed: something wanted that someone is bound by (`bound`), not
+    resolved or abandoned, live, and the current version. The `promised` reason for being
+    awake, and what recall lifts to the top of a search."""
+    return (is_telic(meta) and bool(meta.get("bound")) and not is_closed(meta)
+            and _V.state_of(meta) == _V.LIVE
+            and not str(meta.get("superseded_by") or "").strip())
+
+
 def awake_reasons(meta: dict, now: datetime, *, settings: BreathSettings | None = None,
                   delivered_at=None) -> tuple[str, ...]:
     """Which of the five conditions keep this entry awake at `now` (empty = asleep).
@@ -546,7 +562,7 @@ def awake_reasons(meta: dict, now: datetime, *, settings: BreathSettings | None 
     closed = is_closed(meta)
     telic = is_telic(meta)
     out: list[str] = []
-    if telic and not closed and meta.get("bound"):
+    if is_open_promise(meta):
         out.append(PROMISED)
     due = due_day(meta, today)
     if due is not None and not closed:
@@ -742,8 +758,7 @@ def prospective(all_buckets: list, now: datetime, *, settings: BreathSettings | 
                 reason["backfilled"] = True
             dated.append({**base, "kind": "dated", "reason": reason})
         elif telic and meta.get("bound") and not _waits_on_cue(meta):
-            created = _local_day(meta.get("created"))
-            held = (today - created).days if created else 0
+            held = written_days_ago(meta, today) or 0
             undated.append({**base, "kind": "undated",
                             "reason": {"kind": "undated", "held": held,
                                        "ask": ("still_counts" if held >= s.hanging_days

@@ -502,10 +502,10 @@ class DecayEngine:
         # **empty index** — bm25 is 37.5% of the two-dimension scheme, and that first
         # search came out visibly lower (measured: some entries 74 -> 37). The first decay
         # cycle runs a few seconds after boot and already holds `buckets`, so it builds the
-        # index ahead of time. ---
+        # index ahead of time. Once built, a search keeps it level itself (search()). ---
         try:
-            if (getattr(self.bucket_mgr, "_bm25", None) is not None
-                    and getattr(self.bucket_mgr, "_bm25_dirty", False)
+            bm25 = getattr(self.bucket_mgr, "_bm25", None)
+            if (bm25 is not None and not bm25.built
                     and not getattr(self.bucket_mgr, "_bm25_rebuilding", False)):
                 self.bucket_mgr._bm25_rebuilding = True
                 asyncio.create_task(self.bucket_mgr._rebuild_bm25_async(buckets))

@@ -1067,7 +1067,8 @@ async def recall(
     query is what you are looking for; the other three are where to look. What comes back
     depends on whether you give a query at all:
 
-    · With a query: entries are matched and scored, newest first. Anything below the line
+    · With a query: entries are matched and scored; hits that grew from the same root are
+      one line, promises still open come first, the rest newest first. Anything below the line
       is not thrown away: it collapses into a single line telling you how many were held
       back, the highest score among them, and what the oldest one was about.
       Use one or two words, and use the words that were actually written at the time.
@@ -1087,6 +1088,9 @@ async def recall(
     · The user refers back to something: "that thing I told you about last time…"
     · The user says what they want
     · You suspect this has come up before
+    · What is being said now might hang on an older condition (a plan, a promise, a limit,
+      something said before): go and look; general knowledge only tells you what to look
+      for, never fills in a fact about this person
 
     If two attempts turn up nothing, stop and tell the user plainly that you cannot find it.
     Do not keep rewording the search. That is how you end up inventing an answer.

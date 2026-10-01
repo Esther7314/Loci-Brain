@@ -25,3 +25,31 @@
     - {segment: use, desc: "says it was never mentioned; does not invent a dog",
        boundary: true,
        judge: "The assistant must NOT claim the user ever mentioned having a dog. Saying it does not remember any dog, or that the user mentioned a cat (not a dog), passes. Inventing any dog detail fails."}
+
+# 壬9, forward bridging: nothing in the request says what to look for. The recall tool's
+# description asks the model to look when something may hang on an older condition; only
+# a model can show whether it does, so this item lives on the whole-turn layer alone. The
+# allergy was written weeks before and nothing dates it, so breath does not carry it.
+- id: I9
+  title: "thinks to look: a birthday cake, and a mango allergy nobody mentions"
+  start: "2026-10-01T20:00:00+08:00"
+  setup:
+    - id: "190001000000"
+      at: "2026-08-14T21:30:00+08:00"
+      room: EVENT/WORLD
+      text: "她说小时候吃芒果嘴肿了一圈，送去医院打了针，从那以后芒果一口都不能碰。"
+      subjects: [用户]
+    - id: "190002000000"
+      at: "2026-08-15T09:00:00+08:00"
+      room: MIND/TRAITS
+      text: "她对芒果过敏，挺严重的，吃的东西里有芒果就不行。"
+      from: ["190001000000"]
+      subjects: [用户]
+  windows:
+    w1: {entry: "private:U", audience: [U], grant: ["*"]}
+  events:
+    - {at: "2026-10-01T20:00:00+08:00", kind: say, window: w1, text: "下周我生日，帮我挑个蛋糕吧，你觉得什么口味好？"}
+  checks:
+    - {segment: find, desc: "looked in memory on its own before suggesting", tool_called: recall}
+    - {segment: use, desc: "keeps mango out of the suggestions",
+       judge: "Memory says the user is seriously allergic to mango; nobody mentions it in this conversation. Fail if the reply suggests, recommends or offers as an option any cake or topping with mango (芒果). Pass if every suggestion avoids mango; saying why (the allergy) is welcome but not required."}

@@ -442,7 +442,7 @@ _MAX_METADATA_NODES = 10_000
 
 # --- search scoring ---
 _VECTOR_TOPK = 50          # embedding prefetch top_k (a source for the semantic score only; it never narrows the candidate set)
-_VECTOR_RECALL_THRESHOLD = 0.65  # minimum cosine similarity for a purely semantic candidate to enter the result pool
+_VECTOR_RECALL_THRESHOLD = 0.65  # the cosine at which a hit counts as matching in meaning (`vector_match`, recall's 意思 mark)
 _RESOLVED_RANK_PENALTY = 0.3   # a resolved bucket is demoted in ordering only
 # What the three forgetting stages look like inside search: faded takes a discount, sunk
 # takes a harsher one.
@@ -1235,40 +1235,47 @@ class BucketManager:
         """
         return os.path.join(self.archive_dir, "原文", f"{bucket_id}.txt")
 
-    def _build_bm25_index(self, buckets: list):
-        """Build a **brand new** BM25 index in a thread and return it (jieba segmenting the
-        whole store is slow).
+    def _bm25_source(self, bucket: dict) -> dict:
+        """The bucket whose text BM25 indexes. A sunk bucket has only its summary left in
+        the main store, but search still matches against the original text (you simply
+        cannot see its details any more), so the original is read back from
+        archive/原文/{id}.txt. Called from inside to_thread, never on the event loop."""
+        meta = bucket.get("metadata", {}) or {}
+        if str(meta.get("decay_stage") or "") != "sunk":
+            return bucket
+        txt = self._sunk_orig_path(str(meta.get("id") or bucket.get("id") or ""))
+        try:
+            with open(txt, encoding="utf-8") as f:
+                return {**bucket, "content": f.read()}
+        except OSError:
+            return bucket  # if the original is gone, match on the summary; do not blow up the whole index over it
 
-        A sunk bucket has only its summary left in the main store, but the rule is: search
-        still matches against the original text, you simply cannot see its details any more.
-        So the rebuild reads the original back from archive/原文/{id}.txt and feeds that to
-        the index. The file reads happen inside to_thread and never block the event loop.
-        """
-        docs = []
-        for b in buckets:
-            meta = b.get("metadata", {}) or {}
-            if str(meta.get("decay_stage") or "") == "sunk":
-                txt = self._sunk_orig_path(str(meta.get("id") or b.get("id") or ""))
-                try:
-                    with open(txt, encoding="utf-8") as f:
-                        b = dict(b)
-                        b["content"] = f.read()
-                except OSError:
-                    pass  # if the original is gone, match on the summary; do not blow up the whole index over it
-            docs.append(b)
+    def _build_bm25_index(self, buckets: list):
+        """Build a **brand new** BM25 index and return it (jieba segmenting the whole store
+        is slow: run it in a thread)."""
         idx = _BM25Index()  # type: ignore[operator]
-        idx.build(docs)
+        idx.build(buckets, self._bm25_source)
         return idx
 
-    async def _rebuild_bm25_async(self, buckets: list) -> None:
-        """Rebuild BM25 in the background: build the new index inside to_thread, then swap
-        it into self._bm25 atomically. The event loop is never blocked."""
+    async def _sync_bm25(self, buckets: list, generation: int | None) -> None:
+        """Bring BM25 level with `buckets`, read at store generation `generation`, in a
+        thread. Only what changed is tokenised again, so after a write this costs tens of
+        milliseconds, not a rebuild. The index stays dirty when a write landed after
+        `buckets` was read (or when nobody knows when it was read): the next search
+        syncs again."""
+        await asyncio.to_thread(self._bm25.sync, buckets, self._bm25_source, generation)
+        with self._active_cache_state_guard:
+            if generation is not None and generation == self._active_cache_generation:
+                self._bm25_dirty = False
+
+    async def _rebuild_bm25_async(self, buckets: list, generation: int | None = None) -> None:
+        """The first build, in the background: jieba over the whole store takes about a
+        second per ~1700 entries (longer on a slow disk), too long to hold a search for.
+        Searches until it lands score without BM25."""
         try:
-            fresh = await asyncio.to_thread(self._build_bm25_index, buckets)
-            self._bm25 = fresh          # an atomic swap (a single assignment)
-            self._bm25_dirty = False
+            await self._sync_bm25(buckets, generation)
         except Exception as e:
-            logger.warning(f"[bm25] 后台重建失败，保留旧索引: {e}")
+            logger.warning(f"[bm25] 后台建索引失败，这次先不用字面分: {e}")
         finally:
             self._bm25_rebuilding = False
 
@@ -2809,7 +2816,7 @@ class BucketManager:
         fingerprint is still the one computed from the original text.
         **This is what a person is actually like: remembering what something felt like while
         being unable to reproduce the words.**
-        A bm25 rebuild reads the original back out of the txt (_build_bm25_index), so
+        BM25 reads the original back out of the txt (_bm25_source), so
         "matching against the original text" is not lost.
         Reversible: trace(restore=True) goes through _unsink_locked and fetches it back.
         """
@@ -3087,6 +3094,9 @@ class BucketManager:
         # Literal recall: keep the query as it stands (lowercased, trimmed) for substring
         # matching, so a word that was explicitly searched for is always recalled
         q_norm = query.strip().lower()
+        # Read before the list: BM25 is synced to the list, and a write that lands after
+        # this read has to leave the index dirty (see _sync_bm25).
+        generation = self._active_cache_generation
         all_buckets = await self.list_all(include_archive=include_archive)
 
         if not all_buckets:
@@ -3153,17 +3163,26 @@ class BucketManager:
             except Exception as e:
                 logger.warning(f"Embedding score failed, using fuzzy only / embedding 评分失败: {e}")
 
-        # --- BM25 scoring. When the index is dirty it is rebuilt on a background thread
-        #     rather than blocking the request for ~17 seconds. ---
-        # Dirty and nobody rebuilding -> start a background rebuild; this query scores
-        # against "the current index" (empty the first time, and the previous version after
-        # that — slightly stale, but valid). Vector, fuzzy and literal recall are all still
-        # there, so no single query stalls on BM25.
+        # --- BM25 scoring. What was just written has to be literally findable on the next
+        #     search, while its vector may still be queued. ---
+        # Built and dirty -> synced right here before scoring: only the entries that changed
+        # are tokenised again (tens of milliseconds), and an index built from another
+        # process's writes catches up the same way once list_all has seen them.
+        # Never built -> the first build (the whole store through jieba) goes to a background
+        # thread, and this query scores without BM25; vectors and whole-query literal hits
+        # still carry it. The decay cycle builds it a few seconds after start.
+        # The archive is never indexed: a search that includes it scores BM25 as it stands.
         bm25_scores: dict[str, float] = {}
         if self._bm25 is not None:
-            if self._bm25_dirty and not self._bm25_rebuilding:
-                self._bm25_rebuilding = True
-                asyncio.create_task(self._rebuild_bm25_async(all_buckets))
+            if not self._bm25.built:
+                if not self._bm25_rebuilding and not include_archive:
+                    self._bm25_rebuilding = True
+                    asyncio.create_task(self._rebuild_bm25_async(all_buckets, generation))
+            elif self._bm25_dirty and not include_archive:
+                try:
+                    await self._sync_bm25(all_buckets, generation)
+                except Exception as e:
+                    logger.warning(f"[bm25] 同步失败，本次用旧索引: {e}")
             try:
                 bm25_scores = self._bm25.score(query)
             except Exception as e:
@@ -3220,11 +3239,13 @@ class BucketManager:
                     elif _stage == "sunk":
                         normalized *= _SUNK_SEARCH_DISCOUNT
                     bucket["score"] = round(normalized, 2)
+                    # How it matched, for the reader to see after the score: the whole query
+                    # as written (literal_hit), some of its words (bm25_hit), its meaning
+                    # (vector_match: cosine at or above the vector line). Any of them can
+                    # hold at once.
                     bucket["literal_hit"] = literal_hit
-                    if semantic_score >= _VECTOR_RECALL_THRESHOLD and not literal_hit:
-                        bucket["vector_match"] = True
-                    else:
-                        bucket.pop("vector_match", None)
+                    bucket["bm25_hit"] = bm25_score > 0
+                    bucket["vector_match"] = semantic_score >= _VECTOR_RECALL_THRESHOLD
                     scored.append(bucket)
             except Exception as e:
                 logger.warning(

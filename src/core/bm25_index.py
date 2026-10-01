@@ -9,12 +9,13 @@ which for Chinese text means whole sentences. Either one missing is said loudly:
 WARNING at import and a red row on the health page (`dependency_status()`), because
 literal search degrading to whole-sentence substring matching looks like "search got
 worse" and nothing else.
-BM25Index is owned by BucketManager, marked dirty after any write, and rebuilt lazily
-on the next search().
+BM25Index is owned by BucketManager, which marks it dirty after any write; the next
+search() brings it level with the store before scoring (BucketManager.search).
 """
 from __future__ import annotations
 
 import logging
+import threading
 
 logger = logging.getLogger("loci_brain.bm25")
 
@@ -55,64 +56,119 @@ def _tokenize(text: str) -> list[str]:
     return [t for t in tokens if t.strip()]
 
 
+def _doc_text(bucket: dict) -> str:
+    """What one entry contributes to the index: name + content[:1200] + tags + aliases.
+
+    `domain` stays out of retrieval: it is a folder name the model made up, and indexing
+    it only lets broad words like "programming" or "AI" match a pile of unrelated buckets
+    out of nowhere. `aliases` are in, and they have exactly one job: find it even when it
+    was phrased differently.
+    """
+    meta = bucket.get("metadata", {}) or {}
+    return " ".join([
+        meta.get("name") or "",
+        (bucket.get("content") or "")[:1200],
+        " ".join(meta.get("tags", []) or []),
+        " ".join(meta.get("aliases", []) or []),
+    ])
+
+
+def _doc_key(bucket: dict) -> tuple[str, str]:
+    """What has to change for an entry to be tokenised again: its indexed text, and its
+    decay stage (a sunk entry is indexed from its original, which `source` reads)."""
+    meta = bucket.get("metadata", {}) or {}
+    return str(meta.get("decay_stage") or ""), _doc_text(bucket)
+
+
 class BM25Index:
     """Facade over an in-memory BM25 inverted index.
 
     lifecycle:
-        build(buckets)  — rebuild the index (BucketManager marks dirty on write and
-                          calls this lazily from search)
+        sync(buckets)   — bring the index level with the store. Only entries whose
+                          indexed text changed, or that are new, are tokenised (jieba is
+                          the slow part: the whole store costs about a second per ~1700
+                          entries); entries no longer there drop out; then the BM25 table
+                          is recomputed from the kept tokens (tens of milliseconds). That
+                          is what lets a write be searchable on the very next call.
+        build(buckets)  — sync from empty
         score(query)    — returns {bucket_id: normalized_score}, scores in [0, 1]
+
+    sync may run in a worker thread while score runs on the event loop: score reads one
+    immutable (table, ids) snapshot that sync swaps in with a single assignment, and syncs
+    are serialised by a lock.
     """
 
     def __init__(self):
-        self._index = None          # BM25Okapi instance or None
-        self._ids: list[str] = []
+        self._state: tuple = (None, [])     # (BM25Okapi or None, ids in corpus order)
+        self._docs: dict[str, tuple[tuple[str, str], list[str]]] = {}   # id -> (key, tokens)
+        self._stamp = None                  # the store generation the index was last synced to
+        self._built = False
+        self._lock = threading.Lock()
 
     @property
     def available(self) -> bool:
         return _BM25_AVAILABLE
 
-    def build(self, buckets: list[dict]) -> None:
-        """Rebuild the index. A document = name + content[:1200] + tags + aliases,
-        concatenated and tokenised.
+    @property
+    def built(self) -> bool:
+        """Whether it has been synced at least once (before that every score is empty)."""
+        return self._built
 
-        `domain` was pulled back out of retrieval: it is a folder name the model made
-        up, and indexing it only lets broad words like "programming" or "AI" match a
-        pile of unrelated buckets out of nowhere.
-        `aliases` were let in, and they have exactly one job: find it even when it was
-        phrased differently.
+    def build(self, buckets: list[dict], source=None) -> None:
+        with self._lock:
+            self._docs = {}
+            self._stamp = None
+        self.sync(buckets, source)
+
+    def sync(self, buckets: list[dict], source=None, stamp=None) -> int:
+        """Bring the index level with `buckets`; returns how many entries were tokenised
+        again or dropped.
+
+        `source(bucket)` gives the bucket whose text is indexed when it differs from the
+        one listed (a sunk entry's original); it is called only for entries that changed.
+        `stamp` is the store generation `buckets` was read at: a sync carrying an older
+        stamp than the one already applied does nothing, so a slow sync over an old list
+        can never take back an entry a newer one put in. None always applies.
         """
         if not _BM25_AVAILABLE:
-            return
-        corpus: list[list[str]] = []
-        ids: list[str] = []
-        for b in buckets:
-            meta = b.get("metadata", {})
-            text = " ".join([
-                meta.get("name") or "",
-                b.get("content", "")[:1200],
-                " ".join(meta.get("tags", []) or []),
-                " ".join(meta.get("aliases", []) or []),
-            ])
-            tokens = _tokenize(text)
-            if tokens:
-                corpus.append(tokens)
-                ids.append(b["id"])
-        if corpus:
-            self._index = _BM25Okapi(corpus)
-        else:
-            self._index = None
-        self._ids = ids
+            return 0
+        with self._lock:
+            if stamp is not None and self._stamp is not None and stamp < self._stamp:
+                return 0
+            docs: dict[str, tuple[tuple[str, str], list[str]]] = {}
+            changed = 0
+            for b in buckets:
+                bid = str(b.get("id") or "")
+                if not bid:
+                    continue
+                key = _doc_key(b)
+                old = self._docs.get(bid)
+                if old is not None and old[0] == key:
+                    docs[bid] = old
+                    continue
+                docs[bid] = (key, _tokenize(_doc_text(source(b) if source else b)))
+                changed += 1
+            changed += len(self._docs.keys() - docs.keys())
+            if changed or not self._built:
+                ids = [bid for bid, (_key, tokens) in docs.items() if tokens]
+                corpus = [docs[bid][1] for bid in ids]
+                self._state = (_BM25Okapi(corpus) if corpus else None, ids)
+            self._docs = docs
+            if stamp is not None:
+                self._stamp = stamp
+            self._built = True
+            return changed
 
     def score(self, query: str) -> dict[str, float]:
         """Returns {bucket_id: normalized_bm25_score}; top score = 1.0, {} if nothing hit."""
-        if not _BM25_AVAILABLE or self._index is None:
+        index, ids = self._state
+        if not _BM25_AVAILABLE or index is None:
             return {}
         tokens = _tokenize(query)
         if not tokens:
             return {}
-        raw = self._index.get_scores(tokens)  # numpy ndarray
+        raw = index.get_scores(tokens)  # numpy ndarray
         max_s = float(raw.max()) if raw.size > 0 else 0.0
         if max_s <= 0:
             return {}
-        return {bid: float(s) / max_s for bid, s in zip(self._ids, raw) if s > 0}
+        return {bid: float(s) / max_s for bid, s in zip(ids, raw) if s > 0}

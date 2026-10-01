@@ -11,10 +11,11 @@ from the environment the runner sets:
     EXAM_CLOCK_FILE     where the fake "now" lives (see clock.py)
     EXAM_SEED           seed for random: breath's "suddenly remembered" and dream picks
 
-One more difference, and it is a declared seam: BM25 is rebuilt before a search when a
-write has made it stale. Live Loci rebuilds it in the background and lets that one search
-score against the old index; with embeddings off, that would make every item's first
-search see an empty index and match whole-query substrings only.
+One more difference, and it is a declared seam: the first BM25 build happens before the
+first search instead of in the background. Live Loci builds it in the background and lets
+that one search score without BM25; with embeddings off, that would make every item's
+first search match whole-query substrings only. After that the exam runs what live Loci
+runs: a write leaves BM25 dirty and the next search brings it level before scoring.
 
 And a second seam: a call step may carry a write key (`write_key:` in the item), sent in the
 request's _meta and set for that call the way the request layer will set it from the
@@ -54,11 +55,9 @@ _search = _bm.BucketManager.search
 
 
 async def _search_on_fresh_bm25(self, query, *args, **kwargs):
-    if self._bm25 is not None and self._bm25_dirty:
-        include_archive = kwargs.get("include_archive", False)
-        buckets = await self.list_all(include_archive=include_archive)
+    if self._bm25 is not None and not self._bm25.built:
+        buckets = await self.list_all()
         self._bm25 = await asyncio.to_thread(self._build_bm25_index, buckets)
-        self._bm25_dirty = False
     return await _search(self, query, *args, **kwargs)
 
 
