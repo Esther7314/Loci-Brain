@@ -85,3 +85,26 @@ def test_a_value_outside_the_enum_is_refused(store, tmp_path, field, value):
     bid = run(store.create(BODY + " (2)", tags=["t"]))
     assert run(store.update(bid, **{field: value})) is False
     assert field not in _disk(tmp_path, bid)
+
+
+def test_create_writes_a_cue_and_a_hold(store, tmp_path):
+    bid = run(store.create(
+        BODY, tags=["t"], direction_of_fit="telic", bound=["DT"],
+        cue="the trip is over", exception_of="aaaaaaaaaaaa", hold="avoid",
+        review_after="2026-10-13"))
+    meta = _disk(tmp_path, bid)
+    assert meta["cue"] == {"condition": "the trip is over", "phrasings": []}
+    assert (meta["exception_of"], meta["hold"], meta["review_after"]) == \
+        ("aaaaaaaaaaaa", "avoid", "2026-10-13")
+
+
+@pytest.mark.parametrize("fields", [
+    {"hold": "defer"},
+    {"exception_of": "aaaaaaaaaaaa"},
+    {"cue": {"condition": ""}},
+    {"exception_of": "two ids", "hold": "defer"},
+])
+def test_half_a_hold_or_an_empty_cue_never_reaches_disk(store, tmp_path, fields):
+    with pytest.raises(ValueError):
+        run(store.create(BODY, tags=["t"], **fields))
+    assert not list(tmp_path.rglob("*.md"))

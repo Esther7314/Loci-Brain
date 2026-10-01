@@ -26,6 +26,8 @@ What lives here:
   belongs to no single tool. (Splitting a rule across two homes has cost us twice: a
   room rename that had to be made in both copies, and a `weight=0` falsy-fallback bug
   that got fixed on one side and left standing on the other.)
+- `_holds.py`: what a hold is and when it holds (a short exception hung on a standing
+  entry); breath's roads, the dream pools and the decay sweep all ask it.
 - `profile.py`: the single source for `door_note()` / `event_pool()`. It used to live
   in `tools/breath/awaken.py`, but that rule is not breath's private property — the
   profile page in `web/loci.py` and the awakening in `tools/breath/awaken.py` have to

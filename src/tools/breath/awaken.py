@@ -269,14 +269,14 @@ async def surface_awaken() -> str:
     # ⚠️ Do not add this back. Read this passage before trying.
 
     # ---- 5 Random: something suddenly coming to mind ----
-    # All three gates live in the contract source `event_pool()`: both old and new
+    # All four gates live in the contract source `event_pool()`: both old and new
     # room names are recognised · tooling entries do not count · covered ones stay
-    # out.
+    # out · held ones (and holds themselves) stay out.
     # The profile page imports the same function — what the page calls "suddenly
     # coming to mind" and what I remember on waking have to be the same set, or
     # there are two brains (and that failure is terrifyingly silent: both sides
     # show something, they are just not the same something).
-    ev_pool = event_pool(all_buckets)
+    ev_pool = event_pool(all_buckets, now)
     if ev_pool:
         parts.append("\n═══ 忽然想起 ═══")
         for e in random.sample(ev_pool, min(2, len(ev_pool))):

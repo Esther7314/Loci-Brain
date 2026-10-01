@@ -817,11 +817,34 @@ async def grow(
         "gets louder as the day approaches\n"
         '    a duration, "3w" / "10d" / "2m" / "1y": roughly how long, and the nudging '
         "is paced against how long it has been sitting\n"
-        "    left out: it waits for a trigger. Put the condition in the text (e.g. "
-        '"when he gets back"). It will never nudge you — recognising that the '
-        "condition is met is on you.\n"
+        "    left out: no clock. If it is waiting for something to happen, say what in "
+        "cue; if it is just something you want, leave both out.\n"
+        '· A hold (with exception_of): the day it ends, "2026-10-11", or the days it '
+        'covers, "2026-10-06..2026-10-11". Past that day it lifts by itself.\n'
         "· A stretch of days: not here. To name a stretch of days, use "
         'fold(when="start..end").'
+    ))] = "",
+    cue: Annotated[Optional[dict | str], _PydField(description=(
+        "What this is waiting for, when it waits for something to happen rather than a "
+        'date: {"condition": "<the event, one sentence>"}. Writing a cue says it is '
+        "waiting, so the condition is required. Any entry may carry one — "
+        '{"condition": "the next time we bake"} on "she is allergic to nuts". '
+        "phrasings (ways it might be said) are filled in later; leave them out."
+    ))] = None,
+    exception_of: Annotated[str, _PydField(description=(
+        "Makes this entry a hold: a short exception hung on a standing agreement, whose "
+        "id goes here. The agreement itself is left as it is. One item per call; it is "
+        'always telic and bound to you unless you name someone. e.g. exception_of='
+        '"a1b2c3d4e5f6", hold="defer", when="2026-10-11" for "don\'t push me on the gym '
+        'until Sunday".'
+    ))] = "",
+    hold: Annotated[str, _PydField(description=(
+        'With exception_of: how far the hold reaches. "defer" — don\'t push, don\'t bring '
+        "it up for now; the thing still stands (the usual one, and also what putting "
+        'something aside yourself is). "avoid" — don\'t touch it at all, not even in '
+        'dreams (rare, heavy). e.g. hold="avoid" for "please stop bringing up my dad". '
+        "Without a when, neither lifts by itself: a defer gets a day to look at it again, "
+        "an avoid waits until you close it."
     ))] = "",
 ) -> str:
     """Store what happened, and what you realized from it. Several entries per call.
@@ -881,6 +904,16 @@ async def grow(
       It never closes itself, and the date passing does not close it. Done or not doing it
       is a call you make with trace() once you have seen what happened.
 
+    Example — something wanted that waits on an event, not a date:
+      grow(kind="event", direction_of_fit="telic", bound=["我"],
+           cue={"condition": "her exam is over"},
+           items=[{"room": "EVENT/SELF", "text": "Take her for dessert after the exam.", "v": 0.8, "a": 0.5}])
+
+    Example — "not this week" on something already agreed (a hold; the agreement stays as is):
+      grow(kind="event", exception_of="a1b2c3d4e5f6", hold="defer", when="2026-10-11",
+           items=[{"room": "EVENT/SELF", "text": "She asked me not to push her on the gym until Sunday.", "v": 0.5, "a": 0.3}])
+      Lifting it early is trace(bucket_id=<the hold>, status="resolved").
+
     For a few dozen seconds after writing, tags and summaries are still being filled in in the
     background. Not finding the entry during that window is expected. Do not store it again."""
     return await _with_notice(
@@ -891,6 +924,7 @@ async def grow(
             internally_generated=bool(internally_generated),
             weight=(None if weight is None or weight < 0 else weight),
             test_data=bool(test_data), when=when,
+            cue=cue, exception_of=exception_of, hold=hold,
         ),
         op="grow",
         args={"items": len(items or []),
@@ -898,7 +932,8 @@ async def grow(
               "from": from_, "v": v, "a": a, "direction_of_fit": direction_of_fit,
               "bound": bound, "evidential": evidential,
               "internally_generated": bool(internally_generated), "weight": weight,
-              "when": when, "test_data": bool(test_data)},
+              "when": when, "test_data": bool(test_data), "cue": cue,
+              "exception_of": exception_of, "hold": hold},
     )
 
 
@@ -1381,6 +1416,11 @@ async def trace(
         'the person you talk to. ["我"] you owe it; ["我", "<her name>"] you both agreed; '
         "[] just a wish, nobody owes anything. Other pronouns are refused: write the name."
     ))] = None,
+    cue: Annotated[Optional[dict | str], _PydField(description=(
+        'What this entry is waiting for: {"condition": "<the event, one sentence>"}. '
+        "Replaces any cue it had; the condition is required. An empty string takes the "
+        'cue off. e.g. cue={"condition": "he is back from the trip"}.'
+    ))] = None,
     room: Annotated[str, _PydField(description=(
         "Move the entry to another room. Which room it is in is metadata: it says what "
         "kind of thing this is, not what the entry says, so changing it leaves no version "
@@ -1389,7 +1429,8 @@ async def trace(
     when: Annotated[str, _PydField(description=(
         "Where this entry hangs in time. An ordinary entry takes the day it happened "
         '("2026-07-06"); something wanted takes a date or a length ("3w"); a period takes its range '
-        '("2026-07-31..2026-08-05"). Wrong shapes are refused. Written entries carry the '
+        '("2026-07-31..2026-08-05"); a hold takes the day it ends or the days it covers. '
+        'Wrong shapes are refused. Written entries carry the '
         "day they were written until you say otherwise, which is not always the day the "
         "thing happened."
     ))] = "",
@@ -1453,6 +1494,9 @@ async def trace(
          happened. What was done is its own entry: grow a thetic event with from pointing
          at the wanted one, so "what I meant to do" and "what happened" both stay.
       Whether something is wanted at all is direction_of_fit, not status.
+      A hold (grown with exception_of) is closed the same way: status="resolved" on the
+      hold lifts it early, and the agreement it was hung on comes back. A dated hold
+      lifts by itself once its last day has passed.
 
     Archiving and bringing back:
       delete=True   moves it to the archive and timestamps it. Nothing is really deleted;
@@ -1469,7 +1513,7 @@ async def trace(
 
     Changing fields:
       name / domain / tags / valence / arousal / weight / dont_surface / room / when /
-      direction_of_fit / bound
+      direction_of_fit / bound / cue
       Everything here is metadata: what kind of thing this is, where it hangs in time,
       how it felt. None of it is what the entry says, so none of it leaves a version
       behind — this is correction fluid, not a new draft. The moment the words themselves
@@ -1494,7 +1538,7 @@ async def trace(
             hard_delete=hard_delete, delete_reason=delete_reason,
             restore=restore,
             old_str=old_str, new_str=new_str,
-            direction_of_fit=direction_of_fit, bound=bound,
+            direction_of_fit=direction_of_fit, bound=bound, cue=cue,
         ),
         op="trace",
         args={
@@ -1503,7 +1547,7 @@ async def trace(
             "tags": tags, "pinned": pinned, "room": room, "when": when,
             "folds_append": folds_append,
             "delete": delete, "status": status,
-            "direction_of_fit": direction_of_fit, "bound": bound,
+            "direction_of_fit": direction_of_fit, "bound": bound, "cue": cue,
             "hard_delete": hard_delete,
             "restore": restore,
             "delete_reason_len": len(str(delete_reason or "")),

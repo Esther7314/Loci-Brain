@@ -423,6 +423,32 @@ def test_prov_reaches_disk(store):
     run(go())
 
 
+def test_cue_and_hold_fields_reach_disk(store):
+    async def go():
+        bid = await store.create(BODY)
+        cue = {"condition": "the exam is over", "phrasings": ["after the exam"]}
+        assert await store.update(bid, cue=cue, exception_of="aaaaaaaaaaaa", hold="defer",
+                                  review_after="2026-10-13") is True
+        # Criterion: the same trap a sixth time. A hold's two halves and its review day
+        # go through these fields; dropped here, a hold is an ordinary want that nags.
+        meta = await _meta(store, bid)
+        assert meta["cue"] == cue
+        assert (meta["exception_of"], meta["hold"], meta["review_after"]) == \
+            ("aaaaaaaaaaaa", "defer", "2026-10-13")
+        # Half a hold is refused whole; a value outside its shape too.
+        assert await store.update(bid, hold="") is False
+        assert await store.update(bid, hold="later") is False
+        assert await store.update(bid, review_after="2026-02-30") is False
+        assert await store.update(bid, cue={"phrasings": ["x"]}) is False
+        assert (await _meta(store, bid))["hold"] == "defer"
+        # Empty clears; both halves of the hold go together.
+        assert await store.update(bid, cue="", exception_of="", hold="",
+                                  review_after="") is True
+        meta = await _meta(store, bid)
+        assert not {"cue", "exception_of", "hold", "review_after"} & set(meta)
+    run(go())
+
+
 def test_none_deletes_a_field_instead_of_writing_the_word_none(store):
     async def go():
         bid = await store.create(BODY)

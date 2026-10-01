@@ -170,6 +170,7 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+from . import _holds as _H
 from . import _muse as M
 from tools import _runtime as rt
 from . import _when as _w
@@ -393,17 +394,21 @@ def want_pool(recs: list[tuple[dict, str]], now: datetime) -> list[Ingredient]:
     """What weighs on me: **wants that have not been closed**, weighted by `weight`.
 
     Same definition as "weighing on me" in `core/profile.py` (telic, not closed, not
-    deliberately forgotten, not superseded). ⚠️ With one **deliberate**
-    difference: awaken moves anything with a date inside 30 days over to the ⏰ reminders
+    deliberately forgotten, not superseded, not a hold). ⚠️ With two **deliberate**
+    differences: awaken moves anything with a date inside 30 days over to the ⏰ reminders
     column, but that is a **display split**. As far as a dream is concerned they are all
-    still unfinished business, so all of them count here.
+    still unfinished business, so all of them count here. And only an `avoid` hold keeps
+    a want out of dreams: a `defer` asked not to be pushed, not to be forgotten.
     """
     from utils import is_closed, is_telic
+    holds = _H.hold_index(recs)
     out: list[Ingredient] = []
     for meta, text in recs:
         if not is_telic(meta):
             continue
         if is_closed(meta) or meta.get("dont_surface") or meta.get("superseded_by"):
+            continue
+        if _H.is_hold(meta) or _H.is_held(meta, now, holds) == "avoid":
             continue
         if M._is_utility_record(meta) or str(meta.get("type") or "") in ("letter", "archived"):
             continue
@@ -421,10 +426,16 @@ def unclear_pool(recs, digested: set[str], c: dict, now: datetime) -> list[Ingre
     """Never worked out: events that **carry emotion and that no insight points at**.
 
     🔴 The pool comes straight from `_muse.pool_of(..., "dream", ...)` — ingredient
-    selection goes through one engine; never keep two copies.
+    selection goes through one engine; never keep two copies. What an `avoid` hold is
+    hung on, and holds themselves, are taken out here: muse still sees them.
     """
+    holds = _H.hold_index(recs)
+    skip = {str(m.get("id") or "").strip() for m, _t in recs
+            if _H.is_hold(m) or _H.is_held(m, now, holds) == "avoid"}
     out: list[Ingredient] = []
     for it in M.pool_of(recs, "dream", M.muse_config(rt.config), now, digested):
+        if it.id in skip:
+            continue
         out.append(Ingredient(id=it.id, text=it.text, v=it.v, a=it.a,
                               weight=it.a, days=_age_days(it, now), route="想不明白"))
     return out

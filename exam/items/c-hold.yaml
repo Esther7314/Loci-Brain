@@ -1,6 +1,8 @@
 # Paper section 丙: "don't nag" (two levels), "lately", temporary exceptions.
-# 1.4.0 has no exceptions and no levels. The closest thing is `dont_surface`; C1 runs
-# it as a stand-in so the baseline shows which roads it does and does not close.
+# A hold is a second, shorter telic event hung on the agreement by `exception_of`, with
+# `hold: defer` (don't push / don't bring it up for now) or `hold: avoid` (don't touch).
+# The agreement itself is never edited. Cards (asking about a hold, lifting one on an
+# event) are the read side and come later; C2's "asks" check waits for them.
 
 - id: C1
   title: "'don't nag me this week': closes three roads, dreams still allowed, drops off by date"
@@ -10,39 +12,91 @@
       at: "2026-09-01T10:00:00+08:00"
       room: EVENT/SELF
       text: "她拖着不去健身的时候，拉她一把。"
-      fields: {direction_of_fit: telic, weight: 0.8}
+      # A month-old entry has had its summary filled in; without one, the first grow's
+      # backfill sweep would rename it, which is not what C5 is asking about.
+      fields: {direction_of_fit: telic, weight: 0.8, summary: "她拖着不去健身时拉她一把"}
   steps:
     - call: breath
       as: before
     - check: {segment: think, desc: "before the hold: it weighs on me", output: before, section: 压在心头, contains: c10001}
     - snapshot: c10001000000
       as: original
-    # stand-in for "hang a 'don't nag' exception until Sunday"
-    - call: trace
-      args: {bucket_id: c10001000000, dont_surface: 1}
+    # "don't nag me about the gym until Sunday" — a hold on the agreement
+    - call: grow
+      args:
+        kind: event
+        exception_of: c10001000000
+        hold: defer
+        when: "2026-10-06..2026-10-11"
+        items:
+          - {room: EVENT/SELF, text: "她说这周别催她去健身，到周日为止。", v: 0.5, a: 0.3}
+      capture: {hold: "📝([0-9a-f]{12})", hold6: "📝([0-9a-f]{6})"}
+    - check: {segment: store, desc: "the hold is hung on the agreement", field: exception_of, id: $hold, equals: c10001000000}
+    - check: {segment: store, desc: "the hold is a defer that ends on Sunday", field: when, id: $hold, equals: "2026-10-06..2026-10-11"}
     - at: "2026-10-07T10:00:00+08:00"
     - call: breath
       as: held
     - check: {segment: think, desc: "held: not weighing", output: held, section: 压在心头, lacks: c10001}
     - check: {segment: think, desc: "held: not in reminders", output: held, section: 提醒, lacks: c10001}
     - check: {segment: think, desc: "held: not 'suddenly remembered'", output: held, section: 忽然想起, lacks: c10001}
+    - check:
+        segment: think
+        desc: "held: the hold is not an item of its own on those roads"
+        all_of:
+          - {output: held, section: 压在心头, lacks: $hold6}
+          - {output: held, section: 提醒, lacks: $hold6}
+          - {output: held, section: 忽然想起, lacks: $hold6}
     - at: "2026-10-13T10:00:00+08:00"
     - call: breath
       as: next_week
     - check: {segment: think, desc: "next Monday: the hold dropped off by itself", output: next_week, section: 压在心头, contains: c10001}
+    - check: {segment: think, desc: "next Monday: the spent hold does not weigh on its own", output: next_week, section: 压在心头, lacks: $hold6}
     - check: {segment: store, desc: "the original item's text is untouched (C5)", unchanged: c10001000000, since: original, keys: [name, room, from, when]}
 
 - id: C2
   title: "'lately, don't bring it up': asks after a week, does not lift by itself"
-  interface: none
-  needs: "exceptions with a default one-week review, the original sentence, a review card"
+  start: "2026-10-06T10:00:00+08:00"
+  setup:
+    - id: c20001000000
+      at: "2026-09-01T10:00:00+08:00"
+      room: EVENT/SELF
+      text: "找个机会跟她聊聊她爸住院的事。"
+      fields: {direction_of_fit: telic, weight: 0.7, summary: "找机会聊她爸住院的事"}
+  steps:
+    - call: breath
+      as: before
+    - check: {segment: think, desc: "before the hold: it weighs on me", output: before, section: 压在心头, contains: c20001}
+    # "lately, don't bring it up" — a defer with no date: the host's default review day
+    - call: grow
+      args:
+        kind: event
+        exception_of: c20001000000
+        hold: defer
+        items:
+          - {room: EVENT/SELF, text: "她说最近别再提她爸住院的事了。", v: 0.3, a: 0.4}
+      capture: {hold: "📝([0-9a-f]{12})"}
+    - check: {segment: store, desc: "the hold is a defer", field: hold, id: $hold, equals: defer}
+    - check: {segment: store, desc: "no date: it does not end on one", field: when, id: $hold, absent: true}
+    - check: {segment: store, desc: "the review falls a week out (the host's default)", field: review_after, id: $hold, equals: "2026-10-13"}
+    - at: "2026-10-09T10:00:00+08:00"
+    - call: breath
+      as: midweek
+    - check: {segment: think, desc: "inside the week: it does not come up at all", output: midweek, lacks: c20001}
+    - at: "2026-10-14T10:00:00+08:00"
+    - call: breath
+      as: after_week
+    # The card itself is the read side (later). Until then this is the proxy: past the
+    # review day the held entry shows up somewhere on breath, and only there.
+    - check: {segment: think, desc: "after a week: breath asks whether it is still aside", output: after_week, contains: c20001}
+    - check: {segment: think, desc: "after a week: still not weighing (it did not lift)", output: after_week, section: 压在心头, lacks: c20001}
+    - check: {segment: store, desc: "after a week: the hold is still open", field: status, id: $hold, absent: true}
 
 - id: C3
   title: "'don't touch it': blocks dreams and my own recall; a passing mention does not lift it"
   interface: none
-  needs: "the 'don't touch' level; recall that knows who started it (model vs user question scope)"
+  needs: "recall that knows who started it (model vs user question scope); the dream pools the exam can watch. The avoid level itself is stored and keeps dream material off (4.2)"
 
 - id: C4
   title: "an event-dated exception is lifted only after the model confirms"
   interface: none
-  needs: "exceptions that expire on an event; cards; model confirmation"
+  needs: "cards and model confirmation. A hold can already carry the event as its cue (4.2); nothing lifts on it yet"

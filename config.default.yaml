@@ -169,6 +169,10 @@ surfacing:
   breath_max_results: 20          # 1-50, hard cap of buckets returned per breath
   breath_max_tokens: 10000        # 500-20000, total token cap per breath
   feel_max_tokens: 6000           # 500-20000, full-text budget for feel history; older feels collapse to one-line summaries
+  # A "for now" hold (defer, no date) gets a review day this many days after it is written:
+  # that day breath asks once whether it is still aside. It does not lift by itself. 0 = never ask.
+  # 「先放一放」的条子（defer、没写日子）过这么多天问一次还放不放着；不会自己放下。0 = 不问。
+  hold_review_days: 7
   # iter 1.8: weighted sampling for breath surfacing mode（无参数浮现）
   # 加权采样：从 top_k 候选里按 score**(1/temperature) 抽 sample_k 个，让"想起"带轻微随机性。
   # 测试 fixture 里默认关 (enabled=false)，保证排序确定。生产可以开。

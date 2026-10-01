@@ -23,9 +23,16 @@ Key behaviour:
   validated here and written by create() itself, in the same write as the body
 - With direction_of_fit="telic", when accepts one more form: a duration marker (3w/10d/2m/1y)
   which, together with absolute dates, makes up a want's "three kinds of clock";
-  the third is waiting for a trigger (when is left empty and the condition is
-  written into the body). How the three are read belongs to
-  `core/profile._want_clock`; this file only validates that they can be stored
+  the third is waiting for something to happen (when is left empty and the event
+  goes in `cue`). How the three are read belongs to `core/profile._want_clock`;
+  this file only validates that they can be stored
+- cue ({condition, phrasings}) may ride on any entry; writing one is the
+  declaration that it waits on something, so a cue without a condition is refused.
+  A telic entry with neither when nor cue is a plain want, and is accepted
+- A hold (core/_holds.py) is a one-item telic event with exception_of + hold:
+  checked here (the target live and current, the level known, when a day or a
+  closed span), bound defaulting to the AI, review_after set from the host's
+  config for a defer without a date
 - Validation comes first: if any single item is invalid the whole call errors and
   no bucket is created
 
@@ -37,9 +44,9 @@ What this file deliberately does not do:
   to death
 
 Exports: grow_event(items, direction_of_fit, bound, evidential, internally_generated,
-                    weight, from_ids, test_data) -> str
+                    weight, from_ids, test_data, cue, exception_of, hold) -> str
          grow_mind(room, text, from_ids, v, a, direction_of_fit, bound, evidential,
-                   internally_generated, weight, test_data) -> str
+                   internally_generated, weight, test_data, cue) -> str
 ========================================
 """
 
@@ -48,9 +55,10 @@ import uuid
 from datetime import timedelta
 
 from core import _fold as _F       # a big event = fold's way of circling time
+from core import _holds as _H
 from .. import _runtime as rt
 from core._bigevent import SPAN_RE, first_line as _F_first_line
-from .._common import check_content_size, resolve_bucket_ids
+from .._common import check_content_size, resolve_bucket_id, resolve_bucket_ids
 from core._rooms import check_room, is_mind_room
 from .._subjects import normalize_bound, normalize_subjects
 from utils import (PROV_MAX_LINES, PROV_TARGET_MAX, WAS_DERIVED_FROM, WAS_QUOTED_FROM,
@@ -428,6 +436,85 @@ def _check_v2(kind: str, direction_of_fit, bound, evidential,
     return fields, ""
 
 
+_CUE_KEYS = ("condition", "phrasings")
+_CUE_CONDITION_MAX = 200
+
+
+def check_cue(cue) -> tuple[dict | None, str]:
+    """The `cue` argument -> {condition, phrasings} to store, None when none was given,
+    or a refusal. Writing a cue is the declaration that the entry waits on something,
+    so the condition (what it waits on) is what cannot be missing. phrasings belong to
+    the backfill and are taken as given. trace reads cues through here too."""
+    if cue is None or cue == "":
+        return None, ""
+    if isinstance(cue, str):
+        cue = {"condition": cue}
+    if not isinstance(cue, dict):
+        return None, 'cue 写成 {"condition": "等的那件事，一句话"}。'
+    extra = [k for k in cue if k not in _CUE_KEYS]
+    if extra:
+        return None, (f"cue 不认识 {', '.join(map(str, extra))}：只有 condition（等的那件事）"
+                      "和 phrasings（它可能被怎么说出来，可以不填）。")
+    condition = str(cue.get("condition") or "").strip()
+    if not condition:
+        return None, ('cue 要有 condition：等的是哪件事，一句话（例如 "考完试"）。'
+                      "写了 cue 就是在等，等什么得说出来；不是在等就别写 cue。")
+    if len(condition) > _CUE_CONDITION_MAX:
+        return None, f"cue 的 condition 是一句话，最多 {_CUE_CONDITION_MAX} 字（收到 {len(condition)}）。"
+    phrasings = cue.get("phrasings") or []
+    if isinstance(phrasings, str):
+        phrasings = [phrasings]
+    if not isinstance(phrasings, list) or not all(isinstance(p, str) for p in phrasings):
+        return None, "cue 的 phrasings 是几句话的列表。"
+    return {"condition": condition, "phrasings": [p.strip() for p in phrasings if p.strip()]}, ""
+
+
+async def _check_hold(exception_of, hold) -> tuple[str, str, str]:
+    """The hold arguments -> (target id, level, refusal). Both empty is no hold. The
+    target goes through the same short-id resolver as every write tool, and has to be
+    a live, current entry that is not itself a hold."""
+    target = str(exception_of or "").strip()
+    level = str(hold or "").strip().lower()
+    if not target and not level:
+        return "", "", ""
+    if not target:
+        return "", "", "有 hold 就要有 exception_of：这张条子挂在哪条约定上，填它的 id。"
+    if not level:
+        return "", "", ('挂条子要说是哪种：hold="defer"（先别催 / 先别提，事还算数），'
+                        'hold="avoid"（别碰，连想都别想）。')
+    if level not in _H.HOLD_LEVELS:
+        return "", "", (f'hold 只有两个值："defer"（先别催 / 先别提）/ "avoid"（别碰）'
+                        f"，收到 {hold}。")
+    target, id_err = await resolve_bucket_id(target)
+    if id_err:
+        return "", "", f"exception_of —— {id_err}"
+    found = await rt.bucket_mgr.get_including_archive(target)
+    if not found:
+        return "", "", f"exception_of 指的 {target} 不存在。填那条约定的真 id。"
+    meta = found.get("metadata") or {}
+    if meta.get("deleted_at") or not rt.bucket_mgr.is_live(target):
+        return "", "", (f"{target} 在归档区，条子挂不上去。"
+                        f'先 trace(bucket_id="{target}", restore=True) 捞回来。')
+    newer = str(meta.get("superseded_by") or "").strip()
+    if newer:
+        return "", "", f"{target} 已经有新版 {newer}——条子挂到新版上。"
+    if _H.is_hold(meta):
+        return "", "", (f"{target} 本身是一张条子。条子挂在约定上："
+                        f"exception_of 填它挂着的 {meta.get('exception_of')}。")
+    return target, level, ""
+
+
+def _hold_receipt(bid: str, target: str, level: str, when: str, review_after: str) -> str:
+    """One line saying how this hold will end, so the model hears it once at writing."""
+    head = f"📎 条子 {bid} 挂在 {target} 上（{level}）"
+    close = f'trace(bucket_id="{bid}", status="resolved")'
+    if when:
+        return f"{head}：{when} 过完自己放下；提前放下就 {close}。"
+    if review_after:
+        return f"{head}：没写日子，不会自己放下，{review_after} 是回头再看它的日子；放下就 {close}。"
+    return f"{head}：不会自己放下，要放下就 {close}。"
+
+
 def _in_the_future(when: str) -> bool:
     """Is `when` after now? A bare date is its local midnight; ten minutes of slack for
     a clock that runs a little ahead."""
@@ -539,9 +626,25 @@ async def _normalize_from(from_ids, missing_hint: str = "") -> tuple[list[dict] 
 
 async def grow_event(items: list, direction_of_fit: str = "", bound=None,
                      evidential: str = "", internally_generated: bool = False,
-                     weight=None, from_ids=None, test_data: bool = False) -> str:
+                     weight=None, from_ids=None, test_data: bool = False,
+                     cue=None, exception_of: str = "", hold: str = "") -> str:
     if not isinstance(items, list) or not items:
         return 'kind="event" 需要 items=[{room, text, when?}, ...]，至少一条。'
+    cue_v, cue_err = check_cue(cue)
+    if cue_err:
+        return cue_err
+    hold_target, hold_level, hold_err = await _check_hold(exception_of, hold)
+    if hold_err:
+        return hold_err
+    if hold_target:
+        # A hold is about what I do next: always wanted, and mine unless named otherwise.
+        if len(items) != 1:
+            return f"一张条子一条：items 只放这一条（收到 {len(items)} 条）。"
+        if str(direction_of_fit or "").strip().lower() == "thetic":
+            return '条子总是 telic（它管的是我接下来怎么做），direction_of_fit 不填或填 "telic"。'
+        direction_of_fit = "telic"
+        if not bound:
+            bound = ["我"]
     v2, v2_err = _check_v2("event", direction_of_fit, bound, evidential,
                            internally_generated, weight)
     if v2_err:
@@ -574,7 +677,12 @@ async def grow_event(items: list, direction_of_fit: str = "", bound=None,
         # (one that carries a magnitude).
         # How the three kinds are read lives in core/profile.py._want_clock; this
         # only decides whether the value can be stored.
-        if when:
+        # A hold's when is the day it ends, or the span it covers (core/_holds.py).
+        if when and hold_target:
+            hold_when_err = _H.check_hold_when(when)
+            if hold_when_err:
+                return f"items[{idx}]: {hold_when_err}"
+        elif when:
             _when_ok = bool(_WHEN_RE.match(when))
             if not _when_ok and telic and _WANT_DURATION_RE.match(when):
                 _when_ok = True
@@ -582,7 +690,7 @@ async def grow_event(items: list, direction_of_fit: str = "", bound=None,
                 if telic:
                     return (f"items[{idx}]: when 格式无效：{when}。三种填法：有期限写 "
                             "YYYY-MM-DD；有量级写时长记号（3w=3周/10d=10天/2m=2个月/1y=1年）；"
-                            "等触发就不填 when，条件写在正文里。")
+                            "等某件事发生就不填 when，写 cue={\"condition\": \"等的那件事\"}。")
                 return f"items[{idx}]: when 格式无效：{when}。用 YYYY-MM-DD（可带时间），不填＝存入时间。"
         # You live things only in the past. A lived event set in the future is either
         # something wanted (telic) or something imagined (internally_generated).
@@ -639,8 +747,18 @@ async def grow_event(items: list, direction_of_fit: str = "", bound=None,
     except Exception:
         pass
 
+    # cue, and the hold's three fields, in the same create() as the body.
+    extra: dict = {"cue": cue_v}
+    if hold_target:
+        from core import _when as _w
+        extra.update(exception_of=hold_target, hold=hold_level,
+                     review_after=_H.review_after_for(hold_level, cleaned[0]["when"],
+                                                      _w.now(), rt.config))
+    hold_ids: list[str] = []
     for item in cleaned:
-        dup_id = existing_by_content.get(item["text"])
+        # A hold is written even when its words match an older one: the same "not this
+        # week" a month later is a new hold, not a duplicate.
+        dup_id = None if hold_target else existing_by_content.get(item["text"])
         if dup_id:
             results.append(f"♻️{dup_id} 已存过（同文，未重建）")
             continue
@@ -659,10 +777,13 @@ async def grow_event(items: list, direction_of_fit: str = "", bound=None,
             prov=prov,
             test_data=test_data,
             **v2,
+            **extra,
         )
         results.append(f"📝{bucket_id} {item['room']}")
         pairs.append((bucket_id, item["text"], "event"))
         existing_by_content.setdefault(item["text"], bucket_id)
+        if hold_target:
+            hold_ids.append(bucket_id)
 
     # --- Metadata comes later: tagging / gist / naming run in the background,
     # and a failure only leaves a warning ---
@@ -674,7 +795,12 @@ async def grow_event(items: list, direction_of_fit: str = "", bound=None,
         head += f"（另 {dup_n} 条同文已存过，未重建）"
     if telic:
         head += " [telic]"
+    if cue_v:
+        head += " [cue]"
     out = head + "（标签/摘要后台回填中，几十秒内可检索）\n" + "\n".join(results)
+    for bid in hold_ids:
+        out += "\n" + _hold_receipt(bid, hold_target, hold_level, cleaned[0]["when"],
+                                    extra.get("review_after") or "")
 
     # Overlong entries get a single remark; **whether and how to split is my
     # judgement, made on the spot**.
@@ -708,7 +834,7 @@ async def grow_mind(room: str, text: str, from_ids, v, a,
                     direction_of_fit: str = "", bound=None, evidential: str = "",
                     internally_generated: bool = False, weight=None,
                     importance=None, meaning: str = "",
-                    test_data: bool = False) -> str:
+                    test_data: bool = False, cue=None) -> str:
     room = str(room or "").strip()
     text = str(text or "")  # stored verbatim: never strip the body
     room_err = check_room(room, "mind")
@@ -723,6 +849,9 @@ async def grow_mind(room: str, text: str, from_ids, v, a,
                            internally_generated, weight)
     if v2_err:
         return v2_err
+    cue_v, cue_err = check_cue(cue)
+    if cue_err:
+        return cue_err
     # importance / meaning are retired — rejected on the spot, never silently
     # swallowed (the reasoning is in _RETIRED_MSG).
     # The parameters are kept so that this human-readable message can be
@@ -767,6 +896,7 @@ async def grow_mind(room: str, text: str, from_ids, v, a,
         source_tool="grow",
         room=room,
         test_data=test_data,
+        cue=cue_v,
         **v2,
     )
     try:
@@ -782,4 +912,6 @@ async def grow_mind(room: str, text: str, from_ids, v, a,
             f" V{v:.2f}/A{a:.2f}")
     if v2["direction_of_fit"] == "telic":
         head += " [telic]"
+    if cue_v:
+        head += " [cue]"
     return head + "（标签/摘要后台回填中）"

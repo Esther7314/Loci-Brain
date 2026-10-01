@@ -31,7 +31,8 @@ What this file deliberately does not do:
 Exports: trace_core(bucket_id, name, domain, valence, arousal, tags, pinned,
                     delete, status, weight, dont_surface, media_append,
                     media_replace, hard_delete, delete_reason, restore,
-                    old_str, new_str, closed_by, mark_asked) -> str
+                    old_str, new_str, closed_by, mark_asked, direction_of_fit,
+                    bound, cue) -> str
 ⚰️ Seven dead parameters were removed: importance / resolved / digested /
    content / why_remembered / meaning_append / meaning_replace (see the epitaph
    at _retired below)
@@ -49,6 +50,7 @@ from .._pin import pin_note
 from core._rooms import check_room
 from core._bigevent import SPAN_RE, is_big as _is_big
 from core import _fold as _F
+from core import _holds as _H
 from .._common import (
     _HIGH_IMP_THRESHOLD,
     _quota_turn,
@@ -116,6 +118,9 @@ def _check_when(when: str, meta: dict) -> str | None:
             return ('时期的 when 要写成起止："2026-07-31..2026-08-05"，'
                     '进行中就把止留空："2026-07-31.."。')
         return _check_real_dates(m.group(1), m.group(2) or "")
+    if _H.is_hold(meta):
+        # A hold's when is the day it ends or the days it covers (core/_holds.py).
+        return _H.check_hold_when(when) or None
     if is_telic(meta):
         if not (_DATE_RE.match(when) or _DUR_RE.match(when)):
             return ('想发生的事，when 要么是个日子（"2026-09-01"），'
@@ -194,6 +199,7 @@ async def trace_core(
     mark_asked: Optional[bool] = False,
     direction_of_fit: Optional[str] = "",
     bound: Optional[list | str] = None,
+    cue: Optional[dict | str] = None,
 ) -> str:
     bucket_id = "" if bucket_id is None else str(bucket_id)
     if name is None:
@@ -241,6 +247,23 @@ async def trace_core(
         bound_names, bound_err = normalize_bound(bound)
         if bound_err:
             return bound_err
+    # cue: None leaves it alone, "" takes it off, anything else has to be a whole cue
+    # (grow's check, so a cue means the same thing whichever tool wrote it).
+    cue_update: tuple | None = None
+    if cue is not None:
+        if isinstance(cue, str) and not cue.strip():
+            cue_update = (None,)
+        else:
+            from ..grow.rooms_path import check_cue
+            if isinstance(cue, str) and cue.strip().startswith("{"):
+                try:
+                    cue = __import__("json").loads(cue)
+                except ValueError:
+                    pass
+            cue_value, cue_err = check_cue(cue)
+            if cue_err:
+                return cue_err
+            cue_update = (cue_value,)
     if folds_append is None:
         folds_append = []
     if isinstance(folds_append, str):
@@ -332,6 +355,7 @@ async def trace_core(
         bool(room),
         bool(when),
         bool(folds_append),
+        cue_update is not None,
     ))
     if restore and restore_conflicts:
         return (
@@ -606,6 +630,8 @@ async def trace_core(
             updates["direction_of_fit"] = direction_of_fit
         if bound_names is not None:
             updates["bound"] = bound_names
+        if cue_update is not None:
+            updates["cue"] = cue_update[0]
         if when:
             # Checked against the direction this same call leaves it in.
             when_meta = ({**meta, "direction_of_fit": direction_of_fit}

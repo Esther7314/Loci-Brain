@@ -35,7 +35,7 @@
 - id: H4
   title: "'don't touch' keeps an entry out of dreams; 'don't nag' does not"
   interface: none
-  needs: "the two hold levels (丙); dream weaving from the harness"
+  needs: "dream weaving from the harness. The two hold levels exist (4.2) and the dream pools honour them (unit-tested)"
 
 - id: J1
   title: "shown, searched and derived-from are recorded by code"

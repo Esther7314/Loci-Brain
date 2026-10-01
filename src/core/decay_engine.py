@@ -33,7 +33,10 @@ Key behaviours:
 
 What it deliberately does not do:
 - No moving buckets into archive, and no automatic closing (that is the system lying on
-  your behalf and burying the evidence — it was cut).
+  your behalf and burying the evidence — it was cut). The one thing it does close is a
+  hold whose own date has passed (core/_holds.py): the end was set when the hold was
+  written, so closing it records what was said rather than deciding anything, and it
+  says so (`closed_by: "expired"`).
 - No content changes (sinking itself lives in bucket_manager.sink_bucket), no tagging,
   no LLM calls.
 - Not one number reaches breath or recall (forgetting happens quietly); the dashboard
@@ -49,6 +52,8 @@ import asyncio
 import logging
 
 from utils import parse_iso_datetime, is_closed, is_telic, utc_now
+from . import _holds as _H
+from . import _when as _w
 from ._bigevent import BIGEVENT_TAG
 from ._rooms import is_mind_room
 
@@ -440,8 +445,22 @@ class DecayEngine:
         n_faded = 0
         n_sunk = 0
         n_revived = 0
+        n_expired = 0
+        today = _w.now()
         for bucket in buckets:
             meta = bucket.get("metadata", {})
+            # A dated hold past its last day stops holding on read already; closing it
+            # here is what lets it age (open and bound, it would never sink). It ages
+            # from the next cycle on.
+            if _H.hold_expired(meta, today):
+                bid = str(meta.get("id") or bucket.get("id") or "")
+                try:
+                    if await self.bucket_mgr.update(bid, status="resolved",
+                                                    closed_by=_H.CLOSED_BY_EXPIRY):
+                        n_expired += 1
+                except Exception as e:
+                    logger.warning(f"Closing expired hold {bid} failed: {e}")
+                continue
             if self._never_decays(meta):
                 continue
             # Besides letter/seed there can be archived shells mixed into list_all: leave them alone
@@ -498,6 +517,7 @@ class DecayEngine:
             "faded": n_faded,
             "sunk": n_sunk,
             "revived": n_revived,
+            "holds_expired": n_expired,
             "backfilled_embeddings": backfilled_embeddings,
         }
         logger.info(f"Decay cycle complete / 遗忘周期完成: {result}")

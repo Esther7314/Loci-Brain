@@ -48,6 +48,9 @@ async def dispatch(
     weight=None,
     test_data: bool = False,
     when: str = "",
+    cue=None,
+    exception_of: str = "",
+    hold: str = "",
 ) -> str:
     await rt.decay_engine.ensure_started()
 
@@ -62,6 +65,11 @@ async def dispatch(
     if isinstance(from_, str) and from_.strip().startswith("["):
         try:
             from_ = _json.loads(from_)
+        except (ValueError, TypeError):
+            pass
+    if isinstance(cue, str) and cue.strip().startswith("{"):
+        try:
+            cue = _json.loads(cue)
         except (ValueError, TypeError):
             pass
 
@@ -101,13 +109,17 @@ async def dispatch(
         return await grow_event(items or [], direction_of_fit=direction_of_fit,
                                 bound=bound, evidential=evidential,
                                 internally_generated=internally_generated, weight=weight,
-                                from_ids=from_, test_data=test_data)
+                                from_ids=from_, test_data=test_data,
+                                cue=cue, exception_of=exception_of, hold=hold)
     if kind == "mind":
+        if str(exception_of or "").strip() or str(hold or "").strip():
+            return ('条子是一条事件：grow(kind="event", exception_of="约定的id", '
+                    'hold="defer", items=[{room, text, v, a}])。')
         return await grow_mind(room, text, from_, v, a,
                                direction_of_fit=direction_of_fit, bound=bound,
                                evidential=evidential,
                                internally_generated=internally_generated,
-                               weight=weight, test_data=test_data)
+                               weight=weight, test_data=test_data, cue=cue)
     if kind == "big":
         # ⚰️ `kind="big"` was pulled from the tool face.
         #    Underneath it called fold's own bones (`_F.save_gist`) — it was a

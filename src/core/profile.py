@@ -29,8 +29,11 @@ with no new persisted field (the one tag convention below excepted):
    there is `edited_by_user()`, which scans for the edit tag plus "not yet folded away"
    (`_F.is_covered()`). That is the entire notification mechanism: the tag is both the
    mark and the notice, and no separate notification table was opened.
+④ **Holds** (`core/_holds.py`): an entry with a live hold on it (either level) stays off
+   ⏰ reminders, 🫀 weighing on me and "something suddenly comes back"; a hold entry is
+   never an item of its own on those roads — it belongs with the entry it is hung on.
 
-Exports: door_note(all_buckets, now) / event_pool(all_buckets) / edited_by_user(all_buckets)
+Exports: door_note(all_buckets, now) / event_pool(all_buckets, now=None) / edited_by_user(all_buckets)
 ========================================
 """
 
@@ -40,6 +43,7 @@ from datetime import datetime
 from utils import is_closed, is_telic
 
 from . import _fold as _F         # anything covered stops surfacing on its own
+from . import _holds as _H        # a live hold keeps its entry off the three roads
 from . import _when as _w          # "today" on the local calendar
 # is_mind_room is deliberately no longer imported: the secondary "a rule has to live in
 # MIND" filter at the door was taken out (see the long note further down)
@@ -169,11 +173,12 @@ def _held_loudness(held: int) -> str:
     return "now" if held >= 60 else "soon" if held >= 30 else "near" if held >= 7 else "far"
 
 
-def event_pool(all_buckets: list) -> list[dict]:
+def event_pool(all_buckets: list, now: datetime | None = None) -> list[dict]:
     """The pool behind "something suddenly comes back": events that are visible, live in
-    an EVENT room, and have **not been covered**.
+    an EVENT room, have **not been covered**, and are not held (a hold entry, or an entry
+    with a hold live on it at `now`, local today when omitted).
 
-    🔴 Three gates; miss any one of them and it fails silently:
+    🔴 Four gates; miss any one of them and it fails silently:
     ① `is_event_room()` accepts both old and new room names. Both sides used to write
        `.find("/EVENT/") > 0` themselves, and the new name `EVENT/SELF` contains no
        `/EVENT/` at all, so the pool would **go silently empty** with no error.
@@ -185,9 +190,13 @@ def event_pool(all_buckets: list) -> list[dict]:
        ⚠️ `is_covered()` also covers superseded versions (`superseded_by`) now; that half
        used to be excluded wholesale by `_visible()`, and both are handled by this one
        gate today.
+    ④ **Held entries stay out**, at either level: a hold asked for it not to come up
+       for now. The hold entry itself stays out too; it rides with what it is hung on.
     ⚠️ A future threshold engine's candidate pool has to pass the same gate:
        **this is the anchor point for it.**
     """
+    now = now or _w.now()
+    holds = _H.hold_index(all_buckets)
     pool: list[dict] = []
     for b in all_buckets:
         meta = b.get("metadata", {}) or {}
@@ -197,6 +206,8 @@ def event_pool(all_buckets: list) -> list[dict]:
         if not _visible(meta) or _F.is_covered(meta):
             continue
         if not is_event_room(meta.get("room")):
+            continue
+        if _H.is_hold(meta) or _H.is_held(meta, now, holds):
             continue
         bid = str(meta.get("id") or b.get("id") or "")
         if not bid:
@@ -223,6 +234,7 @@ def door_note(all_buckets: list, now: datetime) -> dict:
     heavy: list[dict] = []        # weighing on me: wants with no date, or a date that passed unresolved
     big: list[dict] = []          # periods (big events) — absent from the awakening, listed on the profile page
     entries: list[dict] = []      # visible memories by recall's definition (for the random pick / the earliest one)
+    holds = _H.hold_index(all_buckets)
 
     for b in all_buckets:
         meta = b.get("metadata", {}) or {}
@@ -251,12 +263,15 @@ def door_note(all_buckets: list, now: datetime) -> dict:
 
         # Reminders: `when` within the next 30 days (wants and ordinary events alike).
         # Nothing closed (resolved/abandoned), deliberately forgotten, or superseded
-        # gets a reminder.
+        # gets a reminder; nor does a hold, or anything a live hold is hung on. The same
+        # test keeps both out of "weighing on me" below.
         _status = str(meta.get("status") or "")
         _telic = is_telic(meta)
         _remindable = (not is_closed(meta)  # only `status` marks an ending; the old booleans stay read-only for compatibility
                        and not meta.get("dont_surface")
-                       and not meta.get("superseded_by"))
+                       and not meta.get("superseded_by")
+                       and not _H.is_hold(meta)
+                       and not _H.is_held(meta, now, holds))
         w = str(meta.get("when") or "") if _remindable else ""
         m = re.match(r"(\d{4}-\d{2}-\d{2})", w)
         _reminded = False

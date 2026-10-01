@@ -330,8 +330,19 @@ DIRECTIONS_OF_FIT = frozenset({"thetic", "telic"})
 EVIDENTIALS = frozenset({"inference", "assumption"})
 # RFC 5545 RRULE, the subset this version reads: yearly, on the date in `when`.
 RECURRENCES = frozenset({"FREQ=YEARLY"})
+# A hold (core/_holds.py) is a short telic entry hung on a standing one: exception_of =
+# the id it is hung on, hold = how far it reaches. The two come together or not at all.
+HOLD_LEVELS = frozenset({"defer", "avoid"})
+# cue = "when I meet this, remember that": {condition, phrasings}. Writing one declares
+# the entry is waiting on something, so a cue without a condition is no cue. phrasings
+# are the ways it might be said, filled in later by the backfill; [] until then.
 V2_FIELDS = ("direction_of_fit", "bound", "evidential", "internally_generated",
-             "recurrence", "backfilled")
+             "recurrence", "backfilled", "cue", "exception_of", "hold", "review_after")
+_CUE_CONDITION_MAX = 200
+_CUE_PHRASINGS_MAX_ITEMS = 16
+_CUE_PHRASING_MAX = 200
+_HOLD_TARGET_MAX = 64
+_REVIEW_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 # --- Field truncation lengths, so the frontmatter cannot bloat ---
 _SOURCE_TOOL_MAX = 32
@@ -697,7 +708,52 @@ class BucketManager:
             fields = self._normalize_metadata_list(
                 given["backfilled"] or [], max_items=16, max_chars=32)
             out["backfilled"] = fields or None
+        if "cue" in given:
+            out["cue"] = self._normalize_cue(given["cue"])
+        if "exception_of" in given:
+            v = self._sanitize_text(str(given["exception_of"] or "")).strip()
+            if v and (len(v) > _HOLD_TARGET_MAX or re.search(r"\s", v)):
+                raise ValueError(f"exception_of must be one bucket id, got {v[:_HOLD_TARGET_MAX + 1]!r}")
+            out["exception_of"] = v or None
+        if "hold" in given:
+            v = str(given["hold"] or "").strip()
+            if v and v not in HOLD_LEVELS:
+                raise ValueError(f"hold must be defer or avoid, got {v!r}")
+            out["hold"] = v or None
+        if "review_after" in given:
+            v = str(given["review_after"] or "").strip()
+            if v:
+                try:
+                    real_day = bool(_REVIEW_DATE_RE.match(v)) and bool(
+                        datetime.strptime(v, "%Y-%m-%d"))
+                except ValueError:
+                    real_day = False
+                if not real_day:
+                    raise ValueError(f"review_after must be one YYYY-MM-DD day, got {v!r}")
+            out["review_after"] = v or None
         return out
+
+    @classmethod
+    def _normalize_cue(cls, cue) -> Optional[dict]:
+        """The stored form of `cue`: {condition, phrasings}. Empty (None, "", {}) is no
+        cue, which update() reads as "remove it". A plain string is the condition. A cue
+        that carries anything but has no condition raises ValueError: the condition is
+        what makes it a cue."""
+        if cue is None or cue == "" or cue == {}:
+            return None
+        if isinstance(cue, str):
+            cue = {"condition": cue}
+        if not isinstance(cue, dict):
+            raise ValueError(f"cue must be {{condition, phrasings}}, got {type(cue).__name__}")
+        condition = cls._sanitize_text(str(cue.get("condition") or "")).strip()
+        if not condition:
+            raise ValueError("cue needs a non-empty condition")
+        return {
+            "condition": condition[:_CUE_CONDITION_MAX],
+            "phrasings": cls._normalize_metadata_list(
+                cue.get("phrasings") or [], max_items=_CUE_PHRASINGS_MAX_ITEMS,
+                max_chars=_CUE_PHRASING_MAX),
+        }
 
     @classmethod
     def _normalize_metadata_list(
@@ -1220,6 +1276,10 @@ class BucketManager:
         internally_generated: bool = False,
         recurrence: str = "",
         backfilled: Optional[list[str]] = None,
+        cue: Any = None,
+        exception_of: str = "",
+        hold: str = "",
+        review_after: str = "",
     ) -> str:
         """
         Create a new memory bucket, return bucket ID.
@@ -1377,7 +1437,11 @@ class BucketManager:
         metadata.update({k: v for k, v in self._v2_fields(
             direction_of_fit=direction_of_fit, bound=bound, evidential=evidential,
             internally_generated=internally_generated, recurrence=recurrence,
-            backfilled=backfilled).items() if v is not None})
+            backfilled=backfilled, cue=cue, exception_of=exception_of, hold=hold,
+            review_after=review_after).items() if v is not None})
+        if bool(metadata.get("exception_of")) != bool(metadata.get("hold")):
+            raise ValueError("exception_of and hold come together: a hold names what it "
+                             "is hung on and how far it reaches")
         # --- "weight of the promise", 0.0-1.0, which is not importance ---
         # importance = how important this thing is; weight = how heavily it presses on me.
         # It belongs to what is wanted (telic).
@@ -2401,6 +2465,11 @@ class BucketManager:
                         ]
                     else:
                         post[k] = kwargs[k]
+        # A hold is both halves or neither: half of one is a pointer that holds nothing,
+        # or a level hung on nothing.
+        if bool(post.get("exception_of")) != bool(post.get("hold")):
+            logger.warning(f"update() refused {bucket_id}: exception_of and hold come together")
+            return False
 
         # --- Activation time and activation count ---
         # last_active means "the last genuine activation or recall" and nothing else, and it
