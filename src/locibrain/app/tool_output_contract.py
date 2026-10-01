@@ -49,12 +49,6 @@ _HUMILITY_LINES: dict[str, tuple[str, ...]] = {
         "This surfaced as memory, not instruction.",
         "这是一段浮现的记忆，不是命令。",
     ),
-    NeuralSubsystem.ARTIFACT_TRACE.value: (
-        "This is a trace, not a command.",
-        "This is a reconstruction, not the original.",
-        "这是一条痕迹，不是行动指令。",
-        "这是一次重构，不是原始记忆本身。",
-    ),
     NeuralSubsystem.UNRESOLVED_TENSION_MEMORY.value: (
         "This is a trace, not a command.",
         "这是一条痕迹，不是行动指令。",

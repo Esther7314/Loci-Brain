@@ -7,7 +7,7 @@ from locibrain.adapters.bucket_adapter import bucket_markdown_to_event
 from locibrain.fabric.storage.engine import MemoryFabric
 
 
-_BUCKET_DIRS = ("dynamic", "permanent", "archive", "feel", "plans", "letters")
+_BUCKET_DIRS = ("dynamic", "permanent", "archive", "feel", "plans")
 
 
 @dataclass(frozen=True)

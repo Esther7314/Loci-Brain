@@ -7,7 +7,7 @@ WHY THIS FILE EXISTS
     road needed them, and a road that forgot one leaked without a sound: 「忽然想起」 and
     the undigested dream pool both showed an entry its owner had marked `dont_surface`,
     and a read by id handed back an archived or deleted entry word for word, as if it were
-    current. core/visibility.py gathers the rules; this file feeds each of the nine places
+    current. core/visibility.py gathers the rules; this file feeds each of the eight places
     an archived, a deleted and a dont_surface entry and says what each must do with it.
 
 THE TABLE
@@ -39,7 +39,6 @@ from core.bucket_manager import BucketManager
 from core._invalidation import block as invalidation_block
 from core.profile import door_note, edited_by_user, event_pool, involuntary, prospective
 from tools import _runtime as rt
-from tools.letter.core import letter_read, letter_write
 from tools.recall import core as R
 
 NOW = datetime(2026, 8, 22, 21, 0, 0, tzinfo=W.LOCAL_TZ)
@@ -99,7 +98,7 @@ async def put_in_state(store, bid, state):
         assert await store.update(bid, dont_surface=True)
 
 
-# ── the nine places ─────────────────────────────────────────────────────────
+# ── the eight places ────────────────────────────────────────────────────────
 
 def breath_reminders(state, store):
     out = door_note([fed(state, "aaa", when=(NOW + timedelta(days=3)).strftime("%Y-%m-%d"),
@@ -186,15 +185,6 @@ def dream_handed_out(state, store):
     return "shown" if run(go()) else "hidden"
 
 
-def letters(state, store):
-    async def go():
-        reply = await letter_write("user", "Dear you, the tide came in early today.", title="t")
-        bid = reply.split("→", 1)[1].split()[0]
-        await put_in_state(store, bid, state)
-        return await letter_read()
-    return "shown" if "tide came in early" in run(go()) else "hidden"
-
-
 def a_dream(*ingredients) -> dict:
     stamp = W.now().isoformat(timespec="seconds")
     return {"id": "d0000000feed", "织于": stamp, "起算点": stamp, "回想次数": 0, "轮次": 0,
@@ -224,8 +214,7 @@ PLACES = [
     ("6 dream · handed out", dream_handed_out, ("hidden", "hidden", "hidden")),
     pytest.param("7 write tools' returns", None, None,
                  marks=NOT_YET(reason="stage 6 adds 回望 / 场景常来; they ask the gate")),
-    ("8 letters", letters, ("hidden", "hidden", "shown")),
-    pytest.param("9 strong-reminder and name cards", None, None,
+    pytest.param("8 strong-reminder and name cards", None, None,
                  marks=NOT_YET(reason="5.5 adds them; they ask the gate")),
 ]
 

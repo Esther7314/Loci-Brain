@@ -234,19 +234,10 @@ limits:
   max_mcp_request_bytes: 4194304  # 4MB HTTP body cap for /mcp; 0 disables
   max_management_request_bytes: 4194304  # 4MB cap for Dashboard/OAuth mutations; large import routes use their own caps
   max_grow_input_bytes: 2097152   # 2MB total grow source/items cap; 0 disables
-  max_query_bytes: 16384          # 16KB breath/letter query cap; 0 disables
+  max_query_bytes: 16384          # 16KB breath query cap; 0 disables
   max_metadata_bytes: 16384       # combined tool metadata/filter cap; 0 disables
   max_grow_items: 100             # pre-split/digest item count cap; 0 disables
   max_pinned: 20                  # max pinned buckets; 0 disables check
-
-# --- iter 1.9 G: 桶类型默认值 / per-type frontmatter defaults ---
-# Applied at create() time only when caller doesn't pass that field.
-# 写入时若调用方未显式传入对应字段，使用此处默认值。
-# 设计意图：letter 天然有重量、信件天然不该被静音。
-bucket_type_defaults:
-  letter:
-    weight: 1.0
-    dont_surface: false
 
 # --- Deprecated: Obsidian wikilinks auto injection / 已废弃 ---
 # wikilink 自动注入已禁用；OB 只读取正文里的 [[wikilink]] 做网络图。
@@ -264,16 +255,6 @@ bucket_type_defaults:
 #
 # 打标时「这两个人的名字不进 tags」就是照这两条查别名表拿到全部叫法 ——
 # 整个库都是关于他们的，名字在任何一条上都没有区分度（别人的名字有，不挡）。
-
-# ============================================================
-# tools —— 可选的工具
-# ============================================================
-# letter：写一封「永不衰减、永不合并、永不压缩」的信。**默认关。**
-#   关的理由不是它不好，是它跟这套东西的骨头相反：整个系统建立在「会忘」上，
-#   而信是不会忘的。想要就打开，但**别拿它当待办箱**——不衰减意味着塞进去的
-#   东西会永久留在那儿。
-tools:
-  letter: false
 
 # ============================================================
 # 面板的锁（2026-08-19）

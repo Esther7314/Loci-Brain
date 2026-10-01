@@ -135,8 +135,6 @@ class AdvancedCommandBoundaryContract:
                     "anchor",
                     "release",
                     "plan",
-                    "letter",
-                    "letter_write",
                     "i",
                     "create_trace",
                     "touch_trace",

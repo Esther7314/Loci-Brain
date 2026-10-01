@@ -202,7 +202,7 @@ def _buckets_rev() -> tuple:
 
     root = str(sh.config.get("buckets_dir") or "")
     newest, count = 0.0, 0
-    for sub in ("dynamic", "permanent", "feel", "letters", "archive"):
+    for sub in ("dynamic", "permanent", "feel", "archive"):
         for dirpath, _dirs, names in os.walk(os.path.join(root, sub)):
             for name in names:
                 if not name.endswith(".md"):
@@ -258,7 +258,7 @@ def _sim_visible(meta: dict) -> bool:
         it, and it no longer surfaces independently, so raising it again here achieves
         nothing
     """
-    if str(meta.get("type") or "") in ("archived", "letter"):
+    if str(meta.get("type") or "") in ("archived",):
         return False
     if (meta.get("domain") or [""])[0] == "seed":
         return False

@@ -18,7 +18,7 @@ Key behaviours:
   already carried by last_active resetting to zero, and that is enough; a count on top
   of that is compound interest, and being brought up often is not the same as being
   truest.
-- The never-sink test looks at `room`, not `type`: pinned / rules / letter / seed /
+- The never-sink test looks at `room`, not `type`: pinned / rules / seed /
   profile facts / periods (`__大event__`) / anything in the MIND branch.
 - Sinking is reversible: trace(restore=True); a bucket that gets touched returns to
   alive on the next cycle.
@@ -82,7 +82,7 @@ _DEFAULT_AROUSAL_BOOST = 0.8      # each +1 of arousal -> +0.8 emotion weight
 
 # --- Locked scores: some buckets do not take part in decay at all ---
 _SCORE_PINNED = 999.0    # pinned / protected / permanent: permanently high (never archived)
-_SCORE_FEEL = 50.0       # feel / letter: fixed middling score
+_SCORE_FEEL = 50.0       # feel: fixed middling score
 
 # --- Periodic self-heal: how many missing vectors one cycle may backfill at most,
 #     so the embedding API is not blown out in a single burst ---
@@ -261,10 +261,6 @@ class DecayEngine:
         if metadata.get("type") == "feel":
             return _SCORE_FEEL
 
-        # --- Letters never decay: a letter is kept forever ---
-        if metadata.get("type") == "letter":
-            return _SCORE_FEEL
-
         try:
             importance = max(1, min(10, int(metadata.get("importance", _DEFAULT_IMPORTANCE))))
         except (TypeError, ValueError):
@@ -336,7 +332,7 @@ class DecayEngine:
         `type` produced was this: among entries that were all equally MIND, the 190 held
         as i/feel never sank while the 61 held as dynamic did. Testing `room` says it in
         one line instead.
-        pinned · rules · letter · seed · profile facts · periods · anything in a /MIND/
+        pinned · rules · seed · profile facts · periods · anything in a /MIND/
         room · something wanted that binds someone and is still open · anything that
         comes back every year.
         (Every permanent bucket is pinned or protected anyway, so the first test already
@@ -353,7 +349,7 @@ class DecayEngine:
         """
         if meta.get("pinned") or meta.get("protected"):
             return True
-        if str(meta.get("type") or "") in ("permanent", "letter", "seed"):
+        if str(meta.get("type") or "") in ("permanent", "seed"):
             return True
         # 🔴 After the room rename, **never write `"/MIND/" in room` again**: the new
         # names look like `MIND/TRAITS` with no leading slash, so that literal test
@@ -463,7 +459,7 @@ class DecayEngine:
                 continue
             if self._never_decays(meta):
                 continue
-            # Besides letter/seed there can be archived shells mixed into list_all: leave them alone
+            # Besides seeds there can be archived shells mixed into list_all: leave them alone
             if str(meta.get("type") or "") == "archived" or meta.get("deleted_at"):
                 continue
             checked += 1

@@ -58,7 +58,7 @@ class RetrievalPlan:
 
 @dataclass(frozen=True)
 class QueryPlanner:
-    default_channels: tuple[str, ...] = ("dynamic", "permanent", "feel", "letter")
+    default_channels: tuple[str, ...] = ("dynamic", "permanent", "feel")
 
     @classmethod
     def default(cls) -> "QueryPlanner":

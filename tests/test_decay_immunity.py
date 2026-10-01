@@ -9,7 +9,7 @@ WHY THIS FILE EXISTS
     from the outside.
 
     The list itself is the load-bearing part. Everything on it is something a person put
-    there **on purpose** — a pin, a rule, a letter, a name given to a stretch of days —
+    there **on purpose** — a pin, a rule, a name given to a stretch of days —
     and the whole point of those gestures is that they outlive the forgetting curve. One
     name missing from the list is not a degraded feature, it is the system quietly
     undoing a deliberate act.
@@ -80,7 +80,6 @@ IMMUNE_KINDS = [
     ("pinned by hand",            {"pinned": True}),
     ("protected",                 {"protected": True}),
     ("permanent",                 {"type": "permanent"}),
-    ("a letter",                  {"type": "letter"}),
     ("a seed",                    {"type": "seed"}),
     ("an insight (MIND/TRAITS)",  {"room": "MIND/TRAITS"}),
     ("an insight (MIND/VIEWS)",   {"room": "MIND/VIEWS"}),
@@ -99,7 +98,7 @@ IMMUNE_KINDS = [
 def test_a_bucket_on_the_never_sink_list_is_still_visible_however_long_it_is_left(
         name, fields, days):
     # Criterion: THE assertion of this file. Every one of these is a deliberate gesture —
-    # a pin, a rule, a letter, the name given to a stretch of days — and the meaning of
+    # a pin, a rule, the name given to a stretch of days — and the meaning of
     # the gesture is "this one is not subject to the curve". Visibility is what is
     # asserted, because visibility is what the user loses.
     stage = DecayEngine.stage_of(_meta(days, **fields))

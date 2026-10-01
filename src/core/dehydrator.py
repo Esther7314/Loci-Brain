@@ -1140,8 +1140,6 @@ class Dehydrator:
                 _icon = "📦"
             elif _btype == "feel":
                 _icon = "🫧"
-            elif _btype == "letter":
-                _icon = "💌"
             else:
                 _icon = "💭"
             header = f"{_icon} 记忆桶: {name}"

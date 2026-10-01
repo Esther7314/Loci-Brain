@@ -15,7 +15,7 @@ readability.
 Key behaviour:
 - anchor_set / anchor_release: call bucket_mgr.set_anchor and translate the
   result as-is
-- pulse: aggregate stats + list_all, group by type (normal/feel/letter),
+- pulse: aggregate stats + list_all, group by type (normal/feel),
   and show icon + domain + emotion + weight + tags line by line
 - pulse also carries an "index drift" self-check: the ID set in embedding.db is
   reconciled against the ID set of buckets on disk, and if missing/orphan > 0 it
@@ -83,29 +83,13 @@ async def _working_section(all_buckets: list) -> str:
     # falling, or the oldest keeps getting older, the tagging path has stopped —
     # and when it stops it raises nothing; new memories simply keep empty tags.
     #
-    # 🔴 **Count only what is supposed to be tagged.** This section produced a
-    #    false alarm on its very first day live: it said "5 still queued, the
-    #    oldest created 13 days ago ⚠️ hung too long" —
-    #    **all five were letters.** Letters are **never tagged** (`letter_write`
-    #    calls dehydration nowhere; a letter is kept word for word, never decayed,
-    #    never merged), so having no summary is not "queued",
-    #    **it is exactly what they are supposed to look like**.
-    #    📌 That was the second time this very code tripped over the line written
-    #       into it:
-    #       **a monitor that lies is worse than no monitor at all.**
-    #       The first time was reporting "succeeded yesterday" as "working now"
-    #       (fixed earlier the same day).
-    #    ⚠️ The rule: **this cell may only report what would have been tagged and
-    #       has not been yet.**
-    #       Report something that cannot happen, and the reader's first instinct
-    #       is to go fix a problem that does not exist — here, to ask for a
-    #       one-click re-tagging tool. **Nothing needed tagging at all.**
-    skip_types = {"letter"}
+    # 🔴 **Count only what is supposed to be tagged.** A monitor that lies is worse
+    #    than no monitor at all: this cell may only report what would have been
+    #    tagged and has not been yet. Report something that cannot happen, and the
+    #    reader's first instinct is to go fix a problem that does not exist.
     untagged, last_tagged = [], None
     for b in all_buckets:
         m = b.get("metadata", {}) or {}
-        if str(m.get("type") or "") in skip_types:
-            continue
         created = _w.parse_stamp(m.get("created"))
         if not str(m.get("summary") or "").strip():
             if created:
@@ -159,7 +143,6 @@ async def pulse(include_archive: Optional[bool] = False) -> str:
         f"动态桶: {stats['dynamic_count']} 个\n"
         f"归档桶: {stats['archive_count']} 个\n"
         f"feel 桶: {stats.get('feel_count', 0)} 条\n"
-        f"letter 桶: {stats.get('letter_count', 0)} 封\n"
         f"总占用: {stats['total_size_kb']:.1f} KB\n"
         f"衰减引擎: {'运行中' if rt.decay_engine.is_running else '已停止'}\n"
     )
@@ -226,7 +209,6 @@ async def pulse(include_archive: Optional[bool] = False) -> str:
 
     normal_lines: list[str] = []
     feel_lines: list[str] = []
-    letter_lines: list[str] = []
     for b in buckets:
         meta = b.get("metadata", {})
         btype = meta.get("type")
@@ -236,8 +218,6 @@ async def pulse(include_archive: Optional[bool] = False) -> str:
             icon = "📦"
         elif btype == "feel":
             icon = "🫧"
-        elif btype == "letter":
-            icon = "💌"
         elif btype == "archived":
             icon = "🗄️"
         elif meta.get("resolved", False):
@@ -266,9 +246,6 @@ async def pulse(include_archive: Optional[bool] = False) -> str:
             line += f" 标签:{','.join(tags)}"
         if btype == "feel":
             feel_lines.append(line)
-        elif btype == "letter":
-            author = meta.get("author", "?")
-            letter_lines.append(line + f" [{author}]")
         else:
             normal_lines.append(line)
 
@@ -277,6 +254,4 @@ async def pulse(include_archive: Optional[bool] = False) -> str:
         sections.append("=== 记忆列表 ===\n" + "\n".join(normal_lines))
     if feel_lines:
         sections.append(f"=== feel（{len(feel_lines)} 条）===\n" + "\n".join(feel_lines))
-    if letter_lines:
-        sections.append(f"=== 信件（{len(letter_lines)} 封）===\n" + "\n".join(letter_lines))
     return "\n\n".join(sections)

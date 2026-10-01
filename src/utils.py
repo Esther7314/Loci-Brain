@@ -996,7 +996,7 @@ def get_ai_name() -> str:
     """Display name for the AI side.
 
     Order: `ai_name` in config.yaml -> the `AI_NAME` environment variable -> "AI".
-    Used in user-facing text (prompts, UI, error messages) and in letter signatures.
+    Used in user-facing text (prompts, UI, error messages).
     """
     return (_persisted_names().get("ai_name")
             or os.environ.get("AI_NAME", "").strip()

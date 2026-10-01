@@ -36,7 +36,7 @@ class SurfacePolicyVM:
     and the VM only decides whether a bucket may enter a specific read pool.
     """
 
-    private_types: tuple[str, ...] = ("feel", "plan", "letter", "self", "i")
+    private_types: tuple[str, ...] = ("feel", "plan", "self", "i")
 
     @classmethod
     def default(cls) -> "SurfacePolicyVM":

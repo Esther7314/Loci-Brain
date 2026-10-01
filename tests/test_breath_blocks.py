@@ -191,7 +191,7 @@ def test_every_breath_road_waits_and_the_lookup_roads_do_not():
         verdict = V.visible_for(meta, road=road, now=at(14), holds=idx)
         assert V.LATER_TODAY in verdict.reasons, road
         assert V.LATER_TODAY not in V.visible_for(meta, road=road, now=at(19), holds=idx).reasons
-    for road in (V.LIST, V.READ, V.LETTER):
+    for road in (V.LIST, V.READ):
         assert V.visible_for(meta, road=road, now=at(14))
     # Closed, there is nothing to wait for.
     assert not V.waits_for_clock({**meta, "status": "resolved"}, at(14))

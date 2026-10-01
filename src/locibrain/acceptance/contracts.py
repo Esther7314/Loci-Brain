@@ -25,8 +25,6 @@ class LegacyCompatibilityContract:
                 "release",
                 "pulse",
                 "plan",
-                "letter_write",
-                "letter_read",
                 "I",
             ),
             dashboard_routes=(

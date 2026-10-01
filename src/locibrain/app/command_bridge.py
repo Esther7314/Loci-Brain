@@ -29,7 +29,7 @@ def _kind_from_envelope(envelope: ExecutionEnvelope) -> CommandKind:
     operation = envelope.operation.lower()
     joined = f"{module}.{operation}"
 
-    if "hold" in joined or "letter_write" in joined or joined.endswith(".i"):
+    if "hold" in joined or joined.endswith(".i"):
         return CommandKind.HOLD
     if "breath" in joined or "search" in joined:
         return CommandKind.BREATH

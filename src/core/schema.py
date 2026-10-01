@@ -45,7 +45,7 @@ BACKUP_DIR = "_backups"
 
 # Where memories live. archive/ counts: a migration must not leave old shapes behind in
 # what can be restored.
-MEMORY_DIRS = ("permanent", "dynamic", "feel", "plans", "letters", "archive")
+MEMORY_DIRS = ("permanent", "dynamic", "feel", "plans", "archive")
 
 # Not copied into a backup: earlier backups, the config (it holds API keys, and the
 # library is restorable without it), lock files, SQLite side files mid-transaction.

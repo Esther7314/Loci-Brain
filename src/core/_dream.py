@@ -412,7 +412,7 @@ def want_pool(recs: list[tuple[dict, str]], now: datetime) -> list[Ingredient]:
             continue
         if not _V.visible_for(meta, road=_V.DREAM, now=now, holds=holds):
             continue
-        if M._is_utility_record(meta) or str(meta.get("type") or "") == "letter":
+        if M._is_utility_record(meta):
             continue
         it = M.item_of(meta, text)
         if it is None or not it.text.strip():

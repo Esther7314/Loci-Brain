@@ -39,9 +39,6 @@ class MemoryInvariantSet:
         if memory_type == "plan":
             rules.append("plan-status-lifecycle")
 
-        if memory_type == "letter":
-            rules.append("letter-raw-preserved")
-
         if command.kind == CommandKind.TRACE and bool(payload.get("delete")):
             rules.append("trace-delete-removes-vector")
 

@@ -20,7 +20,6 @@ class MemoryType(Enum):
     DYNAMIC = "dynamic"
     PERMANENT = "permanent"
     TRACE = "trace"
-    LETTER = "letter"
     PLAN = "plan"
     FEEL = "feel"
 

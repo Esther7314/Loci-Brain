@@ -75,7 +75,7 @@ _HIGH_IMP_THRESHOLD = 9                # importance at or above this counts as "
 _HIGH_IMP_HARD_CAP = 24                # hard ceiling on high-importance buckets
 _HIGH_IMP_SOFT_WARN = 22               # from here on, push the OB-W003 reminder
 _HIGH_IMP_DEGRADE_TO = 8               # the importance an over-quota bucket is degraded to
-_HIGH_IMP_EXEMPT_TYPES = frozenset({"feel", "letter", "archived"})
+_HIGH_IMP_EXEMPT_TYPES = frozenset({"feel", "archived"})
 
 # --- The pinned soft threshold ---
 _PINNED_SOFT_GAP = 2                   # "soft threshold = cap - GAP"; cap=20 -> soft=18

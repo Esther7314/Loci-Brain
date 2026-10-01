@@ -98,11 +98,9 @@ class PublicToolDesignContract:
     @classmethod
     def default(cls) -> "PublicToolDesignContract":
         return cls(
-            normal_tools=frozenset({"hold", "grow", "trace", "breath", "breath_search", "breath_advanced", "pulse", "dream", "anchor", "i", "letter", "plan"}),
+            normal_tools=frozenset({"hold", "grow", "trace", "breath", "breath_search", "breath_advanced", "pulse", "dream", "anchor", "i", "plan"}),
             compatibility_public_names={
                 "release": "anchor",
-                "letter_write": "letter",
-                "letter_read": "letter",
             },
             engineering_public_aliases={
                 "remember": "hold/grow",

@@ -16,8 +16,8 @@ Two kinds of visibility
   surfacing  the entry comes up **by itself**: breath's blocks, muse's pools, dream
              material, a dream handed out. `dont_surface`, live holds and covers count
              here, each on the roads that have always honoured it (the table below).
-  lookup     the entry is **asked for**: recall's search and time browsing, a read by id,
-             letters. `dont_surface` hides nothing here — it governs only what comes up
+  lookup     the entry is **asked for**: recall's search and time browsing, a read by id.
+             `dont_surface` hides nothing here — it governs only what comes up
              by itself. An archived or deleted entry is never shown as if it were live:
              listings leave it out, and a read by id shows it with its state said out
              loud (`Verdict.mark`).
@@ -48,7 +48,6 @@ The roads
 | dream           | surface | ✔            | ✔           |         | avoid        | ✔          |             |
 | dream_handout   | surface | ✔            |             |         | avoid        |            |             |
 | list            | lookup  |              | ✔           |         |              |            |             |
-| letter          | lookup  |              |             |         |              |            |             |
 | read            | lookup  | (any state shown, with its mark)                                              |
 
 Every road but `read` shows live entries only.
@@ -100,7 +99,6 @@ through the strong-reminder card with the owner's next message, not through brea
   (core/_dream.withheld_ingredients). One that may not be seen withholds the whole dream.
 - list: what recall lists and counts — search, time browsing, a period's members, the
   earliest-entry line in breath (`on_timeline`).
-- letter: letter_read (tools/letter/core.py).
 - read: recall's read by id — the entry itself and every entry it links to (sources,
   what it covers, a period's members, who cites it). A linked entry is a line with its
   mark, never its body.
@@ -183,7 +181,6 @@ MUSE = "muse"
 DREAM = "dream"
 DREAM_HANDOUT = "dream_handout"
 LIST = "list"
-LETTER = "letter"
 READ = "read"
 
 
@@ -220,7 +217,6 @@ ROADS: dict[str, Road] = {
                 hold_entry=True),
     DREAM_HANDOUT: Road(SURFACE, dont_surface=True, holds=frozenset({"avoid"})),
     LIST: Road(LOOKUP, superseded=True),
-    LETTER: Road(LOOKUP),
     READ: Road(LOOKUP, states=_ALL_STATES),
 }
 
@@ -365,12 +361,11 @@ def visible_for(meta, scope=None, *, road: str,
 def timeline_kind(meta) -> bool:
     """Is this the kind of entry that sits on the timeline at all — a memory, not machinery?
 
-    Letters live in Home; an old `i` entry stays out until it is merged into MIND (it has
-    a room then); seeds are a coordinate system, not memories; the note by the door and
-    periods are tooling. This says nothing about state — that is `visible_for`'s."""
+    An old `i` entry stays out until it is merged into MIND (it has a room then); seeds
+    are a coordinate system, not memories; the note by the door and periods are tooling. This says nothing about state — that is `visible_for`'s."""
     m = _meta_of(meta)
     t = str(m.get("type") or "")
-    if t == "letter" or (t == "i" and not m.get("room")):
+    if t == "i" and not m.get("room"):
         return False
     if (m.get("domain") or [""])[0] == "seed":
         return False

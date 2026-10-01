@@ -9,16 +9,10 @@ web._shared, then register thin @mcp.tool() wrappers. The real implementations l
 src/tools/<tool>/.
 
 Key behaviour:
-- Once running, it exposes **ten** MCP tools: breath, grow, recall, regrow, fold, muse,
-  trace, pulse, letter_write, letter_read. Each entry point is at most ten lines and does
-  nothing but forward.
-  The upstream tools that had long since been unregistered were later deleted outright,
-  functions and directories together: hold, anchor, release, plan, I, dream, seed,
-  breath_search, breath_advanced.
-  That deletion nearly took live code with it: `tools/anchor/` was where the **live**
-  pulse lived, and `tools/plan/` was where the **live** letter_write/letter_read lived —
-  dead names with living things inside them. Both packages were renamed to `tools/pulse/`
-  and `tools/letter/`, so the names now match what is actually in them.
+- Once running, it exposes **seven** MCP tools: breath, grow, recall, regrow, fold, muse,
+  trace. Each entry point is at most ten lines and does nothing but forward.
+  `pulse` is implemented under `tools/pulse/` but is not an MCP tool; the panel reaches it
+  through `GET /api/loci/pulse`.
 - Every dashboard and HTTP route has been split out into src/web/<domain>.py, each module
   exposing register(mcp). This file only calls web.register_all(mcp) at startup; the
   shared dependencies are in web/_shared.py.
@@ -95,7 +89,6 @@ from tools import muse as _t_muse      # musing: the threshold engine's second i
 from core import _dream as _dream_engine
 from tools import trace as _t_trace
 from tools import pulse as _t_pulse
-from tools import letter as _t_letter
 # `from tools import seed as _t_seed` — **removed**.
 #    Reasoning: once events became episodic memories, the **original words** for "what did
 #    this feel like at the time" are right there in the text. **What was actually said then
@@ -143,7 +136,7 @@ try:
         # (permanent/<domain>/x.md), so an os.listdir of the top level sees only domain
         # folders and always concludes "empty" -> a false "fresh install" report. The data
         # is all still there and breath still reads it; the log line is just alarming.
-        for sub in ("permanent", "dynamic", "feel", "letters"):
+        for sub in ("permanent", "dynamic", "feel"):
             p = os.path.join(_bd, sub)
             if not os.path.isdir(p):
                 continue
@@ -497,7 +490,7 @@ _wsh.init_runtime(
 # Every MCP tool entry point logs the same three phases — entry, ok, err — which is what
 # makes client-side invalid_arguments reports and silent failures diagnosable.
 # Output format: op=<name> phase=entry|ok|err key=value...
-# Any field that might contain PII (content, letter bodies) is logged as a length only,
+# Any field that might contain PII (memory content) is logged as a length only,
 # never as content.
 # =============================================================
 def _fmt_log_val(v: object) -> str:
@@ -549,8 +542,8 @@ def _log_op_err(op: str, exc: BaseException) -> None:
 from core import scope as _scope_mod
 from core import _sources as _src_mod
 
-_READ_OPS = frozenset({"breath", "recall", "muse", "letter_read"})
-_WRITE_OPS = frozenset({"grow", "fold", "regrow", "trace", "letter_write"})
+_READ_OPS = frozenset({"breath", "recall", "muse"})
+_WRITE_OPS = frozenset({"grow", "fold", "regrow", "trace"})
 _STDIO_SCOPE = os.environ.get(_scope_mod.SCOPE_ENV)
 _STDIO_HOST_TOKEN = str(os.environ.get(_scope_mod.HOST_TOKEN_ENV) or "").strip()
 
@@ -1810,7 +1803,7 @@ except (AttributeError, RuntimeError, TypeError, ValueError) as _trace_schema_ex
 
 
 # `pulse` was withdrawn from the MCP tool surface.
-#    The reasoning: the other nine tools are all "what am I doing to a memory", and this one
+#    The reasoning: the other tools are all "what am I doing to a memory", and this one
 #    alone is "is this machine healthy" — a health check is not a memory action, and should
 #    not occupy a tool slot. **Disabled, not deleted**: the implementation is still in
 #    `tools/pulse/`, reached through the panel's read-only `GET /api/loci/pulse`
@@ -1819,136 +1812,15 @@ except (AttributeError, RuntimeError, TypeError, ValueError) as _trace_schema_ex
 
 
 
-# ============================================================
-# The two letter tools: **off by default**
-# ============================================================
-# The position: the version handed to other people does not include this. Anyone who wants
-# it can turn it on, but that is their decision to make.
-# It is a switch rather than a real deletion so that the code **does not fork**: one
-#    codebase, off by default in the released build, on where it is wanted. Two copies of
-#    the code would be exactly the thing this whole cleanup exists to avoid — one thing with
-#    two homes, changed in one and forgotten in the other.
-#
-# To enable, in config.yaml:
-#     tools:
-#       letter: true
-#
-# Why it is off by default: a letter **never decays**, and the entire skeleton of this
-#    system is built around forgetting. Putting something that never decays inside a system
-#    that forgets is upside down.
-#    It stays enabled where a separate front-end still reads the letters page; it will be
-#    withdrawn there too once letters move.
-_letter_on = bool((config.get("tools") or {}).get("letter", False))
-_letter_tool = mcp_extra.tool() if _letter_on else (lambda f: f)
-if not _letter_on:
-    logger.info("letter 工具默认关（config.yaml → tools.letter: true 可开）")
-
-
-@_letter_tool
-async def letter_write(
-    author: Annotated[str, _PydField(description=(
-        "Who it is from. \"user\" for the person's side, \"ai\" for yours; any signature "
-        "string also works."
-    ))],
-    content: Annotated[str, _PydField(description=(
-        "The letter itself, kept word for word."
-    ))],
-    user_name: Annotated[Optional[str], _PydField(description=(
-        "Optional display name for the person's side."
-    ))] = "",
-    title: Annotated[Optional[str], _PydField(description=(
-        "Optional."
-    ))] = "",
-    date: Annotated[Optional[str], _PydField(description=(
-        "Optional; defaults to now."
-    ))] = "",
-    ai_name: Annotated[Optional[str], _PydField(description=(
-        "Optional display name for your side; defaults to the AI_NAME environment "
-        "variable."
-    ))] = "",
-) -> str:
-    """Write a letter.
-
-    Letters are kept whole and forever: never compressed, never merged, never faded. They do
-    not surface in breath. Only the most recent letter from each side is brought along at the
-    start of a session.
-
-    Because a letter never fades, do not use it as a place to put things that should expire.
-    Anything that will stop being true belongs in a memory, not a letter.
-
-      letter_write(author="ai", content="…", title="…")"""
-    return await _with_notice(
-        _t_letter.letter_write(
-            author=author, content=content, user_name=user_name,
-            title=title, date=date, ai_name=ai_name,
-        ),
-        op="letter_write",
-        args={
-            "author": author, "content_len": len(content or ""),
-            "user_name": user_name, "title": title, "date": date,
-            "ai_name": ai_name,
-        },
-    )
-
-
-@_letter_tool
-async def letter_read(
-    query: Annotated[Optional[str], _PydField(description=(
-        "Search by meaning. Leave it out to get the most recent letters in reverse "
-        "date order."
-    ))] = "",
-    limit: Annotated[int, _PydField(description=(
-        "How many to return. Defaults to 10."
-    ))] = 10,
-    author: Annotated[Optional[str], _PydField(description=(
-        'Filter by who wrote it: "user", "ai", or a specific signature.'
-    ))] = "",
-    date_from: Annotated[Optional[str], _PydField(description=(
-        "ISO date, optional."
-    ))] = "",
-    date_to: Annotated[Optional[str], _PydField(description=(
-        "ISO date, optional."
-    ))] = "",
-) -> str:
-    """Read letters that have been written.
-
-    Returns them whole, never shortened.
-
-      letter_read(query="…")          search by meaning
-      letter_read(author="user")      everything from one side
-      letter_read()                   the most recent few, newest first"""
-    return await _with_notice(
-        _t_letter.letter_read(
-            query=query, limit=limit, author=author,
-            date_from=date_from, date_to=date_to,
-        ),
-        op="letter_read",
-        args={
-            "query": query, "limit": limit, "author": author,
-            "date_from": date_from, "date_to": date_to,
-        },
-    )
-
-
-# --- The two letter tools must also fail to recognize removed parameters -----------------
-# --- (**fourth time, same trap**)
-# Counting the nine tools, only seven had this gate: `letter_read` and `letter_write` were
-# missed too.
-# Case history: forbid was added to breath/grow/recall/trace, missing fold and muse; the
-#       next pass added fold and muse and missed regrow; the pass after that added regrow
-#       and **missed these two**.
-# All three times, the fix was "patch whichever names came to mind at the time". The fourth
-#    time does it differently: the block below **iterates the tool registry** and installs
-#    the gate on anything that lacks it, so **a tool added later gets it automatically**.
-#    The rule: **a list kept by human memory will be missed eventually.** All three previous
-#       lessons say the same sentence, and all three times the response was "this time I
-#       will remember them all".
-# WARNING: the two letter tools are registered **conditionally** (config.tools.letter is off
-#    by default), and when they are off they are simply not in the registry — so this can
-#    only install the gate where the tool exists, and must not assert that it always does.
+# --- Every registered tool refuses removed parameters ------------------------------------
+# History: forbid was added to breath/grow/recall/trace, missing fold and muse; the next
+#       pass added fold and muse and missed regrow.
+# Every time, the fix was "patch whichever names came to mind at the time". So the block
+#    below **iterates the tool registry** and installs the gate on anything that lacks it,
+#    so **a tool added later gets it automatically**.
+#    The rule: **a list kept by human memory will be missed eventually.**
 try:
-    for _tool_name in ("breath", "grow", "recall", "regrow", "fold", "muse", "trace",
-                       "letter_write", "letter_read"):
+    for _tool_name in ("breath", "grow", "recall", "regrow", "fold", "muse", "trace"):
         for _surface in (mcp, mcp_extra):
             _t = _surface._tool_manager.get_tool(_tool_name)
             if _t is None:

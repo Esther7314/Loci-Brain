@@ -85,7 +85,6 @@ _TYPE_SUBDIR: dict[str, str] = {
     "archive": "archive",
     "archived": "archive",
     "feel": "feel",
-    "letter": "letters",
 }
 
 # The default subdirectory, used for an unknown type
@@ -787,6 +786,10 @@ class MigrateEngine:
         for arc_path in sorted(names):
             if not arc_path.startswith("buckets/") or not arc_path.endswith(".md"):
                 continue
+            # Only the memory directories are restored; a leftover buckets/letters/
+            # folder in an old backup is not one of them.
+            if arc_path.startswith("buckets/letters/"):
+                continue
             try:
                 content_limit = self._bucket_content_limit()
                 raw = self._read_member(
@@ -1109,8 +1112,6 @@ class MigrateEngine:
         domain = meta.get("domain") or pb.domain or []
         if btype == "feel":
             primary_domain = "沉淀物"
-        elif btype == "letter":
-            primary_domain = "history"
         elif isinstance(domain, list) and domain:
             primary_domain = str(domain[0])
         elif isinstance(domain, str) and domain:

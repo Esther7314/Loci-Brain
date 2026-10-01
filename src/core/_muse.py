@@ -346,9 +346,9 @@ def in_pool(meta: dict, item: Item, kind: str, cfg: dict, now: datetime,
     # --- excluded from every pool ---
     if _is_utility_record(meta):
         return False
-    # Letters live in Home; whether the entry may surface at all is the gate's `muse`
-    # road (an archived or deleted one never does). Covers are this pool's own spec below.
-    if str(meta.get("type") or "") == "letter" or not _V.visible_for(meta, road=_V.MUSE):
+    # Whether the entry may surface at all is the gate's `muse` road (an archived or
+    # deleted one never does). Covers are this pool's own spec below.
+    if not _V.visible_for(meta, road=_V.MUSE):
         return False
     if meta.get("pinned") or meta.get("protected"):
         return False                            # a rule is never something to be summarised

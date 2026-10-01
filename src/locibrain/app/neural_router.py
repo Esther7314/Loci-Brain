@@ -18,8 +18,6 @@ class OrganTool(str, Enum):
     ANCHOR = "anchor"
     RELEASE = "release"
     I = "I"
-    LETTER_WRITE = "letter_write"
-    LETTER_READ = "letter_read"
     PLAN = "plan"
 
 
@@ -31,7 +29,6 @@ class NeuralSubsystem(str, Enum):
     RECONSOLIDATION = "reconsolidation"
     LANDMARK_NETWORK = "landmark_network"
     SELF_DESCRIPTION_MEMORY = "self_description_memory"
-    ARTIFACT_TRACE = "artifact_trace"
     UNRESOLVED_TENSION_MEMORY = "unresolved_tension_memory"
 
 
@@ -140,9 +137,6 @@ _PUBLIC_TO_ORGAN: dict[str, tuple[str, OrganTool]] = {
     "anchor": ("anchor", OrganTool.ANCHOR),
     "release": ("release", OrganTool.RELEASE),
     "i": ("I", OrganTool.I),
-    "letter": ("letter_write", OrganTool.LETTER_WRITE),
-    "letter_write": ("letter_write", OrganTool.LETTER_WRITE),
-    "letter_read": ("letter_read", OrganTool.LETTER_READ),
     "plan": ("plan", OrganTool.PLAN),
 }
 
@@ -210,20 +204,6 @@ _ROUTE_TABLE: dict[OrganTool, dict[str, object]] = {
         "writes_memory": True,
         "policy_boundaries": ("non-cognition-boundary", "self-description-not-control"),
         "capability_tags": ("memory:write", "tools:i"),
-    },
-    OrganTool.LETTER_WRITE: {
-        "subsystem": NeuralSubsystem.ARTIFACT_TRACE,
-        "command_kind": CommandKind.HOLD,
-        "writes_memory": True,
-        "policy_boundaries": ("non-cognition-boundary", "raw-artifact-preserved"),
-        "capability_tags": ("memory:write", "tools:letter_write"),
-    },
-    OrganTool.LETTER_READ: {
-        "subsystem": NeuralSubsystem.ARTIFACT_TRACE,
-        "command_kind": CommandKind.BREATH,
-        "writes_memory": False,
-        "policy_boundaries": ("non-cognition-boundary", "raw-artifact-preserved"),
-        "capability_tags": ("memory:read", "tools:letter_read"),
     },
     OrganTool.PLAN: {
         "subsystem": NeuralSubsystem.UNRESOLVED_TENSION_MEMORY,

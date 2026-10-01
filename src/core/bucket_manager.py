@@ -8,8 +8,7 @@ reading them, writing them back, and filtering them by domain, emotion coordinat
 fuzzy text matching.
 
 Key behaviours:
-- One bucket = one .md file, stored under permanent / dynamic / archive / feel /
-  letters
+- One bucket = one .md file, stored under permanent / dynamic / archive / feel
 - Create, read, update, delete and move all live here
 - Retrieval = pre-filter by domain, then weighted ordering by emotion coordinates and text
   similarity
@@ -325,7 +324,7 @@ _DEFAULT_IMPORTANCE = 5
 _PINNED_IMPORTANCE = 10           # the importance a pinned/protected bucket is locked to
 _DEFAULT_DOMAIN_NAME = "未分类"     # the placeholder used when no domain was supplied
 _EDITABLE_BUCKET_TYPES = frozenset(
-    {"dynamic", "permanent", "feel", "letter", "i", "self"}
+    {"dynamic", "permanent", "feel", "i", "self"}
 )
 # The write-layer fields of v2 (part 1 of the plan document). Absent is the default reading of each:
 # no direction_of_fit = thetic (recording what is), no evidential = not marked,
@@ -429,7 +428,6 @@ _METADATA_TEXT_LIMITS = {
     "author": 120,
     "user_name": 120,
     "title": 120,
-    "letter_date": 64,
     "why_remembered": _WHY_REMEMBERED_MAX,
     "source_tool": _SOURCE_TOOL_MAX,
     "grow_batch_id": _GROW_BATCH_ID_MAX,
@@ -508,7 +506,6 @@ class BucketManager:
         self.dynamic_dir = os.path.join(self.base_dir, "dynamic")
         self.archive_dir = os.path.join(self.base_dir, "archive")
         self.feel_dir = os.path.join(self.base_dir, "feel")
-        self.letter_dir = os.path.join(self.base_dir, "letters")
         self.fuzzy_threshold = config.get("matching", {}).get("fuzzy_threshold", 50)
         self.max_results = config.get("matching", {}).get("max_results", 5)
 
@@ -645,9 +642,8 @@ class BucketManager:
     # ---------------------------------------------------------
     @property
     def _active_dirs(self) -> list[str]:
-        """The active bucket directories, archive excluded (used by list_all, _collect_all_tags and lookups). The order must not be shuffled: feel/letter come after dynamic to preserve the original scan order."""
-        return [self.permanent_dir, self.dynamic_dir,
-                self.feel_dir, self.letter_dir]
+        """The active bucket directories, archive excluded (used by list_all, _collect_all_tags and lookups). The order must not be shuffled: feel comes after dynamic to preserve the original scan order."""
+        return [self.permanent_dir, self.dynamic_dir, self.feel_dir]
 
     def _iter_md_files(self, dirs: list[str]):
         """Recursively walk several directories for *.md, yielding (root, filename, full_path).
@@ -1508,9 +1504,8 @@ class BucketManager:
         if metadata.get("direction_of_fit") == "telic" and weight is not None:
             metadata["weight"] = _clamp01(weight, _DEFAULT_VALENCE)
         # --- bucket_type_defaults: per-type default values ---
-        # config.bucket_type_defaults may hold {letter: {weight: 1.0, dont_surface: false}, ...}
-        # and is applied only where the caller passed no explicit value. A letter defaults to
-        # weight=1.0, expressing that a letter has weight by its nature.
+        # config.bucket_type_defaults may hold {<type>: {weight: 1.0, dont_surface: false}, ...}
+        # and is applied only where the caller passed no explicit value.
         # An older config without that section is skipped silently.
         try:
             type_defaults = (self.config.get("bucket_type_defaults") or {}).get(bucket_type, {})
@@ -1545,14 +1540,10 @@ class BucketManager:
             type_dir = self.permanent_dir
         elif bucket_type == "feel":
             type_dir = self.feel_dir
-        elif bucket_type == "letter":
-            type_dir = self.letter_dir
         else:
             type_dir = self.dynamic_dir
         if bucket_type == "feel":
             primary_domain = "沉淀物"  # feel subfolder name
-        elif bucket_type == "letter":
-            primary_domain = "history"
         else:
             primary_domain = self._primary_domain(domain)
         target_dir = os.path.join(type_dir, primary_domain)
@@ -1793,9 +1784,6 @@ class BucketManager:
         elif normalized_type == "feel":
             type_dir = self.feel_dir
             subdir = "沉淀物"
-        elif normalized_type == "letter":
-            type_dir = self.letter_dir
-            subdir = "history"
         else:
             # ``i`` / ``self`` are private logical channels, not separate
             # physical stores.  They intentionally live under dynamic/<domain>.
@@ -2375,11 +2363,11 @@ class BucketManager:
             except ValueError as exc:
                 logger.warning(f"update() refused {bucket_id}: {exc}")
                 return False
-        # --- Pass-through fields for the letter lifecycle and the rest ---
+        # --- Pass-through fields ---
         # These fields have no validation or conversion logic: whatever is given is written.
         # A new field only has to be added to this tuple.
         for k in ("status", "type", "resolution_reason", "resolved_by",
-                  "related_bucket", "author", "user_name", "title", "letter_date",
+                  "related_bucket", "author", "user_name", "title",
                   # Everything below passes through unconverted, weight included.
                   # weight only means anything on something wanted; its type is not checked in this
                   # loop, and server.py above guarantees the range it passes in.
@@ -3605,7 +3593,6 @@ class BucketManager:
             "dynamic_count": 0,
             "archive_count": 0,
             "feel_count": 0,
-            "letter_count": 0,
             "total_size_kb": 0.0,
             "domains": {},
         }
@@ -3615,7 +3602,6 @@ class BucketManager:
             (self.dynamic_dir, "dynamic_count"),
             (self.archive_dir, "archive_count"),
             (self.feel_dir, "feel_count"),
-            (self.letter_dir, "letter_count"),
         ]:
             if not os.path.exists(subdir):
                 continue
@@ -3736,7 +3722,6 @@ class BucketManager:
                 self.dynamic_dir,
                 self.archive_dir,
                 self.feel_dir,
-                self.letter_dir,
             ]
             index: dict[str, str] = {}
             for _root, fname, full_path in self._iter_md_files(dirs):
@@ -3777,7 +3762,6 @@ class BucketManager:
             self.dynamic_dir,
             self.archive_dir,
             self.feel_dir,
-            self.letter_dir,
         ]
         for _root, fname, full_path in self._iter_md_files(dirs):
             stem = fname[:-3]

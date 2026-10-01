@@ -23,7 +23,7 @@ Key behaviour:
 - Switching status to resolved/abandoned appends a short note about what that means
 
 What this file deliberately does not do:
-- Never creates a bucket (that is grow/letter's job)
+- Never creates a bucket (that is grow's job)
 - Never converts an ordinary memory into erasable test data, and never physically
   deletes an ordinary memory
 - Returns no structured data; always one short sentence

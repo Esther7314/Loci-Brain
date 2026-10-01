@@ -241,7 +241,7 @@ def register(mcp) -> None:
             "in_docker": sh.in_docker(),
             # Display name for the AI side, from the AI_NAME environment variable,
             # falling back to "AI". Read-only for the front-end; used in user-facing
-            # copy such as delete confirmations and letter-signature placeholders.
+            # copy such as delete confirmations.
             "ai_name": _get_ai_name(),
             # Memory ownership: when several people share one store, this says whose
             # memories these are. The front-end only shows the ownership badge when
