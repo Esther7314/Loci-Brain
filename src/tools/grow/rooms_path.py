@@ -50,7 +50,7 @@ from datetime import timedelta
 from core import _fold as _F       # a big event = fold's way of circling time
 from .. import _runtime as rt
 from core._bigevent import SPAN_RE, first_line as _F_first_line
-from .._common import check_content_size
+from .._common import check_content_size, resolve_bucket_ids
 from core._rooms import check_room, is_mind_room
 from .._subjects import normalize_bound, normalize_subjects
 from utils import parse_bool
@@ -481,9 +481,13 @@ async def backfill_sweep() -> int:
 # kind="event"
 # ------------------------------------------------------------
 
-def _normalize_from(from_ids) -> tuple[list[str] | None, str]:
-    """Normalise the from list and check its count and total length. Returns
-    (ids, error message); ids=None means nothing was passed."""
+async def _normalize_from(from_ids) -> tuple[list[str] | None, str]:
+    """Normalise the from list, resolve short handles to full ids, and check its
+    count and total length. Returns (ids, error message); ids=None means nothing
+    was passed. grow, regrow and fold all take `from` through here, so this is
+    the one place a 6-character handle in `from` turns into the full id that
+    gets stored — the length check below measures the full ids, which are what
+    land on disk."""
     if from_ids is None:
         return None, ""
     if isinstance(from_ids, str):
@@ -496,6 +500,9 @@ def _normalize_from(from_ids) -> tuple[list[str] | None, str]:
     if len(ids) > _FROM_MAX:
         return None, (f"from 最多 {_FROM_MAX} 条（收到 {len(ids)} 条）。"
                       "底层字段 64 字符上限，多了会被静默截断成半截 id——拆开分别存。")
+    ids, id_err = await resolve_bucket_ids(ids, "from")
+    if id_err:
+        return None, id_err
     joined = ",".join(ids)
     if len(joined) > _TRIGGERED_BY_LIMIT:
         # Few enough entries but individually long ids (historical readable ones
@@ -520,7 +527,7 @@ async def grow_event(items: list, direction_of_fit: str = "", bound=None,
     # nothing).
     # If passed, it is checked for existence and written into each entry's
     # from.
-    from_ids, from_err = _normalize_from(from_ids)
+    from_ids, from_err = await _normalize_from(from_ids)
     if from_err:
         return from_err
     if from_ids:
@@ -711,7 +718,7 @@ async def grow_mind(room: str, text: str, from_ids, v, a,
 
     # --- from is mandatory, every single one of them: a piece of self-knowledge
     # with no provenance reads exactly like one that was invented ---
-    from_ids, from_err = _normalize_from(from_ids)
+    from_ids, from_err = await _normalize_from(from_ids)
     if from_err:
         return from_err
     if not from_ids:

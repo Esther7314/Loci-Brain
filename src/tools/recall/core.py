@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from core import _bigevent as _big    # a big event: one sentence laid over a stretch of time
 from core import _fold as _F          # fold / gist: what is covered no longer surfaces on its own
 from .. import _runtime as rt
+from .._common import resolve_bucket_id
 from core import _when as _w          # "today" as the user lives it (local timezone) — never call datetime.now() directly
 from core._rooms import (ALL_ROOMS, check_gate, is_mind_room, normalize_room,
                       room_matches)
@@ -1571,20 +1572,12 @@ async def recall_core(when: str, room: str, tag: str, query: str,
     # entry's verbatim text plus all of its metadata ---
     # This is the "click through to the original" door (the tier C list gives
     # gists; you come in here with an id).
-    q = query.strip()
-    if re.fullmatch(r"[0-9a-f]{6,11}", q):
-        # A partial id: match a unique prefix; list the candidates when there are
-        # several; say so plainly when there are none (never fall through to
-        # semantic search)
-        allb = await rt.bucket_mgr.list_all(include_archive=True)
-        cand = [str((bb.get("metadata") or {}).get("id") or "") for bb in allb]
-        cand = sorted({cid for cid in cand if cid.startswith(q)})
-        if len(cand) == 1:
-            q = cand[0]
-        elif len(cand) > 1:
-            return "半截 id 撞了 " + str(len(cand)) + " 个：" + " / ".join(cand[:8]) + "。给完整的。"
-        else:
-            return f"查无此桶：{q}（id 形状但没匹配——可能已物理删除或打错）。"
+    # A partial id is matched as a unique prefix (the same resolver the write
+    # tools use); a collision lists the candidates and no match says so plainly
+    # — never fall through to semantic search.
+    q, id_err = await resolve_bucket_id(query)
+    if id_err:
+        return id_err
     if re.fullmatch(r"[0-9a-f]{12}", q) or re.fullmatch(r"feel_\d{12}_V\d{3}(_\d+)?", q):
         b = await rt.bucket_mgr.get_including_archive(q)
         if not b:

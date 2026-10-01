@@ -56,6 +56,8 @@ from .._common import (
     check_pinned_quota,
     enforce_high_importance_quota,
     occupies_high_importance_quota_slot,
+    resolve_bucket_id,
+    resolve_bucket_ids,
 )
 
 
@@ -300,6 +302,15 @@ async def trace_core(
 
     if not bucket_id or not bucket_id.strip():
         return "请提供有效的 bucket_id。"
+
+    # The handle breath prints next to an item is enough to close it. Resolved
+    # here, before restore / delete / get, so each of those speaks of the full id.
+    bucket_id, id_err = await resolve_bucket_id(bucket_id)
+    if id_err:
+        return id_err
+    folds_append, folds_err = await resolve_bucket_ids(folds_append, "folds_append")
+    if folds_err:
+        return folds_err
 
     restore_conflicts = any((
         delete,

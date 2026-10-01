@@ -33,7 +33,7 @@ Exports: dispatch(text, room, v, a, cover, when, from_, test_data) -> str
 
 from .. import _runtime as rt
 from core import _fold as F
-from .._common import check_content_size
+from .._common import check_content_size, resolve_bucket_ids
 from core._rooms import check_room, _rooms_help, is_event_room, is_mind_room
 from ..grow.rooms_path import _normalize_from
 
@@ -103,7 +103,7 @@ async def dispatch(text: str = "", room: str = "", v=-1, a=-1,
 
     # ---- from: which entries this grew out of (optional; a different meaning
     # from cover, and the two must never be merged) ----
-    from_ids, from_err = _normalize_from(from_)
+    from_ids, from_err = await _normalize_from(from_)
     if from_err:
         return from_err
     if from_ids:
@@ -111,6 +111,12 @@ async def dispatch(text: str = "", room: str = "", v=-1, a=-1,
                    if not await rt.bucket_mgr.get_including_archive(fid)]
         if missing:
             return f"from 里这些 id 不存在：{', '.join(missing)}。"
+
+    # ---- The folded ids may be the handles breath prints; from here on every
+    # gate and every message speaks of the full ids, which are what get stored ----
+    cover, cover_err = await resolve_bucket_ids(cover, "folds")
+    if cover_err:
+        return cover_err
 
     # ---- Gate: folding exactly one = re-versioning, which is regrow's job ----
     if len(cover) == 1 and not when:

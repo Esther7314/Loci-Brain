@@ -5,8 +5,9 @@ tools/_common.py — helper logic shared across tools
 
 This file collects the small helpers reused by several tools that carry no
 tool-specific meaning of their own: size and quota checks (per-bucket byte
-ceiling, grow batch ceilings, pinned and high-importance quotas) and the
-cross-loop turns that serialize a check-then-write.
+ceiling, grow batch ceilings, pinned and high-importance quotas), the
+cross-loop turns that serialize a check-then-write, and the short-id resolver
+every tool that takes a bucket id goes through.
 
 Key behaviour:
 - check_content_size / check_grow_items_payload / check_pinned_quota: read
@@ -14,13 +15,17 @@ Key behaviour:
   exceeded
 - _keyed_turn / _quota_turn: one writer at a time per key, across event loops
   and processes
+- resolve_bucket_id / resolve_bucket_ids: the 6-character handle a read tool
+  prints is accepted by every write tool, as a unique prefix over the whole
+  store
 
 What this file deliberately does not do:
 - Holds no global objects; every dependency comes from _runtime
 - Wraps no side effects beyond log formatting; the caller decides whether to await
 
 Exports: limits_cfg / max_bucket_bytes / max_pinned / check_content_size /
-         check_grow_items_payload / count_pinned / check_pinned_quota
+         check_grow_items_payload / count_pinned / check_pinned_quota /
+         resolve_bucket_id / resolve_bucket_ids
 ========================================
 """
 
@@ -30,6 +35,7 @@ from contextlib import asynccontextmanager
 import math
 import os
 from pathlib import Path
+import re
 import threading
 import time
 import uuid
@@ -196,6 +202,63 @@ async def _quota_turn(name: str):
     """
     async with _keyed_turn(f"quota-{name}"):
         yield
+
+
+# ============================================================
+# Short ids: the handle a read tool prints is the handle a write tool accepts
+# ------------------------------------------------------------
+# breath and recall hand the model a 6-character handle (`recall/core.py::_short_id`
+# cuts a 12-hex id to 6). A model that reads an item off breath and closes it
+# with trace passes exactly that handle on, so every tool that takes an id runs
+# it through here first, and every check downstream (exists? archived?
+# superseded?) speaks of the full id. The rule is recall's read-by-id rule, in
+# one place: a 6–11 hex prefix is matched over the whole store, archive
+# included, and resolves only when exactly one id starts with it.
+# ============================================================
+
+_SHORT_ID_RE = re.compile(r"[0-9a-f]{6,11}")   # shorter than a 12-hex id, longer than noise
+_SHORT_ID_CANDIDATES_SHOWN = 8                  # a collision lists this many, then stops
+
+
+async def resolve_bucket_id(bucket_id) -> tuple[str, str]:
+    """Return (full id, error). A 6–11 hex prefix becomes the one id it names;
+    anything else — a full 12-hex id, a readable `feel_…` id, an empty string —
+    passes through untouched, so the caller's own existence check still answers
+    for exactly what it was given.
+
+    The archive is searched too: an archived entry has to resolve so the caller
+    can say "it is in the archive" rather than "no such bucket". On a collision
+    nothing is chosen and the candidates are listed; the caller writes nothing.
+    """
+    q = str(bucket_id or "").strip()
+    if not _SHORT_ID_RE.fullmatch(q):
+        return q, ""
+    allb = await rt.bucket_mgr.list_all(include_archive=True)
+    cand = sorted({
+        cid for cid in (
+            str((b.get("metadata") or {}).get("id") or b.get("id") or "") for b in allb
+        )
+        if cid.startswith(q)
+    })
+    if len(cand) == 1:
+        return cand[0], ""
+    if cand:
+        return q, ("半截 id 撞了 " + str(len(cand)) + " 个："
+                   + " / ".join(cand[:_SHORT_ID_CANDIDATES_SHOWN]) + "。给完整的。")
+    return q, f"查无此桶：{q}（id 形状但没匹配——可能已物理删除或打错）。"
+
+
+async def resolve_bucket_ids(ids: list, label: str) -> tuple[list[str], str]:
+    """Resolve every id in a list parameter (`from`, `folds`, `folds_append`).
+    Returns (full ids, error); the first id that fails names the parameter and
+    the handle, so the caller can tell which of several went wrong."""
+    out: list[str] = []
+    for raw in ids:
+        full, err = await resolve_bucket_id(raw)
+        if err:
+            return list(ids), f"{label} 里 {str(raw).strip()} —— {err}"
+        out.append(full)
+    return out, ""
 
 
 def _push_warning_safe(code: str, msg: str) -> None:

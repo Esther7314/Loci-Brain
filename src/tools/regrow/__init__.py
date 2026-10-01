@@ -47,7 +47,7 @@ Exports: dispatch(bucket_id, text, v, a, from_, mode) -> str · MODES
 from core import _fold as _F           # fold's bones: regrow is its n=1 case
 from .. import _runtime as rt
 from core._bigevent import is_big as _is_big
-from .._common import _keyed_turn
+from .._common import _keyed_turn, resolve_bucket_id
 # is_mind_room is no longer used to keep events out (that gate was removed; see
 # the epitaph inside regrow below)
 # from core._rooms import is_mind_room
@@ -112,8 +112,14 @@ async def dispatch(bucket_id: str = "", text: str = "", v=-1, a=-1, from_=None,
     if not (0 <= v <= 1 and 0 <= a <= 1):
         return f"v/a 必须在 0~1 之间（收到 v={v}, a={a}）。"
 
+    # The handle breath prints is enough to name the old version. Resolved before
+    # the lock, so the lock key and every message below carry the full id.
+    bucket_id, id_err = await resolve_bucket_id(bucket_id)
+    if id_err:
+        return id_err
+
     # Appended sources: normalise first, then check each one exists
-    extra, from_err = _normalize_from(from_)
+    extra, from_err = await _normalize_from(from_)
     if from_err:
         return from_err
     if extra:
