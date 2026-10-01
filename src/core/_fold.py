@@ -346,16 +346,17 @@ async def span_members(t0: datetime | None, t1: datetime | None) -> list[str]:
     automatically, crossing and nesting hold by construction, and a changed `when` swap
     the membership immediately.
 
-    It uses the same definition as recall's browse path (`_visible` + `_ts_of`): whatever
-    is visible on screen for that stretch of time is exactly what should be inside the
-    period, and the two disagreeing is by definition a bug.
-    ⚠️ Periods and gists are not members themselves (`_visible` already excludes
+    It uses the same definition as recall's browse path (`visibility.on_timeline` +
+    `_ts_of`): whatever is visible on screen for that stretch of time is exactly what
+    should be inside the period, and the two disagreeing is by definition a bug.
+    ⚠️ Periods and gists are not members themselves (`on_timeline` already excludes
     `__大event__`, and `__gist__` is refused here as well — the members of a period are
     memories, not other names).
     """
-    # Lazy import: recall.core imports this module (its read side needs is_covered), and
-    # importing both ways at module level goes in circles
-    from tools.recall.core import _visible, _ts_of
+    # Lazy imports: recall.core and the gate both import this module (their read sides
+    # need is_covered), and importing both ways at module level goes in circles
+    from tools.recall.core import _ts_of
+    from .visibility import on_timeline
 
     if t0 is None:
         return []
@@ -367,7 +368,7 @@ async def span_members(t0: datetime | None, t1: datetime | None) -> list[str]:
     out: list[tuple[datetime, str]] = []
     for b in buckets:
         meta = b.get("metadata", {}) or {}
-        if is_gist(meta) or not _visible(meta):
+        if is_gist(meta) or not on_timeline(meta):
             continue
         ts = _ts_of(meta)      # `by` was cut; one definition remains (`when` first, `created` as fallback)
         if ts is None or ts < t0:

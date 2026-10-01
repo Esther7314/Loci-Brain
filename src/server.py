@@ -108,7 +108,8 @@ from tools import letter as _t_letter
 #    **Not one row of the thirteen roots' data is deleted** (the night_fall precedent:
 #       disable, do not delete). The `tools/seed/` directory stays, the buckets on disk stay;
 #       there is simply no import chain that reaches them any more. The `domain[0]=="seed"`
-#       filter in `_visible()` is unchanged, so they still do not enter the timeline.
+#       filter in `core/visibility.timeline_kind()` is unchanged, so they still do not enter
+#       the timeline.
 
 # --- Load config & init logging ---
 config = load_config()

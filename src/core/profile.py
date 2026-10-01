@@ -33,6 +33,11 @@ with no new persisted field (the one tag convention below excepted):
    ⏰ reminders, 🫀 weighing on me and "something suddenly comes back"; a hold entry is
    never an item of its own on those roads — it belongs with the entry it is hung on.
 
+Which entries each block may show is the gate's (`core/visibility.py`): every block asks
+`visible_for()` with its own road — `remind` for ⏰ and 🫀, `door` for the rules and the
+profile page, `sudden` for "something suddenly comes back", `edited` for 人改过的 — and
+what stays here is each block's own business (an EVENT room, a want, a date).
+
 Exports: door_note(all_buckets, now) / event_pool(all_buckets, now=None) / edited_by_user(all_buckets)
 ========================================
 """
@@ -48,7 +53,7 @@ from . import _when as _w          # "today" on the local calendar
 # is_mind_room is deliberately no longer imported: the secondary "a rule has to live in
 # MIND" filter at the door was taken out (see the long note further down)
 from ._rooms import is_event_room
-from tools.recall.core import _visible  # core->tools backward edge: see the note atop core/__init__.py
+from . import visibility as _V    # the one gate: what may be put in front of the model
 
 _PROFILE_TAG = "__档案事实__"
 _BIGEVENT_TAG = "__大event__"
@@ -175,10 +180,11 @@ def _held_loudness(held: int) -> str:
 
 def event_pool(all_buckets: list, now: datetime | None = None) -> list[dict]:
     """The pool behind "something suddenly comes back": events that are visible, live in
-    an EVENT room, have **not been covered**, and are not held (a hold entry, or an entry
-    with a hold live on it at `now`, local today when omitted).
+    an EVENT room, have **not been covered**, are not held (a hold entry, or an entry
+    with a hold live on it at `now`, local today when omitted), and were not put out of
+    mind with `dont_surface`.
 
-    🔴 Four gates; miss any one of them and it fails silently:
+    🔴 Five gates; miss any one of them and it fails silently:
     ① `is_event_room()` accepts both old and new room names. Both sides used to write
        `.find("/EVENT/") > 0` themselves, and the new name `EVENT/SELF` contains no
        `/EVENT/` at all, so the pool would **go silently empty** with no error.
@@ -186,12 +192,12 @@ def event_pool(all_buckets: list, now: datetime | None = None) -> list[dict]:
     ③ **Covered entries stay out of this pool.** Coming across something suddenly is a
        chance encounter, whereas anything already folded has been given a name — it
        should appear inside recall as that sentence, not tap me on the shoulder again as
-       a loose entry.
-       ⚠️ `is_covered()` also covers superseded versions (`superseded_by`) now; that half
-       used to be excluded wholesale by `_visible()`, and both are handled by this one
-       gate today.
+       a loose entry. An old version (`superseded_by`) stays out for the same reason.
     ④ **Held entries stay out**, at either level: a hold asked for it not to come up
        for now. The hold entry itself stays out too; it rides with what it is hung on.
+    ⑤ **`dont_surface` stays out**: it says "do not bring this up by yourself", and
+       coming across something suddenly is the purest case of that.
+    ③④⑤ and the entry's state are the gate's `sudden` road (`core/visibility.py`).
     ⚠️ A future threshold engine's candidate pool has to pass the same gate:
        **this is the anchor point for it.**
     """
@@ -200,14 +206,9 @@ def event_pool(all_buckets: list, now: datetime | None = None) -> list[dict]:
     pool: list[dict] = []
     for b in all_buckets:
         meta = b.get("metadata", {}) or {}
-        tags = [str(t) for t in (meta.get("tags") or [])]
-        if _PROFILE_TAG in tags or _BIGEVENT_TAG in tags:
+        if not _V.timeline_kind(meta) or not is_event_room(meta.get("room")):
             continue
-        if not _visible(meta) or _F.is_covered(meta):
-            continue
-        if not is_event_room(meta.get("room")):
-            continue
-        if _H.is_hold(meta) or _H.is_held(meta, now, holds):
+        if not _V.visible_for(meta, road=_V.SUDDEN, now=now, holds=holds):
             continue
         bid = str(meta.get("id") or b.get("id") or "")
         if not bid:
@@ -248,11 +249,12 @@ def door_note(all_buckets: list, now: datetime) -> dict:
             #    would go on showing the old text with nothing to say it is old. Only a
             #    page nothing covers is the door. The covered ones come back separately,
             #    so that an empty cell can say which page went and what replaced it.
-            if _F.is_covered(meta):
-                facts_covered.append({"id": bid, "by": _F.covers_of(meta)})
-            else:
+            page = _V.visible_for(meta, road=_V.DOOR)
+            if page:
                 facts.append({"id": bid, "created": str(meta.get("created") or ""),
                               "content": content})
+            elif page.reasons == (_V.COVERED,):
+                facts_covered.append({"id": bid, "by": _F.covers_of(meta)})
             continue
         if _BIGEVENT_TAG in tags:
             # Periods do not appear in the awakening, but the profile page lists a line
@@ -268,10 +270,7 @@ def door_note(all_buckets: list, now: datetime) -> dict:
         _status = str(meta.get("status") or "")
         _telic = is_telic(meta)
         _remindable = (not is_closed(meta)  # only `status` marks an ending; the old booleans stay read-only for compatibility
-                       and not meta.get("dont_surface")
-                       and not meta.get("superseded_by")
-                       and not _H.is_hold(meta)
-                       and not _H.is_held(meta, now, holds))
+                       and _V.visible_for(meta, road=_V.REMIND, now=now, holds=holds).shown)
         w = str(meta.get("when") or "") if _remindable else ""
         m = re.match(r"(\d{4}-\d{2}-\d{2})", w)
         _reminded = False
@@ -323,9 +322,8 @@ def door_note(all_buckets: list, now: datetime) -> dict:
                           "clock": _clock, "clock_note": _note,
                           "last_asked": _asked})
 
-        if not _visible(meta):
+        if not _V.on_timeline(meta):
             continue
-        room = str(meta.get("room") or "")
         # A rule is **something pinned**. That is the whole test.
         #
         # ⚰️ The secondary filter — "and the room has to be MIND, or the first 40
@@ -341,11 +339,10 @@ def door_note(all_buckets: list, now: datetime) -> dict:
         #    fixed, while silence leaves you believing the thing is there.
         #    Good side effect: the mess in the room field no longer blocks the door and
         #    can be cleaned up at leisure.
-        # 🔴 **A superseded or covered version is not a rule.** `_visible()` used to
-        #    exclude `superseded_by` wholesale; that half now belongs to `is_covered()`,
-        #    which has to be called explicitly here — otherwise the door would display a
-        #    rule that has already been changed my mind about.
-        if meta.get("pinned") and not _F.is_covered(meta):
+        # 🔴 **A superseded or covered version is not a rule**: an old version is off the
+        #    timeline already, and a covered one is kept off by the `door` road —
+        #    otherwise the door would display a rule I have already changed my mind about.
+        if meta.get("pinned") and _V.visible_for(meta, road=_V.DOOR):
             rules.append({"id": bid, "meta": meta, "content": content})
         entries.append({"id": bid, "meta": meta, "content": content})
 
@@ -382,7 +379,7 @@ def edited_by_user(all_buckets: list) -> list[dict]:
         tags = [str(t) for t in (meta.get("tags") or [])]
         if _EDITED_BY_USER_TAG not in tags:
             continue
-        if not _visible(meta) or _F.is_covered(meta):
+        if not _V.on_timeline(meta) or not _V.visible_for(meta, road=_V.EDITED):
             continue
         bid = str(meta.get("id") or b.get("id") or "")
         if not bid:

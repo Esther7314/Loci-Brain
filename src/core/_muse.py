@@ -139,6 +139,7 @@ from . import _when as _w
 from ._bigevent import BIGEVENT_TAG
 from ._fold import GIST_TAG, is_covered
 from ._rooms import is_event_room, is_mind_room
+from . import visibility as _V    # the one gate: what may be put in front of the model
 
 # ============================================================
 # Thresholds — the factory values are placeholders; the real ones come from the three
@@ -345,7 +346,9 @@ def in_pool(meta: dict, item: Item, kind: str, cfg: dict, now: datetime,
     # --- excluded from every pool ---
     if _is_utility_record(meta):
         return False
-    if str(meta.get("type") or "") in ("letter", "archived"):
+    # Letters live in Home; whether the entry may surface at all is the gate's `muse`
+    # road (an archived or deleted one never does). Covers are this pool's own spec below.
+    if str(meta.get("type") or "") == "letter" or not _V.visible_for(meta, road=_V.MUSE):
         return False
     if meta.get("pinned") or meta.get("protected"):
         return False                            # a rule is never something to be summarised

@@ -1070,6 +1070,10 @@ async def build_poke(query: str = "", when: str = "", room: str = "",
     drop to the fragment layer. This endpoint remains **read-only**: it does not call
     `degrade_on_wake()`. Demotion is always something the bridge asks for explicitly, and is
     never done on its behalf here.
+    A dream with an ingredient that may no longer be seen (archived, deleted, put out of
+    mind, hung with an avoid hold since) is left out of `dreams` this round —
+    `core._dream.withheld_ingredients()`. Left out is a shape the bridge already reads:
+    no dream is the ordinary daytime answer.
 
     `muse_pending`: the cluster count, reusing `build_muse_pending()` directly (one cached
     pass, the same numbers muse()'s first step sees, with no rescan of the store).
@@ -1093,7 +1097,7 @@ async def build_poke(query: str = "", when: str = "", room: str = "",
     try:
         c = _D._c()
         now = _D._w.now()
-        for rec in _D.load_dreams():
+        for rec in await _D.handable_dreams(_D.load_dreams()):
             layer = _D.layer_of(rec, now, c)
             if layer == "没了":
                 continue          # something past its time does not play dead — but this gate is pure computation and deletes no files

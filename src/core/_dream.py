@@ -150,6 +150,8 @@ DREAM_PROMPT · DREAM_DEFAULTS · dream_config()
 weave() (weave one; returns the whole version, and **persists it too** — see the
          amendment above)
 current_dream() (fetch the current layer, counting as one recall)
+withheld_ingredients() (the ingredients of a dream that may no longer be seen; any one
+         withholds the whole dream from being handed out)
 degrade_on_wake() (🔴 the degrade signal: drop a living `完整` layer down to the fragment
          layer; idempotent)
 maintain() (the hook at awakening: sweep the expired ones and weave if above the line —
@@ -172,6 +174,7 @@ from datetime import datetime, timedelta
 
 from . import _holds as _H
 from . import _muse as M
+from . import visibility as _V    # the one gate: what may be put in front of the model
 from tools import _runtime as rt
 from . import _when as _w
 
@@ -399,18 +402,17 @@ def want_pool(recs: list[tuple[dict, str]], now: datetime) -> list[Ingredient]:
     column, but that is a **display split**. As far as a dream is concerned they are all
     still unfinished business, so all of them count here. And only an `avoid` hold keeps
     a want out of dreams: a `defer` asked not to be pushed, not to be forgotten.
+    Everything but "telic, not closed" is the gate's `dream` road (`core/visibility.py`).
     """
     from utils import is_closed, is_telic
     holds = _H.hold_index(recs)
     out: list[Ingredient] = []
     for meta, text in recs:
-        if not is_telic(meta):
+        if not is_telic(meta) or is_closed(meta):
             continue
-        if is_closed(meta) or meta.get("dont_surface") or meta.get("superseded_by"):
+        if not _V.visible_for(meta, road=_V.DREAM, now=now, holds=holds):
             continue
-        if _H.is_hold(meta) or _H.is_held(meta, now, holds) == "avoid":
-            continue
-        if M._is_utility_record(meta) or str(meta.get("type") or "") in ("letter", "archived"):
+        if M._is_utility_record(meta) or str(meta.get("type") or "") == "letter":
             continue
         it = M.item_of(meta, text)
         if it is None or not it.text.strip():
@@ -426,12 +428,14 @@ def unclear_pool(recs, digested: set[str], c: dict, now: datetime) -> list[Ingre
     """Never worked out: events that **carry emotion and that no insight points at**.
 
     🔴 The pool comes straight from `_muse.pool_of(..., "dream", ...)` — ingredient
-    selection goes through one engine; never keep two copies. What an `avoid` hold is
-    hung on, and holds themselves, are taken out here: muse still sees them.
+    selection goes through one engine; never keep two copies. What the gate's `dream`
+    road keeps out is taken out here — what an `avoid` hold is hung on, holds themselves,
+    a deliberate `dont_surface`, an old version. Muse's own pool counts neither holds nor
+    `dont_surface`, so muse still sees those.
     """
     holds = _H.hold_index(recs)
     skip = {str(m.get("id") or "").strip() for m, _t in recs
-            if _H.is_hold(m) or _H.is_held(m, now, holds) == "avoid"}
+            if not _V.visible_for(m, road=_V.DREAM, now=now, holds=holds)}
     out: list[Ingredient] = []
     for it in M.pool_of(recs, "dream", M.muse_config(rt.config), now, digested):
         if it.id in skip:
@@ -986,6 +990,57 @@ async def weave(force: bool = False, cfg: dict | None = None,
     return out
 
 
+def _ingredient_ids(rec: dict) -> list[str]:
+    """The memory ids a dream was woven from (the few words are not memories)."""
+    material = rec.get("素材") or {}
+    return [str(i) for key in ("压在心头", "想不明白") for i in (material.get(key) or [])]
+
+
+async def withheld_ingredients(rec: dict, holds: "_H.HoldIndex | None" = None,
+                               now: datetime | None = None) -> list[str]:
+    """The ingredients this dream recorded (`素材`) that may no longer be seen: archived,
+    deleted, put out of mind with `dont_surface`, hung with an `avoid` hold since — or
+    gone from the store altogether. Any one of them withholds the **whole** dream when it
+    is handed out: a dream is woven through and through, and there is no cutting one
+    thread out of it. Withholding is per round — nothing on disk changes, and the dream
+    goes on fading on its own clock.
+
+    Judged by the gate's `dream_handout` road (`core/visibility.py`). A new version of an
+    ingredient does not withhold it: the dream was made from the wording of its night.
+    `holds`: the hold index over the store, when the caller has one for several dreams.
+    """
+    ids = _ingredient_ids(rec)
+    if not ids:
+        return []
+    if holds is None:
+        holds = _H.hold_index(await rt.bucket_mgr.list_all(include_archive=False))
+    now = now or _w.now()
+    out: list[str] = []
+    for bid in ids:
+        b = await rt.bucket_mgr.get_including_archive(bid)
+        if not b or not _V.visible_for(b, road=_V.DREAM_HANDOUT, now=now, holds=holds):
+            out.append(bid)
+    return out
+
+
+async def handable_dreams(dreams: list[dict]) -> list[dict]:
+    """The dreams that may be handed out this round, in the order given; the withheld
+    ones are logged and left out. One hold index serves them all, built only when a dream
+    has ingredients to judge."""
+    holds = None
+    out: list[dict] = []
+    for rec in dreams:
+        if holds is None and _ingredient_ids(rec):
+            holds = _H.hold_index(await rt.bucket_mgr.list_all(include_archive=False))
+        unseen = await withheld_ingredients(rec, holds)
+        if unseen:
+            rt.logger.info("[dream] 这一轮不递梦 %s：%d 样料现在看不得了（%s）",
+                           rec.get("id"), len(unseen), "、".join(unseen))
+            continue
+        out.append(rec)
+    return out
+
+
 async def current_dream(recall: bool = True, cfg: dict | None = None) -> dict | None:
     """Fetch the dream at its current layer. `None` when there is no dream.
 
@@ -1008,7 +1063,9 @@ async def current_dream(recall: bool = True, cfg: dict | None = None) -> dict | 
     """
     c = cfg or _c()
     await sweep_expired(c)
-    alive = load_dreams()
+    # A dream with an ingredient that may no longer be seen is withheld this round
+    # (`withheld_ingredients`), and a withheld one is not recalled either.
+    alive = await handable_dreams(load_dreams())
     if not alive:
         return None
     rec = alive[0]

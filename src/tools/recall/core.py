@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from core import _bigevent as _big    # a big event: one sentence laid over a stretch of time
 from core import _fold as _F          # fold / gist: what is covered no longer surfaces on its own
 from core import _sources as _src     # outside material: source records and their registry state
+from core import visibility as _V     # the one gate: what may be put in front of the model
 from .. import _runtime as rt
 from .._common import resolve_bucket_id
 from core import _when as _w          # "today" as the user lives it (local timezone) — never call datetime.now() directly
@@ -430,66 +431,10 @@ def _ts_of(meta: dict) -> datetime | None:
     return None
 
 
-def _visible(meta: dict) -> bool:
-    t = str(meta.get("type") or "")
-    if t in ("letter", "archived", "i"):
-        # letters moved to Home; archived sinks; i stays out until it is merged
-        # into MIND (old I entries that have not been migrated yet)
-        return t == "i" and bool(meta.get("room"))
-    # ⚠️ This used to **stop** excluding an entry outright just because it had a
-    # `superseded_by`.
-    # ------------------------------------------------------------
-    # Two fields, one action, but different treatment: `covered_by` (folded away)
-    # only meant **not taking up a line**, with the count, room, tags and V/A all
-    # intact; `superseded_by` (re-versioned by regrow) used to be **excluded
-    # entirely** here — so covering one entry lost more information than covering
-    # two, which runs against the acceptance rule that **the amount of information
-    # any recall can show may only grow, never shrink**.
-    # 🔴 **Unify it with covered_by's treatment**: the old version still does not
-    #    surface on its own, but it **counts in the statistics**, and the new
-    #    version appears in its place as "▣... covering 1 entry here".
-    # ⚠️ Do not add this line back. Read the rule above before trying.
-    #
-    # ⚰️ —— all of the above was later overturned, and the line below is exactly
-    #    "the line that was added back".
-    #    **What overturned it was not a change of taste but the loss of its
-    #    premise**: the reasoning was "regrow is fold's n=1, so the two must be
-    #    treated alike"; once fold became solely about collecting several entries
-    #    and regrow solely about re-versioning, **the requirement to treat them
-    #    alike stopped existing**.
-    #    The symptom, seen directly: a row of "▣... covering 1 entry here" across
-    #    the browse view, none of which was a fold at all — they were all
-    #    re-versions. **What recall is there to show is events.**
-    #    On the rule that information may only grow: not one word of the old
-    #    version is lost. A direct id lookup returns it verbatim, both ends of the
-    #    version chain are listed, and search reaches it — **what it loses is the
-    #    line it occupied in the browse view and its place in the count**.
-    #    That rule is about not losing things, not about cramming everything onto
-    #    one screen.
-    # 🔴 The decision: **a version superseded by regrow does not count towards the
-    #    number of entries** (and therefore does not appear in the browse view).
-    #    Re-versioning an event = "I remembered it wrong" — the thing happened
-    #    once, and the mistaken version is not a second thing;
-    #    re-versioning a mind = "I used to think that and no longer do" — a
-    #    changed view is not a second act of thinking, it is the previous version
-    #    of the same thought. Two different reasons, one conclusion: **an entry
-    #    that has been re-versioned is still one entry**, and if re-versioning the
-    #    same thing three times turned it into three in the count, that number
-    #    would start lying.
-    #    ⚠️ The old version has not disappeared: a direct id lookup still returns
-    #    it verbatim, both ends of the version chain (what it replaced / what
-    #    replaced it) are still listed, and search still reaches it. It simply no
-    #    longer occupies a line in the browse view and is no longer counted twice.
-    #    ⚠️ **Entries folded away by fold still count** (those are several real
-    #    memories collected together, not earlier versions of one entry).
-    if meta.get("superseded_by"):
-        return False
-    if (meta.get("domain") or [""])[0] == "seed":
-        return False
-    tags = [str(t) for t in (meta.get("tags") or [])]
-    if "__档案事实__" in tags or "__大event__" in tags:
-        return False  # the note by the door and big events are tooling, not events on the timeline
-    return True
+# What recall lists and counts lives in the gate (core/visibility.on_timeline): the
+# timeline's kind filter and the lookup listing's rules together. The panel's counters
+# import it under this name, so the number on a page and the number recall shows are one.
+_visible = _V.on_timeline
 
 
 async def _collect(when, room, tag, query, all_buckets=None) -> tuple[list[dict], str, dict]:
@@ -548,7 +493,7 @@ async def _collect(when, room, tag, query, all_buckets=None) -> tuple[list[dict]
     browsing = not query.strip()
     for b in pool:
         meta = b.get("metadata", {}) or {}
-        if not _visible(meta):
+        if not _V.on_timeline(meta):
             continue
         # Faded or sunk entries **do not turn up while browsing** ("it surfaces on
         # its own even when I am not looking for it" belongs to what is still
@@ -1518,6 +1463,32 @@ def _render_scene_clusters(entries, gates, floor: float = None, ledger: dict | N
     return chr(10).join(x for x in lines if x)
 
 
+# What a read by id says first about an entry that is not live. The body still comes out
+# whole — a lookup hides nothing — but never as if it were a current memory.
+_STATE_LOUD = {
+    _V.ARCHIVED: "⚠️在归档区：这条已经沉下去了，不是现在的记忆——下面是它沉下去之前的原文，别当成眼下的事。",
+    _V.DELETED: "⚠️在归档区（已删除）：这条被删掉了，不是现在的记忆——下面是它删掉之前的原文，别当成眼下的事。",
+}
+
+
+async def _linked(bucket_id: str) -> tuple[dict | None, str, str]:
+    """One entry a read by id links to — a source, what it covers, a period's member, who
+    cites it — as its line shows it: (bucket or None, hint, mark).
+
+    The gate's `read` road decides: a linked entry is always a line (its gist), never
+    expanded into its body, and one that is not live carries its state out loud."""
+    b = await rt.bucket_mgr.get_including_archive(bucket_id)
+    if not b:
+        return None, "", ""
+    meta = b.get("metadata", {}) or {}
+    verdict = _V.visible_for(meta, road=_V.READ)
+    if not verdict:
+        return b, "", "  （不在这次能看的范围里）"
+    hint = re.sub(r"^[\d\- :]+", "",
+                  str(meta.get("summary") or meta.get("name") or "").strip())[:60]
+    return b, hint, (f"  {verdict.mark}" if verdict.mark else "")
+
+
 async def recall_text_and_data(when: str, room: str, tag: str, query: str,
                                floor=None, view: str = "", max_cells: int = 0) -> dict:
     """Collect once, serve both skins. **For the panel only.**
@@ -1654,7 +1625,14 @@ async def recall_core(when: str, room: str, tag: str, query: str,
             return f"查无此桶：{q}（id 形状但不存在——可能已物理删除或打错，不做语义联想）。"
         if b:
             meta = b.get("metadata", {}) or {}
+            # A read by id is a lookup: dont_surface hides nothing, and an entry that is
+            # not live still comes out whole — with its state said before anything else.
+            verdict = _V.visible_for(meta, road=_V.READ)
+            if not verdict:
+                return f"{q} 不在这次能看的范围里。"
             lines = [f"═ {q} · {str(meta.get('name') or '')}"]
+            if verdict.mark:
+                lines.append(_STATE_LOUD[verdict.state])
             info = []
             for k, label in (("room", "房间"), ("when", "when"), ("valence", "V"),
                              ("arousal", "A"), ("importance", "重"), ("status", "状态")):
@@ -1682,18 +1660,11 @@ async def recall_core(when: str, room: str, tag: str, query: str,
                     src_lines.append(f"  ← {_source_label(fid)}  [{word}] "
                                      "（宿主对话里的原话，不在库里）" + _source_mark(fid))
                     continue
-                src = await rt.bucket_mgr.get_including_archive(fid)
+                # A source that sank or was deleted still explains the thought, but
+                # reading it as current would be wrong: it carries its mark.
+                src, hint, mark = await _linked(fid)
                 if src:
-                    smeta = src.get("metadata", {}) or {}
-                    hint = str(smeta.get("summary") or smeta.get("name") or "").strip()
-                    hint = re.sub(r"^[\d\- :]+", "", hint)[:60]
-                    # Same test as this entry's own "在归档区" line below: a source that
-                    # sank or was deleted still explains the thought, but reading it as
-                    # current would be wrong.
-                    archived = (str(smeta.get("type") or "") == "archived"
-                                or smeta.get("tombstone") or smeta.get("deleted_at"))
-                    src_lines.append(f"  ← {fid}  [{word}] {hint}"
-                                     + ("  ⚠️在归档区" if archived else ""))
+                    src_lines.append(f"  ← {fid}  [{word}] {hint}{mark}")
                 else:
                     src_lines.append(f"  ← {fid}  [{word}] （查无此桶——源可能被硬删过）")
             for text in _source_strings(meta):
@@ -1712,9 +1683,6 @@ async def recall_core(when: str, room: str, tag: str, query: str,
             _cbs = [c for c in _F.covers_of(meta) if c != _sup]
             if _cbs:
                 info.append(f"⚠️被 {'、'.join(_cbs)} 盖着（不再独立冒头；搜索和这儿照样看得见）")
-            if (str(meta.get("type") or "") == "archived" or meta.get("tombstone")
-                    or meta.get("deleted_at")):
-                info.append("⚠️在归档区")
             lines.append(" · ".join(info))
             # A basis this memory grew out of was overturned (regrow's overturn marks
             # every descendant). The entry still counts; whoever reads it has to know
@@ -1742,22 +1710,16 @@ async def recall_core(when: str, room: str, tag: str, query: str,
                     lines.append(f"范围内现在有 {len(mem)} 条（**现场算的**，没记账；"
                                  f"下钻：拿下面的 id 再搜）:")
                     for mid in mem[:30]:
-                        mb = await rt.bucket_mgr.get_including_archive(mid)
-                        mmeta = (mb or {}).get("metadata", {}) or {}
-                        mhint = re.sub(r"^[\d\- :]+", "",
-                                       str(mmeta.get("summary") or mmeta.get("name")
-                                           or "").strip())[:60]
-                        lines.append(f"  ◈ {mid}  {mhint}")
+                        _mb, mhint, mmark = await _linked(mid)
+                        lines.append(f"  ◈ {mid}  {mhint}{mmark}")
                     if len(mem) > 30:
                         lines.append(f"  …… 还有 {len(mem) - 30} 条")
             cov = _F.cover_ids(meta)
             if cov:
                 lines.append(f"盖着 {len(cov)} 条（下钻：拿下面的 id 再搜）:")
                 for cid in cov[:30]:
-                    cb = await rt.bucket_mgr.get_including_archive(cid)
+                    cb, chint, cmark = await _linked(cid)
                     cmeta = (cb or {}).get("metadata", {}) or {}
-                    chint = re.sub(r"^[\d\- :]+", "",
-                                   str(cmeta.get("summary") or cmeta.get("name") or "").strip())[:60]
                     if not cb:
                         chint = "（查无此桶——可能被硬删过）"
                     # With crossing, covered_by is a list: if this gist is still on
@@ -1766,7 +1728,7 @@ async def recall_core(when: str, room: str, tag: str, query: str,
                     now_by = _F.covers_of(cmeta)
                     mark = ("" if (not cb or q in now_by)
                             else f"  ↑现在归 {'、'.join(now_by) or '（没人盖）'}")
-                    lines.append(f"  ▣ {cid}  {chint}{mark}")
+                    lines.append(f"  ▣ {cid}  {chint}{cmark}{mark}")
                 if len(cov) > 30:
                     lines.append(f"  …… 还有 {len(cov) - 30} 条")
             # The reverse chain: what thinking has grown out of this entry —
@@ -1779,13 +1741,13 @@ async def recall_core(when: str, room: str, tag: str, query: str,
             if refs:
                 lines.append("被引用（有东西从这条长出来过）:")
                 for rid in refs[:6]:
-                    rb = await rt.bucket_mgr.get_including_archive(rid)
-                    rmeta = (rb or {}).get("metadata", {}) or {}
-                    rhint = re.sub(r"^[\d\- :]+", "",
-                                   str(rmeta.get("summary") or rmeta.get("name") or "").strip())[:60]
-                    lines.append(f"  → {rid}  {rhint}")
-            lines.append("─" * 30)
-            lines.append(str(b.get("content") or ""))  # verbatim, never cut
+                    _rb, rhint, rmark = await _linked(rid)
+                    lines.append(f"  → {rid}  {rhint}{rmark}")
+            # The body, verbatim and never cut; one that is not live says where it
+            # comes from on the rule above it as well.
+            lines.append("─" * 30 if not verdict.mark
+                         else "─" * 12 + " 归档区里的原文 " + "─" * 12)
+            lines.append(str(b.get("content") or ""))
             return "\n".join(lines)
         # id-shaped but no such bucket -> fall back to an ordinary search (it may
         # be a partial id, or the bucket may have been physically deleted)

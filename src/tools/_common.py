@@ -42,6 +42,7 @@ import threading
 import time
 import uuid
 
+from core.visibility import LIVE, state_of
 from utils import parse_bool
 
 from . import _runtime as rt
@@ -583,14 +584,11 @@ async def check_pinned_quota() -> str | None:
 
 
 def is_terminal_memory_metadata(metadata: dict | None) -> bool:
-    """Whether metadata represents an archived/deleted terminal memory."""
+    """Whether metadata represents an archived/deleted terminal memory — the gate's
+    `state_of` (core/visibility.py), so a quota counts exactly what a road shows."""
     if not isinstance(metadata, dict):
         return False
-    return bool(
-        metadata.get("deleted_at")
-        or parse_bool(metadata.get("tombstone"), default=False)
-        or str(metadata.get("type") or "").strip().lower() == "archived"
-    )
+    return state_of(metadata) != LIVE
 
 
 def is_importance_audit_candidate(

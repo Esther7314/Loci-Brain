@@ -158,16 +158,13 @@ def _usable(meta: dict) -> bool:
     `covered_by` was added later: a big event can itself be covered (recursively, with
     no fixed number of layers), and a covered layer should not surface on its own over a
     recalled stretch of time — show the topmost layer, and keep the ones underneath
-    reachable by drilling down.
+    reachable by drilling down. Archived or deleted is the gate's `state_of`.
     """
     from ._fold import is_covered   # _fold imports this module
-    if is_covered(meta) or meta.get("deleted_at"):
+    from .visibility import LIVE, state_of   # the gate imports _fold, which imports this module
+    if is_covered(meta) or state_of(meta) != LIVE:
         return False
-    if str(meta.get("status") or "") in ("resolved", "abandoned"):
-        return False
-    if str(meta.get("type") or "") == "archived":
-        return False
-    return True
+    return str(meta.get("status") or "") not in ("resolved", "abandoned")
 
 
 def first_line(content: str) -> str:
