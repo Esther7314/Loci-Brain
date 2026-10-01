@@ -24,8 +24,9 @@ produces data; all rendering lives in frontend/loci.html.
     GET  /api/loci/auth/state         -> where the password currently lives, and whether one needs setting
     GET  /api/logs                    -> the tail of server.log
     GET  /loci/vendor/{path:path}     -> three.js, served locally, which the starfield page needs
+    GET  /api/v2/slices               -> the host's own read of the pending slices (hook key)
 
-🔴 THE WRITE SURFACE — seven POST routes, and every one of them writes something.
+🔴 THE WRITE SURFACE — eight POST routes, and every one of them writes something.
 
     POST /api/loci/similar/action     -> a human verdict on a suspected duplicate: keep
                                          both, or sink one (trace delete=True — a soft
@@ -37,6 +38,9 @@ produces data; all rendering lives in frontend/loci.html.
     POST /api/loci/auth/set-password  -> sets the password guarding remote MCP access
     POST /api/loci/dream/wake         -> the demotion signal: drop a live "whole" dream
                                          layer down to the fragment layer (idempotent)
+    POST /api/v2/slices               -> the host hands over a day's raw lines; a side model
+                                         slices them and the slices are stored as pending
+                                         (hook key; the raw text is not kept)
 
 ⚠️ This header used to say the file was "read-only, with a single write endpoint", and
    listed two of the seven. That was true when it was written and then five routes were
@@ -1693,6 +1697,21 @@ def _parse_ok(v) -> bool:
 # Routes
 # ============================================================
 
+def _slices_config() -> tuple[int, float]:
+    """`slices:` in config -> (max lines per batch, guess threshold)."""
+    from core import _slicer as _sl
+    cfg = (sh.config or {}).get("slices") or {}
+    try:
+        max_lines = int(cfg.get("max_lines_per_batch") or _sl.DEFAULT_MAX_LINES_PER_BATCH)
+    except (TypeError, ValueError):
+        max_lines = _sl.DEFAULT_MAX_LINES_PER_BATCH
+    try:
+        threshold = float(cfg.get("guess_threshold", _sl.DEFAULT_GUESS_THRESHOLD))
+    except (TypeError, ValueError):
+        threshold = _sl.DEFAULT_GUESS_THRESHOLD
+    return max(1, max_lines), threshold
+
+
 def register(mcp) -> None:
 
     @mcp.custom_route("/loci", methods=["GET"])
@@ -2304,6 +2323,43 @@ def register(mcp) -> None:
         except Exception as e:
             logger.warning(f"[loci] recollect 失败: {e}")
             return JSONResponse({"error": str(e)}, status_code=500)
+
+    # ---------------------------------------------------------
+    # Sources after the fact: the host's raw lines in, pending slices out (core/_slicer.py)
+    # ---------------------------------------------------------
+    @mcp.custom_route("/api/v2/slices", methods=["POST"])
+    async def api_v2_slices_take(request: Request) -> Response:
+        """The host hands over a stretch of raw lines before it lets go of them:
+        {source: {system, instance, container}, day, lines: [{id, text, at?, speaker?}],
+        revision?, fingerprint_by?}. The side model slices them; the slices wait for the
+        main model (recall(view="slices")). 400 for a malformed batch, 502 when the side
+        model fails — then nothing is stored, and the host may send the same batch again."""
+        from starlette.responses import JSONResponse
+        from core import _slicer as _sl
+        try:
+            body = await sh._read_json_object(request)
+        except (ValueError, json.JSONDecodeError) as e:
+            return JSONResponse({"error": f"body: {e}"}, status_code=400)
+        max_lines, threshold = _slices_config()
+        try:
+            out = await _sl.take_batch(sh.bucket_mgr, body,
+                                       model=_sl.side_model(sh.dehydrator, sh.config),
+                                       max_lines=max_lines, threshold=threshold)
+        except _sl.BatchError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        except _sl.SlicerError as e:
+            logger.warning(f"[loci] slicing failed, nothing stored: {e}")
+            return JSONResponse({"error": f"the side model failed, nothing was stored: {e}"},
+                                status_code=502)
+        return JSONResponse(out)
+
+    @mcp.custom_route("/api/v2/slices", methods=["GET"])
+    async def api_v2_slices_pending(request: Request) -> Response:
+        """The pending slices, newest batch first, for the host's own prompt-building:
+        {pending, batches: [{batch_id, source, day, revision, slices: [...]}]}."""
+        from starlette.responses import JSONResponse
+        store = sh.bucket_mgr.slices
+        return JSONResponse({"pending": store.pending_count(), "batches": store.open_batches()})
 
     # ---------------------------------------------------------
     # "Is it time to muse?" — the endpoint the host's wake-up leg asks

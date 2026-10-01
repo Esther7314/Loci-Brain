@@ -10,7 +10,9 @@ WHAT ONE ITEM DOES
     1. Make an empty temp directory; that is the whole library. No real library is
        ever opened: the server only sees LOCI_BUCKETS_DIR, which points here.
     2. Write the item's `setup` entries straight onto disk (fixed ids, fixed times),
-       using Loci's own BucketManager so the files look exactly like real ones.
+       using Loci's own BucketManager so the files look exactly like real ones. An
+       item's `slices:` batch (a day of a host's raw lines) is then handed to Loci's
+       own intake, with the slicing written in the item standing in for the side model.
     3. Start the real MCP server (exam/serve.py) over stdio with the fake clock.
     4. Walk the `steps`: move the clock, call tools (a call may carry `write_key:`, the
        key a host would send for that write), take snapshots, run checks.
@@ -142,8 +144,10 @@ def read_entry(lib: Path, bucket_id: str) -> tuple[dict, str] | None:
     return meta, post.content
 
 
-async def seed(lib: Path, clock_file: Path, entries: list[dict]) -> None:
-    """Write setup entries with Loci's own BucketManager, each at its own fake time."""
+async def seed(lib: Path, clock_file: Path, entries: list[dict],
+               batch: dict | None = None) -> None:
+    """Write setup entries with Loci's own BucketManager, each at its own fake time; then
+    hand `batch` (an item's `slices:`) to the slicing intake."""
     from utils import WAS_DERIVED_FROM, load_config
     from core.bucket_manager import BucketManager
     from core.embedding_engine import EmbeddingEngine
@@ -178,6 +182,23 @@ async def seed(lib: Path, clock_file: Path, entries: list[dict]) -> None:
             ok = await bm.update(bid, **extra)
             if not ok:
                 raise RuntimeError(f"setup could not write fields {extra} on {bid}")
+    if batch:
+        await seed_slices(bm, batch)
+
+
+async def seed_slices(bm, batch: dict) -> None:
+    """The host's intake of raw lines (core/_slicer.take_batch, what POST /api/v2/slices
+    runs), with the item's `cut` answering for the side model: the exam has no model key,
+    and what is under test is what the main model does with the slices. The guesses are
+    Loci's own (embeddings, when on)."""
+    from core import _slicer
+
+    cut = json.dumps({"slices": batch["cut"]}, ensure_ascii=False)
+
+    async def side_model(system: str, user: str) -> str:
+        return cut
+    body = {k: v for k, v in batch.items() if k != "cut"}
+    await _slicer.take_batch(bm, body, model=side_model)
 
 
 def breath_section(text: str, title: str) -> str:
@@ -449,7 +470,7 @@ async def library(item: dict, keep: bool, tag: str = ""):
         os.environ["LOCI_CONFIG_PATH"] = str(config_file)
         clock.set_now(clock_file, item["start"])
         clock.install(clock_file)
-        await seed(lib, clock_file, item.get("setup", []))
+        await seed(lib, clock_file, item.get("setup", []), item.get("slices"))
         clock.set_now(clock_file, item["start"])
         yield Library(lib, clock_file, env)
     finally:
@@ -523,7 +544,9 @@ def seams() -> tuple[str, ...]:
             "BM25 rebuilt before a search when stale (exam/serve.py; live Loci rebuilds "
             "it in the background)",
             "a call step's write_key is sent in _meta and set for that call (exam/serve.py; "
-            "the request layer will set it from the host's turn)")
+            "the request layer will set it from the host's turn)",
+            "an item's slices: batch goes through Loci's intake in setup, its cut standing in "
+            "for the side model (exam/runner.py seed_slices)")
 
 
 def require_search_deps() -> None:

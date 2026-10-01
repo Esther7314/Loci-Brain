@@ -12,6 +12,8 @@ whatever comes back always goes through the same zoom.
     recall(query="学代码", view="scene")            cluster by shared scene words (how it got here)
     recall(when="本周", tag="Home")               stack them; tag is a free fourth sieve
     recall(when="上月", slices=1)                   how coarse or fine I want that stretch
+    recall(view="slices")                         the host's raw lines, sliced and waiting
+                                                  for me to handle (tools/_slices.py)
 
     ⚠️ Every example above uses a form `_parse_when()` actually accepts. Two of them
        used to be `when="7月底"` and `when="那阵子"`, which it does not: it takes

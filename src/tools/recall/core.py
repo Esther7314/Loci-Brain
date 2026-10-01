@@ -1604,9 +1604,19 @@ async def recall_core(when: str, room: str, tag: str, query: str,
        **ask for explicitly**.
     """
     view = str(view or "").strip()
+    # view="slices": the host's raw lines sliced and waiting to be handled
+    # (tools/_slices.py). It reads the pending store, not the library, so the four
+    # filters mean nothing to it and are refused rather than ignored.
+    if view == "slices":
+        if any(str(x or "").strip() for x in (when, room, tag, query)):
+            return ('view="slices" 单独用：它列的是宿主交来、还没认领的切片，不在库里，'
+                    "when / room / tag / query 管不到它。")
+        from .. import _slices
+        return _slices.render_pending()
     if view and view != "scene":
-        return (f'view 无效：{view}。现在只有一种："scene"'
-                "（按共享场景词聚成簇，看这件事怎么一路过来的）。"
+        return (f'view 无效：{view}。只有两种："scene"'
+                "（按共享场景词聚成簇，看这件事怎么一路过来的）；"
+                '"slices"（宿主交来、还没认领的切片）。'
                 "不给 view = 默认按时间＋分数排，找那件事。")
     if view and not query.strip():
         return ('view="scene" 要跟 query 一起用——簇是按**命中的记忆**共享的场景词聚的，'

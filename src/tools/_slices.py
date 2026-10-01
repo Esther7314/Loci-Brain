@@ -1,0 +1,203 @@
+"""
+========================================
+tools/_slices.py — the main model handling pending slices
+========================================
+
+The host's raw lines of a day were sliced by the side model (core/_slicer.py); each
+slice waits for the main model, who decides what it is:
+
+    recall(view="slices")                          the slices waiting, with guesses
+    grow(..., slice="sl_…")                        not recorded yet: write it; the slice's
+                                                   lines become the new memory's sources
+    trace(bucket_id=…, slice="sl_…")               already recorded: append its lines to
+                                                   that memory's sources
+    trace(slice="sl_…", slice_span="m_a..m_b")     sliced wrong: move its span
+    trace(slice="sl_…", drop_slice=True)           nothing worth keeping: drop it
+
+A slice stands for one source record per line of its span (records_for), checked like
+any write's (the registry, the grant). It is closed only on what the write actually
+put on disk carrying those records, so a refused or deduplicated write leaves it open.
+One slice is handled at a time (a lease on its id), and a closed one is refused by name.
+
+Exports: render_pending · write_from_slice · with_records · trace_slice
+========================================
+"""
+
+from __future__ import annotations
+
+import inspect
+from typing import Awaitable, Callable
+
+from core import _sources as _src
+from core._slicer import SliceError
+from . import _runtime as rt
+
+_LIST_MAX = 40          # slices shown by recall(view="slices"); the rest are counted
+
+
+def _store():
+    return getattr(rt.bucket_mgr, "slices", None)
+
+
+def _span_text(span: dict) -> str:
+    first, last, count = span["first"], span["last"], span["count"]
+    head = first if first == last else f"{first}..{last}"
+    return f"{head}（{count} 行）"
+
+
+# ------------------------------------------------------------
+# Reading
+# ------------------------------------------------------------
+
+def render_pending() -> str:
+    """recall(view="slices"): the pending slices, newest batch first."""
+    store = _store()
+    batches = store.open_batches() if store is not None else []
+    if not batches:
+        return "没有待认领的切片。"
+    total = sum(len(b["slices"]) for b in batches)
+    lines = [f"待认领的切片 {total} 片："]
+    shown = 0
+    for b in batches:
+        src = b["source"]
+        lines.append(f"── {src.get('system')}:{src.get('instance')}/{src.get('container')}"
+                     f" · {b['day']}")
+        for s in b["slices"]:
+            if shown >= _LIST_MAX:
+                break
+            shown += 1
+            edited = "（改切过，gist 是原来的）" if s.get("edited") else ""
+            lines.append(f"{s['slice_id']} · {_span_text(s['span'])} · {s['gist']}{edited}")
+            guesses = " / ".join(f"{g['short']} {g['score']:.2f}" for g in s["guesses"])
+            lines.append(f"    像是已经记过的：{guesses}" if guesses
+                         else "    当天没有像的记忆")
+    if shown < total:
+        lines.append(f"（还有 {total - shown} 片没列出来，先处理上面的）")
+    lines.append('没记过的：grow(..., slice="sl_…")；记过了：trace(bucket_id=…, slice="sl_…")；'
+                 '切错了：trace(slice="sl_…", slice_span="前id..后id")；'
+                 '不值得留：trace(slice="sl_…", drop_slice=True)。')
+    return "\n".join(lines)
+
+
+# ------------------------------------------------------------
+# Handling
+# ------------------------------------------------------------
+
+def with_records(given, records: list[dict]):
+    """A write's own `sources` argument with a slice's records after it. Something that
+    is not a list or a record is handed on unchanged for check_sources to refuse."""
+    given = _src.coerce_sources_arg(given)
+    if given in (None, "", []):
+        return list(records)
+    if isinstance(given, dict):
+        return [given, *records]
+    if isinstance(given, (list, tuple)):
+        return [*given, *records]
+    return given
+
+
+async def _carrying(written: list[str], record: dict) -> list[str]:
+    """The written ids whose stored sources name this record's piece."""
+    want = _src.record_id(record)
+    out: list[str] = []
+    for bid in dict.fromkeys(written):
+        b = await rt.bucket_mgr.get(bid)
+        for rec in ((b or {}).get("metadata") or {}).get(_src.SOURCES_FIELD) or []:
+            try:
+                if isinstance(rec, dict) and _src.record_id(rec) == want:
+                    out.append(bid)
+                    break
+            except KeyError:
+                continue
+    return out
+
+
+async def write_from_slice(slice_id: str, how: str,
+                           write: Callable[[list[dict]], Awaitable[str]]) -> str:
+    """Run `write(records)` with the slice's records and close the slice on the memories
+    it wrote carrying them. The write's own receipt comes back, plus one line saying
+    where the slice went; a write that put nothing on disk leaves the slice open."""
+    from core.bucket_manager import _filesystem_turn      # the lease, as the registry takes it
+
+    store = _store()
+    sid = str(slice_id or "").strip()
+    if store is None:
+        return "这个库没有切片。"
+    async with _filesystem_turn(store.base_dir, f"slice-{sid}"):
+        why = store.refusal(sid)
+        if why:
+            return why.zh + "本次什么都没写。"
+        info = store.get(sid)
+        if info["span"]["count"] > _src.SOURCES_MAX:
+            return (f"切片 {sid} 有 {info['span']['count']} 行，一条记忆最多挂 "
+                    f"{_src.SOURCES_MAX} 行来源——先 trace(slice=\"{sid}\", slice_span=…) "
+                    "切细一点。本次什么都没写。")
+        records = store.records_for(sid)
+        with _src.collect_written() as written:
+            out = await write(records)
+        carried = await _carrying(written, records[0])
+        if not carried:
+            return out
+        try:
+            await store.close(sid, how, carried)
+        except SliceError as e:
+            return f"{out}\n{e.zh}"
+        return (f"{out}\n切片 {sid} 挂上了 → {'、'.join(carried)}，"
+                f"{_span_text(info['span'])}。还有 {store.pending_count()} 片待认领。")
+
+
+def _edits_given(kwargs: dict, trace_core) -> list[str]:
+    """The trace arguments set to something other than their default."""
+    params = inspect.signature(trace_core).parameters
+    out = []
+    for name, value in kwargs.items():
+        param = params.get(name)
+        if param is None or name == "bucket_id":
+            continue
+        if value is None or value == param.default or value in ("", [], {}):
+            continue
+        out.append(name)
+    return out
+
+
+async def trace_slice(slice_id: str, *, drop: bool, span: str, kwargs: dict,
+                      trace_core) -> str:
+    """trace's three slice moves: append to a memory (bucket_id), re-cut, drop."""
+    store = _store()
+    sid = str(slice_id or "").strip()
+    bucket_id = str(kwargs.get("bucket_id") or "").strip()
+    span = str(span or "").strip()
+    if store is None:
+        return "这个库没有切片。"
+    if drop and span:
+        return "drop_slice 和 slice_span 二选一：丢掉，或者改切。本次什么都没改。"
+    if drop or span:
+        if bucket_id or _edits_given(kwargs, trace_core):
+            return ("drop_slice / slice_span 单独用：不带 bucket_id，也不带别的改动。"
+                    "本次什么都没改。")
+        if drop:
+            try:
+                await store.close(sid, "drop", [])
+            except SliceError as e:
+                return e.zh + "本次什么都没改。"
+            info = store.get(sid)
+            return (f"切片 {sid} 丢掉了：{_span_text(info['span'])}，不挂到任何记忆上。"
+                    f"还有 {store.pending_count()} 片待认领。")
+        first, dots, last = span.partition("..")
+        first, last = first.strip(), (last.strip() if dots else first.strip())
+        if not first or not last:
+            return 'slice_span 写成 "前id..后id"（只有一行就写那一个 id）。本次什么都没改。'
+        try:
+            await store.recut(sid, first, last)
+        except SliceError as e:
+            return e.zh + "本次什么都没改。"
+        info = store.get(sid)
+        return (f"切片 {sid} 改切成 {_span_text(info['span'])}；gist 没变（原文已经不在了，"
+                f"没法重写）：{info['gist']}")
+    if not bucket_id:
+        return ('slice 要配 bucket_id：挂到哪条记忆上。没记过的用 grow(..., slice="…")；'
+                "切错了用 slice_span，不值得留用 drop_slice=True。")
+    given = kwargs.get("sources_append")
+    return await write_from_slice(
+        sid, "trace",
+        lambda records: trace_core(**{**kwargs, "sources_append": with_records(given, records)}))

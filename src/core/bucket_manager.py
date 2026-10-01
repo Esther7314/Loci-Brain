@@ -258,6 +258,7 @@ from utils import (
 )
 from ._rooms import is_event_room, is_mind_room
 from ._sources import SourceRegistry, normalize_sources, note_written
+from ._slicer import PendingSlices
 from locibrain.storage.media_store import MediaStore
 from locibrain.eventsourcing.ledger_mirror import LedgerMirror
 
@@ -527,6 +528,8 @@ class BucketManager:
         self.ledger_mirror = LedgerMirror(ledger_path)
         # Each source's own state and the write-key claims (`<buckets>/_sources`).
         self.sources = SourceRegistry(self.base_dir, store=self)
+        # Slices of the host's raw lines waiting for the main model (core/_slicer.py).
+        self.slices = PendingSlices(self.base_dir)
 
         # The sparse BM25 index (marked dirty after a write, rebuilt lazily on search())
         self._bm25: "_BM25Index | None" = _BM25Index() if _BM25Index is not None else None

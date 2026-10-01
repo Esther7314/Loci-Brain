@@ -562,9 +562,11 @@ class Dehydrator:
         *,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        model: str | None = None,
     ) -> str:
         """The single chat entry point: exponential backoff retries on transient errors
-        such as 429 / 5xx / timeouts.
+        such as 429 / 5xx / timeouts. `model` names another model on the same endpoint and
+        key (the slicer's, core/_slicer.py); None is the configured one.
 
         The actual single call lives in _chat_once; this only handles retry and backoff, so
         that the occasional 429/503 from a free tier does not knock dehydration or merging
@@ -573,7 +575,8 @@ class Dehydrator:
         for attempt in range(_RETRY_MAX_ATTEMPTS):
             try:
                 return await self._chat_once(
-                    system, user, max_tokens=max_tokens, temperature=temperature
+                    system, user, max_tokens=max_tokens, temperature=temperature,
+                    model=model,
                 )
             except Exception as e:
                 if not self._is_transient_error(e) or attempt == _RETRY_MAX_ATTEMPTS - 1:
@@ -596,6 +599,7 @@ class Dehydrator:
         *,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        model: str | None = None,
     ) -> str:
         """The single OpenAI-compatible chat call.
 
@@ -614,18 +618,21 @@ class Dehydrator:
             system, user — the system/user messages of the chat completion
             max_tokens   — override the default (analyze and digest each want their own)
             temperature  — override the default (digest and plan_judge need 0.0)
+            model        — another model on the same endpoint; None = self.model
         """
         if self.api_format == "gemini":
-            return await self._chat_gemini(system, user, max_tokens=max_tokens, temperature=temperature)
+            return await self._chat_gemini(system, user, max_tokens=max_tokens,
+                                           temperature=temperature, model=model)
         if self.api_format == "anthropic":
-            return await self._chat_anthropic(system, user, max_tokens=max_tokens, temperature=temperature)
+            return await self._chat_anthropic(system, user, max_tokens=max_tokens,
+                                              temperature=temperature, model=model)
         if self.api_format != "openai_compat":
             logger.warning(f"Unknown api_format '{self.api_format}', falling back to openai_compat")
         # openai_compat (default)
         if self.client is None:
             return ""
         response = await self.client.chat.completions.create(
-            model=self.model,
+            model=model or self.model,
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -644,13 +651,14 @@ class Dehydrator:
         *,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        model: str | None = None,
     ) -> str:
         """Native Gemini generateContent API call (no OpenAI-compat wrapper)."""
         if not self.api_key:
             return ""
         import httpx
         # Strip any accidental "models/" prefix — Google rejects double-prefix in the URL
-        model_id = strip_native_resource_prefix(self.model)
+        model_id = strip_native_resource_prefix(model or self.model)
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent"
         payload: dict = {
             "system_instruction": {"parts": [{"text": system}]},
@@ -684,6 +692,7 @@ class Dehydrator:
         *,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        model: str | None = None,
     ) -> str:
         """Native Anthropic Messages API call."""
         if not self.api_key:
@@ -697,7 +706,7 @@ class Dehydrator:
             "content-type": "application/json",
         }
         payload: dict = {
-            "model": self.model,
+            "model": model or self.model,
             "max_tokens": max_tokens if max_tokens is not None else self.max_tokens,
             "system": system,
             "messages": [{"role": "user", "content": user}],

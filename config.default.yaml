@@ -110,6 +110,19 @@ dehydration:
   max_tokens: 1024
   temperature: 0.1
   timeout_seconds: 120             # LLM request timeout seconds / LLM 请求超时秒数
+  # The side model that slices a day's raw lines handed over by the host (POST /api/v2/slices,
+  # core/_slicer.py): same endpoint and key as above, another model name if you want one.
+  # Empty = the model above.
+  # 切宿主交来的一天原文用的副模型：同一个端点和密钥，想换个模型就填名字；留空 = 用上面的 model。
+  slicer_model: ""
+
+# --- Sources after the fact / 来源事后挂 ---
+# The host hands over a day's raw lines; a side model slices them, and each slice waits for
+# the main model to write it (grow slice=) or attach it (trace slice=). The raw text is not kept.
+# 宿主交来一天的原文，副模型切成几片，等主模型自己写（grow slice=）或挂到已有记忆上（trace slice=）。原文不留。
+slices:
+  max_lines_per_batch: 2000       # a bigger batch is refused: send the day in parts / 一批最多几行，多了分批发
+  guess_threshold: 0.65           # cosine for "a memory written that day may already cover it" (recall's semantic line) / 猜「当天已经记过」的相似度线
 
 # --- Decay parameters / 记忆衰减参数 ---
 # Simulates Ebbinghaus forgetting curve, auto-archives inactive memories

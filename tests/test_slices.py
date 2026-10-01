@@ -1,0 +1,449 @@
+# -*- coding: utf-8 -*-
+"""
+tests/test_slices.py — attaching sources after the fact: a day's raw lines, sliced.
+
+The side model is always a stub here: it answers with the slicing the test wants (or
+fails the way the test wants), so nothing leaves the machine. Through take_batch and the
+tools' dispatch against a real BucketManager, read back from the files: a day's lines
+become slices; one is written as a new memory, one appended to a memory already there,
+one dropped; all three end with sources matching their spans and nothing is pending.
+Then the edges: a resend replaces, a failing side model writes nothing, spans are
+repaired or refused, a re-cut moves the records, a closed slice is refused by name, and
+the two HTTP routes answer through the real handlers and the hook lock.
+"""
+
+import asyncio
+import hashlib
+import json
+
+import frontmatter
+import pytest
+
+import tools.grow as grow_mod
+from core import _slicer as SL
+from core import _sources as S
+from core import _when as W
+from core.bucket_manager import BucketManager
+from tools import _runtime as rt
+from tools.grow import dispatch as grow
+from tools.grow import rooms_path
+from tools.recall import core as R
+from tools.trace import dispatch as trace
+
+SOURCE = {"system": "lento", "instance": "home", "container": "private:U"}
+TEXTS = [
+    "Morning! Slept well?", "Yes, finally.", "Good.", "ok",
+    "Want to go to the beach on Saturday?", "Only if it is warm.",
+    "The forecast says sunny.", "Then yes, let us go early.",
+    "The kettle broke again.", "Buy a new one?", "Tomorrow.", "Fine.",
+]
+IDS = [f"m_{i:04d}" for i in range(1, len(TEXTS) + 1)]
+
+
+def run(coro):
+    return asyncio.run(coro)
+
+
+class _Engine:
+    async def ensure_started(self):
+        pass
+
+
+class _Log:
+    def _n(self, *a, **k):
+        pass
+    warning = info = debug = error = _n
+
+
+class _Vectors:
+    """A stand-in embedding engine: every memory in `among` scores by shared words."""
+    enabled = True
+
+    def __init__(self, store):
+        self.store = store
+
+    async def search_similar(self, query, top_k=10, among=None):
+        out = []
+        for bid in among or []:
+            b = await self.store.get(bid)
+            words = set(b["content"].lower().split())
+            hit = len(words & set(query.lower().split())) / max(1, len(query.split()))
+            out.append((bid, hit))
+        return sorted(out, key=lambda p: -p[1])[:top_k]
+
+
+@pytest.fixture
+def store(tmp_path, monkeypatch):
+    mgr = BucketManager({"buckets_dir": str(tmp_path)})
+    monkeypatch.setattr(rt, "bucket_mgr", mgr)
+    monkeypatch.setattr(rt, "decay_engine", _Engine())
+    monkeypatch.setattr(rt, "logger", _Log())
+    monkeypatch.setattr(rt, "config", {"buckets_dir": str(tmp_path)})
+    monkeypatch.setattr(grow_mod, "_sweep_started", True)
+
+    async def no_backfill(pairs):
+        pass
+    monkeypatch.setattr(rooms_path, "_backfill_batch", no_backfill)
+    return mgr
+
+
+def stub(*answers, calls=None):
+    """A side model answering each call with the next answer (an exception is raised)."""
+    queue = list(answers)
+
+    async def model(system, user):
+        if calls is not None:
+            calls.append(user)
+        answer = queue.pop(0) if len(queue) > 1 else queue[0]
+        if isinstance(answer, Exception):
+            raise answer
+        return answer if isinstance(answer, str) else json.dumps({"slices": answer})
+    model.model_name = "stub"
+    return model
+
+
+THREE = [{"from": 1, "to": 4, "gist": "Morning greeting, slept well"},
+         {"from": 5, "to": 8, "gist": "beach on Saturday if sunny"},
+         {"from": 9, "to": 12, "gist": "The kettle broke"}]
+
+
+def body(day=None, texts=TEXTS, ids=IDS, **extra):
+    return {"source": dict(SOURCE), "day": day or W.today().date().isoformat(),
+            "lines": [{"id": i, "text": t, "speaker": "A" if n % 2 else "B"}
+                      for n, (i, t) in enumerate(zip(ids, texts))], **extra}
+
+
+def take(store, model, **kw):
+    return run(SL.take_batch(store, kw.pop("b", None) or body(), model=model, **kw))
+
+
+def _disk(tmp_path, bid) -> dict:
+    [path] = [p for p in tmp_path.rglob(f"*{bid}*.md")]
+    return dict(frontmatter.load(path).metadata)
+
+
+def _ids(meta) -> list[str]:
+    return [r["id"] for r in meta.get("sources") or []]
+
+
+def _fp(text) -> str:
+    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+async def _event(text, **kw):
+    out = await grow(kind="event", items=[{"room": "EVENT/WORLD", "text": text,
+                                           "v": 0.6, "a": 0.3}], **kw)
+    return out, (out.split("📝", 1)[1].split()[0] if "📝" in out else "")
+
+
+# ───────────────────────── the story ─────────────────────────
+
+def test_a_day_sliced_then_written_appended_and_dropped(store, tmp_path, monkeypatch):
+    _out, beach = run(_event("We planned the beach on Saturday if it is sunny."))
+    monkeypatch.setattr(store, "embedding_engine", _Vectors(store))
+    got = take(store, stub(THREE))
+    monkeypatch.setattr(store, "embedding_engine", None)
+    a, b, c = got["slices"]
+    assert [s["span"] for s in got["slices"]] == [
+        {"first": "m_0001", "last": "m_0004", "count": 4},
+        {"first": "m_0005", "last": "m_0008", "count": 4},
+        {"first": "m_0009", "last": "m_0012", "count": 4}]
+    assert b["guesses"][0]["id"] == beach and b["guesses"][0]["short"] == beach[:6]
+    assert got["unsliced"] == 0 and store.slices.pending_count() == 3
+    shown = run(R.recall_core(when="", room="", tag="", query="", view="slices"))
+    assert a["slice_id"] in shown and "m_0005..m_0008（4 行）" in shown and beach[:6] in shown
+
+    # Not recorded yet: written with grow, the slice's lines become its sources.
+    out, new = run(_event("Slept well for once.", slice_id=a["slice_id"]))
+    assert new and "挂上了" in out, out
+    meta = _disk(tmp_path, new)
+    assert _ids(meta) == IDS[0:4]
+    assert [r["fingerprint"] for r in meta["sources"]] == [_fp(t) for t in TEXTS[0:4]]
+    assert meta["sources"][0]["fingerprint_by"] == "adapter"
+    assert "lento:home/private:U#m_0001" in [ln["target"] for ln in meta["prov"]]
+
+    # Already recorded: the lines are appended to that memory.
+    out = run(trace(bucket_id=beach[:6], slice_id=b["slice_id"]))
+    assert out.startswith("已修改记忆桶") and "挂上了" in out, out
+    assert _ids(_disk(tmp_path, beach)) == IDS[4:8]
+
+    # Sliced wrong / nothing to keep: dropped.
+    out = run(trace(slice_id=c["slice_id"], drop_slice=True))
+    assert "丢掉了" in out, out
+
+    assert store.slices.pending_count() == 0
+    assert run(R.recall_core(when="", room="", tag="", query="",
+                             view="slices")) == "没有待认领的切片。"
+    on_disk = store.slices.path.read_text(encoding="utf-8")
+    assert not any(t in on_disk for t in TEXTS if len(t) > 4), "raw text was kept"
+
+
+def test_guesses_only_look_at_the_day_and_the_line(store, monkeypatch):
+    run(_event("We planned the beach on Saturday if it is sunny."))
+    monkeypatch.setattr(store, "embedding_engine", _Vectors(store))
+    yesterday = (W.today().date().fromordinal(W.today().date().toordinal() - 1)).isoformat()
+    got = take(store, stub(THREE), b=body(day=yesterday))
+    assert all(s["guesses"] == [] for s in got["slices"])
+    got = take(store, stub(THREE), threshold=0.99)
+    assert all(s["guesses"] == [] for s in got["slices"])
+
+
+def test_append_to_an_existing_memory_keeps_what_it_had(store, tmp_path):
+    rec = {**SOURCE, "id": "m_0900"}
+    _out, bid = run(_event("Something said last week.", sources=[rec]))
+    sid = take(store, stub(THREE))["slices"][1]["slice_id"]
+    run(trace(bucket_id=bid, slice_id=sid))
+    assert _ids(_disk(tmp_path, bid)) == ["m_0900", *IDS[4:8]]
+
+
+# ───────────────────────── resend, failure ─────────────────────────
+
+def test_the_same_batch_resent_replaces_its_pending_slices(store):
+    first = take(store, stub(THREE))
+    again = take(store, stub(THREE[:2]))
+    assert again["batch_id"] == first["batch_id"] and again["replaced"] == 3
+    assert store.slices.pending_count() == 2
+    old = first["slices"][0]["slice_id"]
+    out = run(trace(slice_id=old, drop_slice=True))
+    assert "换掉了" in out and store.slices.pending_count() == 2
+
+
+def test_a_handled_slice_stays_handled_across_a_resend(store, tmp_path):
+    first = take(store, stub(THREE))
+    sid = first["slices"][0]["slice_id"]
+    _out, bid = run(_event("Slept well for once.", slice_id=sid))
+    again = take(store, stub(THREE))
+    assert again["replaced"] == 2
+    out, _ = run(_event("Slept well, again.", slice_id=sid))
+    assert f"写成了 {bid}" in out and "本次什么都没写" in out
+
+
+@pytest.mark.parametrize("answer", [
+    RuntimeError("connection reset"), "", "not json at all",
+    [{"from": 1, "to": 40, "gist": "past the end"}],
+    [{"from": 3, "to": 2, "gist": "backwards"}],
+    [{"from": 1, "to": 4}],
+    {"cuts": []},
+])
+def test_a_failing_side_model_fails_the_batch_and_writes_nothing(store, answer):
+    model = stub(answer if not isinstance(answer, dict) else json.dumps(answer))
+    with pytest.raises(SL.SlicerError):
+        take(store, model)
+    assert not store.slices.path.exists() and store.slices.pending_count() == 0
+
+
+def test_a_malformed_batch_is_refused_before_the_side_model(store):
+    calls = []
+    model = stub(THREE, calls=calls)
+    bad = [
+        {**body(), "extra": 1},
+        body(day="2026-02-30"),
+        body(ids=["m_1", "m_1"], texts=["a", "b"]),
+        body(ids=["m 1"], texts=["a"]),
+        {**body(), "lines": [{"id": "m_1", "text": "a", "role": "user"}]},
+        {**body(), "source": {"system": "lento"}},
+        {**body(), "lines": []},
+    ]
+    for b in bad:
+        with pytest.raises(SL.BatchError):
+            take(store, model, b=b)
+    with pytest.raises(SL.BatchError):
+        take(store, model, max_lines=5)
+    assert calls == []
+
+
+# ───────────────────────── what the side model may get wrong ─────────────────────────
+
+def test_spans_are_repaired_where_it_is_safe():
+    raw = json.dumps({"slices": [
+        {"from": 5, "to": 9, "gist": "b"}, {"from": 1, "to": 6, "gist": "a"},
+        {"from": 2, "to": 3, "gist": "inside a"}, {"from": "11", "to": "12", "gist": "c"}]})
+    assert SL.parse_slices(raw, 12) == [(1, 6, "a"), (7, 9, "b"), (11, 12, "c")]
+
+
+def test_lines_in_no_slice_are_counted_and_gists_are_cut(store):
+    long = "x" * 200
+    got = take(store, stub([{"from": 2, "to": 3, "gist": long}]))
+    [s] = got["slices"]
+    assert got["unsliced"] == 10 and len(s["gist"]) == SL.GIST_MAX
+
+
+def test_a_slice_over_the_record_cap_is_cut_in_even_parts(store):
+    texts = [f"line {i}" for i in range(100)]
+    ids = [f"m_{i:04d}" for i in range(100)]
+    got = take(store, stub([{"from": 1, "to": 100, "gist": "one long talk"}]),
+               b=body(texts=texts, ids=ids))
+    assert [s["span"]["count"] for s in got["slices"]] == [50, 50]
+    assert got["slices"][1]["span"]["first"] == "m_0050"
+    assert got["slices"][0]["gist"].endswith("（1/2）")
+
+
+def test_a_big_batch_is_sliced_in_chunks(store, monkeypatch):
+    monkeypatch.setattr(SL, "_CALL_MAX_LINES", 5)
+    calls = []
+    got = take(store, stub([{"from": 1, "to": 2, "gist": "start of a chunk"}], calls=calls))
+    assert len(calls) == 3
+    assert [s["span"]["first"] for s in got["slices"]] == ["m_0001", "m_0006", "m_0011"]
+
+
+# ───────────────────────── handling ─────────────────────────
+
+def test_a_recut_moves_the_records_and_keeps_the_gist(store, tmp_path):
+    s = take(store, stub(THREE))["slices"][1]
+    out = run(trace(slice_id=s["slice_id"], slice_span="m_0006..m_0007"))
+    assert "m_0006..m_0007（2 行）" in out and s["gist"] in out, out
+    shown = run(R.recall_core(when="", room="", tag="", query="", view="slices"))
+    assert "改切过" in shown
+    _out, bid = run(_event("Going to the beach early.", slice_id=s["slice_id"]))
+    assert _ids(_disk(tmp_path, bid)) == ["m_0006", "m_0007"]
+
+
+@pytest.mark.parametrize("span, word", [
+    ("m_0006..m_0999", "不在这片的那一批里"), ("m_0007..m_0006", "后面"), ("..", "前id..后id")])
+def test_a_recut_outside_the_batch_or_backwards_is_refused(store, span, word):
+    sid = take(store, stub(THREE))["slices"][1]["slice_id"]
+    out = run(trace(slice_id=sid, slice_span=span))
+    assert word in out and "什么都没改" in out, out
+    assert store.slices.get(sid)["span"]["first"] == "m_0005"
+
+
+def test_a_recut_over_the_record_cap_is_refused(store):
+    texts = [f"line {i}" for i in range(100)]
+    ids = [f"m_{i:04d}" for i in range(100)]
+    sid = take(store, stub([{"from": 1, "to": 3, "gist": "short"}]),
+               b=body(texts=texts, ids=ids))["slices"][0]["slice_id"]
+    out = run(trace(slice_id=sid, slice_span="m_0000..m_0080"))
+    assert "切细一点" in out
+
+
+def test_a_closed_slice_is_refused_naming_what_handled_it(store, tmp_path):
+    a, b, c = take(store, stub(THREE))["slices"]
+    _out, bid = run(_event("Slept well for once.", slice_id=a["slice_id"]))
+    out = run(trace(bucket_id=bid, slice_id=a["slice_id"]))
+    assert f"写成了 {bid}" in out and "不能再用" in out
+    run(trace(slice_id=c["slice_id"], drop_slice=True))
+    out = run(trace(slice_id=c["slice_id"], slice_span="m_0009..m_0010"))
+    assert "丢掉了" in out and "不能再用" in out
+    assert "没有这片切片" in run(trace(slice_id="sl_nothing", drop_slice=True))
+
+
+def test_a_refused_write_leaves_the_slice_open(store, tmp_path):
+    sid = take(store, stub(THREE))["slices"][0]["slice_id"]
+    out = run(grow(kind="event", items=[{"room": "NOWHERE", "text": "x", "v": 0.5, "a": 0.3}],
+                   slice_id=sid))
+    assert "挂上了" not in out
+    assert store.slices.get(sid)["state"] == SL.OPEN and store.slices.pending_count() == 3
+
+
+def test_a_withdrawn_line_refuses_the_write_and_the_slice_waits(store, tmp_path):
+    sid = take(store, stub(THREE))["slices"][0]["slice_id"]
+    run(store.sources.apply_change({"change_id": "w1", "kind": "withdrawn", "host_seq": 1,
+                                    "source": "lento:home/private:U#m_0002"}))
+    out, bid = run(_event("Slept well for once.", slice_id=sid))
+    assert not bid and "撤回" in out
+    assert store.slices.get(sid)["state"] == SL.OPEN
+
+
+def test_slice_moves_that_do_not_fit_together_are_refused(store, tmp_path):
+    _out, bid = run(_event("Something."))
+    sid = take(store, stub(THREE))["slices"][0]["slice_id"]
+    assert "单独用" in run(trace(bucket_id=bid, slice_id=sid, drop_slice=True))
+    assert "单独用" in run(trace(slice_id=sid, drop_slice=True, name="renamed"))
+    assert "二选一" in run(trace(slice_id=sid, drop_slice=True, slice_span="m_0001"))
+    assert "要配 bucket_id" in run(trace(slice_id=sid))
+    assert "一起用" in run(trace(bucket_id=bid, drop_slice=True))
+    assert store.slices.pending_count() == 3
+
+
+def test_the_slice_write_goes_through_the_write_key(store, tmp_path):
+    sid = take(store, stub(THREE))["slices"][0]["slice_id"]
+    with S.write_key_scope("turn-9#1"):
+        first, bid = run(_event("Slept well for once.", slice_id=sid))
+        again, _ = run(_event("Slept well for once.", slice_id=sid))
+    assert again == first and store.sources.claimed("turn-9#1")["ids"] == [bid]
+
+
+def test_the_pending_store_survives_a_restart(store, tmp_path, monkeypatch):
+    sid = take(store, stub(THREE))["slices"][1]["slice_id"]
+    run(trace(slice_id=sid, slice_span="m_0005..m_0006"))
+    fresh = BucketManager({"buckets_dir": str(tmp_path)})
+    assert fresh.slices.pending_count() == 3
+    assert fresh.slices.get(sid)["span"] == {"first": "m_0005", "last": "m_0006", "count": 2}
+    assert [r["id"] for r in fresh.slices.records_for(sid)] == ["m_0005", "m_0006"]
+
+
+def test_view_slices_stands_alone(store):
+    out = run(R.recall_core(when="today", room="", tag="", query="", view="slices"))
+    assert "单独用" in out
+
+
+# ───────────────────────── the two routes ─────────────────────────
+
+def _routes(monkeypatch, store, model, locked=False):
+    from starlette.requests import Request
+    import web
+    from web import _shared as sh
+    from web import loci as Wb
+    from web import panel_auth as PA
+
+    routes = {}
+
+    class _Mcp:
+        def custom_route(self, path, methods=None, **kw):
+            def keep(fn):
+                routes[(methods[0], path)] = fn
+                return fn
+            return keep
+    Wb.register(web._Gated(_Mcp()))
+    monkeypatch.setattr(sh, "bucket_mgr", store)
+    monkeypatch.setattr(sh, "config", {"slices": {"max_lines_per_batch": 100}})
+    monkeypatch.setattr(sh, "dehydrator", None)
+    monkeypatch.setattr(SL, "side_model", lambda dehydrator, config: model)
+    monkeypatch.setattr(PA, "gate_needed", lambda: locked)
+    monkeypatch.setattr(PA, "has_session", lambda r: False)
+    monkeypatch.setattr(PA, "hook_token", lambda: "s3cret")
+
+    def call(method, payload=None, key=None):
+        raw = json.dumps(payload).encode() if payload is not None else b""
+        headers = [(b"content-type", b"application/json")]
+        if key:
+            headers.append((b"x-loci-hook-token", key.encode()))
+
+        async def receive():
+            return {"type": "http.request", "body": raw, "more_body": False}
+        req = Request({"type": "http", "method": method, "path": "/api/v2/slices",
+                       "headers": headers, "query_string": b""}, receive)
+        resp = asyncio.run(routes[(method, "/api/v2/slices")](req))
+        return resp.status_code, json.loads(resp.body)
+    return call
+
+
+def test_the_intake_route_slices_and_the_read_route_lists(store, monkeypatch):
+    call = _routes(monkeypatch, store, stub(THREE))
+    status, out = call("POST", body())
+    assert status == 200 and len(out["slices"]) == 3, out
+    assert out["slices"][0]["span"] == {"first": "m_0001", "last": "m_0004", "count": 4}
+    status, listed = call("GET")
+    assert status == 200 and listed["pending"] == 3
+    assert [s["slice_id"] for s in listed["batches"][0]["slices"]] == \
+        [s["slice_id"] for s in out["slices"]]
+
+
+def test_the_intake_route_answers_400_and_502(store, monkeypatch):
+    call = _routes(monkeypatch, store, stub(RuntimeError("timeout")))
+    status, out = call("POST", {**body(), "day": "yesterday"})
+    assert status == 400
+    status, out = call("POST", body(texts=["x"] * 101, ids=[f"m_{i}" for i in range(101)]))
+    assert status == 400 and "100-line cap" in out["error"]
+    status, out = call("POST", body())
+    assert status == 502 and "nothing was stored" in out["error"]
+    assert store.slices.pending_count() == 0
+
+
+def test_both_routes_want_the_hook_key_when_the_panel_is_locked(store, monkeypatch):
+    call = _routes(monkeypatch, store, stub(THREE), locked=True)
+    assert call("POST", body())[0] == 401
+    assert call("GET")[0] == 401
+    assert call("GET", key="wrong")[0] == 401
+    assert call("POST", body(), key="s3cret")[0] == 200
+    assert call("GET", key="s3cret")[1]["pending"] == 3

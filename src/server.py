@@ -861,6 +861,12 @@ async def grow(
         'sources=[{"system": "lento", "instance": "home", "container": "private:U", '
         '"id": "m_0142"}].'
     ))] = None,
+    slice: Annotated[str, _PydField(description=(
+        "A pending slice of the host's raw lines that nothing records yet (the \"sl_…\" id "
+        "from recall(view=\"slices\")). Write what it was about as usual; the slice's lines "
+        "become this entry's sources and the slice is done. A slice already handled is "
+        "refused."
+    ))] = "",
 ) -> str:
     """Store what happened, and what you realized from it. Several entries per call.
 
@@ -946,7 +952,7 @@ async def grow(
             weight=(None if weight is None or weight < 0 else weight),
             test_data=bool(test_data), when=when,
             cue=cue, exception_of=exception_of, hold=hold, card_of=card_of,
-            sources=sources,
+            sources=sources, slice_id=slice,
         ),
         op="grow",
         args={"items": len(items or []),
@@ -956,7 +962,8 @@ async def grow(
               "internally_generated": bool(internally_generated), "weight": weight,
               "when": when, "test_data": bool(test_data), "cue": cue,
               "exception_of": exception_of, "hold": hold, "card_of": card_of,
-              "sources": len(sources) if isinstance(sources, list) else bool(sources)},
+              "sources": len(sources) if isinstance(sources, list) else bool(sources),
+              "slice": slice},
     )
 
 
@@ -1026,10 +1033,15 @@ async def recall(
         "Only meaningful without a query."
     ))] = 0,
     view: Annotated[str, _PydField(description=(
-        'One value: "scene". Groups the entries that matched into clusters sharing the '
+        'Two values. "scene": groups the entries that matched into clusters sharing the '
         "same scene words, with the rest hanging under a representative. This is how a "
         "single thread reads across time. Needs a query: without one nothing has "
-        "matched, so there is nothing to cluster."
+        "matched, so there is nothing to cluster.\n"
+        "\"slices\", on its own: the host's raw lines of a day, cut into slices and "
+        "waiting for you — each with its span, one line of what it is, and the entries "
+        "from that day that look like they already record it. Handle each one: not "
+        'recorded → grow(..., slice="sl_…"); recorded → trace(bucket_id=…, '
+        'slice="sl_…"); cut wrong → trace(slice="sl_…", slice_span=…) or drop_slice=True.'
     ))] = "",
 ) -> str:
     """Look back through memories that are already stored.
@@ -1414,8 +1426,8 @@ except (AttributeError, RuntimeError, TypeError, ValueError) as _regrow_strict_e
 @mcp.tool()
 async def trace(
     bucket_id: Annotated[str, _PydField(description=(
-        "Which entry to change. Required."
-    ))],
+        "Which entry to change. Required, except to re-cut or drop a slice."
+    ))] = "",
     name: Annotated[Optional[str], _PydField(description=(
         "The entry's title."
     ))] = "",
@@ -1484,6 +1496,21 @@ async def trace(
         "Add pieces of the host's material this entry was formed from, as grow's sources "
         "takes them. Append only; a withdrawn or deleted source is refused."
     ))] = None,
+    slice: Annotated[str, _PydField(description=(
+        "A pending slice of the host's raw lines (the \"sl_…\" id from "
+        'recall(view="slices")). With bucket_id: this entry already records it, and the '
+        "slice's lines are appended to its sources. Without one: slice_span re-cuts it, "
+        "drop_slice drops it."
+    ))] = "",
+    slice_span: Annotated[str, _PydField(description=(
+        "With slice, no bucket_id: the slice's lines were cut wrong; its new span as "
+        '"first_id..last_id" (one line: just that id), within the lines it was cut from. '
+        "Its gist stays as it was."
+    ))] = "",
+    drop_slice: Annotated[bool, _PydField(description=(
+        "With slice, no bucket_id: nothing in it is worth keeping. It is dropped and "
+        "attached to nothing."
+    ))] = False,
     weight: Annotated[float, _PydField(description=(
         "Something wanted only: how heavily it sits on you, 0~1."
     ))] = -1,
@@ -1570,6 +1597,13 @@ async def trace(
       sources_append=[{system, instance, container, id, …}]  more of the host's material
                          this entry was formed from; append only.
 
+    A pending slice of the host's raw lines (recall(view="slices") lists them):
+      bucket_id + slice="sl_…"        this entry already records it: its lines join the
+                                       entry's sources
+      slice="sl_…", slice_span="m_0012..m_0031"   it was cut wrong: move its span
+      slice="sl_…", drop_slice=True   nothing in it to keep
+      (Not recorded anywhere yet: grow(..., slice="sl_…").)
+
     Do not use this tool when:
     · The words themselves are wrong or have moved on. Use regrow, which keeps the old
       version instead of writing over it.
@@ -1588,6 +1622,7 @@ async def trace(
             old_str=old_str, new_str=new_str,
             direction_of_fit=direction_of_fit, bound=bound, cue=cue, card_of=card_of,
             sources_append=sources_append,
+            slice_id=slice, slice_span=slice_span, drop_slice=drop_slice,
         ),
         op="trace",
         args={
@@ -1600,6 +1635,7 @@ async def trace(
             "card_of": card_of,
             "sources_append": (len(sources_append) if isinstance(sources_append, list)
                                else bool(sources_append)),
+            "slice": slice, "slice_span": slice_span, "drop_slice": drop_slice,
             "hard_delete": hard_delete,
             "restore": restore,
             "delete_reason_len": len(str(delete_reason or "")),

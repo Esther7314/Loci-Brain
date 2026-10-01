@@ -44,7 +44,7 @@ import logging
 import os
 import sqlite3
 from collections import OrderedDict
-from typing import Any
+from typing import Any, Collection, Optional
 
 import httpx
 import numpy as np
@@ -857,11 +857,18 @@ class EmbeddingEngine:
     # -------------------- Search --------------------
 
     async def search_similar_strict(
-        self, query: str, top_k: int = 10
+        self, query: str, top_k: int = 10, among: Optional[Collection[str]] = None
     ) -> list[tuple[str, float]]:
-        """Return ranked neighbors, surfacing provider failures to the caller."""
+        """Return ranked neighbors, surfacing provider failures to the caller.
+
+        `among` ranks only those bucket ids (the slicer's "memories written that day");
+        None ranks every stored vector. An empty `among` asks the provider nothing."""
         if not self.enabled:
             raise RuntimeError("embedding is disabled")
+        if among is not None:
+            among = frozenset(str(i) for i in among)
+            if not among:
+                return []
 
         # Preserve the old behaviour of not calling the provider for an empty
         # index, without retaining any embedding payload across the await.
@@ -902,6 +909,8 @@ class EmbeddingEngine:
                 candidate_vectors: list[list[float]] = []
                 candidate_owners: list[int] = []
                 for bucket_id, emb_json, meaning_emb_json in rows:
+                    if among is not None and bucket_id not in among:
+                        continue
                     # A bucket may carry both a content vector and a meaning vector; take
                     # whichever scores higher. Every large object here lives only until the
                     # end of the current small batch.
@@ -971,11 +980,12 @@ class EmbeddingEngine:
         top_results.sort(reverse=True)
         return [(bucket_id, score) for score, _negative_index, bucket_id in top_results]
 
-    async def search_similar(self, query: str, top_k: int = 10) -> list[tuple[str, float]]:
+    async def search_similar(self, query: str, top_k: int = 10,
+                             among: Optional[Collection[str]] = None) -> list[tuple[str, float]]:
         """Returns [(bucket_id, similarity)]; on failure it returns an empty list, for
-        compatibility with older callers."""
+        compatibility with older callers. `among` as in search_similar_strict."""
         try:
-            return await self.search_similar_strict(query, top_k=top_k)
+            return await self.search_similar_strict(query, top_k=top_k, among=among)
         except Exception as e:
             logger.warning(f"Query embedding failed: {e}")
             return []

@@ -74,3 +74,70 @@
       as: second
     - check: {segment: two events, desc: "a second event from the same message is its own memory", entry: {body_any: [看日出]}, min: 2, max: 2}
     - check: {segment: hint, desc: "the second receipt points at the first", output: second, contains: "这条来源已经记过 $first_id"}
+
+# Sources after the fact (施工单 4.4): the host hands over a day's raw lines, a side model
+# slices them, and the main model handles each slice itself — writes it, attaches it to
+# what it already wrote, or drops it.
+- id: F6
+  title: "a day's lines become slices: one written, one attached, one dropped"
+  start: "2026-10-01T09:00:00+08:00"
+  setup:
+    - id: f60001000000
+      at: "2026-09-30T21:30:00+08:00"
+      room: EVENT/WORLD
+      text: "小周说周末想去海边看日出，要早点出发。"
+  slices:
+    source: {system: lento, instance: home, container: "private:U"}
+    day: "2026-09-30"
+    lines:
+      - {id: m_20260930_0001, speaker: 小周, text: "今天总算睡了个好觉。"}
+      - {id: m_20260930_0002, speaker: 我, text: "睡了几个小时？"}
+      - {id: m_20260930_0003, speaker: 小周, text: "九个小时，一觉到天亮。"}
+      - {id: m_20260930_0004, speaker: 我, text: "那今天精神肯定好。"}
+      - {id: m_20260930_0005, speaker: 小周, text: "周末想去海边看日出。"}
+      - {id: m_20260930_0006, speaker: 我, text: "那得很早出门。"}
+      - {id: m_20260930_0007, speaker: 小周, text: "五点出发，带上热咖啡。"}
+      - {id: m_20260930_0008, speaker: 我, text: "好，我定闹钟。"}
+      - {id: m_20260930_0009, speaker: 小周, text: "哈哈"}
+      - {id: m_20260930_0010, speaker: 我, text: "嗯嗯"}
+    cut:
+      - {from: 1, to: 4, gist: "小周终于睡了个好觉，一觉九个小时"}
+      - {from: 5, to: 8, gist: "小周说周末想去海边看日出，五点出发"}
+      - {from: 9, to: 10, gist: "随口应和"}
+  steps:
+    - call: recall
+      args: {view: slices}
+      as: pending
+      capture: {sa: "(sl_[0-9a-f]{8}) · m_20260930_0001", sb: "(sl_[0-9a-f]{8}) · m_20260930_0005", sc: "(sl_[0-9a-f]{8}) · m_20260930_0009"}
+    - check: {segment: pending, desc: "three slices wait, each with its span", output: pending, contains: "m_20260930_0005..m_20260930_0008（4 行）"}
+    - check: {segment: pending, desc: "the beach slice guesses the memory already written that day", output: pending, contains: f60001}
+    - call: grow
+      args:
+        kind: event
+        slice: $sa
+        items: [{room: EVENT/WORLD, text: "小周昨晚一觉睡了九个小时，难得睡够。", v: 0.7, a: 0.3}]
+      as: written
+      capture: {new_id: "📝([0-9a-f]{12})"}
+    - check: {segment: written, desc: "the new memory carries the slice's first line", field: sources, id: $new_id, contains: m_20260930_0001}
+    - check: {segment: written, desc: "and its last line", field: sources, id: $new_id, contains: m_20260930_0004}
+    - check: {segment: written, desc: "the receipt says where the slice went", output: written, contains: "挂上了 → $new_id"}
+    - call: trace
+      args: {bucket_id: f60001000000, slice: $sb}
+      as: attached
+    - check: {segment: attached, desc: "the memory already there gets the slice's lines", field: sources, id: f60001000000, contains: m_20260930_0005}
+    - check: {segment: attached, desc: "through its last line", field: sources, id: f60001000000, contains: m_20260930_0008}
+    - call: trace
+      args: {slice: $sc, drop_slice: true}
+      as: dropped
+    - check: {segment: dropped, desc: "the empty slice is dropped", output: dropped, contains: "丢掉了"}
+    - call: recall
+      args: {view: slices}
+      as: after
+    - check: {segment: done, desc: "nothing is left pending", output: after, contains: "没有待认领的切片"}
+    - call: grow
+      args:
+        kind: event
+        slice: $sa
+        items: [{room: EVENT/WORLD, text: "又记一遍睡觉的事。", v: 0.5, a: 0.3}]
+      as: again
+    - check: {segment: done, desc: "a handled slice is refused by name", output: again, contains: "写成了 $new_id"}

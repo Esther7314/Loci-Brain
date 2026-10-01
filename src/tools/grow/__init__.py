@@ -16,6 +16,9 @@ What this file deliberately does not do:
 - No token-level budgeting (grow cares about "how many pieces", not "how much to show")
 - Returns no structured data; always one short sentence
 
+`slice="sl_…"` writes from a pending slice of the host's raw lines: its lines become
+the entry's sources and the slice is closed (tools/_slices.py).
+
 Exports: dispatch(items=... / kind+text) -> str
 ========================================
 """
@@ -26,6 +29,7 @@ from typing import Optional
 from core import _sources as _src
 from .. import _runtime as rt
 from .._common import check_grow_items_payload, with_write_key
+from .._slices import with_records, write_from_slice
 from .rooms_path import (grow_event, grow_mind, backfill_sweep,
                          _retired_fields_msg)
 
@@ -55,7 +59,17 @@ async def _dispatch(
     hold: str = "",
     card_of: str = "",
     sources=None,
+    slice_id: str = "",
 ) -> str:
+    # A pending slice (core/_slicer.py) handed in: the same write, with the slice's
+    # records added to `sources`, and the slice closed on what it wrote (tools/_slices.py).
+    # locals() here, before anything else is bound, is exactly this call's arguments.
+    if str(slice_id or "").strip():
+        call = {k: v for k, v in locals().items() if k not in ("slice_id", "sources")}
+        given = sources
+        return await write_from_slice(
+            slice_id, "grow",
+            lambda records: _dispatch(**call, sources=with_records(given, records)))
     await rt.decay_engine.ensure_started()
 
     # Clients like GLM sometimes serialise the list as a JSON string — accept it

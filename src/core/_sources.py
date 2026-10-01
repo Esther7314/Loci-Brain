@@ -53,7 +53,7 @@ Exports: SOURCES_FIELD · SOURCES_MAX · SourceId · SourceRecordError · normal
          CHANGE_KINDS · OUTCOMES · next_state · SourceRegistry (apply_change · state_of ·
          revisions_of · describe · rebuild_index · check_writable · claimed · run_once) ·
          memories_of · write_key · current_write_key · write_key_scope · current_grant ·
-         grant_scope · note_written
+         grant_scope · note_written · collect_written
 ========================================
 """
 
@@ -336,6 +336,23 @@ def note_written(bucket_id: str) -> None:
     written = _WRITTEN.get()
     if written is not None and bucket_id:
         written.append(str(bucket_id))
+
+
+@contextmanager
+def collect_written():
+    """Collect the ids written inside the block into the list it yields (a write built
+    from a slice closes the slice on what it wrote). What it collects is also handed on
+    to an enclosing keyed run, so that run still claims it. Use it inside run_once,
+    never around it: a run that starts inside this block takes itself for nested."""
+    outer = _WRITTEN.get()
+    mine: list[str] = []
+    token = _WRITTEN.set(mine)
+    try:
+        yield mine
+    finally:
+        _WRITTEN.reset(token)
+        if outer is not None:
+            outer.extend(mine)
 
 
 # ============================================================
