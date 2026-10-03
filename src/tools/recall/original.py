@@ -273,11 +273,14 @@ async def render_search(query: str) -> str:
             reach[key] = view is None or view.covers_container(where)
         return reach[key]
     registry = getattr(rt.bucket_mgr, "sources", None)
-    hits, total = search_lines(rt.bucket_mgr.base_dir, query, may_read=may_read)
-    if registry is not None:
-        hits = [h for h in hits
-                if registry.state_of(h["source"]) not in (_src.WITHDRAWN, _src.DELETED,
-                                                          _src.HELD)]
+
+    def may_read_line(source: str) -> bool:
+        # A line withdrawn, deleted or held on its own is not found, and not counted: the
+        # total would otherwise say how many such lines hold the words.
+        return registry is None or registry.state_of(source) not in (
+            _src.WITHDRAWN, _src.DELETED, _src.HELD)
+    hits, total = search_lines(rt.bucket_mgr.base_dir, query, may_read=may_read,
+                               may_read_line=may_read_line)
     if not hits:
         return (f"导入的原话里没有「{query}」。（view=\"original\" 搜的是导入的对话原文；"
                 "记忆本身用 recall(query=…) 搜。）")

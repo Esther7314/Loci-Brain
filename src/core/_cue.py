@@ -400,7 +400,9 @@ class _Library:
             self.by_id[bid] = (meta, content)
             if _PROFILE_TAG in [str(t) for t in meta.get("tags") or []]:
                 self.core_ids.add(bid)
-                facts.append(content)
+                # A name page the request may not read does not keep a name card back:
+                # whether one is withheld would say what that page holds.
+                facts.append(content if scope is None or scope.permits(meta) else "")
             if parse_bool(meta.get("pinned"), default=False):
                 self.core_ids.add(bid)
             prev = str(meta.get("supersedes") or "").strip()

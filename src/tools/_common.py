@@ -44,7 +44,7 @@ import threading
 
 from core import scope as _scope
 from core.visibility import LIVE, state_of
-from utils import parse_bool
+from utils import is_bucket_id, parse_bool
 
 from . import _runtime as rt
 
@@ -257,11 +257,15 @@ async def resolve_bucket_id(bucket_id) -> tuple[str, str]:
 
     Under a read scope only what the request may read resolves, a full id included:
     an id out of scope gets the same answer as an id that names nothing, and a
-    collision lists only candidates in scope.
+    collision lists only candidates in scope. "A full id" there is anything shaped like
+    an id of the library (`utils.is_bucket_id`: 12 hex, or a readable `feel_…` id of any
+    shape) or naming an entry of it — a missing id of that shape gets the same answer, so
+    the two cannot be told apart. Anything else (a host's line id in `from`) passes on.
     """
     q = str(bucket_id or "").strip()
     view = await read_scope()
-    if view is not None and _FULL_ID_RE.fullmatch(q):
+    if view is not None and q and (_FULL_ID_RE.fullmatch(q) or is_bucket_id(q)
+                                   or q in view.metas):
         return (q, "") if view.permits_id(q) else (q, not_found(q))
     if not _SHORT_ID_RE.fullmatch(q):
         return q, ""

@@ -365,6 +365,17 @@ def test_a_memory_without_sources_is_read_only_without_a_scope():
     assert not _view([cycle_a, cycle_b]).permits(cycle_a)
 
 
+def test_a_parent_the_library_does_not_have_refuses_even_beside_a_source_of_its_own():
+    # A derived entry is read only when every root behind it is: a parent id the library
+    # does not have is a root nobody can judge, whatever the entry's own record says.
+    dangling = _entry("x", [rec("m_1")], from_=["nowhere"])
+    deeper = _entry("y", [rec("m_1")], from_=["x"])
+    sound = _entry("z", [rec("m_1")])
+    view = _view([dangling, deeper, sound])
+    assert view.permits(sound), "the same record alone is readable"
+    assert not view.permits(dangling) and not view.permits(deeper)
+
+
 def test_a_refused_request_permits_nothing():
     e = _entry("a", [rec("m_1")])
     assert not _view([e], scope="").permits(e)
@@ -609,6 +620,7 @@ def test_breath_over_the_hook_opens_with_the_scope(store, monkeypatch):
                  [("x-loci-hook-token", "bot-key"), ("Loci-Scope", scope_json())])
     text = resp.body.decode("utf-8")
     assert text.startswith("〔范围：受限 · 入口 telegram/bot-a/group:G · 场合 group · 许读 1 处〕\n")
+    assert ids["group"][:6] in text, "what the scope may read is there"
     assert ids["private"][:6] not in text
     # The legacy host by its key: the whole library, said on the first line.
     open_text = _hook(monkeypatch, store, "/api/v2/breath",

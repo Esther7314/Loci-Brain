@@ -29,7 +29,8 @@ The package is a ZIP:
 
 What is left out, and why:
   · withdrawn entries — standing on a source the registry records as withdrawn or deleted,
-    or carrying an open `source_gone` record — and soft-deleted ones (`deleted_at` /
+    or carrying an open `source_gone` record, and everything derived from such an entry —
+    and soft-deleted ones (`deleted_at` /
     `tombstone`). Their ids are listed under `package.filtered`; their text, originals,
     attachments, vectors, dream records and usage-log queries are not in the package.
   · secrets: config.yaml (credentials), the ledger's cursor key, the panel password; and
@@ -87,6 +88,7 @@ import frontmatter
 
 from locibrain.eventsourcing.ledger_mirror import file_lease
 from locibrain.storage import backup_archive as BA
+from utils import read_from_ids
 
 from . import _dream
 from . import _invalidation as _I
@@ -161,17 +163,13 @@ def _jsonl(rows: Iterable[dict]) -> bytes:
 
 
 def _redact_ledger(data: bytes, _ctx: _Scrub) -> Optional[bytes]:
-    """Every ledger line down to what a line may hold (core/_ledger.py): a line written
-    before that rule carries whole metadata, and its names and summaries do not travel.
+    """Every ledger line down to what a line of its kind may hold (core/_ledger.
+    redact_line): a memory line written before that rule carries whole metadata, and its
+    names and summaries do not travel; a source line travels whole (ids and states only).
     Seq numbers and order stay, so an open host keeps reading by them."""
     out = []
     for event in _rows(data):
-        payload = event.get("payload")
-        if isinstance(payload, dict) and not _ledger._is_safe(payload):
-            safe = _ledger.payload_of(payload, payload)
-            safe["redacted"] = True
-            event = {**event, "payload": safe}
-        out.append(event)
+        out.append(_ledger.redact_line(event) or event)
     return _jsonl(out) if out else None
 
 
@@ -468,6 +466,18 @@ def _plan(store, entries: list[dict], alias_path: str) -> dict:
             gone.append(bid)
         else:
             kept.append(b)
+    # What is derived from a withdrawn entry does not travel either, every generation: the
+    # change writes `source_gone` on it, but a source the registry holds as withdrawn without
+    # that record (a change recorded before its clearing reached the entries) is found here
+    # by the same walk to the roots the read gate takes.
+    moved = True
+    while moved:
+        gone_set = set(gone)
+        stays = [b for b in kept if not set(read_from_ids(b.get("metadata") or {})) & gone_set]
+        moved = len(stays) != len(kept)
+        gone += [str(b.get("id") or (b.get("metadata") or {}).get("id") or "")
+                 for b in kept if b not in stays]
+        kept = stays
     kept_ids = {str(b.get("id")) for b in kept}
     left_out = set(deleted) | set(gone)
 

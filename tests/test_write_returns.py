@@ -246,8 +246,9 @@ def test_what_a_return_shows_is_in_the_usage_log(store):
     store.vectors.answers["下雨"] = {a: 0.95}
     event("又下雨了。")
     rows = [json.loads(ln) for ln in store.usage.path.read_text(encoding="utf-8").splitlines()]
-    assert {"kind": "shown", "road": RC.ROAD, "ids": [a]}.items() <= \
-        {k: v for r in rows for k, v in r.items() if r.get("road") == RC.ROAD}.items()
+    # One line says all three: merged rows could pass on a mixture of lines.
+    assert any(r.get("kind") == "shown" and r.get("road") == RC.ROAD and r.get("ids") == [a]
+               for r in rows), rows
 
 
 # ── 场景常来 ──────────────────────────────────────────────────────────────────

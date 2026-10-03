@@ -31,8 +31,8 @@ When it is not asked
 ------------------------------------------------------------
   · the same word was asked about in the last QUIET_DAYS (kept in `_state/ASKED_FILE`:
     word -> day asked, pruned as it is written, so it stays a handful of lines)
-  · a live cue already hangs on the word (its condition or a phrasing carries it): the
-    experience is already written as a cue
+  · a live cue the caller may read already hangs on the word (its condition or a phrasing
+    carries it): the experience is already written as a cue
   · more than one word qualifies: only the one on the most days is asked; the rest wait
     for their next write
 
@@ -106,8 +106,10 @@ def _counts(event: bool, meta: dict) -> bool:
             and not parse_bool(meta.get("internally_generated"), default=False))
 
 
-def _cued_words(buckets: list) -> list[str]:
-    """The normalised conditions and phrasings of every live, open cue."""
+def _cued_words(buckets: list, scope=None) -> list[str]:
+    """The normalised conditions and phrasings of every live, open cue the read scope may
+    read: a cue out of scope does not keep the question back, or whether it is asked would
+    say that cue exists."""
     out: list[str] = []
     for b in buckets:
         m = _meta(b)
@@ -115,6 +117,8 @@ def _cued_words(buckets: list) -> list[str]:
         if not isinstance(cue, dict) or not str(cue.get("condition") or "").strip():
             continue
         if is_closed(m) or _V.state_of(m) != _V.LIVE or str(m.get("superseded_by") or "").strip():
+            continue
+        if scope is not None and not scope.permits(m):
             continue
         out += [_cue.norm(p) for p in [cue.get("condition"), *(cue.get("phrasings") or [])] if p]
     return out
@@ -202,7 +206,7 @@ def ask(buckets: list, texts: list[str], *, buckets_dir: str, scope=None,
     if not qualifying:
         return None
     asked = load_asked(buckets_dir)
-    cued = _cued_words(buckets)
+    cued = _cued_words(buckets, scope)
     messages = [_cue.Message(t) for t in texts]
     best: Optional[tuple[int, int, str]] = None
     for key, by_day in qualifying.items():

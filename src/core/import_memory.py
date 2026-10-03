@@ -592,13 +592,15 @@ def _line_text(row: dict, same_self: bool, human: str) -> str:
     return f"{who}{' · ' + at if at else ''}：{row.get('text') or ''}"
 
 
-def search_lines(base_dir: str, query: str, *, may_read=None,
+def search_lines(base_dir: str, query: str, *, may_read=None, may_read_line=None,
                  limit: int = _SEARCH_LIMIT) -> tuple[list[dict], int]:
     """Lines of the imports holding every word of `query` (split on whitespace, compared
     case-blind): ([{source, batch, container, title, who, at, snippet}], how many matched
     in all), newest batch first, each conversation in line order. `may_read(source)` ({system,
-    instance, container}) says whether the request may read that conversation; a batch
-    being withdrawn is skipped."""
+    instance, container}) says whether the request may read that conversation, and
+    `may_read_line(source string)` whether it may read that one line (a line withdrawn on
+    its own); a line either refuses is neither listed nor counted. A batch being withdrawn
+    is skipped."""
     words = [w.lower() for w in str(query or "").split() if w]
     if not words:
         return [], 0
@@ -621,6 +623,9 @@ def search_lines(base_dir: str, query: str, *, may_read=None,
                 low = text.lower()
                 if not all(w in low for w in words):
                     continue
+                source = source_string(batch, container, str(row.get("id")))
+                if may_read_line is not None and not may_read_line(source):
+                    continue
                 total += 1
                 if len(hits) >= limit:
                     continue
@@ -628,7 +633,7 @@ def search_lines(base_dir: str, query: str, *, may_read=None,
                 start, end = max(0, at - _SNIPPET), at + len(words[0]) + _SNIPPET
                 snippet = (("…" if start else "") + re.sub(r"\s+", " ", text[start:end])
                            + ("…" if end < len(text) else ""))
-                hits.append({"source": source_string(batch, container, str(row.get("id"))),
+                hits.append({"source": source,
                              "batch": batch, "container": container,
                              "title": str(conv.get("title") or ""),
                              "who": speaker_label(row.get("role"), same_self, human),

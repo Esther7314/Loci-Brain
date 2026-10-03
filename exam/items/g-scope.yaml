@@ -444,3 +444,238 @@
         items: [{room: EVENT/WORLD, text: "群里定了周六去湖边烧烤。", v: 0.6, a: 0.4}]
       as: written
     - check: {segment: store, desc: "with the lines known, the same write goes through", entry: {body_has: 湖边烧烤}}
+
+# 庚1-7 hide the entry itself. G8-G10: an entry out of scope is not named on any side
+# channel either — what a read by id mentions in passing, every kind of card, and what the
+# write tools say back. One chat, two venues: `use: venues [group]` vs `[private]`, the
+# group's scope granted the whole chat, so only the use decides.
+
+- id: G8
+  title: "a read by id names nothing out of scope in passing"
+  start: "2026-10-01T10:00:00+08:00"
+  hosts:
+    legacy: {token: life-line-key, scope_mode: open}
+    book-bot: {token: book-bot-key, max_grant: [{system: telegram, instance: bot-a}]}
+  setup:
+    - id: a08001000000
+      at: "2026-09-30T20:00:00+08:00"
+      room: EVENT/WORLD
+      text: "读书会的场地周六借到了。"
+      sources: [{system: telegram, instance: bot-a, container: "group:G", id: "m_801", use: {venues: [group]}}]
+    - id: a08002000000
+      at: "2026-09-30T20:05:00+08:00"
+      room: EVENT/WORLD
+      text: "她私下说周六的场地是她托人借的。"
+      sources: [{system: telegram, instance: bot-a, container: "group:G", id: "m_802", use: {venues: [private]}}]
+    - id: a08003000000
+      at: "2026-09-30T20:10:00+08:00"
+      room: EVENT/WORLD
+      text: "周六读书会有场地了。"
+      tags: ["疑似同件:a08001", "疑似同件:a08002"]
+      sources: [{system: telegram, instance: bot-a, container: "group:G", id: "m_803", use: {venues: [group]}}]
+    - id: a08004000000
+      at: "2026-09-29T20:00:00+08:00"
+      room: EVENT/WORLD
+      text: "读书会原来定在周五晚上。"
+      sources: [{system: telegram, instance: bot-a, container: "group:G", id: "m_804", use: {venues: [private]}}]
+    - id: a08005000000
+      at: "2026-09-30T21:00:00+08:00"
+      room: EVENT/WORLD
+      text: "读书会改到周六下午了。"
+      sources: [{system: telegram, instance: bot-a, container: "group:G", id: "m_805", use: {venues: [group]}}]
+      fields: {supersedes: a08004000000, prov: [{rel: wasRevisionOf, target: a08004000000}]}
+  steps:
+    - call: recall
+      args: {query: a08003000000}
+      host: book-bot-key
+      scope: *group_scope
+      as: tagged
+    - check: {segment: find, desc: "the entry itself reads", output: tagged, contains: 有场地了}
+    - check: {segment: find, desc: "a 疑似同件 tag naming what the group may read stays", output: tagged, contains: "疑似同件:a08001"}
+    - check: {segment: find, desc: "one naming the private entry is not there", output: tagged, lacks: a08002}
+    - call: recall
+      args: {query: a08005000000}
+      host: book-bot-key
+      scope: *group_scope
+      as: versioned
+    - check: {segment: find, desc: "the new version reads", output: versioned, contains: 周六下午}
+    - check: {segment: find, desc: "the version it replaced, private, is not named", output: versioned, lacks: a08004}
+    - call: recall
+      args: {query: a08005000000}
+      host: life-line-key
+      as: versioned_open
+    - check: {segment: find, desc: "control: open, the replaced version is named", output: versioned_open, contains: a08004}
+
+- id: G9
+  title: "every kind of card comes only for what the scope may read"
+  start: "2026-10-01T10:00:00+08:00"
+  hosts:
+    legacy: {token: life-line-key, scope_mode: open}
+    book-bot: {token: book-bot-key, max_grant: [{system: telegram, instance: bot-a}]}
+  names:
+    阿明: {instance_of: 人}
+    小红: {instance_of: 人}
+  setup:
+    - id: a09001000000
+      at: "2026-10-01T09:00:00+08:00"
+      room: EVENT/WORLD
+      text: "答应今晚七点在群里说读书会的结果。"
+      when: "2026-10-01T19:00+08:00"
+      sources: [{system: telegram, instance: bot-a, container: "group:G", id: "m_901", use: {venues: [group]}}]
+      fields: {direction_of_fit: telic, bound: [我]}
+    - id: a09002000000
+      at: "2026-10-01T09:05:00+08:00"
+      room: EVENT/WORLD
+      text: "答应今晚七点私下告诉她体检的结果。"
+      when: "2026-10-01T19:00+08:00"
+      sources: [{system: telegram, instance: bot-a, container: "group:G", id: "m_902", use: {venues: [private]}}]
+      fields: {direction_of_fit: telic, bound: [我]}
+    - id: a09003000000
+      at: "2026-09-28T10:00:00+08:00"
+      room: EVENT/WORLD
+      text: "群里约好下次一起去那家甜品店。"
+      sources: [{system: telegram, instance: bot-a, container: "group:G", id: "m_903", use: {venues: [group]}}]
+      fields: {direction_of_fit: telic, bound: [我], cue: {condition: "去甜品店", phrasings: ["甜品店"]}}
+    - id: a09004000000
+      at: "2026-09-28T10:05:00+08:00"
+      room: EVENT/WORLD
+      text: "她私下说想一个人去那家甜品店。"
+      sources: [{system: telegram, instance: bot-a, container: "group:G", id: "m_904", use: {venues: [private]}}]
+      fields: {direction_of_fit: telic, bound: [我], cue: {condition: "去甜品店", phrasings: ["甜品店"]}}
+    - id: a09005000000
+      at: "2026-09-28T11:00:00+08:00"
+      room: MIND/TRAITS
+      text: "阿明做事急，但答应的都会做到。"
+      sources: [{system: telegram, instance: bot-a, container: "group:G", id: "m_905", use: {venues: [group]}}]
+      fields: {card_of: 阿明}
+    - id: a09006000000
+      at: "2026-09-28T11:05:00+08:00"
+      room: MIND/TRAITS
+      text: "小红心里有事不说。"
+      sources: [{system: telegram, instance: bot-a, container: "group:G", id: "m_906", use: {venues: [private]}}]
+      fields: {card_of: 小红}
+  steps:
+    - at: "2026-10-01T10:30:00+08:00"
+    - cue: {text: "早", window: wg, turn: t1}
+      host: book-bot-key
+      scope: *group_scope
+    - cue: {text: "早", window: wo, turn: t1}
+      host: life-line-key
+    - at: "2026-10-01T19:10:00+08:00"
+    - cue: {text: "回来了", window: wg, turn: t2}
+      host: book-bot-key
+      scope: *group_scope
+      as: due_group
+    - check: {segment: input, desc: "提醒: the group's promise comes due", output: due_group, contains: a09001}
+    - check: {segment: input, desc: "提醒: the private one does not", output: due_group, lacks: a09002}
+    - check: {segment: input, desc: "nor a word of it", output: due_group, lacks: 体检}
+    - cue: {text: "回来了", window: wo, turn: t2}
+      host: life-line-key
+      as: due_open
+    - check: {segment: input, desc: "control: open, both come due", output: due_open, contains: a09002}
+    - cue: {text: "甜品店开门了", window: wg, turn: t3}
+      host: book-bot-key
+      scope: *group_scope
+      as: cue_group
+    - check: {segment: input, desc: "相关记忆: the group's cue matches", output: cue_group, contains: a09003}
+    - check: {segment: input, desc: "相关记忆: the private one with the same phrasing does not", output: cue_group, lacks: a09004}
+    - cue: {text: "阿明来了，小红也来了", window: wg, turn: t4}
+      host: book-bot-key
+      scope: *group_scope
+      as: names_group
+    - check: {segment: input, desc: "相关名字: the group's card for 阿明", output: names_group, contains: a09005}
+    - check: {segment: input, desc: "相关名字: no card for 小红, whose only card is private", output: names_group, lacks: a09006}
+    - check: {segment: input, desc: "nor a bare card naming 小红", output: names_group, lacks: "【相关名字】小红"}
+    - cue: {text: "阿明来了，小红也来了", window: wo, turn: t4}
+      host: life-line-key
+      as: names_open
+    - check: {segment: input, desc: "control: open, 小红's card comes", output: names_open, contains: a09006}
+
+- id: G10
+  title: "what a write says back names nothing out of scope"
+  start: "2026-10-01T20:00:00+08:00"
+  hosts:
+    legacy: {token: life-line-key, scope_mode: open}
+    book-bot: {token: book-bot-key, max_grant: [{system: telegram, instance: bot-a}],
+               authority: [{system: telegram, instance: bot-a}]}
+  setup:
+    - id: a10001000000
+      at: "2026-09-20T11:00:00+08:00"
+      room: MIND/TRAITS
+      text: "阿明做事急，但答应的都会做到。"
+      sources: [{system: telegram, instance: bot-a, container: "group:G", id: "m_1001", use: {venues: [private]}}]
+      fields: {card_of: 阿明}
+    - {id: a10011000000, at: "2026-09-25T21:00:00+08:00", room: EVENT/SELF, text: "下班去健身房练了一小时。", tags: [健身房], when: "2026-09-25", sources: [{system: telegram, instance: bot-a, container: "group:G", id: "m_1011", use: {venues: [private]}}]}
+    - {id: a10012000000, at: "2026-09-26T21:00:00+08:00", room: EVENT/SELF, text: "下班去健身房练了一小时。", tags: [健身房], when: "2026-09-26", sources: [{system: telegram, instance: bot-a, container: "group:G", id: "m_1012", use: {venues: [private]}}]}
+    - {id: a10013000000, at: "2026-09-27T21:00:00+08:00", room: EVENT/SELF, text: "下班去健身房练了一小时。", tags: [健身房], when: "2026-09-27", sources: [{system: telegram, instance: bot-a, container: "group:G", id: "m_1013", use: {venues: [private]}}]}
+    - {id: a10014000000, at: "2026-09-28T21:00:00+08:00", room: EVENT/SELF, text: "下班去健身房练了一小时。", tags: [健身房], when: "2026-09-28", sources: [{system: telegram, instance: bot-a, container: "group:G", id: "m_1014", use: {venues: [private]}}]}
+    - {id: a10015000000, at: "2026-09-29T21:00:00+08:00", room: EVENT/SELF, text: "下班去健身房练了一小时。", tags: [健身房], when: "2026-09-29", sources: [{system: telegram, instance: bot-a, container: "group:G", id: "m_1015", use: {venues: [private]}}]}
+    - {id: a10016000000, at: "2026-09-30T21:00:00+08:00", room: EVENT/SELF, text: "下班去健身房练了一小时。", tags: [健身房], when: "2026-09-30", sources: [{system: telegram, instance: bot-a, container: "group:G", id: "m_1016", use: {venues: [private]}}]}
+  steps:
+    - call: grow
+      host: book-bot-key
+      turn: "t-g10#1"
+      scope: *group_scope
+      args:
+        kind: event
+        sources: [{system: telegram, instance: bot-a, container: "group:G", id: "m_1020"}]
+        items: [{room: EVENT/SELF, text: "今天阿明又迟到了，一起去健身房。", v: 0.5, a: 0.4}]
+      as: event_group
+    - check: {segment: store, desc: "written", output: event_group, contains: 已落盘}
+    - check: {segment: store, desc: "回望: the private card of 阿明 is not run into", output: event_group, lacks: a10001}
+    - check: {segment: store, desc: "回望: no look-back line at all", output: event_group, lacks: 撞上了旧看法}
+    - check: {segment: store, desc: "场景常来: six private days earn no question", output: event_group, lacks: 最近常出现}
+    - call: grow
+      host: life-line-key
+      args:
+        kind: event
+        items: [{room: EVENT/SELF, text: "阿明在健身房等了我半天。", v: 0.5, a: 0.4}]
+      as: event_open
+    - check: {segment: store, desc: "control: open, the card is run into", output: event_open, contains: a10001}
+    - check: {segment: store, desc: "control: open, the six days earn the question", output: event_open, contains: 最近常出现}
+    - call: grow
+      host: book-bot-key
+      turn: "t-g10#2"
+      scope: *group_scope
+      args:
+        kind: mind
+        room: MIND/TRAITS
+        text: "阿明在群里最热心。"
+        card_of: 阿明
+        sources: [{system: telegram, instance: bot-a, container: "group:G", id: "m_1021"}]
+        v: 0.5
+        a: 0.4
+      as: card_group
+    - check: {segment: store, desc: "the group's own card for 阿明 is written", output: card_group, contains: "mind→"}
+    - check: {segment: store, desc: "the one-card rule does not name the private card", output: card_group, lacks: a10001}
+    - source_change: {change_id: c-g10-1, host_seq: 1, change: withdrawn, source: "telegram:bot-a/group:H#m_1030"}
+      host: book-bot-key
+    - source_change: {change_id: c-g10-2, host_seq: 1, change: withdrawn, source: "telegram:bot-a/group:G#m_1031"}
+      host: book-bot-key
+    - call: grow
+      host: book-bot-key
+      turn: "t-g10#3"
+      scope: *group_scope
+      args:
+        kind: mind
+        room: MIND/VIEWS
+        text: "那边群里说的事。"
+        from: ["telegram:bot-a/group:H#m_1030"]
+        v: 0.5
+        a: 0.4
+      as: from_outside
+    - check: {segment: store, desc: "a source outside the grant: refused as outside", output: from_outside, contains: 不在这一轮}
+    - check: {segment: store, desc: "its state is not told", output: from_outside, lacks: 撤回}
+    - call: grow
+      host: book-bot-key
+      turn: "t-g10#4"
+      scope: *group_scope
+      args:
+        kind: mind
+        room: MIND/VIEWS
+        text: "这个群里说过的事。"
+        from: ["telegram:bot-a/group:G#m_1031"]
+        v: 0.5
+        a: 0.4
+      as: from_inside
+    - check: {segment: store, desc: "control: inside the grant a withdrawn source is said to be withdrawn", output: from_inside, contains: 撤回}

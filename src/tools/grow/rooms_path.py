@@ -727,16 +727,24 @@ def card_room_rule(name: str, room: str) -> tuple[str, str]:
 async def live_card(name: str, exclude: str = "") -> str:
     """The id of `name`'s live card, or "". Live = in the active store and not replaced
     by a live newer version; a stored card_of is read through the table as it is now,
-    so a card filed under a spelling that has since become an alias still counts."""
+    so a card filed under a spelling that has since become an alias still counts.
+
+    Under a read scope only what the request may read counts — the card, and the newer
+    version that would replace it: a card out of scope is not there, so it neither
+    blocks a card of the request's own nor gets named. A name may then hold two live
+    cards; every reader of cards takes the newest one it may see."""
     want = name.lower()
+    view = await read_scope()
     for b in await rt.bucket_mgr.list_all(include_archive=False):
         meta = b.get("metadata") or {}
         bid = str(meta.get("id") or b.get("id") or "")
         card = str(meta.get("card_of") or "").strip()
         if not card or bid == exclude or meta.get("deleted_at"):
             continue
+        if view is not None and not view.permits(meta):
+            continue
         newer = str(meta.get("superseded_by") or "").strip()
-        if newer and rt.bucket_mgr.is_live(newer):
+        if newer and rt.bucket_mgr.is_live(newer) and (view is None or view.permits_id(newer)):
             continue
         if (_S.name_key(card) or card).lower() == want:
             return bid
@@ -833,10 +841,11 @@ async def _check_quoted_source(target: str) -> str:
     refusal, or "" to accept. Every write tool that takes `from` comes through
     _normalize_from, so this is the one place that decides it. A target is either a
     source's string form (`lento:home/private:U#m_0142`, or `…#m_0142..m_0160` for a run
-    of lines; `#` marks it), which has to parse and must not be withdrawn or deleted in
-    the registry (a run is read by its own identity, else its first line's), or the
-    host's bare id for a line (`m_0931`), whose identity is not known yet: shape only —
-    one token, short enough to store whole."""
+    of lines; `#` marks it), which has to parse and pass the registry's own check of a
+    source a memory is written from (`SourceRegistry.check_writable`, under this turn's
+    grant: outside the grant one answer whatever the source's state, inside it withdrawn,
+    deleted and held refused), or the host's bare id for a line (`m_0931`), whose identity
+    is not known yet: shape only — one token, short enough to store whole."""
     if _re.search(r"\s", target):
         return (f"from 里「{target[:40]}」不像 id（带空格）——填 bucket_id，"
                 "或宿主那句话自己的 id（如 m_0931）。")
@@ -851,10 +860,12 @@ async def _check_quoted_source(target: str) -> str:
                     "system:instance/container#id（有版本号再加 @版本）。")
         registry = _registry()
         if registry is not None:
-            state = registry.state_of(sid)
-            if state in (_src.WITHDRAWN, _src.DELETED):
-                word = "撤回" if state == _src.WITHDRAWN else "删除"
-                return f"来源 {sid} 已经被{word}了，不能再拿它写记忆。本次什么都没写。"
+            record = {"system": sid.system, "instance": sid.instance,
+                      "container": sid.container, "id": sid.id,
+                      **({"through": sid.through} if sid.through else {})}
+            refusal, _notes = registry.check_writable([record], _src.current_grant())
+            if refusal:
+                return refusal
     return ""
 
 

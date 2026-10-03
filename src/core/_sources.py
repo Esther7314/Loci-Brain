@@ -1472,13 +1472,20 @@ class SourceRegistry:
         for rec in sources or []:
             sid = record_id(rec)
             key = sid.to_string()
-            if not self.order_known(sid):
+            order_known = self.order_known(sid)
+            # Outside the grant there is one answer, whatever the registry knows of the
+            # source (its state, whether a run's lines were registered): telling them
+            # apart would say something of material the turn may not touch. A run whose
+            # lines are unknown is not granted by anything, so it is told as such only
+            # where it lies inside the grant's places.
+            if granted is not None and not self.granted(granted, sid) and (
+                    order_known or not self.reaches(granted, sid)):
+                return (f"来源 {key} 不在这一轮宿主交过来的材料里——只能用这一轮给的来源写。"
+                        "本次什么都没写。"), []
+            if not order_known:
                 return (f"来源 {key} 是连着的一段，宿主没交过这段里有哪几行，Loci 没法知道中间哪一行"
                         "被撤回——不能拿它当依据。宿主先交这段的行（POST /api/v2/source/lines，"
                         "或走 /api/v2/slices），或者引单条。本次什么都没写。"), []
-            if granted is not None and not self.granted(granted, sid):
-                return (f"来源 {key} 不在这一轮宿主交过来的材料里——只能用这一轮给的来源写。"
-                        "本次什么都没写。"), []
             state = self.state_of(sid)
             if state == WITHDRAWN:
                 return (f"来源 {key} 已经被撤回了，不能再拿它写记忆。本次什么都没写。"), []

@@ -50,8 +50,8 @@ receipt gives such a host `applied_cursor` in place of `applied_seq`, the cursor
 change's own line.
 
 Exports: SOURCE_CHANGED · SOURCE_CLEARED · TRACE_CLEARED · NOISE · CursorError · payload_of ·
-         source_keys · public_row · scrub_traces · cursor_of · seq_of_cursor · host_view ·
-         visible_ids · changes_since
+         source_keys · public_row · redact_line · scrub_traces · cursor_of · seq_of_cursor ·
+         host_view · visible_ids · changes_since
 ========================================
 """
 
@@ -133,6 +133,27 @@ def _is_safe(payload: dict) -> bool:
     return set(payload) <= allowed
 
 
+def redact_line(event: dict) -> Optional[dict]:
+    """The line cut down to what a line of its kind may hold, or None when it holds no
+    more already. A source line (`SOURCE_EVENTS`) keeps its identities, change, states and
+    entry ids (`_SOURCE_KEYS`: never text, so nothing of them is cut); a memory line keeps
+    what `payload_of` keeps (names and flags — an old line carries whole metadata). Seq
+    numbers and order are the caller's to keep; a line that was cut says `redacted`."""
+    payload = event.get("payload")
+    if not isinstance(payload, dict):
+        return None
+    if str(event.get("event_type") or "") in SOURCE_EVENTS:
+        if set(payload) <= {*_SOURCE_KEYS, "redacted"}:
+            return None
+        safe = {k: v for k, v in payload.items() if k in _SOURCE_KEYS}
+    else:
+        if _is_safe(payload):
+            return None
+        safe = payload_of(payload, payload)
+    safe["redacted"] = True
+    return {**event, "payload": safe}
+
+
 def public_row(event: dict) -> dict:
     """One ledger line as `/changes` hands it out: numbers, kinds, identities and hashes.
     Works on lines of any age; text in an old line's payload does not come through."""
@@ -171,12 +192,7 @@ def scrub_traces(ledger, ids: Iterable[str]) -> int:
     def redact(event: dict) -> Optional[dict]:
         if str(event.get("trace_id") or "") not in wanted:
             return None
-        payload = event.get("payload")
-        if not isinstance(payload, dict) or _is_safe(payload):
-            return None
-        safe = payload_of(payload, payload)
-        safe["redacted"] = True
-        return {**event, "payload": safe}
+        return redact_line(event)
 
     return ledger.rewrite(redact)
 
