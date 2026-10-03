@@ -573,6 +573,9 @@ class _Library:
                 why.append(f"它站着的 {short_id(r['of'])} 被 {short_id(r['by'])} 推翻了")
             for r in it["revised"]:
                 why.append(f"来源 {r['source']} 出了新版本")
+            for r in it["restored"]:
+                why.append(f"来源 {r['source']} 撤回或删除过、现在恢复了，这条从那上面派生、"
+                           "等你看过")
             if it["failed"]:
                 failed = "、".join(f"{r['source']} {_I.state_word(r['state'])}" for r in it["failed"])
                 why.append(f"依据 {failed}，正文不给了")

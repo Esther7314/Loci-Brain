@@ -241,6 +241,9 @@ def _invalidation_lines(block: dict) -> list[str]:
             why.append(f"它站着的 {short_id(r['of'])} 被 {short_id(r['by'])} 推翻了（{r['at'][5:10]}）")
         for r in it["revised"]:
             why.append(f"来源 {r['source']} 出了新版本（{r['revision'][:16]}）")
+        for r in it["restored"]:
+            why.append(f"来源 {r['source']} 撤回或删除过、现在恢复了，这条是从站在它上面的"
+                       "记忆派生的，等你看过才回来")
         if it["failed"]:
             failed = "、".join(f"{r['source']} {_I.state_word(r['state'])}" for r in it["failed"])
             left = (f"还剩 {'、'.join(it['remaining'])}：只凭它们重写" if it["remaining"]

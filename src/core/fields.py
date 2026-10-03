@@ -167,7 +167,7 @@ FIELDS: tuple[Field, ...] = (
        "registry."),
     _F("invalidation", "sources", "Marks that a basis changed under it: a list of {kind, "
        "of, by, at, confirmed_at?}, kind one of overturn, source_revised, edited, "
-       "source_gone, source_held. Open until confirmed."),
+       "source_gone, source_held, source_restored. Open until confirmed."),
 
     # ---- removal ----
     _F("deleted_at", "removal", "A soft delete: when. The file sits in archive/ and is "

@@ -23,7 +23,7 @@ What each kind of change does:
 | deleted     | deleted (from any state)                | yes     | every place, entries' only  |
 | use_changed | unchanged; the new `use` narrows at once | no      | nothing                     |
 | unreadable  | active -> unreadable; withdrawn/deleted stay | no  | nothing                     |
-| restored    | -> active (withdrawn/deleted need the host's `may_restore`) | no | nothing; a cleared body does not come back |
+| restored    | -> active (withdrawn/deleted need the host's `may_restore`) | no | nothing; a cleared body does not come back, what was derived waits for review |
 | revised     | unchanged (unreadable -> active); the new revision is chained | no | nothing |
 
 Who may send it: the source's declared change authority (`authority:` in `hosts:`,
@@ -49,9 +49,17 @@ everything derived from them (prov's derived-from and primary-source lines, ever
 generation). Blocking comes first, before anything is cleared: each of them gets an open
 `source_gone` invalidation record (`cleared: true` on the entries), which the read gate
 honours on every road but 依据变了的 (core/visibility.py), and under a read scope the
-registry blocks them again by itself. A restore closes the derived ones' records; the
-entries' bodies are gone and stay gone, withdrawn or deleted alike (`note: redeliver`:
-the host delivers the material again if it is to be remembered again).
+registry blocks them again by itself. A restore gives the source back its eligibility, not
+what stood on it: the entries' bodies are gone and stay gone, withdrawn or deleted alike
+(`note: redeliver`: the host delivers the material again if it is to be remembered again),
+and each derived memory's `source_gone` record is traded for an open `source_restored`
+record (`_await_review`) — still off every road but 依据变了的 and a read by id, both now
+showing its text, until the model keeps it as is (trace invalidation="confirmed") or
+rewrites it. The restore's
+`derived_pending` lists those. A restore that settles a hold on a source never withdrawn
+closes the `source_held` records and brings everything back, derived memories too: the
+ordered word says the source was never gone, so nothing standing on it has a changed basis
+to be reviewed for.
 
 The places, cleared in this order, each one of the entries only (what is derived is held
 for review, not cleared):
@@ -570,6 +578,31 @@ async def _settle_holds(store, ids: list[str], stamp: str, by: str) -> None:
                 await store.close_invalidation_records(bid, _I.SOURCE_HELD, of, stamp, by=by)
 
 
+async def _await_review(store, bid: str, of: str, stamp: str, change: str) -> bool:
+    """A source restored: a memory derived from what rested on it trades its open
+    `source_gone` record about `of` for an open `source_restored` record. The ground came
+    back, but what was derived from it while it was gone was never looked at again, so it
+    does not come back by itself — it waits in 依据变了的 (and reads by id, for the review)
+    until the model confirms or rewrites it. The new record is written before the old one is closed, so a resend after
+    a crash in between finds the work half done and finishes it. True when the memory waits
+    on this change's record afterwards."""
+    b = await store.get_including_archive(bid)
+    if not b:
+        return False
+    meta = b.get("metadata") or {}
+    gone = [r for r in _I.open_records(meta, _I.SOURCE_GONE)
+            if str(r.get("of") or "") == of and not r.get("cleared")]
+    waiting = any(r.get("change") == change
+                  for r in _I.open_records(meta, _I.SOURCE_RESTORED))
+    if not gone:
+        return waiting
+    await store.add_invalidation_record(bid, {"kind": _I.SOURCE_RESTORED, "of": of,
+                                              "by": "restored", "at": stamp,
+                                              "change": change})
+    await store.close_invalidation_records(bid, _I.SOURCE_GONE, of, stamp, by=change)
+    return True
+
+
 # ------------------------------------------------------------
 # The request
 # ------------------------------------------------------------
@@ -747,9 +780,10 @@ async def _carry_out(store, host, change: dict, sid, prior: dict, prog: Optional
     reached = list(derived)
     if kind == "restored" and state == _src.ACTIVE:
         reached = await _derived(store, entries)
-        for bid in reached:
-            await store.close_invalidation_records(bid, _I.SOURCE_GONE, change["source"],
-                                                   stamp, by=key.replace("\x00", ":"))
+        derived = [bid for bid in reached
+                   if await _await_review(store, bid, change["source"], stamp,
+                                          key.replace("\x00", ":"))]
+        prog["derived"] = derived
     if kind in _SETTLING:
         # The ordered word has come: what a host's unordered word held is settled by it.
         await _settle_holds(store, entries + reached, stamp, key.replace("\x00", ":"))

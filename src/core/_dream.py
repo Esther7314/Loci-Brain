@@ -760,7 +760,8 @@ async def _quoted(pool: list[Ingredient], c: dict) -> tuple[list[Ingredient], li
         if any(a.outcome == _O.NOT_ALLOWED for a in answers):
             continue
         fresh = await rt.bucket_mgr.get_including_archive(x.id)
-        if not fresh or _V.source_gone(fresh.get("metadata") or {}):
+        fresh_meta = (fresh or {}).get("metadata") or {}
+        if not fresh or _V.source_gone(fresh_meta) or _V.source_restored(fresh_meta):
             continue
         given = [ln.text for a in answers if a.outcome == _O.GIVEN
                  for ln in a.lines if ln.text]

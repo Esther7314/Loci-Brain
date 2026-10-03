@@ -9,7 +9,8 @@ cache, a pending slice's gist, a lookup's query in the usage log, and a ledger l
 written the old way (whole metadata). After `withdrawn` the phrase is nowhere under the
 library — read back byte by byte — and each place answered `done`. Then: D is held for
 review on every road and E's body is gone for good; a crash halfway is finished by a
-resend; a restore lifts D; a line inside a run reaches the run; the route answers
+resend; a restore gives the source back but D waits for review until it is confirmed
+or rewritten; a line inside a run reaches the run; the route answers
 through the hook guard with a host's credential.
 """
 
@@ -187,7 +188,8 @@ def test_a_crash_halfway_is_finished_by_resending_the_same_change(library, monke
     assert kinds.count("SourceChanged") == 1
 
 
-def test_restore_lifts_what_was_derived_but_not_a_cleared_body(library):
+def test_restore_gives_back_the_source_but_what_was_derived_waits_for_review(library):
+    from tools.breath.awaken import _invalidation_lines
     store, e, d, _root = library
     run(SC.handle(store, change("c-1", "withdrawn", 1), OPEN_HOST))
     no_restore = Host("bot", scope_mode="open")
@@ -196,9 +198,64 @@ def test_restore_lifts_what_was_derived_but_not_a_cleared_body(library):
     _s, out = run(SC.handle(store, change("c-3", "restored", 2), OPEN_HOST))
     assert out["status"] == "applied" and out["state"] == "active" and not out["blocked"]
     assert out["note"] == "redeliver", "the cleared body does not come back with the state"
-    assert not V.source_gone(_meta(store, d))
+    assert out["derived_pending"] == [d], "the restore names what still waits"
+    # The entry: its body is gone for good, and so its record stays.
     assert V.source_gone(_meta(store, e))
     assert run(store.get(e))["content"].strip() == store.CLEARED_BODY
+    # What was derived: not gone any more, not back either — off every road but the review
+    # and a read by id, where the review reads it.
+    meta = _meta(store, d)
+    assert not V.source_gone(meta) and V.source_restored(meta)
+    for road in V.ROADS:
+        verdict = V.visible_for(meta, road=road, holds=_HoldsAll())
+        assert bool(verdict) == (road in (V.INVALIDATION, V.READ)), road
+    items = {it["id"]: it for it in I.block(run(store.list_all()), store.sources)}
+    it = items[d]
+    assert [r["source"] for r in it["restored"]] == [M_STR] and it["failed"] == []
+    assert it["text"], "the source may be used again: the review shows the text"
+    [line, *_hints] = _invalidation_lines({"items": [it], "more": 0})
+    assert "现在恢复了" in line and "等你看过" in line
+    # Resent, the same answer.
+    _s, again = run(SC.handle(store, change("c-3", "restored", 2), OPEN_HOST))
+    assert again["status"] == "duplicate" and again["derived_pending"] == [d]
+
+
+def test_what_waits_after_a_restore_comes_back_once_confirmed_or_rewritten(library):
+    from tools.recall import core as R
+    from tools.regrow import dispatch as regrow
+    from tools.trace import dispatch as trace
+    store, e, d, _root = library
+    d2 = run(store.create("小周周末总往外跑。", room="MIND/TRAITS",
+                          prov=[{"rel": WAS_DERIVED_FROM, "target": e}]))
+    run(SC.handle(store, change("c-1", "withdrawn", 1), OPEN_HOST))
+    _s, out = run(SC.handle(store, change("c-2", "restored", 2), OPEN_HOST))
+    assert set(out["derived_pending"]) == {d, d2}
+    # Read by id: the whole entry, under a line saying it waits and how to settle it.
+    read = run(R.recall_core(when="", room="", tag="", query=d))
+    lines = read.splitlines()
+    assert lines[0].startswith(f"═ {d}") and "现在恢复了" in lines[1] and "还没复核" in lines[1]
+    assert f'trace(bucket_id="{d}", invalidation="confirmed")' in lines[1] and "regrow" in lines[1]
+    assert "小周喜欢夏天出门" in read
+    # Nowhere else: not listed, not in the three days, not carded.
+    meta = _meta(store, d)
+    assert not any(V.visible_for(meta, road=road, holds=_HoldsAll())
+                   for road in (V.LIST, V.RECENT, V.CUE))
+    # Kept as it is: the gesture the line offers closes the record, and it is back.
+    said = run(trace(bucket_id=d, invalidation="confirmed"))
+    assert "确认照留" in said, said
+    meta = _meta(store, d)
+    assert not V.source_restored(meta) and not I.open_records(meta)
+    assert all(V.visible_for(meta, road=road, holds=_HoldsAll())
+               for road in (V.READ, V.LIST, V.RECENT, V.CUE))
+    read = run(R.recall_core(when="", room="", tag="", query=d))
+    assert "小周喜欢夏天出门" in read and "还没复核" not in read
+    # Rewritten: the new version carries no mark, the old one leaves the review.
+    run(regrow(bucket_id=d2, mode="supplement", text="小周周末总往外跑，夏天更是。", v=0.5, a=0.3))
+    newer = _meta(store, d2)["superseded_by"]
+    assert "invalidation" not in _meta(store, newer)
+    assert V.visible_for(_meta(store, newer), road=V.READ)
+    carded = [it["id"] for it in I.block(run(store.list_all()), store.sources)]
+    assert d not in carded and d2 not in carded and newer not in carded
 
 
 def test_deleted_then_unreadable_stays_deleted_and_a_revision_keeps_it(library):

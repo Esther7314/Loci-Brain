@@ -49,7 +49,16 @@ What puts a memory in the block:
              cleared — and on everything derived from those, which stays readable to
              nobody until it is rewritten or put away. A memory whose body was cleared
              keeps its record even if the source is restored later (the text does not come
-             back); a derived one's record is closed by the restore.
+             back); a derived one's record is closed by the restore and replaced by an open
+             `source_restored` record (below).
+  restored   an open `{kind: source_restored, of, by, at, change}` record: the source was
+             restored, and this memory was derived from what rested on it while it was
+             gone. The ground came back, but nothing re-checked what was derived from it,
+             so it does not come back by itself: it stays off every road but this block
+             and a read by id (core/visibility.py) until it is kept as is (trace
+             invalidation="confirmed") or rewritten. Its text is shown here, and a read by
+             id shows it whole under `RESTORED_READ_LINE` — the source may be used again,
+             and the model reviews it from there.
   held       an open `{kind: source_held, of, by, at, change}` record: a host serving the
              original said the source is withdrawn or deleted before any ordered change did
              (core/_source_change.hold). Read like `gone` — nothing of the memory is used —
@@ -67,7 +76,9 @@ Which memories the block may show at all is the gate's: the `edited` road for pa
 corrections, the `invalidation` road for the rest (core/visibility.py).
 
 Exports: FIELD · OVERTURN · SOURCE_REVISED · EDITED · CONFIRMED · CONFIRMED_AT ·
-         SOURCE_GONE · SOURCE_HELD · CLEARED · HELD_WORD · records · is_open · open_records · gone_records ·
+         SOURCE_GONE · SOURCE_HELD · SOURCE_RESTORED · RESTORED_READ_LINE · CLEARED ·
+         HELD_WORD · records ·
+         is_open · open_records · gone_records ·
          edit_confirmed · SourceFindings · source_findings · waiting_on_overturn ·
          state_word · confirm · block
 ========================================
@@ -90,8 +101,15 @@ CONFIRMED = "confirmed"          # the one value trace's `invalidation=` takes
 CONFIRMED_AT = "confirmed_at"
 SOURCE_GONE = "source_gone"
 SOURCE_HELD = "source_held"
+SOURCE_RESTORED = "source_restored"
 CLEARED = "cleared"              # a source_gone record's word once the body was cleared
 HELD_WORD = "held"               # a source_held record's word, and a held source's
+
+# The line a read by id puts above an entry carrying an open source_restored record
+# (tools/recall/core.py, tools/recall/original.py); `{q}` is its id.
+RESTORED_READ_LINE = ("⚠️依据的来源撤回或删除过、现在恢复了；这条是从站在它上面的记忆派生的，还没复核，"
+                      "复核前别的路上都不出现。看过照留就 trace(bucket_id=\"{q}\", "
+                      "invalidation=\"confirmed\")，要改就 regrow 重写，不要了就 trace(bucket_id=\"{q}\", delete=True)。")
 
 _STATE_WORD = {_src.WITHDRAWN: "已撤回", _src.DELETED: "已删除", CLEARED: "正文已清",
                HELD_WORD: "宿主说已撤回或删除，等变化通知确认"}
@@ -134,13 +152,17 @@ class SourceFindings:
     failed     [(string form, state)] — withdrawn or deleted: may no longer be used
     revised    [(identity string, the newer revision)] — not confirmed at that revision; for
                a run, the identity of the line inside it that was revised
-    remaining  [string form] — the sources still good to stand on"""
+    remaining  [string form] — the sources still good to stand on
+    restored   [(string form, when)] — restored after a withdrawal or deletion; this memory
+               was derived from what rested on it and waits for review (open
+               `source_restored` records)"""
     failed: list = field(default_factory=list)
     revised: list = field(default_factory=list)
     remaining: list = field(default_factory=list)
+    restored: list = field(default_factory=list)
 
     def __bool__(self) -> bool:
-        return bool(self.failed or self.revised)
+        return bool(self.failed or self.revised or self.restored)
 
 
 def _newer_revision(rec: dict, registry) -> str:
@@ -173,8 +195,9 @@ def gone_records(meta) -> list[dict]:
 def source_findings(meta, registry) -> SourceFindings:
     """Each of the memory's source records, read against the registry (a run by every
     line it holds), and every open `source_gone` record (a source behind a memory it
-    stands on, or one whose body was cleared). A record that no longer reads as one is
-    skipped (it names nothing the registry could answer for)."""
+    stands on, or one whose body was cleared) and open `source_restored` record. A record
+    that no longer reads as one is skipped (it names nothing the registry could answer
+    for)."""
     out = SourceFindings()
     gone = gone_records(meta)
     for r in gone:
@@ -182,6 +205,8 @@ def source_findings(meta, registry) -> SourceFindings:
                  HELD_WORD if r.get("kind") == SOURCE_HELD else str(r.get("by") or ""))
         out.failed.append((str(r.get("of") or ""), state))
     failed_keys = {str(r.get("of") or "") for r in gone}
+    out.restored = [(str(r.get("of") or ""), str(r.get("at") or ""))
+                    for r in open_records(meta, SOURCE_RESTORED)]
     if registry is None:
         return out
     for raw in _src.basis_records(meta):
@@ -250,7 +275,7 @@ def block(all_buckets: list, registry, *, scope=None) -> list[dict]:
     order. One item per memory, every reason it is here on it:
 
         {id, short, text, edited, overturned: [{of, by, at}], failed: [{source, state}],
-         revised: [{source, revision}], remaining: [source]}
+         revised: [{source, revision}], restored: [{source, at}], remaining: [source]}
 
     `text` is None for a memory standing on a withdrawn or deleted source; `remaining` is
     filled in only then (the sources a rewrite may stand on).
@@ -266,7 +291,7 @@ def block(all_buckets: list, registry, *, scope=None) -> list[dict]:
         if bid not in items:
             items[bid] = {"id": bid, "short": short_id(bid), "text": entry_label(meta, content),
                           "edited": False, "overturned": [], "failed": [], "revised": [],
-                          "remaining": []}
+                          "restored": [], "remaining": []}
         return items[bid]
 
     for e in edited_by_user(all_buckets, scope=scope):
@@ -294,6 +319,7 @@ def block(all_buckets: list, registry, *, scope=None) -> list[dict]:
                              "at": str(r.get("at") or "")} for r in overturned]
         it["failed"] = [{"source": s, "state": st} for s, st in found.failed]
         it["revised"] = [{"source": s, "revision": rv} for s, rv in found.revised]
+        it["restored"] = [{"source": s, "at": at} for s, at in found.restored]
         if found.failed:
             it["text"] = None
             it["remaining"] = list(found.remaining)

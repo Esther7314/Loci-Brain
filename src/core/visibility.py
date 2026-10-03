@@ -63,7 +63,13 @@ again (core/scope.py reads each source's state on every request); without one th
 is how the gate knows. `invalidation` lists such an entry by id and status only, never its
 text (core/_invalidation.py). A source a host said was withdrawn or deleted while serving
 its original is held the same way (an open `source_held` record) until the host's ordered
-change settles it.
+change settles it. When a withdrawn or deleted source is restored, what was derived from
+the entries resting on it does not come back by itself: it carries an open
+`source_restored` record instead, which closes every road but `invalidation` and `read`
+(the reason `SOURCE_RESTORED`) until the model has looked at it in 依据变了的 and
+confirmed or rewritten it. `read` stays open because that review is asked of the model:
+the source may be used again, and a read by id shows the whole entry with a line on top
+saying it waits (tools/recall).
 
 later today: an open entry whose `when` names a clock time later today (`waits_for_clock`)
 stays off until that time has passed — 「今晚回来说面试结果」 written in the morning is not
@@ -145,7 +151,8 @@ built once by the caller and passed in, and a caller that already knows whether 
 is covered passes that too.
 
 Exports: SURFACE · LOOKUP · LIVE · ARCHIVED · DELETED · the road names · Verdict ·
-         state_of() · source_gone() · clock_moment() · waits_for_clock() · visible_for() ·
+         state_of() · source_gone() · source_restored() · clock_moment() ·
+         waits_for_clock() · visible_for() ·
          timeline_kind() · on_timeline()
 ========================================
 """
@@ -182,6 +189,7 @@ HOLD_ENTRY = "hold_entry"
 LATER_TODAY = "later_today"
 OUT_OF_SCOPE = "out_of_scope"
 SOURCE_GONE = "source_gone"
+SOURCE_RESTORED = "source_restored"
 
 PROSPECTIVE = "prospective"
 RECENT = "recent"
@@ -306,6 +314,19 @@ def source_gone(meta) -> bool:
                and not str(r.get("confirmed_at") or "").strip() for r in raw)
 
 
+def source_restored(meta) -> bool:
+    """Does the entry carry an open `source_restored` record (core/_invalidation.
+    SOURCE_RESTORED)? Written on what was derived from the entries resting on a withdrawn or
+    deleted source when that source is restored: the ground came back, but what was derived
+    while it was gone waits for the model's review before any road but `invalidation` and
+    `read` (where the review reads it) shows it again."""
+    raw = _meta_of(meta).get("invalidation") or []
+    if not isinstance(raw, list):
+        return False
+    return any(isinstance(r, dict) and r.get("kind") == "source_restored"
+               and not str(r.get("confirmed_at") or "").strip() for r in raw)
+
+
 def _faded(m: dict) -> bool:
     """A deliberate dont_surface: on an old version it is the chain's, read as superseded."""
     return parse_bool(m.get("dont_surface"), default=False) and not _superseded(m)
@@ -362,6 +383,8 @@ def visible_for(meta, scope=None, *, road: str,
     reasons: list[str] = []
     if road != INVALIDATION and source_gone(m):
         reasons.append(SOURCE_GONE)
+    if road not in (INVALIDATION, READ) and source_restored(m):
+        reasons.append(SOURCE_RESTORED)
     if state not in r.states:
         reasons.append(state)
     if r.superseded and _superseded(m):

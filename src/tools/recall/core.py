@@ -1681,7 +1681,8 @@ async def _linked(bucket_id: str, scope_view=None) -> tuple[dict | None, str, st
                   str(meta.get("summary") or meta.get("name") or "").strip())[:60]
     from core._dream import is_marked
     dreamt = f"  {DREAMT_MARK}" if is_marked(meta, b.get("content") or "") else ""
-    return b, hint, (f"  {verdict.mark}" if verdict.mark else "") + dreamt
+    waiting = "  （依据的来源恢复了，这条还等着复核）" if _V.source_restored(meta) else ""
+    return b, hint, (f"  {verdict.mark}" if verdict.mark else "") + dreamt + waiting
 
 
 async def recall_text_and_data(when: str, room: str, tag: str, query: str,
@@ -1868,6 +1869,10 @@ async def recall_core(when: str, room: str, tag: str, query: str,
             def seen(bid) -> bool:
                 return scope_view is None or scope_view.permits_id(str(bid or ""))
             lines = [f"═ {q} · {str(meta.get('name') or '')}"]
+            if _V.source_restored(meta):
+                # Shown whole on purpose: the model reviews it from here (core/visibility.py).
+                from core._invalidation import RESTORED_READ_LINE
+                lines.append(RESTORED_READ_LINE.format(q=q))
             if verdict.mark:
                 lines.append(_STATE_LOUD[verdict.state])
             info = []

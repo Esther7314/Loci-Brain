@@ -340,6 +340,10 @@ async def render_original(query: str) -> str:
         lines.append(f"═ {q}")
     else:
         lines.append(f"═ {q} · {str(meta.get('name') or '')}")
+        if _V.source_restored(meta):
+            # Read on purpose: the model reviews it from here (core/visibility.py).
+            from core._invalidation import RESTORED_READ_LINE
+            lines.append(RESTORED_READ_LINE.format(q=q))
         if verdict.mark:
             lines.append(f"{verdict.mark}：这条不是现在的记忆，别当成眼下的事。")
     if len(records) > 1:
