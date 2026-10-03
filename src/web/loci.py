@@ -28,7 +28,8 @@ produces data; all rendering lives in frontend/loci.html.
     GET  /api/v2/breath               -> breath's waking screen for a host's window-opening hook:
                                          the same text the tool returns, or `?format=json` for
                                          its structured form (hook key). Like the tool, it
-                                         stamps a question it hands out as asked
+                                         stamps a question it hands out as asked; `?peek=1`
+                                         reads without stamping or recording it as shown
     GET  /api/loci/export             -> the export package: every entry, a vector snapshot, the
                                          library's state, sunk originals, attachments, the
                                          schema note and a manifest with what was filtered
@@ -67,8 +68,11 @@ produces data; all rendering lives in frontend/loci.html.
                                          library's state (core/migrate_engine.py), or
                                          {job_id, cancel: true} drops the parse
     POST /api/loci/embedding/migration -> {action: "resume"} carries on a recompute that
-                                         failed or was interrupted; {action: "abandon"}
-                                         throws it away (the old model stays)
+                                         failed or was interrupted; {action: "skip",
+                                         ids?} leaves the entries that keep failing for
+                                         the new model to compute after the swap and
+                                         carries on; {action: "abandon"} throws it away
+                                         (the old model stays)
     POST /api/v2/slices               -> the host hands over a day's raw lines; a side model
                                          slices them and the slices are stored as pending
                                          (hook key; the raw text is not kept)
@@ -1361,6 +1365,21 @@ async def build_setup() -> dict:
             "而你这边只会觉得它们不来了。"
             "设一个环境变量 LOCI_HOOK_TOKEN（随便一串够长的字），桥那边设同一个。")
 
+    # 7. A hosts: table holding a host with a ceiling promises that host only its own
+    #    material; the promise needs the panel locked and MCP auth on (panel_auth.lock_problem).
+    try:
+        from . import panel_auth as _pa
+        hs = _pa.hosts()
+    except Exception:                                # noqa: BLE001
+        hs = None
+    if hs is not None and hs.ceilinged:
+        row("hosts_lock", "带上限的宿主", not hs.unsafe,
+            "面板锁着、MCP 鉴权开着" if not hs.unsafe else hs.unsafe,
+            "hosts 表里有只许碰自己那份材料的宿主（max_grant）。面板没锁、或者 MCP 鉴权关着的时候，"
+            "它——和任何能连上这个端口的人——绕过去就能读全库，所以这时候带上限的宿主一律被拒。",
+            "" if not hs.unsafe else
+            "在上面「账号」里设一把口令（panel_auth 别关），config 里 mcp_require_auth 别关")
+
     # ---- Read-only facts: not "is this configured correctly", but "where things are" ----
     ver = ""
     try:
@@ -1640,6 +1659,30 @@ async def build_health() -> dict:
                 "一条都没存 —— 要么最近没聊，要么写入坏了",
                 "去「日志」看看 grow 有没有报错")
     need_buckets("最近七天", sec_fresh)
+
+    # ---- Open wants nobody is bound by ----
+    def sec_unbound_wants():
+        # 惦记的事 (core/profile.prospective) shows a want by its date, its cue, or as an
+        # undated promise someone is bound by. One with none of the three is never shown:
+        # migrated wants whose `bound` was never filled are exactly that, and nothing else
+        # says so.
+        from core import _holds as _H
+        from core.profile import _waits_on_cue, due_day
+        from utils import is_closed, is_telic
+        today = now.date()
+        ids = [str(m.get("id") or "") for m in visible
+               if is_telic(m) and not is_closed(m) and not m.get("bound")
+               and not _H.is_hold(m) and not str(m.get("superseded_by") or "").strip()
+               and due_day(m, today) is None and not _waits_on_cue(m)]
+        ids = [i for i in ids if i]
+        if ids:
+            add("没人认领的想要", "error",
+                f"{len(ids)} 条还开着的想要没有 bound（谁该做），也没有日子或条件，"
+                f"「惦记的事」里永远看不到它们：{'、'.join(ids)}",
+                "给每条补上 bound：面板上改，或 trace(bucket_id=…, bound=[\"谁\"])")
+        else:
+            add("没人认领的想要", "ok", "开着的想要都有人认领，或有日子、有条件")
+    need_buckets("没人认领的想要", sec_unbound_wants)
 
     # ---- Are the things that should be there still there ----
     def _tags_of(m) -> list[str]:
@@ -2447,9 +2490,11 @@ def register(mcp) -> None:
         {source: {system, instance, container}, day, lines: [{id, text, at?, speaker?, revision?}],
         revision?}. The side model slices them; the slices wait for the main model
         (recall(view="slices")). A `fingerprint_by` in the body is accepted and not used:
-        a slice's fingerprint is Loci's own (core/_slicer.py). 400 for a malformed batch,
-        502 when the side model fails — then nothing is stored, and the host may send the
-        same batch again."""
+        a slice's fingerprint is Loci's own (core/_slicer.py). 400 for a malformed batch
+        or one holding a line the registry reads as withdrawn, deleted or held; 403 past the
+        host's max_grant or for lines another host is the change authority for; 502 when
+        the side model fails — then nothing is stored, and the host may send the same batch
+        again."""
         from starlette.responses import JSONResponse
         from core import _slicer as _sl
         from core import _sources as _src
@@ -2472,10 +2517,15 @@ def register(mcp) -> None:
                 return JSONResponse({"error": f"source {place.label()} is past this host's "
                                      "max_grant; nothing was stored"}, status_code=403)
         max_lines, threshold = _slices_config()
+        from . import panel_auth as _pa
         try:
             out = await _sl.take_batch(sh.bucket_mgr, body,
                                        model=_sl.side_model(sh.dehydrator, sh.config),
-                                       max_lines=max_lines, threshold=threshold)
+                                       max_lines=max_lines, threshold=threshold,
+                                       host=req.host if req is not None else None,
+                                       hosts=_pa.hosts())
+        except _sl.BatchForbidden as e:
+            return JSONResponse({"error": str(e)}, status_code=403)
         except _sl.BatchError as e:
             return JSONResponse({"error": str(e)}, status_code=400)
         except _sl.SlicerError as e:
@@ -2513,20 +2563,32 @@ def register(mcp) -> None:
         handed to a model, so a question in it counts as asked (stamp_asked), as it does
         through the tool. Like every read, it opens with the request's scope: the text's
         first line, the object's `scope`; a refused request gets the refusal and nothing
-        else."""
+        else.
+
+        `?peek=1` is the read-only form, for a host reading the screen for itself rather
+        than handing it to a model (a bridge polling what is on its mind): the same text or
+        object, but no ask-once question is stamped as asked and nothing is recorded as
+        shown in the usage log, so the model still gets those questions the next time its
+        window opens. The breath tool itself always stamps: the model calling it is the
+        model being asked."""
         from starlette.responses import JSONResponse, PlainTextResponse
         from tools.breath.awaken import build_breath, record_shown, render_breath, stamp_asked
         fmt = str(request.query_params.get("format") or "text").strip().lower()
         if fmt not in ("text", "json"):
             return JSONResponse({"error": "format is text or json"}, status_code=400)
+        peek = str(request.query_params.get("peek") or "0").strip().lower()
+        if peek not in ("0", "1", "true", "false"):
+            return JSONResponse({"error": "peek is 1 or 0"}, status_code=400)
+        peek = peek in ("1", "true")
         refused = _scope_refusal(request)
         if refused is not None:
             return refused
         try:
             b = await build_breath()
             text = render_breath(b)
-            await stamp_asked(b)
-            record_shown(b, None if fmt == "json" else text)
+            if not peek:
+                await stamp_asked(b)
+                record_shown(b, None if fmt == "json" else text)
         except Exception as e:
             logger.warning(f"[loci] breath failed: {e}")
             return JSONResponse({"error": str(e)}, status_code=500)
@@ -2575,10 +2637,11 @@ def register(mcp) -> None:
             body = await sh._read_json_object(request)
         except (ValueError, json.JSONDecodeError) as e:
             return JSONResponse({"error": f"body: {e}"}, status_code=400)
+        from . import panel_auth as _pa
         req = _request_of(request)
         host = req.host if req is not None else None
         try:
-            status, out = await _sc.handle_lines(sh.bucket_mgr, body, host)
+            status, out = await _sc.handle_lines(sh.bucket_mgr, body, host, hosts=_pa.hosts())
         except Exception as e:
             logger.warning(f"[loci] source lines failed: {e}")
             return JSONResponse({"error": str(e)}, status_code=500)

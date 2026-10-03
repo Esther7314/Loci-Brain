@@ -47,7 +47,11 @@ how a run cut from those lines is known to hold the lines between its ends. When
 withdraws or deletes a line, every slice over it loses its gist and, still open, is
 dropped (`withdraw_lines`, core/_source_change.py).
 
-Nothing here knows which host it is or where the lines came from. An imported
+A batch is refused before anything is sliced when a line in it is withdrawn, deleted or
+held in the source registry (its text may not reach the side model), and when the host
+handing it over is not the change authority a line of it is declared to have (what a run
+holds decides what a change to it reaches; core/_source_change.registration_refusal).
+Past that, nothing here knows which host it is or where the lines came from. An imported
 conversation (core/import_memory.py) goes through the same slicing and the same pending
 store, with its own prompt: each of its slices also carries a `draft`, the side model's
 candidate entry for the main model to check, and its batch line carries `import` (the
@@ -56,7 +60,8 @@ conversation's title). Withdrawing that import batch removes its slices from the
 whole (`purge`): drafts are not kept as history.
 
 Exports: SLICER_PROMPT_VERSION · SLICER_PROMPT · GIST_MAX · DRAFT_MAX · Slice ·
-         SlicerError · BatchError · SliceError · slice_lines · parse_slices · side_model ·
+         SlicerError · BatchError · BatchForbidden · SliceError · slice_lines ·
+         parse_slices · side_model ·
          read_batch · batch_id_of · fingerprint_of · slice_fingerprint · FINGERPRINT_BY ·
          guess_covering · take_batch · PendingSlices (record_batch · get · record_for ·
          run_length · close · recut · withdraw_lines · purge · open_batches ·
@@ -127,7 +132,12 @@ class SlicerError(RuntimeError):
 
 
 class BatchError(ValueError):
-    """The host's batch is malformed (HTTP 400)."""
+    """The host's batch is malformed, or holds a line that may not be used (HTTP 400)."""
+
+
+class BatchForbidden(BatchError):
+    """The batch registers lines another host is the change authority for (HTTP 403;
+    core/_source_change.registration_refusal)."""
 
 
 class SliceError(ValueError):
@@ -447,24 +457,41 @@ async def guess_covering(store, gists: list[str], day: str, *,
 
 async def take_batch(store, body, *, model: ModelCall,
                      max_lines: int = DEFAULT_MAX_LINES_PER_BATCH,
-                     threshold: float = DEFAULT_GUESS_THRESHOLD) -> dict:
+                     threshold: float = DEFAULT_GUESS_THRESHOLD,
+                     host=None, hosts=None) -> dict:
     """One batch from the host -> pending slices. `store` is the BucketManager (its
     `slices` store, its embedding engine). Returns
 
         {batch_id, day, source, slices: [{slice_id, span: {first, last, count}, gist,
          guesses: [{id, short, score}]}], unsliced, replaced}
 
-    Raises BatchError (malformed, nothing is called) or SlicerError (the side model
-    failed; nothing is written). The raw text goes no further than the side model."""
+    Raises BatchError (malformed, or a line the registry reads as withdrawn, deleted or
+    held: its text may not go to the side model; nothing is called), BatchForbidden (the
+    batch registers lines whose declared change authority is another host than `host`,
+    under `hosts`, the deployment's table; nothing is called) or SlicerError (the side
+    model failed; nothing is written). The raw text goes no further than the side model."""
+    from ._source_change import registration_refusal     # lazy: it imports this module
+
     batch = read_batch(body, max_lines=max_lines)
     ids = [ln["id"] for ln in batch["lines"]]
     revisions = ({ln["id"]: ln["revision"] for ln in batch["lines"] if "revision" in ln}
                  or None)
+    why = registration_refusal(hosts, host, batch["source"], ids)
+    if why:
+        raise BatchForbidden(f"the batch registers lines another host is the change "
+                             f"authority for ({why}); nothing was stored")
     registry = getattr(store, "sources", None)
     if registry is not None:
         why = registry.order_conflict(batch["source"], ids, batch["revision"], revisions)
         if why:
             raise BatchError(f"the lines contradict what is registered: {why}")
+        base = _src.SourceId(batch["source"]["system"], batch["source"]["instance"],
+                             batch["source"]["container"], "\0")
+        for line_id in ids:
+            state = registry.state_of(base.piece(line_id))
+            if state in (_src.WITHDRAWN, _src.DELETED, _src.HELD):
+                raise BatchError(f"line {line_id} is {state} in the source registry: its "
+                                 "text may not be sliced; nothing was stored")
     slices = await slice_lines(batch["lines"], model=model)
     guesses = await guess_covering(store, [s.gist for s in slices], batch["day"],
                                    threshold=threshold)

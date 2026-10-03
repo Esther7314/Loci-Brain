@@ -37,15 +37,17 @@ run: its state is the worst of its own identity and every line it holds (`state_
 each line's `use_changed` narrows it (`uses_of`), so a memory standing on the run is
 blocked whole until it is rewritten — nothing trims a run automatically. A change to a run
 whose lines are registered reaches the other way too: every line it holds, and every run
-or piece holding one of them, reads at least as badly as it (`state_of`) and stands on it
-(`names_identity`). Loci withdrawing an imported conversation is such a change: one per
-conversation, its whole run (core/import_memory.py).
+or piece holding one of them, reads at least as badly as it (`state_of`), is narrowed by
+its `use_changed` (`uses_of`) and stands on it (`names_identity`); so does a hold on such a
+run. Loci withdrawing an imported conversation is such a change: one per conversation, its
+whole run (core/import_memory.py).
 What a run holds is the host's order of its lines, registered when the host hands a
 stretch of lines over for slicing or registers a run's lines on its own (`record_order`,
 `<buckets>/_sources/line_orders.jsonl`: the ids in order, never their text, kept after the
 slices are handled and after a withdrawal clears a body — they are what carries the next
 withdrawal to the memories still standing on the run). Registrations of one container that
-disagree are joined (`members_of`): a line is never taken out of a run again. A run whose
+disagree are joined (`members_of`): a line is never taken out of a run again; a
+registration checks and appends in one turn across processes. A run whose
 lines were never registered is known only by its first and last line (`lines_of`) and is
 refused as a basis and for reading under any grant (`places_cover`, `check_writable`).
 `memories_of` a single line finds every run holding it.
@@ -79,7 +81,8 @@ restored) is applied after the hold. Restoring a source that was never withdrawn
 
 Write keys: a host that resends a write (a retry, a restart) sends the same key, and
 the same key is answered with the first result instead of a second memory. The key is
-the host's turn plus the ordinal of the write call in it (`write_key`). Claims live in
+the host's turn plus the ordinal of the write call in it (`write_key`); one past
+WRITE_KEY_MAX characters ends in a hash of the whole (`bounded_key`). Claims live in
 `<buckets>/_sources/write_keys.jsonl`, append-only, with the ids written and the reply,
 so a resend after a restart gets the same answer. They are not in the ledger: the
 ledger is a best-effort mirror whose failed appends only log, and a claim that did not
@@ -113,10 +116,11 @@ Exports: SOURCES_FIELD · SOURCES_MAX · SourceId · SourceRecordError · normal
          OUTCOMES · next_state · SourceRegistry (apply_change · prior_change · state_of ·
          read_state · granted · reaches · order_known · use_of · uses_of · revisions_of ·
          describe · record_order · order_conflict · members_of · adopted_revisions ·
-         run_revisions · lines_of · hold · held_of · rebuild_index · check_writable ·
-         claimed · run_once) · names_identity · quoted_records · basis_records ·
-         memories_of · write_key · current_write_key · write_key_scope · current_grant ·
-         grant_scope · note_written · collect_written
+         run_revisions · lines_of · hold · held_of · settled_after · rebuild_index ·
+         check_writable · claimed · run_once) · names_identity · quoted_records ·
+         basis_records · memories_of · write_key · bounded_key · current_write_key ·
+         write_key_scope · current_grant · grant_scope · note_written · collect_written ·
+         json_line
 ========================================
 """
 
@@ -659,10 +663,23 @@ def current_write_key() -> Optional[str]:
     return key if key else None
 
 
+def bounded_key(key) -> Optional[str]:
+    """A write key as it is kept: at most WRITE_KEY_MAX characters. A longer one (a long
+    host name and turn) keeps its head and ends in a hash of the whole key, so the ordinal
+    at its end still tells two writes of one turn apart."""
+    import hashlib
+
+    text = str(key).strip() if key else ""
+    if len(text) <= WRITE_KEY_MAX:
+        return text or None
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return f"{text[:WRITE_KEY_MAX - len(digest) - 1]}~{digest}"
+
+
 @contextmanager
 def write_key_scope(key: Optional[str]):
     """Run a block under a write key (the request layer sets it from the host's turn)."""
-    key = str(key).strip()[:WRITE_KEY_MAX] if key else None
+    key = bounded_key(key)
     token = _WRITE_KEY.set(key or None)
     try:
         yield
@@ -771,19 +788,27 @@ def _append_line(path: Path, row: dict) -> None:
             os.fsync(f.fileno())
 
 
+def json_line(raw: bytes):
+    """One line of a jsonl file as read in binary -> its value, or None for a blank line
+    or one a crash tore (cut short, possibly inside a multi-byte character: decoded per
+    line, so a torn line never stops the lines after it from being read)."""
+    line = raw.strip()
+    if not line:
+        return None
+    try:
+        return json.loads(line.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+
+
 def _read_lines(path: Path) -> list[dict]:
+    """Every whole JSON object line of a jsonl file, in order; torn lines skipped."""
     if not path.exists():
         return []
     out = []
-    with path.open("r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError:
-                continue
+    with path.open("rb") as f:
+        for raw in f:
+            row = json_line(raw)
             if isinstance(row, dict):
                 out.append(row)
     return out
@@ -1033,24 +1058,30 @@ class SourceRegistry:
             revisions = {str(k): _opt_text(v) for k, v in revisions.items() if str(k) in wanted}
         where = (str(source.get("system")), str(source.get("instance")),
                  str(source.get("container")))
-        self._fresh_orders()
-        with self._guard:
-            why = self.order_conflict(source, ids, revision, revisions)
-            if why:
-                return why
-            for known in self._orders.get(where, []):
-                if (known.ids == ids and known.revision == revision
-                        and (revisions is None or known.revisions == revisions)):
-                    return KNOWN
-            row = {"system": where[0], "instance": where[1], "container": where[2],
-                   "ids": ids, "batch": str(batch_id or ""), "recorded_at": _now()}
-            if revision is not None:
-                row["revision"] = revision
-            if revisions is not None:
-                row["revisions"] = revisions
-            _append_line(self.orders_path, row)
-            self._orders_size = -1
-            return RECORDED
+        from locibrain.eventsourcing.ledger_mirror import file_lease
+
+        # The check and the append are one turn across threads and processes: two
+        # registrations racing would otherwise both pass the check and both land, giving
+        # a line two revisions under one watermark.
+        with file_lease(self.dir / (LINE_ORDERS_FILE + ".register.lock")):
+            self._fresh_orders()
+            with self._guard:
+                why = self.order_conflict(source, ids, revision, revisions)
+                if why:
+                    return why
+                for known in self._orders.get(where, []):
+                    if (known.ids == ids and known.revision == revision
+                            and (revisions is None or known.revisions == revisions)):
+                        return KNOWN
+                row = {"system": where[0], "instance": where[1], "container": where[2],
+                       "ids": ids, "batch": str(batch_id or ""), "recorded_at": _now()}
+                if revision is not None:
+                    row["revision"] = revision
+                if revisions is not None:
+                    row["revisions"] = revisions
+                _append_line(self.orders_path, row)
+                self._orders_size = -1
+                return RECORDED
 
     def _orders_holding(self, sid: SourceId) -> list:
         """[(registration, first position, last position)] of the run's container that
@@ -1201,6 +1232,18 @@ class SourceRegistry:
         with self._guard:
             return self._by_source.get(key)
 
+    def settled_after(self, identity, seq) -> bool:
+        """Has a change that settles whether this exact source may be used (withdrawn,
+        deleted, restored) been applied after the registry's line `seq`? A resend of the
+        older change then finishes only what it had already done (core/_source_change.py)."""
+        try:
+            seq = int(seq)
+        except (TypeError, ValueError):
+            return False
+        entry = self._entry(_identity_key(identity))
+        with self._guard:
+            return entry is not None and entry["settled_seq"] > seq
+
     def describe(self, identity) -> Optional[dict]:
         """What the registry knows of a source under its own identity: {state, host_seq,
         use, use_changed, revisions}, or None when it has never heard of it. A run it has
@@ -1232,17 +1275,30 @@ class SourceRegistry:
                 out.append(key)
         return out
 
+    def _held_runs_over(self, sid: SourceId, lines: list) -> list[str]:
+        """The keys of held runs of the same container (other than `sid` itself) whose
+        registered lines hold one of `lines`: a hold on a run reaches its lines the way a
+        change to it does (`_runs_over`)."""
+        self._fresh_held()
+        prefix = f"{sid.system}:{sid.instance}/{sid.container}#"
+        with self._guard:
+            runs = sorted(k for k in self._held if _RANGE_MARK in k and k.startswith(prefix))
+        own = sid.to_string()
+        ids = {x.id for x in lines}
+        return [k for k in runs if k != own and ids & set(self.members_of(k) or ())]
+
     def state_of(self, identity) -> str:
         """The source's state; one the registry has never heard of is active. A run is as
         bad as the worst of its own identity and every line it holds (`lines_of`): a line
-        withdrawn inside it withdraws the whole run. A run a change was recorded for
-        reaches every line it holds: a piece or run holding one of them is no better than
-        that run (`_runs_over`). An open hold (`hold`) reads as HELD where the recorded
-        state is no worse."""
+        withdrawn inside it withdraws the whole run. A run a change was recorded for, or a
+        run held, reaches every line it holds: a piece or run holding one of them is no
+        better than that run (`_runs_over`, `_held_runs_over`). An open hold (`hold`) reads
+        as HELD where the recorded state is no worse."""
         sid = _identity(identity)
         lines = self.lines_of(sid)
         keys = [sid.to_string()] + ([x.to_string() for x in lines] if sid.through else [])
         keys += self._runs_over(sid, lines)
+        keys += self._held_runs_over(sid, lines)
         worst = ACTIVE
         for key in dict.fromkeys(keys):
             entry = self._entry(key)
@@ -1292,16 +1348,23 @@ class SourceRegistry:
         return not sid.through or self.members_of(sid) is not None
 
     def uses_of(self, record: dict) -> list:
-        """Every `use` a record has to satisfy: its own (`use_of`) and, for a run, the
-        `use_changed` of each line inside it — a line narrowed narrows the run. An absent
-        use is left out (it is no rule of its own)."""
+        """Every `use` a record has to satisfy: its own (`use_of`); for a run, the
+        `use_changed` of each line inside it — a line narrowed narrows the run; and the
+        `use_changed` of every run a change was recorded for that holds one of its lines
+        (`_runs_over`) — a run narrowed narrows its lines and the runs overlapping them, the
+        way `state_of` reaches them. An absent use is left out (it is no rule of its own)."""
         out = [self.use_of(record)]
         sid = record_id(record)
-        if sid.through:
-            for line in self.lines_of(sid):
-                entry = self._entry(line.to_string())
-                if entry is not None and entry["use_changed"]:
-                    out.append(entry["use"])
+        lines = self.lines_of(sid)
+        keys = ([x.to_string() for x in lines] if sid.through else [])
+        keys += self._runs_over(sid, lines)
+        own = sid.to_string()
+        for key in dict.fromkeys(keys):
+            if key == own:
+                continue
+            entry = self._entry(key)
+            if entry is not None and entry["use_changed"]:
+                out.append(entry["use"])
         return [u for u in out if u is not None]
 
     def revisions_of(self, identity) -> list[dict]:
@@ -1484,7 +1547,7 @@ class SourceRegistry:
             return await do()
         from .bucket_manager import _filesystem_turn      # lazy: bucket_manager imports this module
 
-        key = str(key)[:WRITE_KEY_MAX]
+        key = bounded_key(key)
         async with _filesystem_turn(self.base_dir, f"write-key-{key}"):
             prior = self.claimed(key)
             if prior is not None:

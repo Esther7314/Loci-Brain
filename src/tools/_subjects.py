@@ -67,6 +67,8 @@ from dataclasses import dataclass
 
 import yaml
 
+from utils import replace_file
+
 # Where the alias table lives: under config/, alongside src/.
 # Keeping it out of config.yaml is deliberate — that file holds engine parameters
 # (models, timeouts), this one holds **people's names**. The two change at
@@ -777,11 +779,23 @@ def _insert_under(text: str, key: str, value: str, comment: str = "") -> tuple:
 
 
 def _read_table_text() -> str:
+    """The table's text, for a writer to edit. Refused (ValueError) when it does not parse
+    as a mapping: the writers edit lines by their indentation, and on a file the YAML
+    reader cannot read they would replace an existing kind or file aliases as names of
+    their own. Readers just see an empty table (_load); a writer must not touch it until a
+    person has fixed the file."""
     path = _alias_path()
     if not os.path.isfile(path):
         return _NEW_TABLE_HEADER
     with open(path, "r", encoding="utf-8") as f:
-        return f.read()
+        text = f.read()
+    try:
+        parsed = yaml.safe_load(text)
+    except yaml.YAMLError as e:
+        raise ValueError(f"人名表 {path} 现在读不懂（YAML 写坏了），先手动修好它再改：{e}") from e
+    if parsed is not None and not isinstance(parsed, dict):
+        raise ValueError(f"人名表 {path} 不是「名字: …」的样子，先手动修好它再改")
+    return text
 
 
 def _write_table(text: str) -> None:
@@ -801,7 +815,7 @@ def _write_table(text: str) -> None:
     tmp = path + ".tmp"
     with open(tmp, "wb") as f:
         f.write(data)
-    os.replace(tmp, path)
+    replace_file(tmp, path)
     with _lock:
         # Invalidate the cache actively: never bet on mtime's second-level
         # resolution (two edits within the same second would be invisible)

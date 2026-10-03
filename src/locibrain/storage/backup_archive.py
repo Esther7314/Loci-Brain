@@ -37,7 +37,10 @@ MAX_MANIFEST_BYTES = 8 * MIB
 # Production migration has a deliberately smaller attack surface: only the
 # files the importer consumes are accepted, ordinary members are tightly
 # bounded, and total extraction cannot fill a 512 MiB instance's filesystem.
-MIGRATE_MAX_MEMBERS = 9_000
+# Members are counted, not sized, here: one per entry, sunk original and attachment, so the
+# cap has to sit well above any library a person keeps (the byte caps below are what bound
+# the disk). The importer's vector-row cap follows it (core/migrate_engine).
+MIGRATE_MAX_MEMBERS = 100_000
 MIGRATE_MAX_TOTAL_UNCOMPRESSED_BYTES = 512 * MIB
 MIGRATE_MAX_BUCKET_BYTES = 10 * MIB
 MIGRATE_MAX_EXPORT_META_BYTES = 1 * MIB

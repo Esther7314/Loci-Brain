@@ -63,7 +63,9 @@ What this file deliberately does not do:
 Exports: grow_event(items, direction_of_fit, bound, evidential, internally_generated,
                     weight, from_ids, test_data, cue, exception_of, hold, sources) -> str
          grow_mind(room, text, from_ids, v, a, direction_of_fit, bound, evidential,
-                   internally_generated, weight, test_data, cue, card_of, sources) -> str
+                   internally_generated, weight, test_data, cue, card_of, sources,
+                   when) -> str
+         clock_when(when) · backfill_sweep(before)
          check_card(card_of, room, exclude) · card_room_rule(name, room) · live_card(name)
          check_sources(sources, prov, exclude)
 ========================================
@@ -71,7 +73,7 @@ Exports: grow_event(items, direction_of_fit, bound, evidential, internally_gener
 
 import asyncio
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from core import _dates
 from core import _fold as _F       # a big event = fold's way of circling time
@@ -88,7 +90,7 @@ from core import _sources as _src
 from .. import _subjects as _S
 from .._subjects import normalize_bound, normalize_subjects
 from utils import (PROV_MAX_LINES, PROV_TARGET_MAX, WAS_DERIVED_FROM, WAS_QUOTED_FROM,
-                   is_bucket_id, is_telic, parse_bool, prov_targets)
+                   is_bucket_id, is_closed, is_telic, parse_bool, prov_targets, read_prov)
 
 # A body longer than this earns a line in the response saying "this looks like
 # more than one thing".
@@ -107,6 +109,28 @@ _WHEN_RE = _re.compile(r"^\d{4}-\d{2}-\d{2}([ T].*)?$")
 # happened", where a duration marker means nothing, so that path still accepts
 # absolute dates only.
 _WANT_DURATION_RE = _re.compile(r"^\d+[dwmy]$")
+# A date with a clock time: `2026-10-03 20:00`, `2026-10-03T20:00`, with or without an offset.
+_CLOCK_RE = _re.compile(r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}")
+
+
+def clock_when(when: str) -> tuple[str, bool]:
+    """A `when` carrying a clock time -> (the form stored, whether it reads as one). The
+    model writes the hour as it lives it; a stored stamp without an offset is read as UTC
+    (core/_when.py), so the local offset is written out — `2026-10-03 20:00` is stored as
+    `2026-10-03T20:00+08:00`, the same form the backfill writes (core/_dates.stamp). A
+    stamp that states its own offset is kept as given. Anything else -> (when, False)."""
+    if not _CLOCK_RE.match(when or ""):
+        return when, False
+    try:
+        moment = datetime.fromisoformat(when.replace("Z", "+00:00"))
+    except ValueError:
+        return when, False
+    if moment.tzinfo is not None:
+        return when, True
+    from core import _when as _w
+    precise = moment.second or moment.microsecond
+    return (moment.replace(tzinfo=_w.LOCAL_TZ)
+            .isoformat(timespec="seconds" if precise else "minutes"), True)
 
 
 def _placeholder_meta() -> dict:
@@ -193,15 +217,19 @@ def _summary_is_blank(meta: dict) -> bool:
             or meta.get("summary_source") == _SOURCE_FALLBACK)
 
 
-async def _current_meta(bucket_id: str) -> dict:
-    """The entry's frontmatter as it is now. Unreadable reads as a fresh entry (nothing
-    filled yet), which is what the backfill finds right after a write."""
+async def _current_meta(bucket_id: str) -> dict | None:
+    """The entry's frontmatter as it is now, for what the side model is told; None when
+    it cannot be read. An unreadable entry is not a blank one: reading it as blank would
+    let the answer overwrite everything on it, so that round is skipped."""
     try:
         cur = await rt.bucket_mgr.get(bucket_id)
     except Exception as e:
-        rt.logger.warning(f"backfill 读不到 {bucket_id} 现在的样子，按刚存下的算: {e}")
-        return {}
-    return dict((cur or {}).get("metadata") or {})
+        rt.logger.warning(f"backfill 读不到 {bucket_id} 现在的样子，这轮不补: {e}")
+        return None
+    if not cur:
+        rt.logger.warning(f"backfill 读不到 {bucket_id}（不在了或读坏了），这轮不补")
+        return None
+    return dict(cur.get("metadata") or {})
 
 
 def _backfill_context(meta: dict, mind: bool) -> dict:
@@ -362,28 +390,65 @@ def _record_kinds(bucket_id: str, pairs: list) -> None:
 _DUP_COS_THRESHOLD = 0.80
 
 
-async def _merged_tags(bucket_id: str, additions: list[str]) -> list[str] | None:
-    """The bucket's current tags with `additions` appended, read right before the write.
+def _backfill_updates(meta: dict, answer: BackfillAnswer | None, came_back_empty: bool,
+                      text: str, *, mind: bool, similar: list[str]) -> dict:
+    """The update() keywords for this answer against `meta`, the entry as it is on disk
+    at the moment of writing (read under the bucket's lock, BucketManager `revise`). Every
+    blank-or-not decision is made here, so a trace or a panel edit that landed while the
+    side model was thinking is never overwritten nor listed in `backfilled`.
 
-    🔴 `bucket_mgr.update(tags=...)` replaces the whole list. System tags (`__gist__`,
-       `__档案事实__`, `__大event__`) are put on at creation, before backfill runs, and the
-       model knows nothing about them — so every tag backfill writes has to go on top of
-       what is already there. That includes a lone similarity hint on a round where the
-       model returned no tags: a regrown entry is always close to the version it replaced,
-       so that round is the common case, not the rare one.
-    Read as late as possible, so tags applied while the model calls were running are kept.
-    Returns None when the current tags cannot be read: writing the additions alone would
-    be a replacement, and skipping one round of added tags is the cheaper loss.
+    🔴 `update(tags=...)` replaces the whole list. System tags (`__gist__`, `__档案事实__`,
+       `__大event__`) are put on at creation, before backfill runs, and the model knows
+       nothing about them — so every tag the backfill adds goes on top of the tags on disk.
+       That includes a lone similarity hint (`similar`) on a round where the model returned
+       no tags: a regrown entry is always close to the version it replaced, so that round
+       is the common case, not the rare one.
     """
-    try:
-        cur = await rt.bucket_mgr.get(bucket_id)
-    except Exception as e:
-        rt.logger.warning(f"backfill 读不到 {bucket_id} 现有的 tags，这轮不写 tags: {e}")
-        return None
-    if not cur:
-        return None
-    existing = [str(t) for t in ((cur.get("metadata") or {}).get("tags") or [])]
-    return list(dict.fromkeys(existing + additions))
+    out: dict = {}
+    tag_additions: list[str] = []
+    if answer is not None:
+        if answer.tags and not mind:
+            tag_additions += answer.tags
+        out.update(_fills_from(answer, meta, mind=mind))
+    # --- Naming, and what happens when no name comes back ---
+    # 🔴 Deliberately OUTSIDE the `if answer` block above: the case this exists for is
+    #    "the model call did not succeed", and the commonest shape of that is no answer
+    #    at all. Fold it back inside and the fallback stops firing in exactly the
+    #    situation it was written for — silently, since a bucket named after its own
+    #    birth-second looks like a bucket, not like a failure.
+    # She settled this on 2026-08-20: fall back, **but stamp it**.
+    if _name_is_blank(meta):
+        if answer is not None and answer.name:
+            out["name"] = answer.name
+            # The model named it, so any earlier stand-in is over. None deletes the field.
+            out["name_source"] = None
+        else:
+            fallback = _fallback_name(text)
+            if fallback:
+                out["name"] = fallback
+                out["name_source"] = _SOURCE_FALLBACK
+    # Same two-state rule for the summary — with one difference: a model that never
+    # answered leaves it absent, the marker `backfill_sweep` finds this bucket by.
+    if _summary_is_blank(meta):
+        if answer is not None and answer.summary:
+            out["summary"] = answer.summary
+            out["summary_source"] = None
+        elif came_back_empty or answer is not None:
+            fallback = _fallback_summary(text)
+            if fallback:
+                out["summary"] = fallback
+                out["summary_source"] = _SOURCE_FALLBACK
+    filled = _backfilled_names(out)
+    tag_additions += similar
+    if tag_additions:
+        existing = [str(t) for t in (meta.get("tags") or [])]
+        out["tags"] = list(dict.fromkeys(existing + tag_additions))
+        if answer is not None and answer.tags and not mind:
+            filled.append("tags")
+    if filled:
+        have = [str(f) for f in meta.get("backfilled") or []]
+        out["backfilled"] = have + [f for f in filled if f not in have]
+    return out
 
 
 async def _backfill_one(bucket_id: str, text: str, kind: str) -> None:
@@ -398,51 +463,17 @@ async def _backfill_one(bucket_id: str, text: str, kind: str) -> None:
     so its tags come out empty — that is normal and accepted.
     """
     meta = await _current_meta(bucket_id)
+    if meta is None:
+        return
     mind = kind == "mind" or is_mind_room(meta.get("room"))
     kinds = backfill_kinds()
     answer, came_back_empty = await _ask_backfill(
         bucket_id, text, _backfill_context(meta, mind), kinds)
-
-    update_kwargs: dict = {}
-    # Every tag this backfill wants to add. They are only ever added: the list goes on
-    # top of the bucket's current tags right before the write (see _merged_tags).
-    tag_additions: list[str] = []
-    if answer is not None:
-        if answer.problems:
-            rt.logger.warning(
-                f"backfill {bucket_id}: 回填答案里这几块形状不对，没用上：{', '.join(answer.problems)}"
-                + ("（人名表这次一个字没写）" if "subjects" in answer.problems else ""))
-        if answer.tags and not mind:
-            tag_additions += answer.tags
-        update_kwargs.update(_fills_from(answer, meta, mind=mind))
-    # --- Naming, and what happens when no name comes back ---
-    # 🔴 Deliberately OUTSIDE the `if answer` block above: the case this exists for is
-    #    "the model call did not succeed", and the commonest shape of that is no answer
-    #    at all. Fold it back inside and the fallback stops firing in exactly the
-    #    situation it was written for — silently, since a bucket named after its own
-    #    birth-second looks like a bucket, not like a failure.
-    # She settled this on 2026-08-20: fall back, **but stamp it**.
-    if _name_is_blank(meta):
-        if answer is not None and answer.name:
-            update_kwargs["name"] = answer.name
-            # The model named it, so any earlier stand-in is over. None deletes the field.
-            update_kwargs["name_source"] = None
-        else:
-            fallback = _fallback_name(text)
-            if fallback:
-                update_kwargs["name"] = fallback
-                update_kwargs["name_source"] = _SOURCE_FALLBACK
-    # Same two-state rule for the summary — with one difference: a model that never
-    # answered leaves it absent, the marker `backfill_sweep` finds this bucket by.
-    if _summary_is_blank(meta):
-        if answer is not None and answer.summary:
-            update_kwargs["summary"] = answer.summary
-            update_kwargs["summary_source"] = None
-        elif came_back_empty or answer is not None:
-            fallback = _fallback_summary(text)
-            if fallback:
-                update_kwargs["summary"] = fallback
-                update_kwargs["summary_source"] = _SOURCE_FALLBACK
+    if answer is not None and answer.problems:
+        rt.logger.warning(
+            f"backfill {bucket_id}: 回填答案里这几块形状不对，没用上：{', '.join(answer.problems)}"
+            + ("（人名表这次一个字没写）" if "subjects" in answer.problems else ""))
+    similar: list[str] = []
 
     # The "possibly the same thing" hint: nothing is merged and nothing is
     # blocked. Similarity is checked once in the background, and above the
@@ -464,26 +495,19 @@ async def _backfill_one(bucket_id: str, text: str, kind: str) -> None:
                 for sid, s in sims:
                     sid = str(sid)
                     if sid and sid != bucket_id and float(s) >= _DUP_COS_THRESHOLD:
-                        tag_additions.append(f"疑似同件:{sid[:6]}")
+                        similar.append(f"疑似同件:{sid[:6]}")
                         break
         except Exception:
             pass
 
-    filled = _backfilled_names(update_kwargs)
-    if tag_additions:
-        merged = await _merged_tags(bucket_id, tag_additions)
-        if merged is not None:
-            update_kwargs["tags"] = merged
-            if answer is not None and answer.tags and not mind:
-                filled.append("tags")
-    if filled:
-        have = [str(f) for f in meta.get("backfilled") or []]
-        update_kwargs["backfilled"] = have + [f for f in filled if f not in have]
-    if update_kwargs:
-        try:
-            await rt.bucket_mgr.update(bucket_id, **update_kwargs)
-        except Exception as e:
-            rt.logger.warning(f"backfill update 失败 {bucket_id}（正文已落盘）: {e}")
+    try:
+        written = await rt.bucket_mgr.update(
+            bucket_id, revise=lambda now: _backfill_updates(
+                now, answer, came_back_empty, text, mind=mind, similar=similar))
+        if not written:
+            rt.logger.warning(f"backfill {bucket_id} 没写上（读不到或被拒），下一轮再补")
+    except Exception as e:
+        rt.logger.warning(f"backfill update 失败 {bucket_id}（正文已落盘）: {e}")
     if answer is not None and answer.subjects:
         _record_kinds(bucket_id, answer.subjects)
 
@@ -499,9 +523,9 @@ async def _backfill_batch(pairs: list[tuple[str, str, str]]) -> None:
         *(_backfill_one(bucket_id, text, kind) for bucket_id, text, kind in pairs),
         return_exceptions=True,
     )
-    # A backfill write always invalidates the cache — while still in the
-    # background, warm the whole-library parse cache back up, so the next waking
-    # screen does not have to pay 8 seconds for it
+    # A backfill write updates its entry in the parse cache in place; this read only
+    # pays when the cache was dropped meanwhile (an external edit, an archive), and then
+    # pays it here in the background rather than in the next waking screen
     try:
         await rt.bucket_mgr.list_all()
     except Exception:
@@ -758,7 +782,7 @@ def _in_the_future(when: str) -> bool:
     return bool(t) and t > _w.now() + timedelta(minutes=10)
 
 
-async def backfill_sweep() -> int:
+async def backfill_sweep(before: str = "") -> int:
     """Self-healing at startup: a backfill in flight under a bare
     asyncio.create_task is lost across a restart, leaving buckets that have only
     a body and placeholder metadata. On boot they are found again and refilled.
@@ -774,6 +798,11 @@ async def backfill_sweep() -> int:
     could never be repaired — 444 of them were missed for two months.
     "room has a value but summary is missing" is a complete criterion on its own;
     where the bucket came from is irrelevant.
+
+    `before` (a stored `created` stamp, the moment the sweep was started): only entries
+    written before it are taken. The sweep starts on the first grow after a restart, in
+    the background while that grow writes, and what this run writes has its own backfill
+    in flight — taken again here it would be backfilled twice.
     """
     try:
         all_buckets = await rt.bucket_mgr.list_all(include_archive=False)
@@ -784,6 +813,8 @@ async def backfill_sweep() -> int:
     for b in all_buckets:
         meta = b.get("metadata", {}) or {}
         if not meta.get("room") or meta.get("summary"):
+            continue
+        if before and str(meta.get("created") or "") >= before:
             continue
         kind = "mind" if is_mind_room(meta.get("room")) else "event"
         pending.append((str(b.get("id")), str(b.get("content") or ""), kind))
@@ -858,6 +889,29 @@ def _same(stored, given: dict) -> str:
         return "reference" if bare and _src.same_reference(stored, given) else ""
     except (KeyError, TypeError):
         return ""
+
+
+def _same_entry(meta: dict, item: dict, *, telic: bool, prov, records, cue) -> bool:
+    """Whether a stored entry with the same body is this write already, so its id can be
+    returned instead of a new one: nothing the call brings may be lost by that. It has to
+    be live and current (not replaced by a newer version), wanted the same way and still
+    open (a new want never comes back as a closed one), in the same room on the same day,
+    and already carry every `from` line, every source record and the cue of this call."""
+    if meta.get("deleted_at") or meta.get("superseded_by"):
+        return False
+    if is_telic(meta) != telic or is_closed(meta):
+        return False
+    if str(meta.get("room") or "") != item["room"]:
+        return False
+    if str(meta.get("when") or "").strip() != item["when"]:
+        return False
+    have = {(ln["rel"], ln["target"]) for ln in read_prov(meta)}
+    if any((ln["rel"], ln["target"]) not in have for ln in prov or []):
+        return False
+    stored = list(meta.get(_src.SOURCES_FIELD) or [])
+    if any(not any(_same(s, r) for s in stored) for r in records or []):
+        return False
+    return not cue or meta.get("cue") == cue
 
 
 async def _already_recorded(records: list[dict], exclude: set) -> list[str]:
@@ -1063,6 +1117,7 @@ async def grow_event(items: list, direction_of_fit: str = "", bound=None,
             if hold_when_err:
                 return f"items[{idx}]: {hold_when_err}"
         elif when:
+            when, _clock = clock_when(when)
             _when_ok = bool(_WHEN_RE.match(when))
             if not _when_ok and telic and _WANT_DURATION_RE.match(when):
                 _when_ok = True
@@ -1123,7 +1178,10 @@ async def grow_event(items: list, direction_of_fit: str = "", bound=None,
     # told about: its id would be named, so the write goes ahead.
     # The same listing is the library the return's look-back and scene question read
     # (tools/_write_returns.py): taken before the write, while the parse cache is warm.
-    existing_by_content: dict[str, str] = {}
+    # A stored body is a duplicate only when nothing this call brings would be lost by
+    # pointing at it (_same_entry): live and current, wanted the same way, still open,
+    # on the same day, and already carrying every source, line and cue of this call.
+    existing_by_content: dict[str, list[dict]] = {}
     library: list | None = None
     _view = await read_scope()
     try:
@@ -1131,7 +1189,7 @@ async def grow_event(items: list, direction_of_fit: str = "", bound=None,
         for _b in library:
             _m = _b.get("metadata", {}) or {}
             if not _m.get("deleted_at") and (_view is None or _view.permits(_m)):
-                existing_by_content.setdefault(str(_b.get("content") or ""), str(_m.get("id") or ""))
+                existing_by_content.setdefault(str(_b.get("content") or ""), []).append(_m)
     except Exception:
         pass
 
@@ -1146,7 +1204,10 @@ async def grow_event(items: list, direction_of_fit: str = "", bound=None,
     for item in cleaned:
         # A hold is written even when its words match an older one: the same "not this
         # week" a month later is a new hold, not a duplicate.
-        dup_id = None if hold_target else existing_by_content.get(item["text"])
+        dup_id = None if hold_target else next(
+            (str(m.get("id") or "") for m in existing_by_content.get(item["text"], [])
+             if _same_entry(m, item, telic=telic, prov=prov, records=source_records,
+                            cue=cue_v)), None)
         if dup_id:
             results.append(f"♻️{dup_id} 已存过（同文，未重建）")
             continue
@@ -1174,7 +1235,10 @@ async def grow_event(items: list, direction_of_fit: str = "", bound=None,
         pairs.append((bucket_id, item["text"], "event"))
         if ig:
             dreamt.add(bucket_id)
-        existing_by_content.setdefault(item["text"], bucket_id)
+        existing_by_content.setdefault(item["text"], []).append({
+            "id": bucket_id, "room": item["room"], "when": item["when"],
+            "direction_of_fit": v2["direction_of_fit"], "cue": cue_v,
+            _src.SOURCES_FIELD: source_records, "prov": prov or []})
         if hold_target:
             hold_ids.append(bucket_id)
 
@@ -1241,7 +1305,7 @@ async def grow_mind(room: str, text: str, from_ids, v, a,
                     internally_generated: bool = False, weight=None,
                     importance=None, meaning: str = "",
                     test_data: bool = False, cue=None, card_of: str = "",
-                    sources=None) -> str:
+                    sources=None, when: str = "") -> str:
     room = str(room or "").strip()
     text = str(text or "")  # stored verbatim: never strip the body
     room_err = check_room(room, "mind")
@@ -1262,6 +1326,18 @@ async def grow_mind(room: str, text: str, from_ids, v, a,
     cue_v, cue_err = check_cue(cue)
     if cue_err:
         return cue_err
+    # `when` on a thought: only a wanted one has a day (its deadline, a length, a clock
+    # time), read like an event's. A thought that is not wanted has no day of its own;
+    # refused rather than dropped, so the caller knows where the date went.
+    when = str(when or "").strip()
+    if when:
+        if v2["direction_of_fit"] != "telic":
+            return ('想法没有「发生在哪天」：when 只给想让它发生的（direction_of_fit="telic"）。'
+                    '这条想法跟某天的事有关，就把那天的事存成 event（带 when），从它长出这条。')
+        when, _clock = clock_when(when)
+        if not (_WHEN_RE.match(when) or _WANT_DURATION_RE.match(when)):
+            return (f"when 格式无效：{when}。有期限写 YYYY-MM-DD（可带钟点）；"
+                    "有量级写时长记号（3w/10d/2m/1y）；等某件事发生就不填 when，写 cue。")
     # importance / meaning are retired — rejected on the spot, never silently
     # swallowed (the reasoning is in _RETIRED_MSG).
     # The parameters are kept so that this human-readable message can be
@@ -1298,8 +1374,8 @@ async def grow_mind(room: str, text: str, from_ids, v, a,
     if not (0 <= v <= 1 and 0 <= a <= 1):
         return f"v/a 必须在 0~1 之间（收到 v={v}, a={a}；没传会是 -1）。MIND 的坐标你自己打。"
 
-    # The library as it stood before this write, for the return's look-back (listing it
-    # after the write would re-read every file: create() clears the parse cache).
+    # The library as it stood before this write, for the return's look-back: the old
+    # views the new body may run into, without the new entry itself.
     try:
         library = await rt.bucket_mgr.list_all(include_archive=False)
     except Exception as e:  # noqa: BLE001 - without it the return only skips the look-back
@@ -1322,6 +1398,7 @@ async def grow_mind(room: str, text: str, from_ids, v, a,
         cue=cue_v,
         card_of=card,
         sources=source_records,
+        when=when,
         **v2,
     )
     try:

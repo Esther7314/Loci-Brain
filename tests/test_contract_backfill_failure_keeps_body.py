@@ -90,9 +90,13 @@ class FakeStore:
         return {"id": bucket_id, "content": BODY,
                 "metadata": {"id": bucket_id, "tags": list(self.existing_tags)}}
 
-    async def update(self, bucket_id, **kwargs):
+    async def update(self, bucket_id, revise=None, **kwargs):
         if self.update_raises:
             raise OSError("disk full")
+        if revise is not None:
+            kwargs = {**revise((await self.get(bucket_id))["metadata"]), **kwargs}
+            if not kwargs:
+                return True
         self.updates.append(kwargs)
         return True
 
@@ -315,15 +319,16 @@ class UnreadableStore(FakeStore):
         raise OSError("file is locked")
 
 
-def test_tags_are_not_written_when_the_current_ones_cannot_be_read(runtime):
-    # Criterion: without the current list, any write of tags is a replacement. Missing one
-    # round of added tags can be retried; the system tags already there cannot be recovered.
+def test_nothing_is_written_when_the_entry_cannot_be_read(runtime):
+    # Criterion: an entry the backfill cannot read is not a blank one. Without the current
+    # metadata every fill is a guess at what is empty — tags would replace the system tags,
+    # a name or a bound would overwrite the caller's. Missing one round can be retried (the
+    # summary stays absent, the sweep's marker); what was overwritten cannot be recovered.
     d = FakeDehydrator(answers=[{"tags": ["panel"], "summary": "s"}])
     store = UnreadableStore(existing_tags=["__gist__"])
     runtime(d, store)
     run(R._backfill_one("b1", BODY, "event"))
-    assert store.updates, "name and summary still get written"
-    assert "tags" not in store.updates[0]
+    assert store.updates == []
 
 
 def test_fields_the_model_left_out_are_not_written(runtime):

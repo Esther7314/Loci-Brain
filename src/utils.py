@@ -37,6 +37,7 @@ import logging
 import math
 import tempfile
 import threading
+import time
 from pathlib import Path
 from datetime import date, datetime, timezone
 from typing import Callable, Optional
@@ -1081,8 +1082,37 @@ def _win_long_path(path: Path) -> str:
     return "\\\\?\\" + resolved
 
 
+# How long a write or a read waits out a file another handle has open. On Windows a file
+# someone is reading cannot be replaced, and a file being replaced cannot be opened
+# (WinError 5 access denied / 32 sharing violation); both last milliseconds. Elsewhere
+# PermissionError is a real permission problem and the waits simply run out.
+_BUSY_TRIES = 12
+_BUSY_FIRST_WAIT = 0.01
+_BUSY_MAX_WAIT = 0.25
+
+
+def busy_retry(do):
+    """Run `do()`, waiting out a PermissionError (a file busy for a moment) with a short
+    backoff; the last one is raised. About two seconds in all."""
+    wait = _BUSY_FIRST_WAIT
+    for attempt in range(_BUSY_TRIES):
+        try:
+            return do()
+        except PermissionError:
+            if attempt == _BUSY_TRIES - 1:
+                raise
+            time.sleep(wait)
+            wait = min(wait * 2, _BUSY_MAX_WAIT)
+
+
+def replace_file(source: str | Path, target: str | Path) -> None:
+    """os.replace that waits out a reader holding the target open (busy_retry)."""
+    busy_retry(lambda: os.replace(source, target))
+
+
 def atomic_write_text(path: str | Path, text: str) -> None:
-    """Atomically replace a UTF-8 text file after flushing it to disk."""
+    """Atomically replace a UTF-8 text file after flushing it to disk. A reader holding
+    the file open for a moment is waited out (replace_file)."""
     target = Path(path)
     os.makedirs(_win_long_path(target.parent), exist_ok=True)
     temporary = target.with_name(f"{target.name}.{uuid.uuid4().hex}.tmp")
@@ -1092,7 +1122,7 @@ def atomic_write_text(path: str | Path, text: str) -> None:
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary_long, _win_long_path(target))
+        replace_file(temporary_long, _win_long_path(target))
     except Exception:
         try:
             os.remove(temporary_long)

@@ -16,7 +16,9 @@ list of what the panel can reach):
     GET  /api/loci/import-package       where that stands
     GET  /api/loci/embedding/migration  the recompute after a change of embedding model
                                         (core/embedding_switch.py)
-    POST /api/loci/embedding/migration  {action: resume | abandon}
+    POST /api/loci/embedding/migration  {action: resume | skip | abandon}; skip leaves
+                                        `ids` (default: what the last run failed on)
+                                        for the new model to compute after the swap
 
 All of them sit behind the panel gate; the two POSTs also take only same-origin requests
 (web/loci._origin_reject), like every panel write.
@@ -137,7 +139,9 @@ async def import_package(request: Request) -> Response:
             return JSONResponse({"error": f"正在{engine.phase}，等它完了再传"}, status_code=409)
         path = ""
         try:
-            form = await request.form()
+            # One file and a few fields at most: the body as a whole is bounded by the
+            # upload ceiling (bridge/request_limits.UPLOAD_CEILINGS) while it streams.
+            form = await request.form(max_files=1, max_fields=8)
             upload = form.get("file")
             if upload is None or not hasattr(upload, "read"):
                 raise ValueError("没收到文件（表单里要有一个叫 file 的字段）")
@@ -225,10 +229,20 @@ async def reembed_action(request: Request) -> Response:
         if action == "resume":
             out = await es.resume(config=sh.config, store=sh.bucket_mgr,
                                   db_path=_embedding_db_path(), publish=publish_embedding)
+        elif action == "skip":
+            ids = body.get("ids")
+            if ids is not None and not (isinstance(ids, list)
+                                        and all(isinstance(i, str) for i in ids)):
+                return JSONResponse({"error": "ids 是记忆 id 的列表（不给就跳过上一轮失败的全部）"},
+                                    status_code=400)
+            out = await es.skip(config=sh.config, store=sh.bucket_mgr,
+                                db_path=_embedding_db_path(), publish=publish_embedding,
+                                ids=ids or None)
         elif action == "abandon":
             out = await es.abandon(_buckets_dir(), _embedding_db_path())
         else:
-            return JSONResponse({"error": "action 只有 resume / abandon"}, status_code=400)
+            return JSONResponse({"error": "action 只有 resume / skip / abandon"},
+                                status_code=400)
     except es.SwitchBusy as e:
         return JSONResponse({"error": str(e)}, status_code=409)
     except Exception as e:                           # noqa: BLE001 - said to the person

@@ -28,8 +28,9 @@ with vectors present) goes like this:
 Until the swap the old model stays the live one: searches use old query vectors against
 old memory vectors, writes are embedded by the old model into the live database. Nothing
 is blocked and nothing is mixed. A failure leaves the live library exactly as it was; the
-staging database and the checkpoint stay, so `resume` carries on from the last batch, and
-`abandon` throws the attempt away.
+staging database and the checkpoint stay, so `resume` carries on from the last batch,
+`skip` leaves the entries that keep failing for the new model to compute after the swap
+and carries on, and `abandon` throws the attempt away.
 
 The recompute's progress and failure are the migration engine's status file, read by
 `status()` for `GET /api/loci/embedding/migration`; what was asked for (the target model,
@@ -37,7 +38,7 @@ whether to persist) is kept beside it (`_embedding_switch.json`, no keys in it),
 attempt interrupted by a restart can be resumed with the same target.
 
 Exports: thresholds · vectors_in · target_config · needs_reembed · resolved_model · busy ·
-         preview · start · resume · abandon ·
+         preview · start · resume · skip · abandon ·
          status · SwitchBusy · ENGINE_FACTORY
 ========================================
 """
@@ -307,12 +308,19 @@ def _drop_target(buckets_dir: str) -> None:
 
 async def _entries(store) -> list[tuple[str, str, str]]:
     """(id, body, newest meaning) of every entry that gets a vector: not soft-deleted,
-    with a body (the vector outbox's own rule)."""
+    with a body (the vector outbox's own rule), and not withdrawn — an entry standing on a
+    withdrawn or deleted source has had its vectors removed and its body cleared, and a
+    recompute must not give it a vector back (core/export_package.withdrawn)."""
+    from .export_package import withdrawn
+    registry = getattr(store, "sources", None)
+    cleared = str(getattr(store, "CLEARED_BODY", "") or "")
     out = []
     for b in await store.list_all(include_archive=True):
         meta = b.get("metadata") or {}
         content = str(b.get("content") or "")
         if not content.strip() or meta.get("deleted_at"):
+            continue
+        if (cleared and content.strip() == cleared) or withdrawn(meta, registry):
             continue
         meaning = meta.get("meaning") or []
         if isinstance(meaning, str):
@@ -409,7 +417,8 @@ async def abandon(buckets_dir: str, db_path: str) -> dict:
             await task
         except BaseException:                        # noqa: BLE001 - cancelled on purpose
             pass
-    for path in (ME.checkpoint_path_for(buckets_dir), ME.staging_db_path_for(db_path)):
+    for path in (ME.checkpoint_path_for(buckets_dir), ME.staging_db_path_for(db_path),
+                 ME.backup_path_for(db_path)):
         try:
             if os.path.exists(path):
                 os.remove(path)
@@ -420,6 +429,32 @@ async def abandon(buckets_dir: str, db_path: str) -> dict:
         **ME._empty_status(), "phase": "idle",
         "message": "这次换模型放弃了：旧模型和旧向量照用。"})
     return status(buckets_dir)
+
+
+async def skip(*, config: dict, store, db_path: str, publish: Callable[[dict, bool], None],
+               ids: Optional[list[str]] = None) -> dict:
+    """Leave the entries that keep failing without a new vector and carry on: `ids`, or
+    every entry the last run failed on. They are kept in the checkpoint as skipped; after
+    the swap the vector outbox finds them without a vector and the new model computes them
+    in the background, so one entry the model cannot take never holds the switch back."""
+    buckets_dir = str(config.get("buckets_dir") or store.base_dir)
+    if ME.is_running():
+        raise SwitchBusy("正在重算向量，等这一轮停下来再跳过")
+    saved = _read_target(buckets_dir)
+    if not saved:
+        raise RuntimeError("没有可以接着算的那一次（没有记下的目标模型）")
+    signature = ME.target_signature(str(saved.get("backend") or ""),
+                                    str(saved.get("model") or ""), int(saved.get("dim") or 0))
+    path = ME.checkpoint_path_for(buckets_dir)
+    state = ME.read_checkpoint(path, signature)
+    chosen = [str(i) for i in ids] if ids else list(state["failed"])
+    if not chosen:
+        raise RuntimeError("上一轮没有失败的条目可以跳过")
+    state["skipped"] |= set(chosen)
+    for bid in chosen:
+        state["failed"].pop(bid, None)
+    ME.write_checkpoint(path, state, signature)
+    return await resume(config=config, store=store, db_path=db_path, publish=publish)
 
 
 def status(buckets_dir: str, live_model: str = "") -> dict:
@@ -437,6 +472,9 @@ def status(buckets_dir: str, live_model: str = "") -> dict:
         "phase": phase,
         "running": running,
         "resumable": phase in ("failed", "interrupted") and saved is not None,
+        # Entries that failed can be skipped (`skip`) so the rest goes live.
+        "skippable": (phase in ("failed", "interrupted") and saved is not None
+                      and bool(st.get("failed_count")) and not st.get("error")),
         "target": ({"model": saved.get("model"), "dim": saved.get("dim"),
                     "base_url": (saved.get("target") or {}).get("base_url", ""),
                     "persist": saved.get("persist")} if saved else None),

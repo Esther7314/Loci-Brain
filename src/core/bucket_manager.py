@@ -246,6 +246,7 @@ from utils import (
     PROV_RELS,
     PROV_TARGET_MAX,
     atomic_write_text,
+    busy_retry,
     generate_bucket_id,
     is_closed,
     read_from_ids,
@@ -1084,6 +1085,40 @@ class BucketManager:
             if file_path:
                 self._refresh_cached_file_state(file_path)
 
+    def _cache_upsert(self, bucket_id: str, file_path: str, old_path: str = "") -> None:
+        """A managed create or update changed one bucket: its new parsed form goes into the
+        active cache in place, as _cache_bump does for touch, instead of dropping the whole
+        listing. A full re-parse is ~0.8 s for 1700 entries locally and 2–3 s on a bind
+        mount, and whatever reads next (breath, the cue poke right after a write) used to
+        pay it. Costs one file parse, done here while the caller still holds the bucket's
+        lock. The generation still moves (a builder that parsed the old file must not
+        publish) and BM25 is marked for its incremental sync. A file outside the active
+        directories, or one that does not read back, falls back to dropping the cache."""
+        path = os.path.normcase(os.path.abspath(file_path))
+        archive = os.path.normcase(os.path.abspath(self.archive_dir))
+        try:
+            in_archive = os.path.commonpath((path, archive)) == archive
+        except ValueError:
+            in_archive = False
+        fresh = None if in_archive else self._load_bucket(file_path)
+        if fresh is None:
+            self._invalidate_bm25()
+            return
+        with self._active_cache_state_guard:
+            self._active_cache_generation += 1
+            self._bm25_dirty = True
+            if self._active_cache is None:
+                return
+            for i, cached in enumerate(self._active_cache):
+                if str(cached.get("id") or "") == bucket_id:
+                    self._active_cache[i] = fresh
+                    break
+            else:
+                self._active_cache.append(fresh)
+            if old_path and not self._same_path(old_path, file_path):
+                self._active_file_state.pop(os.path.normcase(os.path.abspath(old_path)), None)
+            self._refresh_cached_file_state(file_path)
+
     def _refresh_cached_file_state(self, file_path: str) -> None:
         """Acknowledge an internal in-place write without invalidating the cache."""
         with self._active_cache_state_guard:
@@ -1634,9 +1669,8 @@ class BucketManager:
             )
 
         # Markdown becomes the visible source of truth before any network or
-        # derived-index await.  This also changes the path index from the
-        # precise hand-off above to a normal lazy rebuild for later lookups.
-        self._invalidate_bm25()
+        # derived-index await: the new entry joins the parsed listing in place.
+        self._cache_upsert(bucket_id, candidate_path)
         # The file is on disk: a keyed write (core/_sources.run_once) claims this id.
         note_written(bucket_id)
 
@@ -1688,7 +1722,7 @@ class BucketManager:
         file_path = self._find_bucket_file(bucket_id)
         if not file_path:
             return None
-        data = self._load_bucket(file_path)
+        data = self._load_bucket(file_path, strict=True)
         # F-10: a soft-deleted bucket must not be visible through get()
         if data and data.get("metadata", {}).get("deleted_at"):
             return None
@@ -1715,7 +1749,7 @@ class BucketManager:
         if not bucket_id or not isinstance(bucket_id, str):
             return None
         file_path = self._find_bucket_file(bucket_id)
-        return self._load_bucket(file_path) if file_path else None
+        return self._load_bucket(file_path, strict=True) if file_path else None
 
     def find_exact_content(
         self,
@@ -1837,7 +1871,7 @@ class BucketManager:
 
         _atomic_write_text(target_path, serialized)
         try:
-            os.remove(file_path)
+            busy_retry(lambda: os.remove(file_path))
         except Exception:
             try:
                 os.remove(target_path)
@@ -2106,6 +2140,8 @@ class BucketManager:
         bump_active=True: treat this write as a genuine activation (hold/grow merging into a
         neighbouring bucket, say), refreshing last_active and incrementing
         activation_count, with the same meaning as touch().
+        revise=fn: fn(metadata as on disk, read under the lock) -> keywords to write
+        (see _update_locked); for appends and fill-only-if-blank writes.
         """
         async with self._bucket_turn(bucket_id):
             committed = await self._update_locked(
@@ -2127,9 +2163,26 @@ class BucketManager:
         bump_active: bool = False,
         **kwargs,
     ) -> bool:
+        revise = kwargs.pop("revise", None)
         file_path = self._find_bucket_file(bucket_id)
         if not file_path:
             return False
+
+        # `revise`: a function of the entry's metadata as it is on disk now, under this
+        # bucket's lock, returning the keywords to write (None writes nothing and reports
+        # failure, {} writes nothing). Every write that depends on what is already there —
+        # appending to a list, filling only a blank — is decided here, so a write landing
+        # between someone's read and their write cannot be overwritten by a stale copy.
+        if revise is not None:
+            current = self._load_bucket(file_path)
+            if current is None:
+                return False
+            more = revise(dict(current.get("metadata") or {}))
+            if more is None:
+                return False
+            kwargs.update(more)
+            if not kwargs:
+                return True
 
         # Normalize public/migration inputs at the storage boundary.  A quoted
         # YAML value such as "false" must never be persisted as true merely
@@ -2204,7 +2257,7 @@ class BucketManager:
                 return False
 
         try:
-            post = frontmatter.load(file_path)
+            post = busy_retry(lambda: frontmatter.load(file_path))
         except Exception as e:
             logger.warning(f"Failed to load bucket for update / 加载桶失败: {file_path}: {e}")
             return False
@@ -2582,6 +2635,8 @@ class BucketManager:
                 activation_count=post["activation_count"],
                 file_path=committed_path,
             )
+        # The parsed listing takes the new form now, before any await below.
+        self._cache_upsert(bucket_id, committed_path, file_path)
 
         logger.info(f"Updated bucket / 更新记忆桶: {bucket_id}")
 
@@ -2593,7 +2648,6 @@ class BucketManager:
         # meaning each trigger their own regeneration.
         if "meaning" in kwargs or "meaning_append" in kwargs:
             await self._sync_meaning_embedding(bucket_id, post.get("meaning") or [])
-        self._invalidate_bm25()
         self._record_v3_bucket_event(
             "update",
             bucket_id,
@@ -3996,12 +4050,30 @@ class BucketManager:
             f"bucket metadata contains unsupported scalar: {type(value).__name__}"
         )
 
-    def _load_bucket(self, file_path: str) -> Optional[dict]:
+    def _load_bucket(self, file_path: str, *, strict: bool = False) -> Optional[dict]:
         """
         Parse a Markdown file and return structured bucket data.
+
+        A file busy for a moment (another handle replacing it) is waited out. strict=True
+        (get): a file that still cannot be opened raises OSError rather than reading as
+        "no such entry" — a caller taking None for a blank entry would overwrite it. A file
+        gone since it was found, or one that does not parse, is None either way.
         """
         try:
-            post = frontmatter.load(file_path)
+            post = busy_retry(lambda: frontmatter.load(file_path))
+        except FileNotFoundError:
+            return None
+        except OSError:
+            if strict:
+                raise
+            logger.warning(f"Failed to load bucket file / 加载桶文件失败: {file_path}: busy")
+            return None
+        except Exception as e:
+            logger.warning(
+                f"Failed to load bucket file / 加载桶文件失败: {file_path}: {e}"
+            )
+            return None
+        try:
             # Normalize the metadata object as one graph so aliases shared by
             # different top-level keys cannot reset the node/depth budgets.
             metadata = self._normalize_metadata_value(dict(post.metadata))

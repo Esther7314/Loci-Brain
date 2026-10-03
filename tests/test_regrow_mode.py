@@ -196,3 +196,27 @@ def test_the_read_by_id_shows_which_basis_moved(store):
         # And the new version itself reads clean.
         assert "依据变了" not in await R.recall_core(when="", room="", tag="", query=new)
     run(go())
+
+
+def test_one_descendant_failing_leaves_the_rest_marked_and_is_named(store, tmp_path,
+                                                                    monkeypatch):
+    async def go():
+        root = await store.create(ROOT, room="EVENT/SELF")
+        broken = await store.create(CHILD, room="MIND/TRAITS", prov=_derived(root))
+        fine = await store.create(GRANDCHILD, room="MIND/VIEWS", prov=_derived(root))
+        real_update = store.update
+
+        async def update(bucket_id, **kwargs):
+            if bucket_id == broken and ("invalidation" in kwargs or "revise" in kwargs):
+                raise OSError("disk hiccup")
+            return await real_update(bucket_id, **kwargs)
+        monkeypatch.setattr(store, "update", update)
+        out = await regrow(bucket_id=root, text="Wrong: we stayed in.", v=0.5, a=0.3,
+                           mode="overturn")
+        return out, broken, fine
+    out, broken, fine = run(go())
+    # Criterion: the new version is already written, so a retry would be refused; the
+    # walk goes on past the failure and the receipt names the one left without a mark.
+    assert "invalidation" in _disk(tmp_path, fine)
+    assert "invalidation" not in _disk(tmp_path, broken)
+    assert broken in out.split("记号没写上", 1)[1]

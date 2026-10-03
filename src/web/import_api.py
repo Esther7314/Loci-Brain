@@ -30,7 +30,8 @@ request asks to wait). Nothing here writes a memory.
          format, same_self, conversations, lines, drafted, drafts, pending, drafting:
          "background" | "done", failures: [{container, title, error}], errors, note}
     400 not a file it can read · 404 no such batch to resume · 409 an import is running,
-    or this file is already a batch (its id in `batch`) · 503 the engine is not up
+    this file is already a batch (its id in `batch`), or the batch to resume is being
+    withdrawn · 503 the engine is not up
 
 /api/import/withdraw takes JSON {batch} -> 200 {ok, status: "withdrawn" | "incomplete",
 batch, conversations, entries, derived_pending, drafts_deleted, text_deleted, changes};
@@ -51,13 +52,16 @@ import logging
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
+from bridge.request_limits import IMPORT_UPLOAD_BYTES
 from utils import parse_bool
 
 logger = logging.getLogger("loci_brain.web.import")
 
 # Both upload routes read the whole file into memory, so there has to be a ceiling: a
-# few-hundred-megabyte export would burst the container and everything running in it.
-_MAX_UPLOAD = 50 * 1024 * 1024
+# few-hundred-megabyte export would burst the container and everything running in it. The
+# body as a whole is held to the same number while it streams
+# (bridge/request_limits.UPLOAD_CEILINGS).
+_MAX_UPLOAD = IMPORT_UPLOAD_BYTES
 # The background drafting tasks: the event loop keeps only a weak reference to a task, so
 # one nobody holds can be collected mid-run.
 _TASKS: set = set()
@@ -87,7 +91,7 @@ async def _read_form(request: Request, need_file: bool = True):
     if why:
         raise PermissionError(why)
     try:
-        form = await request.form()
+        form = await request.form(max_files=1, max_fields=16)
     except Exception as e:                          # noqa: BLE001
         raise ValueError("读不出上传的表单：" + str(e))
     fields = {k: str(v) for k, v in form.items() if not hasattr(v, "read")}
@@ -168,6 +172,11 @@ def register(mcp) -> None:
                 if meta is None and batch:
                     return JSONResponse({"error": f"没有这一批导入：{batch[:40]}"},
                                         status_code=404)
+                from core.import_memory import draft_refusal
+                refusal = draft_refusal(meta) if meta is not None else ""
+                if refusal:
+                    return JSONResponse({"error": refusal, "batch": meta.get("batch")},
+                                        status_code=409)
             resumed = meta is not None
             if meta is None:
                 try:

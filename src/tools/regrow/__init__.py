@@ -77,8 +77,18 @@ async def _mark_overturned(old_id: str, new_id: str) -> tuple[list[str], list[st
     """Append one `invalidation` record to every memory that grew out of `old_id`,
     and out of those, layer by layer (`referenced_by`, the reverse of `prov`).
     Returns (marked, could not write). The walk never enters the new version or a
-    memory it has already seen, so a `prov` loop ends."""
+    memory it has already seen, so a `prov` loop ends.
+
+    Each record is appended to the list as it is on disk, under that entry's lock, so two
+    overturns reaching one descendant at once both leave their record. A descendant that
+    fails — a write refused or raising — is reported as not marked and the walk goes on:
+    the new version is already written, so a retry would be refused, and the receipt is
+    the only place left to say which ones still lack the record."""
     record = {"kind": "overturn", "of": old_id, "by": new_id, "at": now_iso()}
+
+    def append(meta: dict) -> dict:
+        return {"invalidation": list(meta.get("invalidation") or []) + [record]}
+
     seen = {old_id, new_id}
     frontier = [old_id]
     marked: list[str] = []
@@ -86,17 +96,23 @@ async def _mark_overturned(old_id: str, new_id: str) -> tuple[list[str], list[st
     while frontier:
         next_layer: list[str] = []
         for parent in frontier:
-            for cid in await rt.bucket_mgr.referenced_by(parent):
+            try:
+                children = await rt.bucket_mgr.referenced_by(parent)
+            except Exception as e:  # noqa: BLE001 - reported below as the walk stopping short
+                rt.logger.warning(f"regrow overturn: {parent} 的下游没列出来: {e}")
+                failed.append(parent)
+                continue
+            for cid in children:
                 if not cid or cid in seen:
                     continue
                 seen.add(cid)
                 next_layer.append(cid)
-                child = await rt.bucket_mgr.get(cid)
-                existing = list(((child or {}).get("metadata") or {}).get("invalidation") or [])
-                if await rt.bucket_mgr.update(cid, invalidation=existing + [record]):
-                    marked.append(cid)
-                else:
-                    failed.append(cid)
+                try:
+                    ok = await rt.bucket_mgr.update(cid, revise=append)
+                except Exception as e:  # noqa: BLE001 - one descendant must not stop the rest
+                    rt.logger.warning(f"regrow overturn: {cid} 的记号没写上: {e}")
+                    ok = False
+                (marked if ok else failed).append(cid)
         frontier = next_layer
     return marked, failed
 
@@ -286,8 +302,8 @@ async def _regrow(bucket_id: str = "", text: str = "", v=-1, a=-1, from_=None,
             _t0, _t1, span_err = _F.check_span(new_when)
             if span_err:
                 return span_err
-        # The library as it stood before the new version, for the return's look-back
-        # (listing it after the write would re-read every file: the write clears the cache).
+        # The library as it stood before the new version, for the return's look-back: the
+        # old views it may run into, without the new version itself.
         try:
             library = await rt.bucket_mgr.list_all(include_archive=False)
         except Exception as e:  # noqa: BLE001 - without it the return only skips the look-back

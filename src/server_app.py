@@ -198,7 +198,8 @@ def identify_host(headers: Mapping[bytes, bytes], hosts: Any) -> tuple[str, Any]
         ("unknown", None)   `x-loci-hook-token` carries a credential no host has, and a
                             `hosts:` table is written: refused, never taken for open
         ("none", None)      no host credential: the caller is the deployment's default
-                            host (`legacy`) once MCP auth has let it in
+                            host (`legacy`) once MCP auth has let it in; with a table and
+                            MCP auth off it is refused (MCPAuthMiddleware)
 
     Without a table a key matching nothing is "none": the one legacy host is all there
     is, as the hook routes have always treated a stale key on an unlocked panel."""
@@ -228,7 +229,10 @@ class MCPAuthMiddleware:
 
     A host's credential (`hosts:` in config, core/scope.py) admits its holder to the MCP
     endpoint in either auth mode. Anyone else passes the MCP auth as before and is the
-    deployment's default host. The host's name goes down in the ASGI scope
+    deployment's default host — except that with a `hosts:` table and MCP auth off, a
+    caller presenting no host credential is refused (nothing else could say who it is),
+    and a host with a ceiling is refused while MCP auth is off or the table says the
+    deployment is not locked (`Hosts.unsafe`). The host's name goes down in the ASGI scope
     (`scope["loci.host"]`, "" for none): the tools read it from the request in their own
     call (src/server.py `_with_notice`) — a contextvar set here would not reach them, since
     a stateful session runs its tools in the session's own task."""
@@ -255,11 +259,25 @@ class MCPAuthMiddleware:
         self.host_resolver = host_resolver
 
     async def _refuse_unknown_host(self, send: Any) -> None:
-        body = json.dumps({
-            "error": "Unknown host credential",
-            "detail": "x-loci-hook-token matches no host in the hosts: table "
-                      "(check that host's token_env on the Loci side)",
-        }).encode()
+        await self._refuse(send, "Unknown host credential",
+                           "x-loci-hook-token matches no host in the hosts: table "
+                           "(check that host's token_env on the Loci side)")
+
+    def _ceiling_refusal(self, hosts: Any, host: Any) -> str:
+        """Why a host with a ceiling is refused here, or "": its promise of seeing only its
+        own material needs MCP auth on and the panel locked (web/panel_auth.lock_problem,
+        carried on the table as `unsafe`)."""
+        if host is None or getattr(host, "max_grant", None) is None:
+            return ""
+        reasons = [str(getattr(hosts, "unsafe", "") or "")]
+        if not self.auth_required:
+            reasons.append("MCP auth is off (mcp_require_auth: false): a host with a "
+                           "max_grant is refused until it is on")
+        return " / ".join(r for r in reasons if r)
+
+    async def _refuse(self, send: Any, error: str, detail: str) -> None:
+        body = json.dumps({"error": error, "detail": detail},
+                          ensure_ascii=False).encode("utf-8")
         await send({
             "type": "http.response.start",
             "status": 401,
@@ -285,9 +303,22 @@ class MCPAuthMiddleware:
             if kind == "unknown":
                 await self._refuse_unknown_host(send)
                 return
+            if (kind == "none" and hosts is not None and not hosts.implicit
+                    and not self.auth_required):
+                # With a table, presenting nothing makes nobody anybody: MCP auth off
+                # leaves no other way to say who this is.
+                await self._refuse(send, "No host credential",
+                                   "a hosts: table is written and MCP auth is off: present a "
+                                   "host's credential (x-loci-hook-token)")
+                return
             if hosts is not None:
                 if host is None:
                     host = hosts.default
+                why = self._ceiling_refusal(hosts, host)
+                if why:
+                    await self._refuse(send, "Host refused until the deployment is locked",
+                                       why)
+                    return
                 scope[HOST_SCOPE_KEY] = host.name if host is not None else ""
             if kind == "host":
                 await self.app(scope, receive, send)
@@ -410,11 +441,16 @@ class OriginCSRFGuardMiddleware:
     state there, no matter what the CORS preflight allowed. ``/mcp``,
     ``/oauth/*`` and ``/.well-known/*`` are exempt — they authenticate via
     bearer tokens / proof-of-possession (PKCE), not ambient cookies, so a
-    mismatched Origin there isn't a CSRF risk.
+    mismatched Origin there isn't a CSRF risk. One read is guarded the same
+    way: ``GET /api/loci/export`` (``_GUARDED_READS``).
     """
 
     _SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
     _EXEMPT_PREFIXES = ("/oauth/", "/.well-known/")
+    # Reads guarded like writes: the export hands out the whole library in one response,
+    # and CORS is `*`, so on an unlocked panel any web page could fetch and read it. The
+    # panel's own fetch is same-origin; a script on the machine sends no Origin at all.
+    _GUARDED_READS = frozenset({"/api/loci/export"})
 
     def __init__(
         self,
@@ -442,7 +478,9 @@ class OriginCSRFGuardMiddleware:
             return
         method = str(scope.get("method", "GET")).upper()
         path = str(scope.get("path", ""))
-        if method in self._SAFE_METHODS or self._is_exempt(path):
+        safe = method in self._SAFE_METHODS and not (
+            method in ("GET", "HEAD") and path in self._GUARDED_READS)
+        if safe or self._is_exempt(path):
             await self.app(scope, receive, send)
             return
         raw_headers = [

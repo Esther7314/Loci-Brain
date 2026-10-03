@@ -56,7 +56,7 @@
     - check: {segment: store, desc: "the withdrawal is applied", output: change, contains: '"status": "applied"'}
     - call: trace
       args: {bucket_id: x10005000000, delete: true}
-    - round_trip: {lacks: ["蓝色雨伞", "旧钥匙"]}
+    - round_trip: {lacks: ["蓝色雨伞", "旧钥匙"], self_restore: true}
       as: rt
     - check: {segment: store, desc: "brought back, the library is the same field by field", output: rt, contains: '"identical": true'}
     - check: {segment: store, desc: "the withdrawn entry is left out, by id", output: rt, contains: '"withdrawn": ["x10002000000"]'}
@@ -66,3 +66,4 @@
     - check: {segment: source, desc: "the names table travels", output: rt, contains: '"aliases.yaml"'}
     - check: {segment: source, desc: "the host's material is listed as staying with the host", output: rt, contains: '"host_material"'}
     - check: {segment: store, desc: "an empty library takes the state whole", output: rt, contains: '"mode": "fresh"'}
+    - check: {segment: store, desc: "brought back into itself, nothing already there is archived again", output: rt, contains: '"archived_added": 0'}

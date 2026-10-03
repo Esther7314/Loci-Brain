@@ -18,9 +18,23 @@ Key behaviours:
 - Conflict decisions: skip | overwrite | keep_both (keep both, reassigning the ID)
 - Matching embedding model -> merge the vector data; mismatched -> import the md files
   only, and re-vectorise automatically afterwards
+- keep_both copies get a fresh id in the library's shape (12 hex characters), and every
+  link of the package that named the original (prov, the version chain, covers, a hold's
+  standing entry, attachment paths) names the copy
+- An entry whose file is already the package's, byte for byte, counts as imported: nothing
+  is archived or written again
 - A package's library state goes back after the entries
   (export_package.restore_library_state): whole into a library that had no entries,
   merged into one that had; a package of another library version is refused
+- What the receiving library has withdrawn stays withdrawn: entries standing on a source
+  its registry withdrew, deleted or holds — and what is derived from them — are not
+  written (`refused`), and an entry of the library blocked by such a change is neither
+  overwritten nor copied. Refusing, not writing and then clearing: an import is no host
+  and has no change authority, and a write-then-clear would put the text on disk first
+- The job is kept on disk (JOB_FILE): a restart shows an interrupted import, and a second
+  run of the same package keeps the first run's mode (an empty library is still restored
+  whole); a library that had entries is backed up (core/schema.backup) before anything is
+  written
 
 State machine: idle -> parsing -> parsed -> applying -> reindexing -> done | error
 
@@ -42,6 +56,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import hashlib
 import json
 import logging
 import math
@@ -55,7 +70,7 @@ import time
 import uuid
 import weakref
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Optional
 
 import frontmatter
@@ -73,9 +88,11 @@ from locibrain.storage.backup_archive import (
 _PACKAGE_PREFIXES = (_PACKAGE_STATE, _PACKAGE_ORIGINALS, _PACKAGE_MEDIA)
 
 try:
-    from utils import _win_long_path, now_iso, safe_path, sanitize_name  # type: ignore
+    from utils import (_win_long_path, atomic_write_text, now_iso, read_from_ids,  # type: ignore
+                       safe_path, sanitize_name)
 except ImportError:  # pragma: no cover
-    from .utils import _win_long_path, now_iso, safe_path, sanitize_name  # type: ignore
+    from .utils import (_win_long_path, atomic_write_text, now_iso,  # type: ignore
+                        read_from_ids, safe_path, sanitize_name)
 
 logger = logging.getLogger("loci_brain.migrate")
 
@@ -109,11 +126,29 @@ _FRONTMATTER_OVERHEAD_BYTES = 64 * 1024
 _EMBEDDING_FETCH_BATCH = 32
 _MAX_EMBEDDING_CELL_BYTES = 1024 * 1024
 _MAX_EMBEDDING_DIMENSIONS = 65_536
-_MAX_EMBEDDING_ROWS = 10_000
+# One vector row per entry at most: the package's member cap bounds it.
+_MAX_EMBEDDING_ROWS = 100_000
 _MAX_EMBEDDING_TIMESTAMP_BYTES = 256
 _MAX_EMBEDDING_HASH_BYTES = 256
 _PARSED_WORKSPACE_TTL_SECONDS = 3600.0
 _PARSED_WORKSPACE_SWEEP_SECONDS = 60.0
+
+# The import job, kept on disk (`<buckets>/_state/import_package.json`) so that a restart
+# shows it and a second run of the same package carries the first one's mode: a library
+# that was empty when the package started coming in is still restored whole, although half
+# the entries are already there.
+JOB_FILE = os.path.join("_state", "import_package.json")
+_JOB_SAVE_EVERY = 50
+_REFUSED_SHOWN = 200
+# The fields that name other entries by id (besides prov and the old `from`).
+_LINK_FIELDS = ("supersedes", "superseded_by", "covered_by", "cover", "exception_of")
+# Why an entry of the package was not written; the panel shows these.
+REFUSAL_WORDS = {
+    "withdrawn": "它依据的来源在这个库里已经撤回或删除了",
+    "held": "它依据的来源在这个库里被宿主按住了，等宿主的正式变更再说",
+    "derived": "它是从一条撤回或按住的记忆推出来的",
+    "blocked_here": "库里同号的那条因为来源撤回被挡着，不拿包里的覆盖、也不另存一份",
+}
 
 _MIGRATE_ENGINES: weakref.WeakSet[Any] = weakref.WeakSet()
 _MIGRATE_ENGINES_GUARD = threading.Lock()
@@ -171,6 +206,9 @@ class _ParsedBucket:
     domain: list[str]
     created: str
     md_path: str = ""     # disk-backed extracted member owned by MigrateEngine
+    # The normalised frontmatter: what the receiving library's registry is asked about,
+    # and the links that are pointed at new ids.
+    meta: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -242,6 +280,71 @@ def _safe_str(val: Any, max_len: int = 512) -> str:
     return str(val)[:max_len] if val is not None else ""
 
 
+def _new_entry_id(taken) -> str:
+    """A fresh entry id in the library's own shape (12 hex characters) that `taken(id)`
+    says is free."""
+    while True:
+        candidate = uuid.uuid4().hex[:12]
+        if not taken(candidate):
+            return candidate
+
+
+def _remap_links(meta: dict, id_map: dict[str, str]) -> bool:
+    """Point an entry's links at the ids their targets were written under: prov targets,
+    the old `from`, the version chain, covers, the standing entry of a hold, and the
+    attachment paths of an entry that moved (`_media/<id>/…`). A quoted line names a
+    source, never an entry id, and is left as it is unless it equals one. Returns True when
+    something changed."""
+    if not id_map:
+        return False
+    changed = False
+    prov = meta.get("prov")
+    if isinstance(prov, list):
+        lines = []
+        for line in prov:
+            target = str(line.get("target") or "") if isinstance(line, dict) else ""
+            if target in id_map:
+                line = {**line, "target": id_map[target]}
+                changed = True
+            lines.append(line)
+        meta["prov"] = lines
+    for name in ("from",) + _LINK_FIELDS:
+        value = meta.get(name)
+        if isinstance(value, list):
+            mapped = [id_map.get(str(v).strip(), v) for v in value]
+            if mapped != value:
+                meta[name] = mapped
+                changed = True
+        elif isinstance(value, str) and value.strip():
+            parts = [p.strip() for p in value.split(",")]
+            mapped = [id_map.get(p, p) for p in parts]
+            if mapped != parts:
+                meta[name] = ",".join(mapped)
+                changed = True
+    media = meta.get("media")
+    if isinstance(media, list):
+        items = []
+        for item in media:
+            parts = str(item.get("path") or "").split("/") if isinstance(item, dict) else []
+            if len(parts) >= 3 and parts[0] == "_media" and parts[1] in id_map:
+                item = {**item, "path": "/".join(["_media", id_map[parts[1]], *parts[2:]])}
+                changed = True
+            items.append(item)
+        meta["media"] = items
+    return changed
+
+
+def _same_file(path: str, data: bytes) -> bool:
+    """Is the file at `path` exactly these bytes?"""
+    try:
+        if os.path.getsize(path) != len(data):
+            return False
+        with open(_win_long_path(path), "rb") as handle:
+            return handle.read() == data
+    except OSError:
+        return False
+
+
 # ============================================================
 # MigrateEngine
 # ============================================================
@@ -283,6 +386,14 @@ class MigrateEngine:
         self._package_info: Optional[dict[str, Any]] = None
         self._package_members: dict[str, Any] = {}
         self._state_report: Optional[dict[str, Any]] = None
+        # The uploaded file's sha256: a second run of the same package is known by it.
+        self._package_sha: str = ""
+        # package id -> why it was not written (REFUSAL_WORDS); the library backup taken
+        # before writing into a library that had entries; whether this run carried on an
+        # interrupted one.
+        self._refused: dict[str, str] = {}
+        self._backup_path: str = ""
+        self._resumed: bool = False
 
         # ---- Counters for the apply phase ----
         self._apply_total: int = 0
@@ -365,6 +476,10 @@ class MigrateEngine:
         self._backup_manifest = None
         self._package_info = None
         self._state_report = None
+        self._package_sha = ""
+        self._refused = {}
+        self._backup_path = ""
+        self._resumed = False
         self._total_buckets = 0
         self._apply_errors = []
         self._apply_imported = 0
@@ -520,13 +635,62 @@ class MigrateEngine:
             "result": {
                 "imported": self._apply_imported,
                 "skipped": self._apply_skipped,
+                "refused": len(self._refused),
             },
+            # What was not written because the receiving library had withdrawn or held
+            # what it stands on (REFUSAL_WORDS says why, in the panel's words).
+            "refused": [{"bucket_id": bid, "why": why, "say": REFUSAL_WORDS.get(why, why)}
+                        for bid, why in list(self._refused.items())[:_REFUSED_SHOWN]],
+            "backup": self._backup_path,
+            "resumed": self._resumed,
             # An export package: its format, library version and what else it carries;
             # after apply, what of the library's state was restored or merged.
             "package": self._package_info,
             "library_state": self._state_report,
             "error": self._error_message,
+            # The job kept on disk: after a restart, the last import — an interrupted one
+            # says so, and that uploading the same package again carries it on.
+            "job": self._job_on_disk(),
         }
+
+    # ----------------------------------------------------------
+    # The job on disk
+    # ----------------------------------------------------------
+
+    def _job_path(self) -> str:
+        return os.path.join(str(self._config.get("buckets_dir") or "buckets"), JOB_FILE)
+
+    def _read_job(self) -> Optional[dict[str, Any]]:
+        try:
+            with open(self._job_path(), encoding="utf-8") as handle:
+                data = json.load(handle)
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) else None
+
+    def _save_job(self, job: dict[str, Any]) -> None:
+        job["updated_at"] = now_iso()
+        try:
+            os.makedirs(os.path.dirname(self._job_path()), exist_ok=True)
+            atomic_write_text(self._job_path(), json.dumps(job, ensure_ascii=False, indent=2))
+        except OSError as exc:
+            logger.warning("[migrate] could not save the import job: %s", exc)
+
+    def _job_on_disk(self) -> Optional[dict[str, Any]]:
+        job = self._read_job()
+        if job is None:
+            return None
+        out = {k: job.get(k) for k in ("phase", "mode", "started_at", "updated_at",
+                                       "finished_at", "done", "total", "imported",
+                                       "refused", "backup", "error")}
+        with self._state_guard:
+            running = self._phase == PHASE_APPLYING
+        if job.get("phase") == PHASE_APPLYING and not running:
+            out["phase"] = "interrupted"
+            out["say"] = (f"上一次导回在第 {job.get('done') or 0} / {job.get('total') or 0} 条"
+                          "停下了。重新上传同一个包就接着导：已经写进去的会认出来，"
+                          "空库那次的来源登记、待核切片这些照样原样放回。")
+        return out
 
     # ----------------------------------------------------------
     # Step one: parse the zip
@@ -658,6 +822,7 @@ class MigrateEngine:
         self._integrity_warning = str(parsed.get("integrity_warning") or "")
         self._package_info = parsed.get("package")
         self._package_members = dict(parsed.get("package_members") or {})
+        self._package_sha = str(parsed.get("package_sha256") or "")
         manifest = parsed.get("manifest")
         self._backup_manifest = (
             {
@@ -764,7 +929,13 @@ class MigrateEngine:
 
     def _parse_zip_path_sync(self, archive_path: str, workspace: str) -> dict:
         package = extract_backup_archive_file(archive_path, workspace)
-        return self._parse_package(package, disk_backed=True)
+        parsed = self._parse_package(package, disk_backed=True)
+        digest = hashlib.sha256()
+        with open(archive_path, "rb") as handle:
+            while chunk := handle.read(1024 * 1024):
+                digest.update(chunk)
+        parsed["package_sha256"] = digest.hexdigest()
+        return parsed
 
     def _parse_package(self, package: dict[str, Any], *, disk_backed: bool) -> dict:
         buckets: list[_ParsedBucket] = []
@@ -873,6 +1044,7 @@ class MigrateEngine:
                     domain=[_safe_str(item, 100) for item in domain],
                     created=_safe_str(meta.get("created", ""), 32),
                     md_path=str(files[arc_path]) if disk_backed else "",
+                    meta=meta,
                 ))
             except BackupArchiveError:
                 raise
@@ -990,7 +1162,18 @@ class MigrateEngine:
 
         decisions: {bucket_id: "skip" | "overwrite" | "keep_both"}
         A bucket that conflicts but is absent from `decisions` defaults to skip — safety
-        first. A bucket with no conflict is imported directly and needs no decision.
+        first. A bucket with no conflict is imported directly and needs no decision. A
+        bucket whose file in the library is already byte for byte the package's counts as
+        imported whatever the decision (a second run of an interrupted import finds its
+        first half that way).
+
+        What the receiving library has withdrawn stays withdrawn: an entry standing on a
+        source its registry records as withdrawn, deleted or held, or derived from such an
+        entry, is not written (`refused`, REFUSAL_WORDS), and an entry of the library
+        blocked by such a change is neither overwritten nor copied. Nothing is cleared
+        afterwards, because nothing that should not be there is written — the package
+        still holds those entries, and the same package can be brought back once the host
+        restores the source.
         """
         if reservation_id is None:
             reservation_id = self.reserve_apply(self._job_id)
@@ -1010,17 +1193,50 @@ class MigrateEngine:
         self._apply_skipped = 0
         self._apply_errors = []
         self._buckets_to_reindex = []
+        self._refused = {}
+        self._backup_path = ""
+        self._resumed = False
 
         embedding_matches = self._embedding_match()
         buckets_dir = self._config.get("buckets_dir", "buckets")
         imported_id_map: dict[str, str] = {}
         imported_files: dict[str, str] = {}
         self._state_report = None
+        job: dict[str, Any] = {}
 
         try:
+            existing = await self._existing_entries()
+            survey = await _to_thread_reaped(self._survey, existing)
+            earlier = self._read_job()
+            resuming = bool(
+                earlier and earlier.get("phase") == PHASE_APPLYING
+                and self._package_sha and earlier.get("package_sha256") == self._package_sha
+            )
+            self._resumed = resuming
             # Judged before anything is written: a library with no entries takes a
-            # package's state whole, one with entries has it merged.
-            fresh = bool(self._package_members) and await self._library_is_empty()
+            # package's state whole, one with entries has it merged. A second run of an
+            # interrupted import keeps the first run's judgement.
+            if resuming:
+                fresh = earlier.get("mode") == "fresh"
+                self._backup_path = str(earlier.get("backup") or "")
+            else:
+                fresh = bool(self._package_members) and not existing
+            if existing and not fresh and not self._backup_path:
+                from . import schema as _schema
+                self._backup_path = str(await _to_thread_reaped(
+                    _schema.backup, buckets_dir, "before-import-package"))
+            job = {"phase": PHASE_APPLYING, "mode": "fresh" if fresh else "merge",
+                   "package_sha256": self._package_sha, "job_id": self._job_id,
+                   "started_at": (earlier or {}).get("started_at") if resuming else now_iso(),
+                   "backup": self._backup_path, "done": 0, "total": self._apply_total,
+                   "imported": 0, "refused": 0}
+            self._save_job(job)
+
+            self._refused = await _to_thread_reaped(
+                self._refusals, decisions, survey)
+            planned = self._plan_ids(decisions, survey)
+            link_map = {old: new for old, new in planned.items() if old != new}
+
             ensure_path_index = getattr(
                 self._bucket_mgr,
                 "_ensure_bucket_path_index",
@@ -1030,6 +1246,9 @@ class MigrateEngine:
                 await _to_thread_reaped(ensure_path_index)
             for pb in self._parsed_buckets:
                 try:
+                    if pb.bucket_id in self._refused:
+                        self._apply_skipped += 1
+                        continue
                     result = await self._apply_one_bucket(
                         pb,
                         decisions.get(pb.bucket_id, "skip"),
@@ -1037,6 +1256,8 @@ class MigrateEngine:
                         conflicted_at_parse=(
                             pb.bucket_id in self._conflict_ids_at_parse
                         ),
+                        target_id=planned.get(pb.bucket_id, pb.bucket_id),
+                        link_map=link_map,
                     )
                     if result is None:
                         self._apply_skipped += 1
@@ -1051,8 +1272,12 @@ class MigrateEngine:
                     logger.error(f"[migrate] apply error: {err_msg}", exc_info=True)
                     self._apply_errors.append(err_msg)
                     self._apply_skipped += 1
-
-                self._apply_done += 1
+                finally:
+                    self._apply_done += 1
+                    if self._apply_done % _JOB_SAVE_EVERY == 0:
+                        job.update(done=self._apply_done, imported=self._apply_imported,
+                                   refused=len(self._refused))
+                        self._save_job(job)
 
             # ---- Handling the vector data ----
             merged_ids: set[str] = set()
@@ -1088,10 +1313,13 @@ class MigrateEngine:
                         self._package_members,
                         fresh=fresh,
                         id_map=dict(imported_id_map),
+                        left_out=frozenset(self._refused),
+                        own_basis=survey["own_basis"],
                     )
                 )
                 for message in self._state_report.get("errors") or []:
                     self._apply_errors.append(message)
+                await self._drop_withdrawn_slices()
 
             self._buckets_to_reindex = [
                 (target_id, path)
@@ -1104,6 +1332,9 @@ class MigrateEngine:
             if callable(invalidate):
                 invalidate()
             self._phase = PHASE_DONE
+            job.update(phase=PHASE_DONE, finished_at=now_iso(), done=self._apply_done,
+                       imported=self._apply_imported, refused=len(self._refused))
+            self._save_job(job)
 
         except asyncio.CancelledError:
             self._phase = PHASE_ERROR
@@ -1113,6 +1344,10 @@ class MigrateEngine:
             self._phase = PHASE_ERROR
             self._error_message = str(e)
             logger.error(f"[migrate] apply failed: {e}", exc_info=True)
+            if job:
+                job.update(phase=PHASE_ERROR, error=str(e)[:500], finished_at=now_iso(),
+                           done=self._apply_done, imported=self._apply_imported)
+                self._save_job(job)
         finally:
             with self._state_guard:
                 if self._apply_reservation == reservation_id:
@@ -1121,6 +1356,195 @@ class MigrateEngine:
             self._parsed_buckets = []
             self._buckets_to_reindex = []
 
+    async def _existing_entries(self) -> list[dict]:
+        list_all = getattr(self._bucket_mgr, "list_all", None)
+        if not callable(list_all):
+            return []
+        try:
+            found = await list_all(include_archive=True)
+        except TypeError:
+            found = await list_all()
+        return [b for b in found or [] if isinstance(b, dict)]
+
+    def _member_bytes(self, pb: _ParsedBucket) -> bytes:
+        return self._read_member(
+            pb.md_bytes if pb.md_bytes is not None else pb.md_path,
+            limit=(self._bucket_content_limit() + self._metadata_limit()
+                   + _FRONTMATTER_OVERHEAD_BYTES),
+            label=pb.arc_path)
+
+    def _survey(self, existing: list[dict]) -> dict[str, Any]:
+        """(Runs in a thread.) What of the receiving library the import has to respect:
+
+            identical   package ids whose file in the library is byte for byte the
+                        package's (already imported)
+            own_basis   the sources the library's own entries stand on — every entry but
+                        the identical ones, which are the package's — that the package's
+                        registry rows may not settle (export_package._merge_registry)
+            blocked     the library's entries blocked by a source change (an open
+                        source_gone, source_held or source_restored record, or a source
+                        its registry records as withdrawn or deleted)
+            registry    the library's source registry; package_registry the package's own
+        """
+        from . import _invalidation as _I
+        from . import _sources as _src
+        from . import export_package as _ep
+
+        registry = getattr(self._bucket_mgr, "sources", None)
+        by_id = {str(b.get("id") or ""): b for b in existing}
+        identical: set[str] = set()
+        for pb in self._parsed_buckets:
+            have = by_id.get(pb.bucket_id)
+            if have and have.get("path") and _same_file(str(have["path"]),
+                                                       self._member_bytes(pb)):
+                identical.add(pb.bucket_id)
+        own_basis: list = []
+        blocked: set[str] = set()
+        for bid, b in by_id.items():
+            if bid in identical:
+                continue
+            meta = b.get("metadata") or {}
+            for rec in _src.basis_records(meta):
+                try:
+                    own_basis.append(_src.record_id(rec))
+                except (KeyError, TypeError, AttributeError):
+                    continue
+            if any(r.get("kind") in (_I.SOURCE_GONE, _I.SOURCE_HELD, _I.SOURCE_RESTORED)
+                   for r in _I.open_records(meta)) or _ep.withdrawn(meta, registry):
+                blocked.add(bid)
+        return {"identical": identical, "own_basis": own_basis, "blocked": blocked,
+                "registry": registry, "package_registry": self._package_registry()}
+
+    def _package_registry(self):
+        """The package's own source registry, read from its state members in a scratch
+        folder: a package whose entries stand on a source its own registry withdrew is not
+        one an export writes, and is not trusted either."""
+        from . import _sources as _src
+        from . import export_package as _ep
+
+        rows = {name: _ep.STATE_PREFIX + f"{_src.SOURCES_DIR}/{name}"
+                for name in (_src.CHANGES_FILE, _src.HELD_FILE, _src.LINE_ORDERS_FILE)}
+        if not any(member in self._package_members for member in rows.values()):
+            return None
+        scratch = tempfile.mkdtemp(prefix="loci-package-registry-",
+                                   dir=self._parse_temp_dir or None)
+        folder = os.path.join(scratch, _src.SOURCES_DIR)
+        os.makedirs(folder, exist_ok=True)
+        for name, member in rows.items():
+            source = self._package_members.get(member)
+            if source is None:
+                continue
+            if isinstance(source, bytes):
+                data = source
+            else:
+                with open(source, "rb") as handle:
+                    data = handle.read()
+            with open(os.path.join(folder, name), "wb") as handle:
+                handle.write(data)
+        return _src.SourceRegistry(scratch)
+
+    def _refusals(self, decisions: dict[str, str], survey: dict[str, Any]) -> dict[str, str]:
+        """(Runs in a thread.) package id -> why it is not written (REFUSAL_WORDS)."""
+        from . import _invalidation as _I
+        from . import _sources as _src
+        from . import export_package as _ep
+
+        registry = survey["registry"]
+        package_registry = survey["package_registry"]
+        refused: dict[str, str] = {}
+        for pb in self._parsed_buckets:
+            meta = pb.meta
+            why = ""
+            if (_ep.withdrawn(meta, None) or _ep.withdrawn(meta, registry)
+                    or (package_registry is not None
+                        and _ep.withdrawn(meta, package_registry))):
+                why = "withdrawn"
+            elif registry is not None and not _I.open_records(meta, _I.SOURCE_HELD):
+                # An entry that already carries the package's own hold arrives blocked by
+                # it; one the library's hold would reach without a record is not written.
+                for raw in _src.basis_records(meta):
+                    try:
+                        [rec] = _src.normalize_sources([raw])
+                    except (_src.SourceRecordError, ValueError):
+                        continue
+                    if registry.read_state(rec) == _src.HELD:
+                        why = "held"
+                        break
+            if (not why and pb.bucket_id in survey["blocked"]
+                    and pb.bucket_id not in survey["identical"]
+                    and decisions.get(pb.bucket_id, "skip") in ("overwrite", "keep_both")):
+                why = "blocked_here"
+            if why:
+                refused[pb.bucket_id] = why
+        # Whatever is derived from a refused entry, or from one the library has blocked,
+        # every generation.
+        stop = set(refused) | survey["blocked"]
+        grew = True
+        while grew:
+            grew = False
+            for pb in self._parsed_buckets:
+                if pb.bucket_id in refused or pb.bucket_id in survey["identical"]:
+                    continue
+                if set(read_from_ids(pb.meta)) & stop:
+                    refused[pb.bucket_id] = "derived"
+                    stop.add(pb.bucket_id)
+                    grew = True
+        return refused
+
+    def _plan_ids(self, decisions: dict[str, str], survey: dict[str, Any]) -> dict[str, str]:
+        """package id -> the id it is written under: its own, or for keep_both a fresh id
+        in the library's shape that neither the library nor the package uses."""
+        finder = getattr(self._bucket_mgr, "_find_bucket_file", None)
+        package_ids = {pb.bucket_id for pb in self._parsed_buckets}
+        given: set[str] = set()
+
+        def taken(candidate: str) -> bool:
+            return (candidate in package_ids or candidate in given
+                    or (callable(finder) and bool(finder(candidate))))
+
+        planned: dict[str, str] = {}
+        for pb in self._parsed_buckets:
+            if pb.bucket_id in self._refused:
+                continue
+            if (pb.bucket_id in self._conflict_ids_at_parse
+                    and pb.bucket_id not in survey["identical"]
+                    and decisions.get(pb.bucket_id) == "keep_both"):
+                new_id = _new_entry_id(taken)
+                given.add(new_id)
+                planned[pb.bucket_id] = new_id
+            else:
+                planned[pb.bucket_id] = pb.bucket_id
+        return planned
+
+    async def _drop_withdrawn_slices(self) -> None:
+        """Pending slices restored from the package over lines the library's registry
+        holds as withdrawn or deleted lose their gist and draft at once, as a withdrawal's
+        own clearing does (PendingSlices.withdraw_lines)."""
+        from . import _sources as _src
+        slices = getattr(self._bucket_mgr, "slices", None)
+        registry = getattr(self._bucket_mgr, "sources", None)
+        if slices is None or registry is None:
+            return
+        try:
+            batches = slices.open_batches()
+        except Exception as exc:                     # noqa: BLE001 - reported
+            self._apply_errors.append(f"待核切片读不出来：{exc}")
+            return
+        for batch in batches:
+            source = batch.get("source") or {}
+            for one in batch.get("slices") or []:
+                span = one.get("span") or {}
+                first, last = str(span.get("first") or ""), str(span.get("last") or "")
+                try:
+                    sid = _src.SourceId(str(source.get("system")), str(source.get("instance")),
+                                        str(source.get("container")), first,
+                                        last if last and last != first else None)
+                    state = registry.state_of(sid)
+                except Exception:                    # noqa: BLE001 - not a source it can read
+                    continue
+                if state in (_src.WITHDRAWN, _src.DELETED):
+                    await slices.withdraw_lines(source, [first])
+
     async def _apply_one_bucket(
         self,
         pb: _ParsedBucket,
@@ -1128,8 +1552,12 @@ class MigrateEngine:
         buckets_dir: str,
         *,
         conflicted_at_parse: bool,
+        target_id: str | None = None,
+        link_map: dict[str, str] | None = None,
     ) -> tuple[str, str] | None:
-        """Recheck and commit one ID while holding its normal mutation lock."""
+        """Recheck and commit one ID while holding its normal mutation lock. `target_id`
+        is the id a keep_both copy is written under (`_plan_ids`); `link_map` the package
+        ids written under another id, which the entry's links are pointed at."""
 
         turn_factory = getattr(self._bucket_mgr, "_bucket_turn", None)
         turn = turn_factory(pb.bucket_id) if callable(turn_factory) else _noop_bucket_turn()
@@ -1141,6 +1569,10 @@ class MigrateEngine:
             # cannot forge overwrite/keep_both for an ID that was conflict-free
             # in the parse snapshot: a newly-created collision always wins.
             if existing_path:
+                if await _to_thread_reaped(_same_file, existing_path,
+                                           self._member_bytes(pb)):
+                    # Already the package's, byte for byte: imported, nothing written.
+                    return pb.bucket_id, existing_path
                 if not conflicted_at_parse:
                     message = (
                         f"[{pb.bucket_id}] apply 时出现新冲突，已跳过；"
@@ -1156,12 +1588,13 @@ class MigrateEngine:
                         pb.bucket_id,
                         buckets_dir,
                         existing_path,
+                        link_map or {},
                     )
-                if requested_decision == "keep_both":
-                    target_id = str(uuid.uuid4())
-                else:
+                if requested_decision != "keep_both":
                     return None
-            else:
+                target_id = target_id if target_id and target_id != pb.bucket_id else (
+                    _new_entry_id(lambda c: bool(finder(c)) if callable(finder) else False))
+            elif not target_id:
                 target_id = pb.bucket_id
 
             return await _to_thread_reaped(
@@ -1169,14 +1602,17 @@ class MigrateEngine:
                 pb,
                 target_id,
                 buckets_dir,
+                link_map or {},
             )
 
     def _render_bucket(
-        self, pb: _ParsedBucket, target_id: str, buckets_dir: str
+        self, pb: _ParsedBucket, target_id: str, buckets_dir: str,
+        link_map: Optional[dict[str, str]] = None,
     ) -> tuple[str, str, str]:
         """(Runs in a thread.) Pure computation: parse the frontmatter, work out the target
         path and the serialised markdown. Apart from os.makedirs creating directories, it
-        performs no disk writes at all.
+        performs no disk writes at all. `link_map`: package ids written under another id,
+        which the entry's links are pointed at (`_remap_links`).
 
         Returns (content, target_path, rendered).
         """
@@ -1198,10 +1634,13 @@ class MigrateEngine:
                 f"{pb.arc_path} 正文过大（{content_size} bytes > {self._bucket_content_limit()}）"
             )
 
-        # A file that already names itself by the id it is restored under goes back byte
-        # for byte, at its path in the library it came from: the Markdown is the library,
-        # and re-serialising it would be a second writer of every field.
-        if written_id == target_id:
+        relinked = _remap_links(meta, link_map or {})
+
+        # A file that already names itself by the id it is restored under, and links to
+        # nothing that moved, goes back byte for byte, at its path in the library it came
+        # from: the Markdown is the library, and re-serialising it would be a second writer
+        # of every field.
+        if written_id == target_id and not relinked:
             verbatim_path = self._package_path(pb.arc_path, buckets_dir)
             if verbatim_path:
                 os.makedirs(os.path.dirname(verbatim_path), exist_ok=True)
@@ -1296,16 +1735,19 @@ class MigrateEngine:
             _safe_unlink(temp_path_long)
 
     def _write_bucket_file(
-        self, pb: _ParsedBucket, target_id: str, buckets_dir: str
+        self, pb: _ParsedBucket, target_id: str, buckets_dir: str,
+        link_map: Optional[dict[str, str]] = None,
     ) -> tuple[str, str]:
         """Write one new bucket without replacing an existing path."""
-        _content, target_path, rendered = self._render_bucket(pb, target_id, buckets_dir)
+        _content, target_path, rendered = self._render_bucket(pb, target_id, buckets_dir,
+                                                              link_map)
         self._atomic_create(target_path, rendered)
         logger.debug(f"[migrate] wrote {target_path} (id={target_id})")
         return target_id, target_path
 
     def _write_bucket_file_staged(
-        self, pb: _ParsedBucket, target_id: str, buckets_dir: str
+        self, pb: _ParsedBucket, target_id: str, buckets_dir: str,
+        link_map: Optional[dict[str, str]] = None,
     ) -> tuple[str, str, str]:
         """(Runs in a thread.) Write the new content to a staging file in the same directory
         as target_path, without touching target_path itself.
@@ -1316,7 +1758,8 @@ class MigrateEngine:
         does its own os.replace(staged_path, target_path) once it has confirmed the old
         bucket has been dealt with safely.
         """
-        content, target_path, rendered = self._render_bucket(pb, target_id, buckets_dir)
+        content, target_path, rendered = self._render_bucket(pb, target_id, buckets_dir,
+                                                             link_map)
         staged_path = f"{target_path}.staging-{uuid.uuid4().hex}"
         self._atomic_write(staged_path, rendered)
         logger.debug(f"[migrate] staged {staged_path} (id={target_id}, target={target_path})")
@@ -1328,10 +1771,12 @@ class MigrateEngine:
         bucket_id: str,
         buckets_dir: str,
     ) -> str:
-        """Create the pre-overwrite version under a unique archived ID."""
+        """Create the pre-overwrite version under a fresh archived ID in the library's own
+        shape (12 hex characters), so it reads by id like any other entry."""
 
         post = frontmatter.load(existing_path)
-        new_id = f"{bucket_id[:160]}-superseded-{uuid.uuid4().hex[:12]}"
+        finder = getattr(self._bucket_mgr, "_find_bucket_file", None)
+        new_id = _new_entry_id(lambda c: bool(finder(c)) if callable(finder) else False)
         post["id"] = new_id
         post["type"] = "archived"
         post["superseded_by"] = bucket_id
@@ -1352,11 +1797,12 @@ class MigrateEngine:
         target_id: str,
         buckets_dir: str,
         existing_path: str,
+        link_map: Optional[dict[str, str]] = None,
     ) -> tuple[str, str]:
         """Preserve old data and commit an overwrite with rollback on failure."""
 
         _content, target_path, staged_path = self._write_bucket_file_staged(
-            pb, target_id, buckets_dir
+            pb, target_id, buckets_dir, link_map
         )
         historical_path = ""
         target_created = False
@@ -1484,13 +1930,22 @@ class MigrateEngine:
                 vector_column = "embedding"
                 updated_column = "updated_at" if "updated_at" in columns else None
                 hash_column = "content_hash" if "content_hash" in columns else None
+                meaning_column = ("meaning_embedding" if "meaning_embedding" in columns
+                                  else None)
             elif {"id", "vector"}.issubset(columns):
                 id_column = "id"
                 vector_column = "vector"
                 updated_column = None
                 hash_column = None
+                meaning_column = None
             else:
                 raise BackupArchiveError("embeddings 表结构无法识别")
+
+            # The meaning vector (its own column) travels with the content vector when
+            # both libraries have the column.
+            if meaning_column is not None and "meaning_embedding" not in {
+                    str(row[1]) for row in dst.execute("PRAGMA table_info(embeddings)")}:
+                meaning_column = None
 
             src.execute(
                 "CREATE TEMP TABLE loci_migrate_wanted_ids "
@@ -1523,7 +1978,8 @@ class MigrateEngine:
                 f"SELECT e.{id_column}, "  # nosec B608
                 f"{bounded_column(vector_column, _MAX_EMBEDDING_CELL_BYTES)}, "
                 f"{bounded_column(updated_column, _MAX_EMBEDDING_TIMESTAMP_BYTES)}, "
-                f"{bounded_column(hash_column, _MAX_EMBEDDING_HASH_BYTES)} "
+                f"{bounded_column(hash_column, _MAX_EMBEDDING_HASH_BYTES)}, "
+                f"{bounded_column(meaning_column, _MAX_EMBEDDING_CELL_BYTES)} "
                 "FROM embeddings AS e "
                 f"JOIN loci_migrate_wanted_ids AS wanted "
                 f"ON e.{id_column} = wanted.source_id"
@@ -1536,7 +1992,7 @@ class MigrateEngine:
             skipped = 0
 
             while rows := cursor.fetchmany(_EMBEDDING_FETCH_BATCH):
-                normalized_rows: list[tuple[str, str, str, str]] = []
+                normalized_rows: list[tuple[str, str, str, str, Optional[str]]] = []
                 normalized_ids: list[str] = []
                 for row in rows:
                     processed += 1
@@ -1553,6 +2009,9 @@ class MigrateEngine:
                         hash_type,
                         hash_size,
                         hash_value,
+                        meaning_type,
+                        meaning_size,
+                        meaning_value,
                     ) = row
                     target_id = safe_id_map.get(source_id)
                     normalized_vector = self._normalize_embedding_vector(
@@ -1573,6 +2032,13 @@ class MigrateEngine:
                         hash_size,
                         _MAX_EMBEDDING_HASH_BYTES,
                     )
+                    # No meaning vector is no meaning vector; a malformed one is dropped
+                    # alone and the entry's next meaning write computes it again.
+                    meaning_vector = (
+                        self._normalize_embedding_vector(
+                            meaning_value, meaning_type, meaning_size, expected_dim)
+                        if meaning_value is not None else None
+                    )
                     if (
                         target_id is None
                         or normalized_vector is None
@@ -1592,17 +2058,27 @@ class MigrateEngine:
                             normalized_vector,
                             updated_at or fallback_time,
                             content_hash,
+                            meaning_vector,
                         )
                     )
                     normalized_ids.append(target_id)
 
                 if normalized_rows:
-                    dst.executemany(
-                        """INSERT OR REPLACE INTO embeddings
-                           (bucket_id, embedding, updated_at, content_hash)
-                           VALUES (?, ?, ?, ?)""",
-                        normalized_rows,
-                    )
+                    if meaning_column is not None:
+                        dst.executemany(
+                            """INSERT OR REPLACE INTO embeddings
+                               (bucket_id, embedding, updated_at, content_hash,
+                                meaning_embedding)
+                               VALUES (?, ?, ?, ?, ?)""",
+                            normalized_rows,
+                        )
+                    else:
+                        dst.executemany(
+                            """INSERT OR REPLACE INTO embeddings
+                               (bucket_id, embedding, updated_at, content_hash)
+                               VALUES (?, ?, ?, ?)""",
+                            [r[:4] for r in normalized_rows],
+                        )
                     dst.commit()
                     merged.update(normalized_ids)
                 # Drop the current SQLite payloads before fetchmany builds the

@@ -284,3 +284,126 @@ def test_no_vectors_or_the_same_model_needs_no_confirmation(world, tmp_path):
     assert not ES.needs_reembed(str(empty), "new-embed", "old-embed")
     assert ES.needs_reembed(str(world["db"]), "new-embed", "old-embed")
     assert not ES.needs_reembed(str(world["db"]), "models/old-embed", "")
+
+
+# ───────────────────────── what moves while the recompute runs ─────────────────────────
+
+def _on_new_model_call(world, ready, action):
+    """Run `action(texts the new model already embedded)` once, inside the first call to
+    the new model where `ready(those texts)` holds — the moment a host or a person acts
+    while the recompute is under way."""
+    world["backends"].setdefault("new-embed", _Backend("new-embed", world["failing"]))
+    new = world["backends"]["new-embed"]
+    real = new.generate_async
+    state = {"fired": False}
+
+    async def generate_async(text):
+        already = list(new.calls)
+        if not state["fired"] and ready(already):
+            state["fired"] = True
+            await action(already)
+        return await real(text)
+    new.generate_async = generate_async
+
+
+def test_an_entry_withdrawn_mid_run_gets_no_vector_back_at_the_swap(world):
+    from core import _source_change as SC
+    from core.scope import Host
+    store, live = world["store"], world["live"]
+    host = Host("life", scope_mode="open", may_restore=True)
+    sourced = {}
+
+    async def seed():
+        for n in (1, 2):
+            text = f"依据宿主第 {n} 条的记忆。"
+            bid = await store.create(text, room="EVENT/SELF", sources=[{
+                "system": "lento", "instance": "home", "container": "private:U",
+                "id": f"m_00{n}"}])
+            assert await live.generate_and_store(bid, text)
+            sourced[text] = bid
+    asyncio.run(seed())
+    gone = {}
+
+    async def withdraw(already):
+        text = next(t for t in already if t in sourced)
+        gone["id"] = sourced[text]
+        n = text.split("第 ")[1].split(" ")[0]
+        status, out = await SC.handle(store, {
+            "change_id": "w-mid", "source": f"lento:home/private:U#m_00{n}",
+            "host_seq": 1, "change": "withdrawn"}, host)
+        assert out["state"] == "withdrawn", out
+    # The withdrawal lands right after a sourced entry has its new vector staged (two are
+    # sourced, so another call always follows the first).
+    _on_new_model_call(world, lambda already: any(t in sourced for t in already), withdraw)
+
+    async def go():
+        status, out = await world["call"]("POST", "/api/config", {
+            "embedding": {"model": "new-embed", "reembed": "confirm"}})
+        assert status == 200, out
+        await _finish()
+        st = (await world["call"]("GET", "/api/loci/embedding/migration"))[1]
+        assert st["phase"] == "completed", st
+    asyncio.run(go())
+    dims = _dims(world["db"])
+    assert gone["id"] not in dims, "the withdrawn entry's vector came back at the swap"
+    assert set(dims.values()) == {4} and len(dims) == 4
+
+
+def test_a_meaning_that_fails_is_a_failure_and_can_be_skipped(world):
+    world["failing"].add("那天很开心")
+
+    async def go():
+        status, out = await world["call"]("POST", "/api/config", {
+            "embedding": {"model": "new-embed", "reembed": "confirm"}})
+        assert status == 200, out
+        await _finish()
+        st = (await world["call"]("GET", "/api/loci/embedding/migration"))[1]
+        assert st["phase"] == "failed" and st["failed_count"] == 1, st
+        assert st["failed_items"][0]["bucket_id"] == world["ids"][0]
+        assert "meaning" in st["failed_items"][0]["error"] and st["skippable"], st
+        assert world["sh"].embedding_engine is world["live"], "nothing went live"
+        # The model keeps refusing it: skip it and the rest goes live.
+        status, out = await world["call"]("POST", "/api/loci/embedding/migration",
+                                          {"action": "skip"})
+        assert status == 200, out
+        await _finish()
+        st = (await world["call"]("GET", "/api/loci/embedding/migration"))[1]
+        assert st["phase"] == "completed" and st["skipped_count"] == 1, st
+        assert world["sh"].embedding_engine.model == "new-embed"
+    asyncio.run(go())
+    assert _meaning_dims(world["db"]) == {}
+
+
+def test_a_meaning_written_mid_run_is_computed_again_before_the_swap(world):
+    store = world["store"]
+    changed = {}
+
+    async def new_meaning(already):
+        text = next(t for t in already if t in world["texts"])
+        bid = world["ids"][world["texts"].index(text)]
+        changed["id"] = bid
+        await store.update(bid, meaning_append="后来想想也挺好")
+    _on_new_model_call(world, lambda already: any(t in world["texts"] for t in already),
+                       new_meaning)
+
+    async def go():
+        await world["call"]("POST", "/api/config", {
+            "embedding": {"model": "new-embed", "reembed": "confirm"}})
+        await _finish()
+        st = (await world["call"]("GET", "/api/loci/embedding/migration"))[1]
+        assert st["phase"] == "completed", st
+    asyncio.run(go())
+    assert "后来想想也挺好" in world["backends"]["new-embed"].calls
+    assert _meaning_dims(world["db"]).get(changed["id"]) == 4
+
+
+def test_the_old_backup_copy_does_not_outlive_the_swap(world):
+    backup = Path(str(world["db"]) + ".backup")
+    backup.write_bytes(world["db"].read_bytes())
+
+    async def go():
+        await world["call"]("POST", "/api/config", {
+            "embedding": {"model": "new-embed", "reembed": "confirm"}})
+        await _finish()
+    asyncio.run(go())
+    assert not backup.exists()

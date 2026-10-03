@@ -57,7 +57,11 @@ class DictStore:
     async def get(self, bucket_id):
         return {"id": bucket_id, "content": self.body, "metadata": dict(self.meta)}
 
-    async def update(self, bucket_id, **kwargs):
+    async def update(self, bucket_id, revise=None, **kwargs):
+        if revise is not None:
+            kwargs = {**revise(dict(self.meta)), **kwargs}
+            if not kwargs:
+                return True
         self.updates.append(kwargs)
         for k, v in kwargs.items():
             if v is None:

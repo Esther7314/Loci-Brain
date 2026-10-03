@@ -63,6 +63,7 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from locibrain.eventsourcing.ledger_mirror import file_lease
+from utils import replace_file
 
 from . import _when as _w
 
@@ -381,7 +382,7 @@ class CueLedger:
         with tmp.open("w", encoding="utf-8", newline="\n") as f:
             for r in rows:
                 f.write(json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n")
-        os.replace(tmp, self.path)
+        replace_file(tmp, self.path)
         with self._guard:
             self._reset()
         self.refresh()

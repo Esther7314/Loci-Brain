@@ -142,15 +142,32 @@ class MCPRequestBodyLimitMiddleware:
         await send({"type": "http.response.body", "body": body, "more_body": False})
 
 
-_LARGE_UPLOAD_PATHS = {
-    "/api/import/preflight",
-    "/api/import/upload",
-    "/api/migrate/upload",
+_MIB = 1024 * 1024
+# The files the upload routes take, and what a multipart body adds around one file (the
+# boundaries, the part headers, the few small fields beside it).
+IMPORT_UPLOAD_BYTES = 50 * _MIB         # web/import_api.py: an exported conversation file
+PACKAGE_UPLOAD_BYTES = 512 * _MIB       # web/library_api.py: an export package
+                                        # (locibrain.storage.backup_archive.MAX_ARCHIVE_BYTES)
+MULTIPART_SLACK_BYTES = 1 * _MIB
+
+# The routes that take an upload, each with its own ceiling in place of the management
+# limit. Their bodies are counted as they stream through and never held here: a 512 MiB
+# package must not sit in memory before the route spools it to disk.
+UPLOAD_CEILINGS = {
+    "/api/import/preflight": IMPORT_UPLOAD_BYTES + MULTIPART_SLACK_BYTES,
+    "/api/import/upload": IMPORT_UPLOAD_BYTES + MULTIPART_SLACK_BYTES,
+    "/api/loci/import-package": PACKAGE_UPLOAD_BYTES + MULTIPART_SLACK_BYTES,
 }
 
 
+def upload_ceiling(path: object) -> int:
+    """The body ceiling of an upload route, or 0 for any other path."""
+    return UPLOAD_CEILINGS.get(str(path or "").rstrip("/") or "/", 0)
+
+
 class ManagementRequestBodyLimitMiddleware(MCPRequestBodyLimitMiddleware):
-    """Bound normal Dashboard/OAuth mutations while preserving large upload APIs."""
+    """Bound normal Dashboard/OAuth mutations; an upload route gets its own, larger ceiling
+    (`UPLOAD_CEILINGS`), enforced while the body streams."""
 
     def __init__(
         self,
@@ -161,12 +178,74 @@ class ManagementRequestBodyLimitMiddleware(MCPRequestBodyLimitMiddleware):
     ) -> None:
         def should_limit(path: object) -> bool:
             normalized = str(path or "").rstrip("/") or "/"
-            return (
-                not mcp_path_matcher(normalized)
-                and normalized not in _LARGE_UPLOAD_PATHS
-            )
+            return not mcp_path_matcher(normalized) and not upload_ceiling(normalized)
 
         super().__init__(app, max_bytes=max_bytes, path_matcher=should_limit)
+
+    async def __call__(self, scope: dict, receive: _Receive, send: _Send) -> None:
+        ceiling = upload_ceiling(scope.get("path")) if scope.get("type") == "http" else 0
+        if not ceiling or str(scope.get("method", "GET")).upper() not in {
+                "POST", "PUT", "PATCH"}:
+            await super().__call__(scope, receive, send)
+            return
+        await self._stream_under(ceiling, scope, receive, send)
+
+    async def _stream_under(self, ceiling: int, scope: dict, receive: _Receive,
+                            send: _Send) -> None:
+        """Pass an upload through while counting it. Past the ceiling the client gets a
+        413 at once and the route sees the client gone (its form parser stops, its own
+        answer is dropped)."""
+        headers = {key.lower(): value for key, value in scope.get("headers", [])}
+        raw_length = headers.get(b"content-length", b"").decode("latin-1").strip()
+        if raw_length:
+            try:
+                declared = int(raw_length)
+            except ValueError:
+                declared = -1
+            if declared < 0:
+                await self._send_json(send, 400, "invalid Content-Length")
+                return
+            if declared > ceiling:
+                # A modest overshoot is drained first, as for the management limit (Docker
+                # Desktop resets a connection answered before its body was read); a huge
+                # one is answered straight away.
+                if declared <= ceiling + max(self.max_bytes, _MIB):
+                    await self._drain_request(receive, max_bytes=declared)
+                await self._send_upload_too_large(send, ceiling)
+                return
+
+        received = 0
+        cut = False
+        answered = False
+
+        async def counted_receive() -> dict:
+            nonlocal received, cut, answered
+            if cut:
+                return {"type": "http.disconnect"}
+            message = await receive()
+            if isinstance(message, dict) and message.get("type") == "http.request":
+                received += len(message.get("body", b""))
+                if received > ceiling:
+                    cut = True
+                    if not answered:
+                        answered = True
+                        await self._send_upload_too_large(send, ceiling)
+                    return {"type": "http.disconnect"}
+            return message
+
+        async def guarded_send(message: dict) -> None:
+            nonlocal answered
+            if cut:
+                return
+            if message.get("type") == "http.response.start":
+                answered = True
+            await send(message)
+
+        await self.app(scope, counted_receive, guarded_send)
+
+    async def _send_upload_too_large(self, send: _Send, ceiling: int) -> None:
+        # The panel shows this to the person.
+        await self._send_json(send, 413, f"上传的文件超过 {ceiling // _MIB} MB 的上限")
 
     async def _send_too_large(self, send: _Send) -> None:
         await self._send_json(

@@ -56,7 +56,15 @@ being the conversation's whole run: every memory resting on any of its lines is 
 and cleared like any withdrawn source's, its drafts are removed from the slice store
 (`PendingSlices.purge`) and the batch's directory is deleted. With nothing written from it
 in between, the library is left as it was before the import; what stays is the registry's
-own history (the change lines and the line orders, ids only).
+own history (the change lines and the line orders, ids only). The batch's folder goes lines
+first and record last, so a withdrawal cut off half way is finished by withdrawing again;
+the temporary copies a crash left beside the cleared entries go with it. A batch being
+withdrawn is never drafted again, and a line withdrawn on its own never reaches the side
+model (drafting skips it and drafts the lines on either side apart).
+
+A ChatGPT export is read along the branch the person last saw (`current_node` up through
+the parents): an abandoned answer, the system prompt, tool calls and their output, hidden
+nodes are not lines of the conversation.
 
 Exports: IMPORT_DRAFT_PROMPT · BATCH_RE · ImportStore · ImportRefused · ImportDuplicate ·
          parse_conversations · preview_import · original_of · search_lines ·
@@ -151,9 +159,65 @@ def _parse_claude_json(data: dict | list) -> list[dict]:
     return turns
 
 
+# What of a ChatGPT `mapping` is a line of the conversation as it was had: a message the
+# person or the model said to the other, as text. Tool calls and their output, system
+# prompts, the model's hidden reasoning and the person's custom instructions are not.
+_CHATGPT_SAID_ROLES = frozenset({"user", "assistant"})
+_CHATGPT_TEXT_TYPES = frozenset({"text", "multimodal_text"})
+
+
+def _node_time(node: dict) -> float:
+    msg = node.get("message")
+    try:
+        return float((msg or {}).get("create_time") or 0) if isinstance(msg, dict) else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _chatgpt_path(mapping: dict, current: object) -> list[dict]:
+    """The nodes of the conversation as the person last saw it: from `current_node` up
+    through each node's `parent` to the root, then in order. A regenerated answer or an
+    edited question leaves the abandoned branch in the tree; following the parents of the
+    current node passes it by. An export with no `current_node` is followed from its
+    newest node; one whose nodes carry no parents at all has no branches to tell apart
+    and is read in creation order."""
+    nodes = {str(k): n for k, n in mapping.items() if isinstance(n, dict)}
+    if not any(n.get("parent") for n in nodes.values()):
+        return sorted(nodes.values(), key=_node_time)
+    tip = str(current or "")
+    if tip not in nodes:
+        tip = max(nodes, key=lambda k: _node_time(nodes[k]), default="")
+    path: list[dict] = []
+    seen: set[str] = set()
+    while tip and tip in nodes and tip not in seen:
+        seen.add(tip)
+        path.append(nodes[tip])
+        tip = str(nodes[tip].get("parent") or "")
+    path.reverse()
+    return path
+
+
+def _chatgpt_said(msg: dict) -> str:
+    """The text of one mapping message when it is a line of talk (see
+    _CHATGPT_SAID_ROLES), else ""."""
+    role = str((msg.get("author") or {}).get("role") or "")
+    meta = msg.get("metadata") if isinstance(msg.get("metadata"), dict) else {}
+    content_obj = msg.get("content") if isinstance(msg.get("content"), dict) else {}
+    if (role not in _CHATGPT_SAID_ROLES
+            or meta.get("is_visually_hidden_from_conversation")
+            or msg.get("recipient") not in (None, "", "all")
+            or str(content_obj.get("content_type") or "text") not in _CHATGPT_TEXT_TYPES):
+        return ""
+    parts = content_obj.get("parts") or []
+    # A part that is not text (an image, an attachment) is not a line of talk.
+    return " ".join(p for p in parts if isinstance(p, str) and p).strip()
+
+
 def _parse_chatgpt_json(data: list | dict) -> list[dict]:
     """ChatGPT export JSON (one conversation or a list) -> [{role, content, timestamp}].
-    The tree of a `mapping` is read in creation order."""
+    A `mapping` tree is read along the branch that ends at `current_node`
+    (`_chatgpt_path`), keeping only what the person and the model said to each other
+    (`_chatgpt_said`)."""
     turns = []
     conversations = data if isinstance(data, list) else [data]
     for conv in conversations:
@@ -161,29 +225,18 @@ def _parse_chatgpt_json(data: list | dict) -> list[dict]:
             continue
         mapping = conv.get("mapping", {})
         if mapping and isinstance(mapping, dict):
-            valid_nodes = [n for n in mapping.values() if isinstance(n, dict)]
-
-            def _node_ts(n):
-                msg = n.get("message")
-                if not isinstance(msg, dict):
-                    return 0
-                return msg.get("create_time") or 0
-
-            for node in sorted(valid_nodes, key=_node_ts):
+            for node in _chatgpt_path(mapping, conv.get("current_node")):
                 msg = node.get("message")
                 if not msg or not isinstance(msg, dict):
                     continue
-                content_obj = msg.get("content", {})
-                parts = content_obj.get("parts", []) if isinstance(content_obj, dict) else []
-                # A part that is not text (an image, an attachment) is not a line of talk.
-                content = " ".join(p for p in parts if isinstance(p, str) and p)
-                if not content.strip():
+                content = _chatgpt_said(msg)
+                if not content:
                     continue
                 role = (msg.get("author") or {}).get("role", "user")
                 ts = msg.get("create_time", "")
                 if isinstance(ts, (int, float)):
                     ts = datetime.fromtimestamp(ts).isoformat()
-                turns.append({"role": str(role), "content": content.strip(),
+                turns.append({"role": str(role), "content": content,
                               "timestamp": str(ts or "")})
         else:
             messages = conv.get("messages", [])
@@ -481,10 +534,23 @@ class ImportStore:
         return next((m for m in self.batches() if m.get("sha256") == sha256), None)
 
     def delete(self, batch: str) -> bool:
+        """Delete a batch's folder. The lines go first and the record last, so a delete cut
+        off half way leaves the record: the batch is still found and withdrawing it again
+        finishes the job. True when something of the batch was on disk."""
         where = self._dir(batch)
         if not where.exists():
             return False
-        shutil.rmtree(where)
+        for path in sorted(where.iterdir()):
+            if path.name == BATCH_FILE:
+                continue
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+        record = where / BATCH_FILE
+        if record.exists():
+            record.unlink()
+        where.rmdir()
         try:
             self.root.rmdir()           # only when no other batch is left in it
         except OSError:
@@ -603,6 +669,65 @@ def draft_prompt(same_self: bool) -> str:
 # ============================================================
 # The engine
 # ============================================================
+
+def _sweep_temp_copies(base_dir: str, ids: list[str]) -> int:
+    """Delete the temporary files a crash left beside these entries' files (an atomic
+    write's `<file>.<hex>.tmp`, a package import's staging copy): each can hold the whole
+    text the withdrawal just cleared. Returns how many went."""
+    from .schema import MEMORY_DIRS
+    wanted = [i for i in ids if i]
+    if not wanted:
+        return 0
+    gone = 0
+    for sub in MEMORY_DIRS:
+        folder = Path(base_dir) / sub
+        if not folder.is_dir():
+            continue
+        for path in folder.rglob("*"):
+            name = path.name
+            if not (name.endswith(".tmp") or ".staging-" in name) or not path.is_file():
+                continue
+            if any(i in name for i in wanted):
+                try:
+                    path.unlink()
+                    gone += 1
+                except OSError as exc:
+                    logger.warning("[import] could not delete %s: %s", path, exc)
+    return gone
+
+
+def draft_refusal(meta: dict) -> str:
+    """Why this batch may not be drafted (again), or "": a batch being withdrawn is on its
+    way out — its lines must not reach the side model or come back as drafts."""
+    if str(meta.get("status") or "") == WITHDRAWING:
+        return ("这一批正在撤回（撤回没走完），不能再起草：再点一次撤回把它清完。")
+    return ""
+
+
+def _usable_stretches(store, source: dict, rows: list[dict]) -> list[list[dict]]:
+    """The conversation's lines that may still be drafted, as runs of consecutive lines:
+    a line the registry holds as withdrawn, deleted or held is left out, and the lines on
+    either side of it are drafted apart (a draft spanning it would be a run standing on
+    it). All of them in one run when nothing was withdrawn."""
+    registry = getattr(store, "sources", None)
+    if registry is None:
+        return [rows] if rows else []
+    gone = (_src.WITHDRAWN, _src.DELETED, _src.HELD)
+    stretches: list[list[dict]] = []
+    current: list[dict] = []
+    for row in rows:
+        sid = _src.SourceId(source["system"], source["instance"], source["container"],
+                            str(row.get("id") or ""))
+        if registry.state_of(sid) in gone:
+            if current:
+                stretches.append(current)
+            current = []
+            continue
+        current.append(row)
+    if current:
+        stretches.append(current)
+    return stretches
+
 
 async def _await_worker(func, *args):
     """Run CPU-heavy parsing off the event loop; a cancelled request still waits for the
@@ -813,6 +938,9 @@ class ImportEngine:
         meta = store.meta(batch)
         if meta is None:
             raise ImportRefused(f"没有这一批导入：{batch}")
+        refusal = draft_refusal(meta)
+        if refusal:
+            raise ImportRefused(refusal)
         if job_id:
             self.working_on(job_id, batch)
         model = self._side_model()
@@ -829,7 +957,7 @@ class ImportEngine:
         prompt = draft_prompt(same_self)
         slices_store = self.bucket_mgr.slices
         for conv in meta["conversations"]:
-            if conv.get("drafted"):
+            if conv.get("drafted") or conv.get("withdrawn"):
                 continue
             with self._job_guard:
                 paused = self._paused
@@ -840,23 +968,35 @@ class ImportEngine:
                 return self.describe(meta)
             rows = store.lines(batch, conv["container"])
             source = {"system": IMPORT_SYSTEM, "instance": batch, "container": conv["container"]}
+            stretches = _usable_stretches(self.bucket_mgr, source, rows)
+            if not stretches:
+                # Every line of it was withdrawn: nothing to draft, nothing to fail.
+                conv.update(withdrawn=True, error="")
+                store.save_meta(meta)
+                continue
+            drafted = 0
             try:
-                cut = await SL.slice_lines(
-                    [{"id": r["id"], "text": r.get("text") or "", "at": _short_at(r.get("at")),
-                      "speaker": speaker_label(r.get("role"), same_self, human)}
-                     for r in rows], model=model, prompt=prompt)
-                if cut:
-                    ids = [r["id"] for r in rows]
+                for stretch in stretches:
+                    cut = await SL.slice_lines(
+                        [{"id": r["id"], "text": r.get("text") or "",
+                          "at": _short_at(r.get("at")),
+                          "speaker": speaker_label(r.get("role"), same_self, human)}
+                         for r in stretch], model=model, prompt=prompt)
+                    if not cut:
+                        continue
+                    ids = [r["id"] for r in stretch]
                     day = conv.get("day") or str(meta.get("created_at") or "")[:10]
                     await slices_store.record_batch(
                         batch_id=SL.batch_id_of(source, day, ids), source=source, day=day,
                         revision=None,
-                        lines=[(r["id"], SL.fingerprint_of(r.get("text") or "")) for r in rows],
+                        lines=[(r["id"], SL.fingerprint_of(r.get("text") or ""))
+                               for r in stretch],
                         slices=[{"first": s.first, "last": s.last, "gist": s.gist,
                                  "draft": s.draft, "guesses": []} for s in cut],
                         model=str(getattr(model, "model_name", "") or ""),
                         origin={"batch": batch, "same_self": same_self,
                                 "title": conv.get("title") or ""})
+                    drafted += len(cut)
             except Exception as e:      # noqa: BLE001 - said by name in the status, resumable
                 why = str(e) if isinstance(e, SL.SlicerError) else f"{type(e).__name__}: {e}"
                 conv["error"] = why[:_ERROR_MAX]
@@ -864,9 +1004,9 @@ class ImportEngine:
                                conv["container"], why[:_ERROR_MAX])
                 store.save_meta(meta)
                 continue
-            conv.update(drafted=True, drafts=len(cut), error="")
+            conv.update(drafted=True, drafts=drafted, error="")
             store.save_meta(meta)
-        convs = meta["conversations"]
+        convs = [c for c in meta["conversations"] if not c.get("withdrawn")]
         failed = [c for c in convs if c.get("error")]
         meta["status"] = (DRAFTED if not failed
                           else PARTIAL if any(c.get("drafted") for c in convs) else FAILED)
@@ -906,7 +1046,19 @@ class ImportEngine:
         except ImportRefused:
             meta = None
         if meta is None:
-            return 404, {"error": f"没有这一批导入：{str(batch)[:40]}"}
+            # No record but lines on disk: a delete cut off half way (an older layout
+            # removed the record first), or a store cut off before its record was
+            # written. Nothing can rest on such a batch; its text goes now.
+            leftover = BATCH_RE.match(str(batch or "")) and store.delete(batch)
+            if not leftover:
+                return 404, {"error": f"没有这一批导入：{str(batch)[:40]}"}
+            slices = getattr(self.bucket_mgr, "slices", None)
+            dropped = await slices.purge(batch) if slices is not None else 0
+            logger.info("[import] %s: leftover text deleted", batch)
+            return 200, {"ok": True, "status": "withdrawn", "batch": batch,
+                         "conversations": 0, "entries": [], "derived_pending": [],
+                         "changes": [], "drafts_deleted": dropped, "text_deleted": True,
+                         "temp_files_deleted": 0}
         if self.active_batch == batch:
             return 409, {"error": "这一批还在起草，先暂停（/api/import/pause），停下来再撤回。"}
         meta["status"] = WITHDRAWING
@@ -936,8 +1088,9 @@ class ImportEngine:
                          "note": "有地方没清完（看 changes 里的 pending），再撤回一次接着清。"}
         slices = getattr(self.bucket_mgr, "slices", None)
         dropped = await slices.purge(batch) if slices is not None else 0
+        swept = await asyncio.to_thread(_sweep_temp_copies, store.base_dir, entries)
         deleted = store.delete(batch)
         logger.info("[import] %s withdrawn: %d memories cleared, %d drafts removed", batch,
                     len(entries), dropped)
         return 200, {"ok": True, "status": "withdrawn", **out, "drafts_deleted": dropped,
-                     "text_deleted": deleted}
+                     "text_deleted": deleted, "temp_files_deleted": swept}

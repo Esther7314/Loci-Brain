@@ -29,7 +29,9 @@ merely touched" (TraceTouched), and only those about sources the calling host's
 credential (`max_grant`) reaches. A memory line counts as about every source standing
 behind the memory — its own records and, for anything derived, every root's (the same
 walk as the read gate, core/scope.ScopeView, judging only where each source lies); a
-memory with none, or with one past the credential, is not shown to a host with a ceiling.
+memory with none, or with one past the credential, is not shown to a host with a ceiling,
+and its id is left out of the `entries` a source line lists (`visible_ids` says the same
+for a change's receipt).
 
 Where a host reads from depends on whether it has a ceiling:
 
@@ -49,7 +51,7 @@ change's own line.
 
 Exports: SOURCE_CHANGED · SOURCE_CLEARED · TRACE_CLEARED · NOISE · CursorError · payload_of ·
          source_keys · public_row · scrub_traces · cursor_of · seq_of_cursor · host_view ·
-         changes_since
+         visible_ids · changes_since
 ========================================
 """
 
@@ -193,32 +195,43 @@ class CursorError(ValueError):
     """A cursor this library did not hand to this host."""
 
 
+_KEY_BYTES = 32
+
+
 def _cursor_key(ledger) -> bytes:
-    """The library's cursor key, made on first use (created exclusively, so two processes
-    racing to make it end up with the same one)."""
+    """The library's cursor key, made on first use. It is made under a lease beside it and
+    written whole into a temporary file that is then renamed into place, so no reader ever
+    sees half a key, and two processes racing to make it end up with the same one. A key
+    file shorter than a key (an older crash between creating and writing it) never signed
+    a cursor that verifies: it is made again."""
+    from locibrain.eventsourcing.ledger_mirror import file_lease
+
     path = Path(ledger.path).with_name(CURSOR_KEY_FILE)
     try:
         data = path.read_bytes()
-        if len(data) >= 32:
-            return data[:32]
+        if len(data) >= _KEY_BYTES:
+            return data[:_KEY_BYTES]
     except OSError:
         pass
     path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError:
-        # Another process is making it: wait for its 32 bytes.
-        for _ in range(100):
+    with file_lease(path.with_name(CURSOR_KEY_FILE + ".lock")):
+        try:
             data = path.read_bytes()
-            if len(data) >= 32:
-                return data[:32]
-            time.sleep(0.01)
-        raise CursorError("the cursor key is unreadable") from None
-    with os.fdopen(fd, "wb") as f:
-        f.write(os.urandom(32))
-        f.flush()
-        os.fsync(f.fileno())
-    return path.read_bytes()[:32]
+            if len(data) >= _KEY_BYTES:
+                return data[:_KEY_BYTES]
+        except OSError:
+            pass
+        tmp = path.with_name(f"{CURSOR_KEY_FILE}.{os.getpid()}.tmp")
+        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(os.urandom(_KEY_BYTES))
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+        data = path.read_bytes()
+    if len(data) < _KEY_BYTES:
+        raise CursorError("the cursor key is unreadable")
+    return data[:_KEY_BYTES]
 
 
 def _round(key: bytes, i: int, half: int) -> int:
@@ -288,6 +301,28 @@ def _coverage_view(host, metas: dict, registry) -> Optional[_CoverageView]:
     return _CoverageView(req, metas, registry)
 
 
+async def _library_metas(store) -> dict:
+    metas: dict = {}
+    for b in await store.list_all(include_archive=True):
+        meta = b.get("metadata") or {}
+        bid = str(meta.get("id") or b.get("id") or "")
+        if bid:
+            metas[bid] = meta
+    return metas
+
+
+async def visible_ids(store, host, ids: Iterable[str]) -> set:
+    """Which of these memory ids `host` may be told of: all of them for a host without a
+    ceiling; for one with a ceiling, those whose every source lies within it (the walk
+    `/changes` judges memory lines by). An id the library no longer has is not told."""
+    ids = [str(i) for i in ids if i]
+    if not host_view(host):
+        return set(ids)
+    metas = await _library_metas(store)
+    view = _coverage_view(host, metas, store.sources)
+    return {i for i in ids if view is not None and view.permits_id(i)}
+
+
 def _covered(view: Optional[_CoverageView], places, key: str) -> bool:
     if view is None:
         return True
@@ -318,11 +353,7 @@ async def changes_since(store, host, since: int = 0, limit: int = CHANGES_LIMIT,
     metas: dict = {}
     view = None
     if host is not None and host.max_grant is not None:
-        for b in await store.list_all(include_archive=True):
-            meta = b.get("metadata") or {}
-            bid = str(meta.get("id") or b.get("id") or "")
-            if bid:
-                metas[bid] = meta
+        metas = await _library_metas(store)
         view = _coverage_view(host, metas, store.sources)
     places = tuple(host.max_grant) if view is not None else ()
     out: list[dict] = []
@@ -345,6 +376,9 @@ async def changes_since(store, host, since: int = 0, limit: int = CHANGES_LIMIT,
             if etype in SOURCE_EVENTS:
                 if not _covered(view, places, row.get("source", "")):
                     continue
+                if "entries" in row:
+                    # A memory it may not reconcile is not named, even on its own source's line.
+                    row["entries"] = [b for b in row["entries"] if view.permits_id(b)]
             else:
                 bid = row.get("id", "")
                 meta = metas.get(bid)

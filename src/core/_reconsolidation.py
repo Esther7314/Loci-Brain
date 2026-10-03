@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Iterable, Optional
@@ -67,6 +68,11 @@ SIMILARITY_LINE = 0.80
 # loaded model in well under this; a cold model or a dead backend costs the meaning hits of
 # this one write, not the write.
 MEANING_BUDGET_SECONDS = 2.0
+# After the budget runs out, the look-back does not ask the vector backend again for this
+# long: a hung backend then costs one write a minute the budget instead of every write.
+QUIET_AFTER_TIMEOUT_SECONDS = 60.0
+# Kept on the engine object, so a new engine (a reload, a switch) starts unmuted.
+_QUIET_ATTR = "_look_back_quiet_until"
 # How many neighbours the vector search returns before lineage and the gate thin them.
 _SEARCH_TOP_K = 8
 # How far a lineage walk goes; a prov loop or a very long chain ends here.
@@ -186,12 +192,24 @@ async def _meaning_hits(store, views: _Views, text: str) -> list[Hit]:
     engine = getattr(store, "embedding_engine", None)
     if engine is None or not getattr(engine, "enabled", False) or not views.by_id:
         return []
+    if time.monotonic() < float(getattr(engine, _QUIET_ATTR, 0.0) or 0.0):
+        return []
     try:
         pairs = await asyncio.wait_for(
             engine.search_similar_strict(text, top_k=_SEARCH_TOP_K, among=list(views.by_id)),
             timeout=MEANING_BUDGET_SECONDS)
     except Exception as e:  # noqa: BLE001 - no vectors means no meaning hits, never a failed write
-        logger.info("look-back: meaning hits skipped (%s: %s)", type(e).__name__, e)
+        # Loud: a vector backend that is down or hung costs every write this budget and
+        # drops the meaning hits, and nothing else says so. After a timeout the look-back
+        # leaves the backend alone for a while, so a hung service costs one write in
+        # QUIET_AFTER_TIMEOUT_SECONDS the budget, not every write.
+        if isinstance(e, asyncio.TimeoutError):
+            try:
+                setattr(engine, _QUIET_ATTR, time.monotonic() + QUIET_AFTER_TIMEOUT_SECONDS)
+            except AttributeError:
+                pass
+        logger.warning("look-back: meaning hits skipped (%s: %s) — the vector backend did "
+                       "not answer within %.1fs", type(e).__name__, e, MEANING_BUDGET_SECONDS)
         return []
     return [Hit(str(bid), MEANING, f"{float(s):.2f}", float(s))
             for bid, s in pairs if float(s) >= SIMILARITY_LINE and str(bid) in views.by_id]
@@ -200,8 +218,7 @@ async def _meaning_hits(store, views: _Views, text: str) -> list[Hit]:
 async def look_back(store, buckets: list, writes: list[tuple[str, str]], *, scope=None,
                     now: Optional[datetime] = None, skip: Iterable[str] = ()) -> list[Hit]:
     """The old views these writes run into, at most LIMIT. `buckets` is the library as it
-    stood before the write (listing it after would re-read every file: the write cleared the
-    store's cache). `writes` are (new id, body); `skip` is the writes' lineage."""
+    stood before the write. `writes` are (new id, body); `skip` is the writes' lineage."""
     if not writes:
         return []
     now = now or _w.now()

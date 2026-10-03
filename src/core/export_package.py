@@ -52,11 +52,15 @@ Bringing a package back (`restore_library_state`, called by the importer after i
 written the entries): into a library that had no entries, every state file is put in place
 as it was. Into a library that already has entries, four kinds join what is there — the
 source registry (a source the library has never heard of comes in with its whole chain,
-renumbered after the library's own; a source both know keeps the library's), the host's
-line orders (registrations are joined by design), imported conversation batches (a batch
-the library does not have), and the names table (names it does not know are added) — and
-the rest, which name entries and windows of the other library, are reported as not
-merged.
+renumbered after the library's own; a source both know, or one the library's own entries
+stand on, keeps the library's: a package is no change authority), the host's line orders
+(registrations are joined by design), imported conversation batches (a batch the library
+does not have), and the names table (names it does not know are added) — and the rest,
+which name entries and windows of the other library, are reported as not merged. What the
+importer refused to write (core/migrate_engine.REFUSAL_WORDS) is taken off the state files
+the way an export takes off what it leaves out, and its originals and attachments stay
+out; a file already in place byte for byte counts as restored, so a second run of an
+interrupted import finishes the first.
 
 Adding a kind of library state to the package is one row in `STATE_FILES`.
 
@@ -293,6 +297,8 @@ _LEFT_BEHIND: tuple[tuple[str, str], ...] = (
     ("_sources/" + _src.WRITE_KEYS_FILE, "host resend claims: their stored replies can "
      "hold text no withdrawal reaches; a resend after the move is written again"),
     ("_sources/cleanup.jsonl", "the progress of a clearing in flight"),
+    ("_state/import_package.json", "the receiving library's own record of a package "
+                                   "import"),
     ("_state/schema.json", "the receiving library stamps its own version; the package's "
                            "is in export_meta.json"),
     ("embeddings.db.backup", "the vectors before a model switch"),
@@ -704,11 +710,39 @@ def _append_rows(path: Path, rows: list[dict]) -> None:
             os.fsync(f.fileno())
 
 
-def _merge_registry(base: Path, changes: list[dict], held: list[dict]) -> dict:
+def _stood_on(registry, own_basis: Iterable) -> Callable[[str], bool]:
+    """`check(source key)`: does any of the library's own entries stand on that source
+    — the same identity, a run holding it, a line inside it, or an overlapping run, read
+    with the registry's line orders (core/_sources.names_identity, both ways)?"""
+    by_place: dict[tuple, list] = {}
+    for have in own_basis:
+        by_place.setdefault((have.system, have.instance, have.container), []).append(have)
+
+    def check(key: str) -> bool:
+        try:
+            want = _src.SourceId.parse(str(key))[0]
+        except (_src.SourceRecordError, ValueError):
+            return False
+        for have in by_place.get((want.system, want.instance, want.container), ()):
+            if (_src.names_identity(have, want, registry)
+                    or _src.names_identity(want, have, registry)):
+                return True
+        return False
+    return check
+
+
+def _merge_registry(base: Path, changes: list[dict], held: list[dict],
+                    stood_on: Optional[Callable[[str], bool]] = None) -> dict:
     """A source the library has never heard of comes in with its whole chain, its seq
     numbers moved past the library's own (so the order within the chain, and between it
     and its holds, stays as it was); a source the library knows keeps the library's chain
-    and holds. A change the library already applied (same host and change_id) is skipped."""
+    and holds. A change the library already applied (same host and change_id) is skipped.
+
+    A source the library's own entries stand on (`stood_on`) is settled by the library's
+    host alone: a package row for it — a withdrawal, a hold, a narrowed use, a revision —
+    is not appended (`refused_stood_on`). A package is no change authority, and a row
+    appended without the clearing a change does would leave those entries half withdrawn;
+    the host sends its change to this library if the source changed."""
     changes_path = base / _src.SOURCES_DIR / _src.CHANGES_FILE
     held_path = base / _src.SOURCES_DIR / _src.HELD_FILE
     own = _src._read_lines(changes_path)
@@ -718,11 +752,24 @@ def _merge_registry(base: Path, changes: list[dict], held: list[dict]) -> dict:
     applied = {(str(r.get("host") or ""), str(r.get("change_id") or "")) for r in own}
     shift = max((int(r.get("seq") or 0) for r in own), default=0)
     kept_own: set[str] = set()
+    refused: set[str] = set()
+    verdict: dict[str, bool] = {}
+
+    def own_ground(source: str) -> bool:
+        if stood_on is None:
+            return False
+        if source not in verdict:
+            verdict[source] = stood_on(source)
+        return verdict[source]
+
     add: list[dict] = []
     for r in changes:
         source = str(r.get("source") or "")
         if source in known:
             kept_own.add(source)
+            continue
+        if own_ground(source):
+            refused.add(source)
             continue
         if (str(r.get("host") or ""), str(r.get("change_id") or "")) in applied:
             continue
@@ -733,12 +780,15 @@ def _merge_registry(base: Path, changes: list[dict], held: list[dict]) -> dict:
         if source in known:
             kept_own.add(source)
             continue
+        if own_ground(source):
+            refused.add(source)
+            continue
         add_held.append({**r, "after_seq": int(r.get("after_seq") or 0) + shift})
     _append_rows(changes_path, add)
     _append_rows(held_path, add_held)
     return {"sources_added": len({r["source"] for r in add} | {r["source"] for r in add_held}),
             "changes_added": len(add), "holds_added": len(add_held),
-            "kept_own": sorted(kept_own)}
+            "kept_own": sorted(kept_own), "refused_stood_on": sorted(refused)}
 
 
 def _merge_orders(path: Path, rows: list[dict]) -> dict:
@@ -793,18 +843,51 @@ def _merge_names(data: bytes) -> dict:
     return {"added": added, "kept_own": kept, "refused": refused}
 
 
+def _scrubbed(spec: StateFile, data: bytes, ctx: _Scrub) -> Optional[bytes]:
+    """A state file through its row's filter, for the receiving library: the entries the
+    import did not write leave it, and lines the library's registry withdrew. When the
+    filter takes nothing out, the package's own bytes go back (a filter re-serialises)."""
+    if spec.scrub is None:
+        return data
+    out = spec.scrub(data, ctx)
+    if out is None or out == data:
+        return out
+    try:
+        if json.loads(out) == json.loads(data):
+            return data
+    except ValueError:
+        if _rows(out) == _rows(data):
+            return data
+    return out
+
+
+def _same_bytes(path: Path, data: bytes) -> bool:
+    try:
+        return path.stat().st_size == len(data) and path.read_bytes() == data
+    except OSError:
+        return False
+
+
 def restore_library_state(store, members: dict[str, str], *, fresh: bool,
-                          id_map: dict[str, str]) -> dict:
+                          id_map: dict[str, str], left_out: Iterable[str] = (),
+                          own_basis: Iterable = ()) -> dict:
     """Put the package's library state in place after its entries were written.
 
     `members`: package member -> local file, for the state/, originals/ and media/ members.
-    `fresh`: the library had no entries before this import. `id_map`: package id -> the id
-    it was written under, for every entry imported (an entry skipped is absent).
+    `fresh`: the library had no entries before this import (a second run of an interrupted
+    import keeps the first run's word). `id_map`: package id -> the id it was written
+    under, for every entry imported (an entry skipped or refused is absent; its original
+    and attachments stay out too). `left_out`: the package ids the import refused, taken
+    off the state files the way an export takes off what it leaves out. `own_basis`: the
+    sources the library's own entries stand on (SourceIds), which no package row settles
+    (`_merge_registry`). A file already in place byte for byte counts as restored.
     Returns what was restored, merged, and left as it was."""
     base = Path(store.base_dir).resolve()
     report: dict[str, Any] = {"mode": "fresh" if fresh else "merge", "restored": [],
                               "merged": {}, "not_merged": [], "unknown": [],
                               "originals": 0, "media": 0, "kept": [], "errors": []}
+    registry = getattr(store, "sources", None)
+    left = frozenset(left_out)
 
     def read(member: str) -> bytes:
         source = members[member]
@@ -812,6 +895,17 @@ def restore_library_state(store, members: dict[str, str], *, fresh: bool,
             return source
         with open(source, "rb") as f:
             return f.read()
+
+    def put(dest: Path, data: bytes, label: str, counter: str = "") -> None:
+        if dest.exists() and not _same_bytes(dest, data):
+            report["kept"].append(label)
+            return
+        if not dest.exists():
+            _atomic_bytes(dest, data)
+        if counter:
+            report[counter] += 1
+        else:
+            report["restored"].append(label)
 
     registry_rows: dict[str, list] = {}
     for member in sorted(members):
@@ -824,25 +918,27 @@ def restore_library_state(store, members: dict[str, str], *, fresh: bool,
                 target_id = id_map.get(source_id)
                 if not target_id:
                     continue
-                dest = Path(store._sunk_orig_path(target_id))
-                if dest.exists():
-                    report["kept"].append(f"archive/原文/{target_id}.txt")
-                    continue
-                _atomic_bytes(dest, read(member))
-                report["originals"] += 1
+                put(Path(store._sunk_orig_path(target_id)), read(member),
+                    f"archive/原文/{target_id}.txt", "originals")
                 continue
             if member.startswith(MEDIA_PREFIX):
                 rel = member[len(MEDIA_PREFIX):]
-                dest = (base / rel).resolve()
-                if not (rel.startswith(MEDIA_DIR + "/")
-                        and dest.is_relative_to(base / MEDIA_DIR)):
+                parts = rel.split("/")
+                if not (len(parts) >= 3 and parts[0] == MEDIA_DIR
+                        and (base / rel).resolve().is_relative_to(base / MEDIA_DIR)):
                     report["unknown"].append(member)
                     continue
-                if dest.exists():
-                    report["kept"].append(rel)
+                # An attachment goes with its entry: not at all for one not written, under
+                # the new id for a copy written under one.
+                target_id = id_map.get(parts[1])
+                if not target_id:
                     continue
-                _atomic_bytes(dest, read(member))
-                report["media"] += 1
+                rel = "/".join([MEDIA_DIR, target_id, *parts[2:]])
+                dest = (base / rel).resolve()
+                if not dest.is_relative_to(base / MEDIA_DIR):
+                    report["unknown"].append(member)
+                    continue
+                put(dest, read(member), rel, "media")
                 continue
             spec = state_member_spec(member)
             if spec is None:
@@ -853,11 +949,16 @@ def restore_library_state(store, members: dict[str, str], *, fresh: bool,
             if spec.merge == REGISTRY:
                 registry_rows[spec.path] = _rows(read(member))
                 continue
-            if not _has_content(dest) and (fresh or spec.merge != FRESH):
-                _atomic_bytes(dest, read(member))
+            data = _scrubbed(spec, read(member), _Scrub(left, registry, rel))
+            if not data:
+                continue
+            if _same_bytes(dest, data):
+                report["restored"].append(rel)
+            elif not _has_content(dest) and (fresh or spec.merge != FRESH):
+                _atomic_bytes(dest, data)
                 report["restored"].append(rel)
             elif spec.merge == ORDERS:
-                report["merged"][rel] = _merge_orders(dest, _rows(read(member)))
+                report["merged"][rel] = _merge_orders(dest, _rows(data))
             elif spec.merge == ADD:
                 report["kept"].append(rel)
             else:
@@ -875,15 +976,24 @@ def restore_library_state(store, members: dict[str, str], *, fresh: bool,
             held = registry_rows.get(f"{_src.SOURCES_DIR}/{_src.HELD_FILE}", [])
             own_changes = base / _src.SOURCES_DIR / _src.CHANGES_FILE
             own_held = base / _src.SOURCES_DIR / _src.HELD_FILE
-            if not _has_content(own_changes) and not _has_content(own_held):
+            # Whole only into a library that had no entries: one with entries stands on
+            # sources of its own, which the package's rows may not settle.
+            if fresh and not _has_content(own_changes) and not _has_content(own_held):
                 for rows, dest, name in ((changes, own_changes, _src.CHANGES_FILE),
                                          (held, own_held, _src.HELD_FILE)):
                     if rows:
                         _atomic_bytes(dest, _jsonl(rows))
                         report["restored"].append(f"{_src.SOURCES_DIR}/{name}")
+            elif fresh and _src._read_lines(own_changes) == changes and _src._read_lines(
+                    own_held) == held:
+                # Put in place by an earlier run of this same import.
+                report["restored"] += [f"{_src.SOURCES_DIR}/{n}" for n, rows in (
+                    (_src.CHANGES_FILE, changes), (_src.HELD_FILE, held)) if rows]
             else:
-                report["merged"][_src.SOURCES_DIR] = _merge_registry(base, changes, held)
-            registry = getattr(store, "sources", None)
+                if registry is not None:
+                    registry.rebuild_index()      # the line orders merged above
+                report["merged"][_src.SOURCES_DIR] = _merge_registry(
+                    base, changes, held, _stood_on(registry, own_basis))
             if registry is not None:
                 registry.rebuild_index()
         except Exception as exc:                      # noqa: BLE001
@@ -917,7 +1027,7 @@ def library_snapshot(buckets_dir, *, alias_path: Optional[str] = None,
                      left_out: Iterable[str] = ()) -> dict:
     """Everything a package carries, read off a library folder in a form two libraries
     can be compared by: each entry's frontmatter and body, sunk originals, attachments,
-    vectors, every state file (passed through the export's own filters with `left_out`,
+    content and meaning vectors, every state file (passed through the export's own filters with `left_out`,
     so a library and its restored copy compare equal), the registry's answers per source,
     and the names table."""
     import yaml
@@ -925,7 +1035,8 @@ def library_snapshot(buckets_dir, *, alias_path: Optional[str] = None,
     base = Path(buckets_dir).resolve()
     left = set(left_out)
     out: dict[str, Any] = {"entries": {}, "originals": {}, "media": {}, "state": {},
-                           "vectors": {}, "registry": {}, "names": None}
+                           "vectors": {}, "meaning_vectors": {}, "registry": {},
+                           "names": None}
     for sub in ("permanent", "dynamic", "feel", "archive"):
         d = base / sub
         if not d.is_dir():
@@ -963,6 +1074,16 @@ def library_snapshot(buckets_dir, *, alias_path: Optional[str] = None,
                         out["vectors"][str(bid)] = str(emb)
         except sqlite3.Error:
             pass
+        try:
+            for bid, emb in con.execute("SELECT bucket_id, meaning_embedding FROM embeddings "
+                                        "WHERE meaning_embedding IS NOT NULL"):
+                if bid in out["entries"] and str(emb or "").strip():
+                    try:
+                        out["meaning_vectors"][str(bid)] = json.loads(emb)
+                    except (TypeError, ValueError):
+                        out["meaning_vectors"][str(bid)] = str(emb)
+        except sqlite3.Error:
+            pass                    # a database from before meaning vectors had a column
         finally:
             con.close()
     registry = _src.SourceRegistry(base)

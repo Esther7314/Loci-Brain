@@ -44,7 +44,8 @@ from contextlib import AsyncExitStack
 from typing import Optional
 
 from locibrain.domain.memory_messages import resolved_hint
-from utils import PROV_FIELD, is_telic, parse_bool, read_prov
+from utils import (PROV_FIELD, PROV_MAX_LINES, WAS_QUOTED_FROM, is_telic, parse_bool,
+                   read_prov)
 from .. import _runtime as rt
 from .._pin import pin_note
 from core._rooms import check_room
@@ -121,56 +122,90 @@ def _check_when(when: str, meta: dict) -> str | None:
     if _H.is_hold(meta):
         # A hold's when is the day it ends or the days it covers (core/_holds.py).
         return _H.check_hold_when(when) or None
+    # A day with a clock time (`2026-09-01 20:00`, local unless it says otherwise) is the
+    # same shape grow takes and the backfill writes, so a read hour can be corrected.
+    from ..grow.rooms_path import clock_when
+    if clock_when(when)[1]:
+        return None
     if is_telic(meta):
         if not (_DATE_RE.match(when) or _DUR_RE.match(when)):
-            return ('想发生的事，when 要么是个日子（"2026-09-01"），'
+            return ('想发生的事，when 要么是个日子（"2026-09-01"，可带钟点 "2026-09-01 20:00"），'
                     '要么是段时长（"3w" / "10d" / "2m" / "1y"）。')
         return _check_real_dates(when) if _DATE_RE.match(when) else None
     if not _DATE_RE.match(when):
-        return ('普通记忆的 when 是**它发生的那一天**："2026-07-06"。\n'
+        return ('普通记忆的 when 是**它发生的那一天**："2026-07-06"（可带钟点 "2026-07-06 18:30"）。\n'
                 '（"3w" 这种时长只对想发生的事有意义；起止范围只对时期有意义。）')
     return _check_real_dates(when)
 
 
-async def _append_folds(gist_id: str, meta: dict, add: list) -> tuple[str | None, list]:
-    """Push **a few more entries** under an existing gist. Returns (error, the new
-    cover list).
+async def _live_version(bucket_id: str, meta: dict) -> str:
+    """The newest version along `superseded_by`: the last one that still reads, stopping at
+    a loop or after 64 steps."""
+    current, seen = bucket_id, {bucket_id}
+    nxt = str(meta.get("superseded_by") or "").strip()
+    while nxt and nxt not in seen and len(seen) < 64:
+        b = await rt.bucket_mgr.get_including_archive(nxt)
+        if not b:
+            break
+        current = nxt
+        seen.add(nxt)
+        nxt = str((b.get("metadata") or {}).get("superseded_by") or "").strip()
+    return current
+
+
+class _Refused(Exception):
+    """A refusal decided under the bucket's lock (the entry changed since it was read);
+    the message is what the caller is told."""
+
+
+def _appended_cover(add: list):
+    """The cover roster with `add` appended, decided on the gist as it is on disk."""
+    def revise(meta: dict) -> dict:
+        return {"cover": list(dict.fromkeys([*_F.cover_ids(meta), *add]))}
+    return revise
+
+
+async def _append_folds(gist_id: str, meta: dict, add: list) -> str | None:
+    """Push **a few more entries** under an existing gist: checks them, and writes each
+    covered entry's side (`covered_by`). Returns the refusal, or None; the gist's own
+    `cover` goes in with the caller's write (`_appended_cover`).
 
     🔴 **Append only, never replace.** Passing a fresh list to replace the old one
        means that leaving one id out **quietly releases it** — another silent
        change of behaviour, and this codebase has already been bitten twice by
        that same shape (the silent filter and the silent truncation).
+    Both rosters are appended to as they are on disk, under each entry's lock, so two
+    appends at the same moment both stand.
     """
     if not _F.is_gist(meta):
         return (f"{gist_id} 不是 gist（它没盖着任何东西）。"
-                "要把几条收成一句，用 fold；这个参数只往已有的 gist 底下加。", [])
-    old_cover = list(_F._covered_list(meta) if hasattr(_F, "_covered_list") else [])
-    old_cover = [c for c in (meta.get("cover") or [])] or old_cover
-    cover = list(dict.fromkeys([*old_cover, *add]))
+                "要把几条收成一句，用 fold；这个参数只往已有的 gist 底下加。")
+    cover = list(dict.fromkeys([*_F.cover_ids(meta), *add]))
     covered_rooms = []
     for cid in add:
         if cid == gist_id:
-            return ("一条 gist 盖不了自己。", [])
+            return "一条 gist 盖不了自己。"
         live = await rt.bucket_mgr.get(cid)
         if not live:
             arch = await rt.bucket_mgr.get_including_archive(cid)
             if arch:
                 return (f'{cid} 在归档区，盖不上（盖上了只会留半条链）。'
-                        f'先 trace(bucket_id="{cid}", restore=True) 捞回来。', [])
-            return (f"这些 id 不存在：{cid}。填真 bucket_id。", [])
+                        f'先 trace(bucket_id="{cid}", restore=True) 捞回来。')
+            return f"这些 id 不存在：{cid}。填真 bucket_id。"
         covered_rooms.append(str((live.get("metadata", {}) or {}).get("room") or ""))
     from core._rooms import is_event_room
     if len(cover) >= 2 and any(is_event_room(r) for r in covered_rooms):
         return ("盖一组事件不存在（跟 fold 同一条闸）：日子用时期画圈，"
-                "看一条线用 recall(query)。", [])
+                "看一条线用 recall(query)。")
+
     # Write both directions: the covered entries have to acknowledge this gist
+    def acknowledge(old_meta: dict) -> dict:
+        old_covers = _F._covered_list(old_meta)
+        return {} if gist_id in old_covers else {"covered_by": old_covers + [gist_id]}
+
     for cid in add:
-        old = await rt.bucket_mgr.get(cid)
-        old_meta = (old or {}).get("metadata", {}) or {}
-        old_covers = list(old_meta.get("covered_by") or [])
-        if gist_id not in old_covers:
-            await rt.bucket_mgr.update(cid, covered_by=old_covers + [gist_id])
-    return (None, cover)
+        await rt.bucket_mgr.update(cid, revise=acknowledge)
+    return None
 
 
 async def trace_core(
@@ -438,6 +473,13 @@ async def trace_core(
         return f"未找到记忆桶: {bucket_id}"
 
     meta = bucket.get("metadata", {})
+    # An old version (regrow replaced it) is on file, not in use: an edit there would
+    # succeed and change nothing anyone reads, while the live version keeps asking. Refused,
+    # naming the version in use. Deleting or restoring an old one is handled above.
+    if str(meta.get("superseded_by") or "").strip():
+        live = await _live_version(bucket_id, meta)
+        return (f"{bucket_id} 是旧版，已经换成 {live} 了——改旧版动不到正在用的那一版。"
+                f"要改就在 {live} 上 trace；本次未修改。")
     current_pinned = parse_bool(meta.get("pinned"), default=False)
     protected = parse_bool(meta.get("protected"), default=False)
     unpinning_now = pinned == 0 and current_pinned
@@ -670,12 +712,19 @@ async def trace_core(
             when_err = _check_when(when, when_meta)
             if when_err:
                 return when_err
-            updates["when"] = when
+            from ..grow.rooms_path import clock_when
+            updates["when"] = clock_when(when)[0]
+        # What depends on lists already on the entry — the cover roster, the
+        # invalidation records, the sources and their quoted lines — is decided on the
+        # entry as it is on disk, under its lock (BucketManager `revise`): two appends at
+        # the same moment both land. `appended` keeps what was written, for the receipt.
+        revisers: list = []
+        appended: dict = {}
         if folds_append:
-            fold_err, new_cover = await _append_folds(bucket_id, meta, folds_append)
+            fold_err = await _append_folds(bucket_id, meta, folds_append)
             if fold_err:
                 return fold_err
-            updates["cover"] = new_cover
+            revisers.append(_appended_cover(folds_append))
         # invalidation="confirmed": looked at, the basis changed, this stands. Every open
         # record gains confirmed_at (today); a source revision or a panel correction seen
         # now is recorded as a confirmed record. Refused while a source it stands on is
@@ -686,16 +735,26 @@ async def trace_core(
             from core._when import now as _now_local
             from core.profile import _EDITED_BY_USER_TAG
             confirmed_on = _now_local().date().isoformat()
-            records, refusal = _I.confirm(
-                meta, getattr(rt.bucket_mgr, "sources", None),
-                edited=_EDITED_BY_USER_TAG in [str(t) for t in (meta.get("tags") or [])],
-                today=confirmed_on)
+
+            def confirmed(m: dict) -> tuple[list, str]:
+                return _I.confirm(
+                    m, getattr(rt.bucket_mgr, "sources", None),
+                    edited=_EDITED_BY_USER_TAG in [str(t) for t in (m.get("tags") or [])],
+                    today=confirmed_on)
+            nothing_open = (f"{bucket_id} 没有待看的依据变化（不在「依据变了的」里），"
+                            "不用确认；本次未修改。")
+            records, refusal = confirmed(meta)
             if refusal:
                 return refusal
             if not records:
-                return (f"{bucket_id} 没有待看的依据变化（不在「依据变了的」里），"
-                        "不用确认；本次未修改。")
-            updates["invalidation"] = records
+                return nothing_open
+
+            def confirm_now(m: dict) -> dict:
+                now_records, now_refusal = confirmed(m)
+                if now_refusal or not now_records:
+                    raise _Refused(now_refusal or nothing_open)
+                return {"invalidation": now_records}
+            revisers.append(confirm_now)
         # sources_append: more of the host's material this entry was formed from. Append
         # only, like folds_append; each record is checked like a write's (the registry,
         # the grant) and brings its quoted prov line with it.
@@ -703,19 +762,41 @@ async def trace_core(
         if sources_append:
             from ..grow.rooms_path import check_sources
             from core import _sources as _src
-            new_sources, prov_lines, source_notes, sources_err = await check_sources(
+            new_sources, _lines, source_notes, sources_err = await check_sources(
                 sources_append, read_prov(meta), exclude={bucket_id}, from_call=False)
             if sources_err:
                 return sources_err
             if not new_sources:
                 return "sources_append 是空的：要追加的来源写成 [{system, instance, container, id}]。"
             try:
-                merged = _src.normalize_sources(
-                    list(meta.get(_src.SOURCES_FIELD) or []) + new_sources)
+                _src.normalize_sources(list(meta.get(_src.SOURCES_FIELD) or []) + new_sources)
             except _src.SourceRecordError as e:
                 return f"sources 不对：{e.zh}。"
-            updates[_src.SOURCES_FIELD] = merged
-            updates[PROV_FIELD] = prov_lines
+            # The same two changes check_sources made to the lines it read, made again to
+            # the lines on disk: each new record's quoted line is added, and a bare host
+            # id the entry already had is linked to the one new record carrying that id.
+            strings = [_src.record_string(r) for r in new_sources]
+            by_id: dict[str, set] = {}
+            for r, s in zip(new_sources, strings):
+                by_id.setdefault(str(r["id"]), set()).add(s)
+            linked = {i: next(iter(s)) for i, s in by_id.items() if len(s) == 1}
+            added = [{"rel": WAS_QUOTED_FROM, "target": s} for s in strings]
+
+            def append_sources(m: dict) -> dict:
+                try:
+                    merged = _src.normalize_sources(
+                        list(m.get(_src.SOURCES_FIELD) or []) + new_sources)
+                except _src.SourceRecordError as e:
+                    raise _Refused(f"sources 不对：{e.zh}。") from e
+                lines = [{"rel": WAS_QUOTED_FROM, "target": linked[ln["target"]]}
+                         if ln["rel"] == WAS_QUOTED_FROM and "#" not in ln["target"]
+                         and ln["target"] in linked else ln for ln in read_prov(m)]
+                lines = list({(ln["rel"], ln["target"]): ln for ln in lines + added}.values())
+                if len(lines) > PROV_MAX_LINES:
+                    raise _Refused(f"来源加起来 {len(lines)} 条，超过 {PROV_MAX_LINES}"
+                                   "——一条记忆挂不了这么多来源，拆开分别存。")
+                return {_src.SOURCES_FIELD: merged, PROV_FIELD: lines}
+            revisers.append(append_sources)
         if final_importance != requested_importance:
             # Unpinning/restoring surfacing can create an ordinary high slot.
             # Persist quota degradation in the same bucket transaction.
@@ -754,16 +835,30 @@ async def trace_core(
             from core._when import now as _now_local
             updates["last_asked"] = _now_local().isoformat()
 
-        if not updates and not patch_args_supplied:
+        if not updates and not patch_args_supplied and not revisers:
             return "没有任何字段需要修改。"
 
+        write = dict(updates)
+        if revisers:
+            def revise(m: dict) -> dict:
+                out: dict = {}
+                for fn in revisers:
+                    out.update(fn(m))
+                appended.clear()
+                appended.update(out)
+                return out
+            write["revise"] = revise
+
         if patch_args_supplied:
-            patch_result = await rt.bucket_mgr.update_content_fragment(
-                bucket_id,
-                old_str=old_str,
-                new_str=new_str,
-                **updates,
-            )
+            try:
+                patch_result = await rt.bucket_mgr.update_content_fragment(
+                    bucket_id,
+                    old_str=old_str,
+                    new_str=new_str,
+                    **write,
+                )
+            except _Refused as refused:
+                return str(refused)
             if not patch_result.get("ok"):
                 patch_error = patch_result.get("error")
                 if patch_error == "not_found":
@@ -786,9 +881,13 @@ async def trace_core(
                     return "old_str 与 new_str 替换后正文没有变化；本次未修改。"
                 return f"修改失败: {bucket_id}"
         else:
-            success = await rt.bucket_mgr.update(bucket_id, **updates)
+            try:
+                success = await rt.bucket_mgr.update(bucket_id, **write)
+            except _Refused as refused:
+                return str(refused)
             if not success:
                 return f"修改失败: {bucket_id}"
+        updates.update(appended)
 
     # Note: both a full body update and a partial replacement funnel into
     # _update_locked(content=...) inside BucketManager, which posts to the

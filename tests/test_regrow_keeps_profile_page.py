@@ -46,9 +46,11 @@ class Store:
         self.content[bid] = content
         return bid
 
-    async def update(self, bid, **kw):
+    async def update(self, bid, revise=None, **kw):
         if bid not in self.meta:
             return False
+        if revise is not None:
+            kw = {**revise(dict(self.meta[bid])), **kw}
         self.meta[bid].update(kw)
         return True
 

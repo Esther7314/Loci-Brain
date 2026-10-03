@@ -58,10 +58,14 @@ its original itself (core/_originals.py). No host may be named `loci`.
 
 No `hosts:` table means exactly one host, `legacy` above (its key falls back to config
 `hook_token`, as the hook routes always read it), which is then the change authority for
-every source but the imported ones and serves no originals. The host named `legacy` is
-also who a caller presenting no host credential is: an MCP client authenticated the old way (or with
-MCP auth off) and a hook caller on an unlocked panel. A table without `legacy` has no
-such caller — a request without a host credential is refused. Only an `open` host reads
+every source but the imported ones and serves no originals; it is also who a caller
+presenting no host credential is (an MCP client, a hook caller on an unlocked panel).
+With a table, a caller is a host only by that host's credential: an MCP client the
+deployment's MCP auth let in is the `legacy` row (if any), and nobody else who presents
+nothing is anyone — MCP with auth off and the hook routes refuse them, and the panel's own
+routes need the panel locked. A table holding a host with a ceiling (`Hosts.ceilinged`)
+also needs the panel locked and MCP auth on; until both hold, those hosts' credentials
+are refused (`Hosts.unsafe`, filled in by web/panel_auth). Only an `open` host reads
 without a Loci-Scope; every other host gets nothing without one, and a scope that is
 malformed or reaches past its `max_grant` is refused whole: no host ever falls back to
 open.
@@ -100,7 +104,7 @@ The view never says how many entries it withheld: a count is itself a leak.
 
 Exports: SCOPE_HEADER · TURN_HEADER · HOST_HEADER · SCOPE_ENV · HOST_TOKEN_ENV · OPEN ·
          RESTRICTED · LEGACY · LOCI · LOCI_HOST · IMPORT_SYSTEM · ScopeError · Host ·
-         Hosts (authority_for · provider_for) ·
+         Hosts (authority_for · provider_for · ceilinged · unsafe) ·
          load_hosts · Scope ·
          parse_scope · parse_turn · RequestScope · ScopeView · unsupported_line ·
          current_request · request_scope
@@ -273,6 +277,15 @@ class Hosts:
         self.hosts = {h.name: h for h in hosts}
         self.implicit = implicit
         self.errors = tuple(errors)
+        # Why the hosts with a ceiling are refused in this deployment, or "": the request
+        # layer fills it in (web/panel_auth.lock_problem — the panel unlocked, MCP auth off).
+        self.unsafe = ""
+
+    @property
+    def ceilinged(self) -> bool:
+        """A table holding a host with a ceiling (`max_grant`; every restricted host has
+        one): what it keeps out has to be kept out on every door."""
+        return not self.implicit and any(h.max_grant is not None for h in self.hosts.values())
 
     def by_token(self, token: str) -> Optional[Host]:
         """The host whose credential this is (compared in constant time per host). Two
@@ -286,7 +299,9 @@ class Hosts:
 
     @property
     def default(self) -> Optional[Host]:
-        """Who a caller presenting no host credential is: the `legacy` host, if any."""
+        """Who a caller presenting no host credential is once the deployment let it in
+        some other way (MCP auth; without a table, an unlocked panel): the `legacy` host,
+        if any."""
         return self.hosts.get(LEGACY)
 
     def get(self, name: str) -> Optional[Host]:

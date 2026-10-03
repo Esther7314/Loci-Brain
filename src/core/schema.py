@@ -48,8 +48,9 @@ BACKUP_DIR = "_backups"
 MEMORY_DIRS = ("permanent", "dynamic", "feel", "plans", "archive")
 
 # Not copied into a backup: earlier backups, the config (it holds API keys, and the
-# library is restorable without it), lock files, SQLite side files mid-transaction.
-_SKIP_NAMES_PREFIX = ("config.yaml",)
+# library is restorable without it), the panel's password and login sessions (secrets the
+# library does not need back), lock files, SQLite side files mid-transaction.
+_SKIP_NAMES_PREFIX = ("config.yaml", ".dashboard_auth.json", ".dashboard_sessions.json")
 _SKIP_SUFFIXES = (".lock", "-journal", "-wal", "-shm")
 
 

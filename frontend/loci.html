@@ -791,6 +791,7 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
           <div class="frow" id="cfgEMigRow" style="margin-top:8px" hidden>
             <span class="tiny" id="cfgEMig"></span>
             <button class="btn ghost" id="cfgEResume" hidden>接着算</button>
+            <button class="btn ghost" id="cfgESkip" hidden>跳过失败的接着算</button>
             <button class="btn ghost" id="cfgEAbandon" hidden>放弃这一次</button>
           </div>
         </div>
@@ -1231,6 +1232,7 @@ async function loadMig(){
     const row = $("#cfgEMigRow"), t = $("#cfgEMig");
     const to = (st.target && st.target.model) || st.target_model || "新模型";
     $("#cfgEResume").hidden = !st.resumable;
+    $("#cfgESkip").hidden = !st.skippable;
     $("#cfgEAbandon").hidden = !(st.resumable || st.running);
     if (st.phase === "running"){
       row.hidden = false; t.className = "tiny";
@@ -1256,6 +1258,9 @@ async function migAct(action){
   loadMig(); loadCfg();
 }
 $("#cfgEResume").onclick = () => migAct("resume");
+$("#cfgESkip").onclick = () => {
+  if (confirm("跳过一直算不成的那几条？其余的照常换上，跳过的换上以后由新模型在后台再补算。")) migAct("skip");
+};
 $("#cfgEAbandon").onclick = () => {
   if (confirm("放弃这一次换模型？新算的向量扔掉，旧模型和旧向量接着用。")) migAct("abandon");
 };
@@ -1477,6 +1482,8 @@ function pkgSay(t, bad){
 function pkgSummary(st){
   const res = st.result || {}, lib = st.library_state || {};
   let t = "导回完了：进来 " + (res.imported || 0) + " 条，跳过 " + (res.skipped || 0) + " 条。";
+  if (res.refused) t += "其中 " + res.refused + " 条没写：依据的来源在这个库里撤回或按住了（包里还在，宿主恢复以后可以再导）。";
+  if (st.backup) t += "导之前把库备份了一份：" + st.backup + "。";
   if (lib.mode === "fresh") t += "空库，来源登记、名字表这些原样放回了。";
   else if (lib.mode === "merge"){
     t += "合进了已有的库。";

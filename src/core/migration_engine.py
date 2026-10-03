@@ -7,12 +7,19 @@ Switching the embedding model (or backend) means recomputing the vector of every
 in embeddings.db with the new one. core/embedding_switch.py starts it when the panel
 changes the model; this module runs it in the background:
 
-- Back up embeddings.db -> embeddings.db.backup (only on the first run)
-- Write new vectors into embeddings.db.migrating first, so a half-finished state cannot
-  contaminate the main table
-- Once everything is through, swap atomically: the main db is replaced by the .migrating file
-- A bucket's meaning vector (its own column) is recomputed with its content vector
-- A single failure is skipped and recorded in failed_items[:50] without stopping the run
+- Write new vectors into embeddings.db.migrating, so a half-finished state cannot
+  contaminate the main table; the live db is untouched until the swap, so no backup copy
+  is made (one an earlier version left is removed at the swap: it keeps vectors of entries
+  withdrawn since)
+- Once everything is through, swap atomically: the main db is replaced by the .migrating
+  file. Right before, the library is read again: an entry withdrawn, deleted or cleared
+  meanwhile loses its new vector, and a meaning written meanwhile is computed again
+- A bucket's meaning vector (its own column) is recomputed with its content vector; an
+  entry is done only when both are
+- A single failure is recorded (the checkpoint keeps every one, the status the first 50)
+  without stopping the run; the run does not swap while any failed. Resuming tries them
+  again; the person can also skip them (`skipped_ids`), and the new model computes those
+  in the background after the swap
 - Progress lives in _pending_migration_status.json, which the front end polls every 3s
 - Resume after interruption: _migration_checkpoint.json records the set of finished ids
 - Rate limiting: batches of 10 with a 0.5s gap, so local inference cannot peg the CPU and
@@ -34,10 +41,11 @@ What it does not do:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
-import shutil
+import sqlite3
 import threading
 import time
 import uuid
@@ -197,29 +205,45 @@ def target_signature(target_backend: str, target_model: str, target_dim: int) ->
     return f"{target_backend}:{target_model}:{target_dim}"
 
 
-def _read_checkpoint(path: str, signature: str) -> set[str]:
+def _digest(text: str) -> str:
+    return hashlib.sha256(str(text or "").encode("utf-8")).hexdigest()[:16]
+
+
+def read_checkpoint(path: str, signature: str) -> dict[str, Any]:
+    """The checkpoint of a recompute to `signature`: {done: set of ids with their new
+    vectors, skipped: set of ids the person chose to leave without one, failed: {id: why},
+    meanings: {id: digest of the meaning its meaning vector was computed from}}. Empty for
+    another target: a mismatched target starts over."""
+    out: dict[str, Any] = {"done": set(), "skipped": set(), "failed": {}, "meanings": {}}
     if not os.path.exists(path):
-        return set()
+        return out
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        if not isinstance(data, dict):
-            return set()
-        if data.get("target_signature") != signature:
-            return set()
-        done = data.get("done_ids", [])
-        return set(done) if isinstance(done, list) else set()
     except (OSError, json.JSONDecodeError):
-        return set()
+        return out
+    if not isinstance(data, dict) or data.get("target_signature") != signature:
+        return out
+    for key, name in (("done_ids", "done"), ("skipped_ids", "skipped")):
+        value = data.get(key, [])
+        out[name] = set(map(str, value)) if isinstance(value, list) else set()
+    for key in ("failed", "meanings"):
+        value = data.get(key, {})
+        out[key] = {str(k): str(v) for k, v in value.items()} if isinstance(value, dict) else {}
+    return out
 
 
-def _write_checkpoint(path: str, done_ids: Iterable[str], signature: str) -> None:
+def write_checkpoint(path: str, state: dict[str, Any], signature: str) -> None:
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(
-                {"done_ids": sorted(done_ids), "target_signature": signature},
+                {"done_ids": sorted(state.get("done") or ()),
+                 "skipped_ids": sorted(state.get("skipped") or ()),
+                 "failed": dict(state.get("failed") or {}),
+                 "meanings": dict(state.get("meanings") or {}),
+                 "target_signature": signature},
                 f, ensure_ascii=False,
             )
         os.replace(tmp, path)
@@ -284,22 +308,60 @@ def _tail_errors_log(buckets_dir: str, n: int = TAIL_LOG_LINES) -> list[str]:
 
 
 # ============================================================
-# Backup and commit
+# The swap
 # ============================================================
 
-def backup_db_once(db_path: str) -> str:
-    """Back up db_path if no .backup exists yet, and return the backup's path.
+def backup_path_for(db_path: str) -> str:
+    """Where an earlier version kept a copy of the vectors before a switch. Nothing writes
+    it now — the live database is never touched until the swap, so it is its own backup
+    until then, and after the swap the old model's vectors mean nothing to the new one —
+    and a copy left behind (it holds vectors of entries withdrawn since) is removed by the
+    next swap or abandon."""
+    return db_path + ".backup"
 
-    If a .backup is already there it is not made again, so an earlier version cannot be
-    overwritten.
-    """
-    backup = db_path + ".backup"
-    if os.path.exists(backup):
-        return backup
-    if not os.path.exists(db_path):
-        return backup
-    shutil.copy2(db_path, backup)
-    return backup
+
+def drop_backup(db_path: str) -> None:
+    path = backup_path_for(db_path)
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+    except OSError as e:
+        logger.warning(f"[migration] could not remove {path}: {e}")
+
+
+def _prune(db_path: str, keep: set[str]) -> int:
+    """Delete the rows of every entry not in `keep` (withdrawn, deleted or cleared while
+    the recompute ran), overwriting their pages. Returns how many went."""
+    if not db_path or not os.path.exists(db_path):
+        return 0
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("PRAGMA secure_delete = ON")
+        have = [r[0] for r in conn.execute("SELECT bucket_id FROM embeddings")]
+        gone = [bid for bid in have if bid not in keep]
+        for bid in gone:
+            conn.execute("DELETE FROM embeddings WHERE bucket_id = ?", (bid,))
+        conn.commit()
+        return len(gone)
+    except sqlite3.OperationalError as e:
+        if "no such table" in str(e):
+            return 0
+        raise
+    finally:
+        conn.close()
+
+
+def _clear_meaning(db_path: str, ids: Iterable[str]) -> None:
+    ids = list(ids)
+    if not ids or not os.path.exists(db_path):
+        return
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executemany("UPDATE embeddings SET meaning_embedding = NULL WHERE bucket_id = ?",
+                         [(bid,) for bid in ids])
+        conn.commit()
+    finally:
+        conn.close()
 
 
 # ============================================================
@@ -317,8 +379,26 @@ class MigrationConfig:
     # Both the source and target engines have already been constructed by the caller
     target_engine: Any           # an EmbeddingEngine instance: the migration target
     # Where bucket content comes from: an awaitable returning list[(bucket_id, content)]
-    # or list[(bucket_id, content, newest meaning)]
+    # or list[(bucket_id, content, newest meaning)] — every entry that gets a vector now.
+    # It is asked again at the swap, so what was withdrawn or edited meanwhile is seen.
     fetch_buckets: Callable[[], Awaitable[list[tuple]]]
+
+
+def _meaning_of(item: tuple) -> str:
+    return str(item[2]) if len(item) > 2 and item[2] else ""
+
+
+async def _store_meaning(engine: Any, bucket_id: str, meaning: str) -> str:
+    """Compute one meaning vector into the staging database. "" when it is stored, else
+    why not (a False from the engine is a failure, said as one)."""
+    store_meaning = getattr(engine, "generate_and_store_meaning", None)
+    if not callable(store_meaning):
+        return ""
+    try:
+        ok = await store_meaning(bucket_id, meaning)
+    except Exception as exc:
+        return f"meaning vector: {type(exc).__name__}: {exc}"
+    return "" if ok else "meaning vector: generate_and_store_meaning returned False"
 
 
 async def _run_migration(
@@ -329,23 +409,7 @@ async def _run_migration(
     status_path = status_path_for(cfg.buckets_dir)
     ckpt_path = checkpoint_path_for(cfg.buckets_dir)
 
-    # 1) Back up the original db
-    try:
-        backup_db_once(cfg.db_path)
-    except Exception as e:
-        write_status(status_path, {
-            **_empty_status(),
-            "phase": "failed",
-            "error": f"backup failed: {type(e).__name__}: {e}",
-            "finished_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "message": "迁移未启动：备份 embeddings.db 失败",
-            "tail_log": _tail_errors_log(cfg.buckets_dir),
-        })
-        if on_complete:
-            on_complete(False)
-        return
-
-    # 2) Fetch every bucket
+    # 1) Fetch every bucket
     try:
         buckets = await cfg.fetch_buckets()
     except Exception as e:
@@ -363,15 +427,25 @@ async def _run_migration(
 
     total = len(buckets)
     signature = target_signature(cfg.target_backend, cfg.target_model, cfg.target_dim)
-    done_ids = _read_checkpoint(ckpt_path, signature)  # resume from the checkpoint (a mismatched target starts over)
-    failed_items: list[dict[str, str]] = []
-    failed_count = 0
+    # Resume from the checkpoint (a mismatched target starts over). What failed last time
+    # is tried again; what the person chose to skip is left out.
+    state = read_checkpoint(ckpt_path, signature)
+    done_ids: set[str] = state["done"]
+    skipped: set[str] = state["skipped"]
+    failed: dict[str, str] = {}
+    meanings: dict[str, str] = state["meanings"]
+    state["failed"] = failed
+
+    def failed_items() -> list[dict[str, str]]:
+        return [{"bucket_id": bid, "error": why}
+                for bid, why in list(failed.items())[:MAX_FAILED_ITEMS]]
 
     write_status(status_path, {
         **_empty_status(),
         "phase": "running",
         "total": total,
         "done": len(done_ids),
+        "skipped_count": len(skipped),
         "failed_count": 0,
         "current_id": "",
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -381,13 +455,13 @@ async def _run_migration(
         "message": f"开始迁移 {total} 个 bucket（已完成 {len(done_ids)}）",
     })
 
-    # 3) Run in batches
-    pending = [item for item in buckets if item[0] not in done_ids]
+    # 2) Run in batches
+    pending = [item for item in buckets if item[0] not in done_ids and item[0] not in skipped]
     for i in range(0, len(pending), BATCH_SIZE):
         batch = pending[i:i + BATCH_SIZE]
         for item in batch:
             bucket_id, content = item[0], item[1]
-            meaning = item[2] if len(item) > 2 else ""
+            meaning = _meaning_of(item)
             cur = read_status(status_path)
             cur["current_id"] = bucket_id
             write_status(status_path, cur)
@@ -395,58 +469,76 @@ async def _run_migration(
             try:
                 ok = await cfg.target_engine.generate_and_store(bucket_id, content)
                 if not ok:
-                    failed_count += 1
-                    if len(failed_items) < MAX_FAILED_ITEMS:
-                        failed_items.append({
-                            "bucket_id": bucket_id,
-                            "error": "generate_and_store returned False",
-                        })
-                else:
-                    done_ids.add(bucket_id)
-                    if meaning:
-                        # The meaning vector lives in its own column of the same row; it
-                        # is best-effort here as it is on every write.
-                        store_meaning = getattr(
-                            cfg.target_engine, "generate_and_store_meaning", None)
-                        if callable(store_meaning):
-                            try:
-                                await store_meaning(bucket_id, meaning)
-                            except Exception as exc:
-                                logger.warning(
-                                    f"[migration] meaning vector {bucket_id}: {exc}")
+                    failed[bucket_id] = "generate_and_store returned False"
+                    continue
+                if meaning:
+                    # The meaning vector lives in its own column of the same row; an entry
+                    # is done only with both, or a "0 failed" would drop meaning vectors.
+                    why = await _store_meaning(cfg.target_engine, bucket_id, meaning)
+                    if why:
+                        failed[bucket_id] = why
+                        continue
+                done_ids.add(bucket_id)
+                meanings[bucket_id] = _digest(meaning) if meaning else ""
             except Exception as e:
-                failed_count += 1
-                if len(failed_items) < MAX_FAILED_ITEMS:
-                    failed_items.append({
-                        "bucket_id": bucket_id,
-                        "error": f"{type(e).__name__}: {e}",
-                    })
+                failed[bucket_id] = f"{type(e).__name__}: {e}"
 
         # Write the checkpoint and status once per batch
-        _write_checkpoint(ckpt_path, done_ids, signature)
+        write_checkpoint(ckpt_path, state, signature)
         cur = read_status(status_path)
         cur["done"] = len(done_ids)
-        cur["failed_count"] = failed_count
-        cur["failed_items"] = failed_items
-        cur["message"] = f"已完成 {len(done_ids)} / {total}（失败 {failed_count}）"
+        cur["failed_count"] = len(failed)
+        cur["failed_items"] = failed_items()
+        cur["message"] = f"已完成 {len(done_ids)} / {total}（失败 {len(failed)}）"
         write_status(status_path, cur)
 
         # Rate limiting
         if i + BATCH_SIZE < len(pending):
             await asyncio.sleep(BATCH_INTERVAL_SEC)
 
-    # 4) Only a completely successful run swaps atomically into the main store. This is
-    #    where the docstring's promise — "write .migrating first, swap atomically once
-    #    everything is through" — actually lands. Throughout the loop only
-    #    cfg.target_engine's own staging db is written (the caller points its db_path at
-    #    whatever staging_db_path_for() returned when constructing target_engine), and
-    #    cfg.db_path is never touched. So any failure or crash at any step leaves the live
-    #    db exactly as it was before the migration, with no half-finished state mixing
+    # 3) Only a completely successful run swaps atomically into the main store. Throughout
+    #    the loop only cfg.target_engine's own staging db is written (the caller points its
+    #    db_path at whatever staging_db_path_for() returned when constructing target_engine),
+    #    and cfg.db_path is never touched. So any failure or crash at any step leaves the
+    #    live db exactly as it was before the migration, with no half-finished state mixing
     #    vectors from two models.
-    all_done = failed_count == 0 and len(done_ids) >= total
     swap_error = ""
+    pruned = 0
+    staged_path = getattr(cfg.target_engine, "db_path", "")
+    all_done = not failed and all(item[0] in done_ids or item[0] in skipped
+                                  for item in buckets)
     if all_done:
-        staged_path = getattr(cfg.target_engine, "db_path", "")
+        # What the library holds now, not when the run began: an entry withdrawn, deleted
+        # or cleared meanwhile does not get its vector back at the swap, and a meaning
+        # written meanwhile is computed again before the new vectors go live.
+        try:
+            now = await cfg.fetch_buckets()
+            current = {item[0] for item in now}
+            pruned = _prune(staged_path, current)
+            stale, cleared = [], []
+            for item in now:
+                bid, meaning = item[0], _meaning_of(item)
+                if bid not in done_ids:
+                    continue
+                if not meaning and meanings.get(bid):
+                    cleared.append(bid)
+                elif meaning and meanings.get(bid) != _digest(meaning):
+                    stale.append((bid, meaning))
+            _clear_meaning(staged_path, cleared)
+            for bid in cleared:
+                meanings[bid] = ""
+            for bid, meaning in stale:
+                why = await _store_meaning(cfg.target_engine, bid, meaning)
+                if why:
+                    failed[bid] = why
+                    done_ids.discard(bid)
+                else:
+                    meanings[bid] = _digest(meaning)
+            write_checkpoint(ckpt_path, state, signature)
+        except Exception as e:
+            swap_error = f"re-reading the library before the swap: {type(e).__name__}: {e}"
+        all_done = not failed and not swap_error
+    if all_done:
         if staged_path and os.path.abspath(staged_path) != os.path.abspath(cfg.db_path):
             try:
                 os.replace(staged_path, cfg.db_path)
@@ -459,16 +551,28 @@ async def _run_migration(
             except OSError as e:
                 swap_error = f"{type(e).__name__}: {e}"
                 logger.error(f"[migration] atomic swap staging→live failed: {swap_error}")
+        if not swap_error:
+            # A withdrawal that cleared the old live database between the re-read and the
+            # rename: read the library once more against the database now live.
+            try:
+                pruned += _prune(cfg.db_path, {item[0] for item in await cfg.fetch_buckets()})
+            except Exception as e:
+                logger.warning(f"[migration] pruning after the swap failed: {e}")
+            drop_backup(cfg.db_path)
 
     finished_at = time.strftime("%Y-%m-%dT%H:%M:%S")
     success = all_done and not swap_error
     final_phase = "completed" if success else "failed"
     if swap_error:
-        final_msg = f"迁移全部完成但原子替换主库失败，向量仍留在暂存文件：{swap_error}"
+        final_msg = f"迁移没能换上：{swap_error}"
     else:
-        final_msg = f"迁移完成：{len(done_ids)} 成功 / {failed_count} 失败"
+        final_msg = f"迁移完成：{len(done_ids)} 成功 / {len(failed)} 失败"
+        if skipped:
+            final_msg += f" / {len(skipped)} 跳过（这几条换上以后由新模型在后台补算）"
+        if failed:
+            final_msg += "。失败的那几条在 failed_items 里：接着算会再试，也可以跳过它们"
     tail = []
-    if failed_count > 0 or swap_error:
+    if failed or swap_error:
         # On failure, attach the log and a pointer to what to do
         tail = _tail_errors_log(cfg.buckets_dir)
 
@@ -477,8 +581,10 @@ async def _run_migration(
         "phase": final_phase,
         "current_id": "",
         "done": len(done_ids),
-        "failed_count": failed_count if not swap_error else max(failed_count, 1),
-        "failed_items": failed_items,
+        "skipped_count": len(skipped),
+        "failed_count": len(failed) if not swap_error else max(len(failed), 1),
+        "failed_items": failed_items(),
+        "pruned": pruned,
         "finished_at": finished_at,
         "message": final_msg,
         "error": swap_error,
@@ -587,7 +693,10 @@ __all__ = [
     "checkpoint_path_for",
     "read_status",
     "write_status",
-    "backup_db_once",
+    "backup_path_for",
+    "drop_backup",
+    "read_checkpoint",
+    "write_checkpoint",
     "MigrationReservation",
     "reserve_migration",
     "owns_migration_reservation",

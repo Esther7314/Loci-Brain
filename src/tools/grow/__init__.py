@@ -119,7 +119,8 @@ async def _dispatch(
         if not _sweep_started:
             _sweep_started = True
             import asyncio as _asyncio
-            _asyncio.create_task(backfill_sweep())
+            from utils import now_iso as _now_iso
+            _asyncio.create_task(backfill_sweep(before=_now_iso()))
     if kind == "event":
         if str(card_of or "").strip():
             return ('名字卡是一条 mind：grow(kind="mind", room="MIND/TRAITS"（人）或 '
@@ -142,7 +143,7 @@ async def _dispatch(
                                evidential=evidential,
                                internally_generated=internally_generated,
                                weight=weight, test_data=test_data, cue=cue,
-                               card_of=card_of, sources=sources)
+                               card_of=card_of, sources=sources, when=when)
     if kind == "big":
         # ⚰️ `kind="big"` was pulled from the tool face.
         #    Underneath it called fold's own bones (`_F.save_gist`) — it was a

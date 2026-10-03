@@ -27,7 +27,8 @@ What each kind of change does:
 | revised     | unchanged (unreadable -> active); the new revision is chained | no | nothing |
 
 Who may send it: the source's declared change authority (`authority:` in `hosts:`,
-core/scope.Hosts.authority_for), within its `max_grant`. One order per source — the
+core/scope.Hosts.authority_for), within its `max_grant`; for a run, the authority for
+every line it holds as well (`authority_refusal`). One order per source — the
 authority's host_seq — so a newer change can never be overtaken by an older one arriving
 later from somewhere else. A change past the ceiling is `forbidden` with `note:
 exceeds_max_grant`; from a host that is not the authority, `forbidden` with `note:
@@ -81,9 +82,9 @@ for review, not cleared):
                        names only (core/_ledger.scrub_traces)
 
 The ones that match words run before the body is cleared, while the words are still there
-to match; "the words" are the body, name, summary, aliases, tags and subjects of each
-entry and its sunk original, matched as runs of six CJK or twelve other characters
-(`Words`).
+to match; "the words" are the body, name and summary of each entry and its sunk original
+— never its tags, subjects or aliases, labels other memories share — matched as runs of
+six CJK or twelve other characters (`Words`).
 Each place answers `done` (it held something and holds nothing now), `none` (it held
 nothing) or `pending` (it failed; the places after it wait too, so a failed word match is
 never left without the words to match). Every place done writes one ledger line
@@ -91,13 +92,19 @@ never left without the words to match). Every place done writes one ledger line
 `applied_seq`).
 
 Resending: the same change_id (from the same host) is a duplicate in the registry. If its
-cleanup had a place left pending, this call carries on from there and answers `applied`
-with the progress now; once every place is done or none the answer is `duplicate` with the
-final result. Progress lives in `<buckets>/_sources/cleanup.jsonl`, one line per step, the
-last line per change winning; every place is safe to run twice.
+cleanup had a place left pending, or the step after the places (a restore's review, the
+holds a settling change closes) was not written, this call carries on from there and
+answers `applied` with the progress now; once every place is done or none and that step is
+written the answer is `duplicate` with the final result. A resend works on the memories
+the first send found, never on what rests on the source now, and once a later change has
+settled the source it blocks nothing new: it finishes the places for the memories this
+change already blocked (`_carry_out`). Two sends of one change at once run one after the
+other (a lease per host and change_id). Progress lives in
+`<buckets>/_sources/cleanup.jsonl`, one line per step, the last line per change winning;
+every place is safe to run twice.
 
 Exports: PLACES · CLEARING · NO_AUTHORITY · NOT_AUTHORITY · LINES_MAX · Words · handle ·
-         handle_lines · hold · request_record
+         handle_lines · hold · request_record · authority_refusal · registration_refusal
 ========================================
 """
 
@@ -220,6 +227,37 @@ def _complete(places: dict) -> bool:
     return all(v in (DONE, NONE) for v in places.values())
 
 
+def _finished(prog: dict) -> bool:
+    """Every place done or none, and the step after them (a restore's review, the holds a
+    settling change closes) written. A progress line without `settled` is from before that
+    step was tracked, and counts as written."""
+    return _complete(prog.get("places") or {}) and bool(prog.get("settled", True))
+
+
+# How long a second send of one change waits for the first to finish: clearing a large
+# library can take a while, and the second send must not run alongside it.
+_CHANGE_LEASE_SECONDS = 600.0
+
+
+def _change_turn(store, key: str):
+    """The lease of one change (host, change_id): two sends of it at once run one after
+    the other, so the second finds the first one's progress instead of running it again."""
+    from .bucket_manager import _filesystem_turn      # lazy: bucket_manager imports _sources
+    return _filesystem_turn(store.base_dir, f"source-change-{key}",
+                            timeout_seconds=_CHANGE_LEASE_SECONDS)
+
+
+async def _blocked_by(store, bid: str, tag: str, *, cleared: bool = False) -> bool:
+    """Does this memory carry this change's `source_gone` record (open or closed; with
+    `cleared`, one saying its body was cleared)?"""
+    b = await store.get_including_archive(bid)
+    if not b:
+        return False
+    return any(r.get("kind") == _I.SOURCE_GONE and r.get("change") == tag
+               and (not cleared or r.get("cleared"))
+               for r in _I.records(b.get("metadata") or {}))
+
+
 # ------------------------------------------------------------
 # Who stood on it
 # ------------------------------------------------------------
@@ -253,14 +291,17 @@ def _dream_records(store, ctx) -> str:
     from . import _dream
     ids = set(ctx["entries"]) | set(ctx["derived"])
     registry = getattr(store, "sources", None)
+    # Once a later change gave the source back, a dream fed by it since is not this
+    # change's to clear.
+    fed = (lambda rec: False) if ctx.get("superseded") else (
+        lambda rec: _dream.fed_by(rec, ctx["sid"], registry))
     hit = 0
     for rec in _dream.load_dreams(store.base_dir):
         path = rec.get("_路径") or ""
         used = set(_dream.ingredient_ids(rec))
         text = json.dumps({k: v for k, v in rec.items() if not k.startswith("_")},
                           ensure_ascii=False)
-        if ((used & ids) or _dream.fed_by(rec, ctx["sid"], registry)
-                or ctx["words"].hit(text)):
+        if (used & ids) or fed(rec) or ctx["words"].hit(text):
             if path and os.path.exists(path):
                 os.remove(path)
                 hit += 1
@@ -295,7 +336,7 @@ def _dehydration_cache(store, ctx) -> str:
 
 async def _slices(store, ctx) -> str:
     slices = getattr(store, "slices", None)
-    if slices is None:
+    if slices is None or ctx.get("superseded"):
         return NONE
     sid = ctx["sid"]
     lines = [x.id for x in store.sources.lines_of(sid)]
@@ -391,8 +432,10 @@ _RUN = {"dream_records": _dream_records, "dehydration_cache": _dehydration_cache
 
 
 async def _words(store, entries: list[str]) -> tuple[list[str], Words]:
-    """(the entries' bodies, the words of every text they hold), read before anything
-    is cleared."""
+    """(the entries' bodies, the words of the texts written from the material), read
+    before anything is cleared: the body, the name, the summary, the sunk original. Tags,
+    subjects and aliases are left out — they are labels shared across the library, and a
+    generic one would clear dreams and lookups that never held this material."""
     bodies, texts = [], []
     for bid in entries:
         b = await store.get_including_archive(bid)
@@ -404,8 +447,6 @@ async def _words(store, entries: list[str]) -> tuple[list[str], Words]:
             bodies.append(body)
             texts.append(body)
             texts += [str(meta.get(k) or "") for k in ("name", "summary")]
-            texts += [str(x) for k in ("aliases", "tags", "subjects")
-                      for x in (meta.get(k) or []) if isinstance(x, str)]
         path = store._sunk_orig_path(bid)
         if os.path.exists(path):
             with open(path, encoding="utf-8") as f:
@@ -481,7 +522,43 @@ def _identity_fields(sid: _src.SourceId) -> dict:
             "id": sid.id}
 
 
-async def handle_lines(store, body, host) -> tuple[int, dict]:
+def authority_refusal(registry, hosts, host, sid: _src.SourceId) -> str:
+    """Why `host` may not send a change for `sid`, or "": NO_AUTHORITY when no single host
+    is the change authority for it, NOT_AUTHORITY when another host is. A run reaches
+    every line it holds (`SourceRegistry.state_of`), so for a run the sender has to be the
+    authority for every one of its lines too (`SourceRegistry.lines_of`) — a line no deeper
+    place declares is the container's, whose authority covers the run itself; a line two
+    hosts declare at the same depth has none. `hosts` None = a deployment of `host` alone."""
+    if hosts is None:
+        return ""
+    for identity in [sid] + (registry.lines_of(sid) if sid.through else []):
+        authority = hosts.authority_for(identity)
+        if authority is None:
+            return NO_AUTHORITY
+        if authority.name != host.name:
+            return NOT_AUTHORITY
+    return ""
+
+
+def registration_refusal(hosts, host, where: dict, ids: list[str]) -> str:
+    """Why `host` may not register these lines of a container (a run's lines, a slicing
+    batch), or "": NOT_AUTHORITY when the container or one of the lines has a declared
+    change authority that is another host. What a run holds decides what a change for it
+    reaches, so only the authority for the material puts lines into its runs; material
+    nobody is declared the authority of may be registered by any host within its ceiling.
+    `hosts` None = a deployment of `host` alone."""
+    if hosts is None or host is None:
+        return ""
+    base = _src.SourceId(str(where["system"]), str(where["instance"]),
+                         str(where["container"]), "\0")
+    for identity in [base.piece(i) for i in ids]:
+        authority = hosts.authority_for(identity)
+        if authority is not None and authority.name != host.name:
+            return NOT_AUTHORITY
+    return ""
+
+
+async def handle_lines(store, body, host, *, hosts=None) -> tuple[int, dict]:
     """`POST /api/v2/source/lines`: a host registers which lines a run holds, in order,
     without handing their text over for slicing:
 
@@ -496,8 +573,11 @@ async def handle_lines(store, body, host) -> tuple[int, dict]:
     delivered under the watermark; a run record whose own `revision` is that watermark
     adopted those revisions. `conflict`: the watermark already gives one of these lines
     another revision; nothing is recorded. `forbidden`: the run lies past the host's
-    `max_grant`. Like source changes, 400 for a malformed body, 403 for a caller that is
-    not a host, every outcome a 200."""
+    `max_grant` (`note: exceeds_max_grant`), or one of its lines has a declared change
+    authority that is another host (`note: not_change_authority`, `registration_refusal`;
+    `hosts` is the deployment's table, None = a deployment of `host` alone). Like source
+    changes, 400 for a malformed body, 403 for a caller that is not a host, every outcome
+    a 200."""
     from .bucket_manager import _filesystem_turn      # lazy: bucket_manager imports _sources
     from .scope import Host
 
@@ -515,6 +595,9 @@ async def handle_lines(store, body, host) -> tuple[int, dict]:
         return 200, {"status": _src.FORBIDDEN, **out, "note": "exceeds_max_grant",
                      "exceeds": _src.Place.coerce(sid).label()}
     where = {"system": sid.system, "instance": sid.instance, "container": sid.container}
+    why = registration_refusal(hosts, host, where, ids)
+    if why:
+        return 200, {"status": _src.FORBIDDEN, **out, "note": why}
     async with _filesystem_turn(store.base_dir, "source-registry"):
         got = store.sources.record_order(where, ids, batch_id=f"lines:{host.name}",
                                          revision=revision, revisions=revisions)
@@ -631,14 +714,22 @@ def _outward(row: dict) -> dict:
             "use": row.get("use")}
 
 
-def _for_host(store, host, reply: dict) -> dict:
+async def _for_host(store, host, reply: dict) -> dict:
     """A host with a ceiling never sees the ledger's own numbers (core/_ledger.py): its
-    receipt names the change's line by `applied_cursor` instead of `applied_seq`."""
+    receipt names the change's line by `applied_cursor` instead of `applied_seq`, and its
+    `entries` and `derived_pending` name only the memories it may reconcile — every source
+    behind them within its ceiling, as `/changes` shows them (core/_ledger.visible_ids).
+    The rest were reached and handled all the same; their ids are not its to see."""
     if not _ledger.host_view(host):
         return reply
     seq = reply.pop("applied_seq", None)
     if isinstance(seq, int):
         reply["applied_cursor"] = _ledger.cursor_of(store.ledger_mirror, seq, host.name)
+    named = list(reply.get("entries") or []) + list(reply.get("derived_pending") or [])
+    if named:
+        seen = await _ledger.visible_ids(store, host, named)
+        for key in ("entries", "derived_pending"):
+            reply[key] = [b for b in reply.get(key) or [] if b in seen]
     return reply
 
 
@@ -649,7 +740,7 @@ async def handle(store, body, host, *, dehydrator=None, hosts=None) -> tuple[int
     whose `status` says which. `hosts` is the deployment's table (core/scope.Hosts), which
     names each source's change authority; None = a deployment of `host` alone."""
     status, reply = await _handle(store, body, host, dehydrator=dehydrator, hosts=hosts)
-    return status, (_for_host(store, host, reply) if status == 200 else reply)
+    return status, ((await _for_host(store, host, reply)) if status == 200 else reply)
 
 
 async def _handle(store, body, host, *, dehydrator=None, hosts=None) -> tuple[int, dict]:
@@ -668,56 +759,78 @@ async def _handle(store, body, host, *, dehydrator=None, hosts=None) -> tuple[in
         return 200, _reply(change, _src.FORBIDDEN, note="exceeds_max_grant",
                            exceeds=_src.Place.coerce(sid).label())
     # One order per source: only its declared change authority sends its changes.
-    authority = hosts.authority_for(sid) if hosts is not None else host
-    if authority is None:
-        return 200, _reply(change, _src.FORBIDDEN, note=NO_AUTHORITY)
-    if authority.name != host.name:
-        return 200, _reply(change, _src.FORBIDDEN, note=NOT_AUTHORITY)
+    why = authority_refusal(store.sources, hosts, host, sid)
+    if why:
+        return 200, _reply(change, _src.FORBIDDEN, note=why)
     registry = store.sources
-    out = await registry.apply_change(record, may_restore=host.may_restore, host=host.name)
-    outcome = out["outcome"]
-    if outcome == _src.CONFLICT:
-        return 200, _reply(change, outcome, note=out.get("note"),
-                           conflict={"sent": _outward(change),
-                                     "recorded": _outward(out.get("conflict_with") or {})})
-    if outcome == _src.STALE:
-        return 200, _reply(change, outcome, state=registry.state_of(sid),
-                           blocked=registry.state_of(sid) in CLEARING)
-    if outcome == _src.FORBIDDEN:
-        return 200, _reply(change, outcome, note=out.get("note"))
+    # One send of a change at a time: a second one waits, then finds the first's progress.
+    async with _change_turn(store, _src.SourceRegistry.change_key(host.name,
+                                                                  change["change_id"])):
+        out = await registry.apply_change(record, may_restore=host.may_restore,
+                                          host=host.name)
+        outcome = out["outcome"]
+        if outcome == _src.CONFLICT:
+            return 200, _reply(change, outcome, note=out.get("note"),
+                               conflict={"sent": _outward(change),
+                                         "recorded": _outward(out.get("conflict_with") or {})})
+        if outcome == _src.STALE:
+            return 200, _reply(change, outcome, state=registry.state_of(sid),
+                               blocked=registry.state_of(sid) in CLEARING)
+        if outcome == _src.FORBIDDEN:
+            return 200, _reply(change, outcome, note=out.get("note"))
 
-    prior = registry.prior_change(host.name, change["change_id"]) or {}
-    prog = _progress(store, host.name, change["change_id"])
-    if outcome == _src.DUPLICATE and prog is not None and _complete(prog.get("places") or {}):
-        return 200, _reply(change, _src.DUPLICATE, state=prog.get("state"),
-                           blocked=bool(prog.get("blocked")),
-                           applied_seq=prog.get("applied_seq"),
-                           entries=list(prog.get("entries") or []),
-                           derived_pending=list(prog.get("derived") or []),
-                           cleanup=dict(prog.get("places") or {}), note=prog.get("note"),
-                           result=prog.get("result"))
-    status = prior.get("outcome") or outcome
-    if outcome == _src.DUPLICATE:
-        # Left unfinished: carry on, and say how far it got now.
-        status = _src.APPLIED if prior.get("outcome") == _src.APPLIED else prior.get("outcome")
-    return 200, await _carry_out(store, host, change, sid, prior, prog, status,
-                                 dehydrator=dehydrator)
+        prior = registry.prior_change(host.name, change["change_id"]) or {}
+        prog = _progress(store, host.name, change["change_id"])
+        if outcome == _src.DUPLICATE and prog is not None and _finished(prog):
+            return 200, _reply(change, _src.DUPLICATE, state=prog.get("state"),
+                               blocked=bool(prog.get("blocked")),
+                               applied_seq=prog.get("applied_seq"),
+                               entries=list(prog.get("entries") or []),
+                               derived_pending=list(prog.get("derived") or []),
+                               cleanup=dict(prog.get("places") or {}), note=prog.get("note"),
+                               result=prog.get("result"))
+        status = prior.get("outcome") or outcome
+        if outcome == _src.DUPLICATE:
+            # Left unfinished: carry on, and say how far it got now.
+            status = (_src.APPLIED if prior.get("outcome") == _src.APPLIED
+                      else prior.get("outcome"))
+        return 200, await _carry_out(store, host, change, sid, prior, prog, status,
+                                     dehydrator=dehydrator)
 
 
 async def _carry_out(store, host, change: dict, sid, prior: dict, prog: Optional[dict],
                      status: str, *, dehydrator=None) -> dict:
+    """Write the change's ledger line, block, clear, review, settle — or carry on from
+    where an earlier send of it stopped. An earlier send's progress names the memories it
+    found, and a resend works on those, never on what rests on the source now: after a
+    later change gave the source back, a memory written since stands on a source that is
+    active. Once a later change has settled the source (`SourceRegistry.settled_after`), a
+    resend no longer blocks anything: it finishes the places only for the memories this
+    change had already blocked."""
     kind, state = change["kind"], str(prior.get("state") or _src.ACTIVE)
     note = prior.get("note") or ""
     if kind == "restored" and prior.get("previous") in CLEARING:
         note = "redeliver"          # what was cleared does not come back with the state
     key = _src.SourceRegistry.change_key(host.name, change["change_id"])
-    entries = await _src.memories_of(store, sid)
+    tag = key.replace("\x00", ":")
     clearing = kind in CLEARING and state in CLEARING
-    derived = await _derived(store, entries) if clearing else []
+    resumed = prog is not None and "entries" in prog
+    if resumed:
+        entries = [str(x) for x in prog.get("entries") or []]
+        derived = [str(x) for x in prog.get("derived") or []] if clearing else []
+    else:
+        entries = await _src.memories_of(store, sid)
+        derived = await _derived(store, entries) if clearing else []
+    superseded = clearing and store.sources.settled_after(change["source"],
+                                                          prior.get("seq"))
+    if superseded:
+        entries = [b for b in entries if await _blocked_by(store, b, tag, cleared=True)]
+        derived = [b for b in derived if await _blocked_by(store, b, tag)]
     if prog is None:
         prog = {"key": key, "host": host.name, "change_id": change["change_id"],
                 "applied_seq": None, "places": {p: (PENDING if clearing else NONE)
-                                                for p in PLACES}}
+                                                for p in PLACES},
+                "settled": kind not in _SETTLING}
     prog.update({"state": state, "blocked": state in CLEARING, "entries": entries,
                  "derived": derived, "note": note,
                  "result": prior.get("outcome")})
@@ -735,20 +848,22 @@ async def _carry_out(store, host, change: dict, sid, prior: dict, prog: Optional
 
     def gone(cleared: bool = False) -> dict:
         rec = {"kind": _I.SOURCE_GONE, "of": change["source"], "by": state, "at": stamp,
-               "change": key.replace("\x00", ":")}
+               "change": tag}
         if cleared:
             rec["cleared"] = True
         return rec
 
     if clearing:
-        # Blocked first, cleared after.
-        for bid in derived:
-            await store.add_invalidation_record(bid, gone())
-        for bid in entries:
-            await store.add_invalidation_record(bid, gone(cleared=True))
+        # Blocked first, cleared after; once superseded, what was blocked stays as it is.
+        if not superseded:
+            for bid in derived:
+                await store.add_invalidation_record(bid, gone())
+            for bid in entries:
+                await store.add_invalidation_record(bid, gone(cleared=True))
         bodies, words = await _words(store, entries)
         ctx = {"entries": entries, "derived": derived, "sid": sid, "gone": gone,
-               "bodies": bodies, "words": words, "dehydrator": dehydrator}
+               "bodies": bodies, "words": words, "dehydrator": dehydrator,
+               "superseded": superseded}
         places = dict(prog["places"])
         for place in PLACES:
             if places.get(place) in (DONE, NONE):
@@ -781,12 +896,14 @@ async def _carry_out(store, host, change: dict, sid, prior: dict, prog: Optional
     if kind == "restored" and state == _src.ACTIVE:
         reached = await _derived(store, entries)
         derived = [bid for bid in reached
-                   if await _await_review(store, bid, change["source"], stamp,
-                                          key.replace("\x00", ":"))]
+                   if await _await_review(store, bid, change["source"], stamp, tag)]
         prog["derived"] = derived
     if kind in _SETTLING:
         # The ordered word has come: what a host's unordered word held is settled by it.
-        await _settle_holds(store, entries + reached, stamp, key.replace("\x00", ":"))
+        await _settle_holds(store, entries + reached, stamp, tag)
+    # Saved only now: a send that broke off before this point is carried on by a resend
+    # (`_finished`), so the review and the settled holds are always written.
+    prog["settled"] = True
     _save(store, prog)
     return _reply(change, status, state=state, blocked=state in CLEARING,
                   applied_seq=prog["applied_seq"], entries=entries,

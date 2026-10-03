@@ -457,7 +457,13 @@ class EmbeddingOutbox:
             await self._wait(delay)
 
     async def _process(self, bucket_id: str, item: dict[str, Any], engine: Any) -> None:
-        bucket = await self.bucket_mgr.get(bucket_id)
+        try:
+            bucket = await self.bucket_mgr.get(bucket_id)
+        except OSError as exc:
+            # A file another handle kept busy past the read's own retries: try again
+            # later, never take it for a deleted entry.
+            self._fail(bucket_id, str(item.get("content_hash") or ""), exc)
+            return
         if not bucket:
             self.discard(bucket_id)
             return

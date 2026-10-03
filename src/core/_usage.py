@@ -51,6 +51,7 @@ from __future__ import annotations
 import contextvars
 import json
 import logging
+import os
 import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -113,18 +114,15 @@ def _caller() -> tuple[str, str]:
 
 
 def _read(path: Path) -> list[dict]:
+    """Every whole line, read in binary and decoded one by one: a line a crash tore
+    (inside a multi-byte character, say) is skipped and the rest still read."""
+    from ._sources import json_line
     if not path.exists():
         return []
     out = []
-    with path.open("r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError:
-                continue
+    with path.open("rb") as f:
+        for raw in f:
+            row = json_line(raw)
             if isinstance(row, dict):
                 out.append(row)
     return out
@@ -174,7 +172,15 @@ class UsageLog:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with file_lease(self.lock_path, timeout=5.0):
                 with self.path.open("ab") as f:
+                    # A line a crash left torn is ended first, so this one stands whole.
+                    if f.tell() > 0:
+                        with self.path.open("rb") as r:
+                            r.seek(-1, os.SEEK_END)
+                            if r.read(1) != b"\n":
+                                data = b"\n" + data
                     f.write(data)
+                    f.flush()
+                    os.fsync(f.fileno())
         except (OSError, TimeoutError) as e:
             logger.warning("usage log write failed (%s %s): %s", kind, road, e)
             return

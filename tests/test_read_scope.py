@@ -535,7 +535,8 @@ def test_a_host_credential_admits_and_names_the_host():
 def test_the_old_mcp_credential_is_the_default_host():
     assert _asgi(TABLE, headers=[("authorization", "Bearer mcp-key")]) == (200, "legacy")
     assert _asgi(TABLE, headers=[])[0] == 401
-    assert _asgi(TABLE, auth_required=False) == (200, "legacy")
+    # MCP auth off and a table: presenting nothing makes nobody legacy (B11).
+    assert _asgi(TABLE, auth_required=False)[0] == 401
 
 
 def test_an_unknown_host_credential_is_refused_never_taken_for_open():
@@ -568,7 +569,9 @@ def _hook(monkeypatch, store, path, headers=(), hosts=None, method="GET"):
             return keep
     Wb.register(web._Gated(_Mcp()))
     monkeypatch.setattr(sh, "bucket_mgr", store)
-    monkeypatch.setattr(PA, "gate_needed", lambda: False)
+    # A table with a ceiling needs the panel locked (and MCP auth on, the default) before
+    # its hosts are let in at all (B11).
+    monkeypatch.setattr(PA, "gate_needed", lambda: True)
     monkeypatch.setattr(PA, "has_session", lambda r: False)
     monkeypatch.setattr(PA, "hosts", lambda: hosts or TABLE)
 
@@ -607,9 +610,12 @@ def test_breath_over_the_hook_opens_with_the_scope(store, monkeypatch):
     text = resp.body.decode("utf-8")
     assert text.startswith("〔范围：受限 · 入口 telegram/bot-a/group:G · 场合 group · 许读 1 处〕\n")
     assert ids["private"][:6] not in text
-    # The legacy host, unlocked panel, no key: the whole library, said on the first line.
-    open_text = _hook(monkeypatch, store, "/api/v2/breath").body.decode("utf-8")
+    # The legacy host by its key: the whole library, said on the first line.
+    open_text = _hook(monkeypatch, store, "/api/v2/breath",
+                      [("x-loci-hook-token", "life")]).body.decode("utf-8")
     assert open_text.startswith("〔范围：全库（open）〕\n")
+    # With a table, no key is nobody — not the legacy host (B11).
+    assert _hook(monkeypatch, store, "/api/v2/breath").status_code == 401
 
 
 def test_an_unknown_key_on_a_hook_route_is_refused_when_hosts_are_written(store, monkeypatch):

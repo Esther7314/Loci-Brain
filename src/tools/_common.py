@@ -39,12 +39,8 @@ from concurrent.futures import Future, InvalidStateError
 from contextlib import asynccontextmanager
 import contextvars
 import math
-import os
-from pathlib import Path
 import re
 import threading
-import time
-import uuid
 
 from core import scope as _scope
 from core.visibility import LIVE, state_of
@@ -82,10 +78,11 @@ _PINNED_SOFT_GAP = 2                   # "soft threshold = cap - GAP"; cap=20 ->
 
 # --- Length of the content lock's hash key ---
 _CONTENT_LOCK_KEY_HEX = 16             # a 64-bit space; collision probability is negligible
-_CONTENT_LOCK_POLL_SECONDS = 0.01
-_CONTENT_LOCK_STALE_MIN_SECONDS = 180.0
-_CONTENT_LOCK_STALE_GRACE_SECONDS = 60.0
-_CONTENT_LOCK_WAIT_GRACE_SECONDS = 30.0
+# How long a keyed turn waits for its holder: the slowest holder may be in a side-model
+# call (dehydration.timeout_seconds), plus grace; never less than the minimum.
+_CONTENT_TURN_WAIT_MIN_SECONDS = 180.0
+_CONTENT_TURN_WAIT_GRACE_SECONDS = 60.0
+_CONTENT_TURN_WAIT_EXTRA_SECONDS = 30.0
 
 # Per-content turns use concurrent futures rather than asyncio.Lock. FastMCP may
 # dispatch independent HTTP sessions from different event loops/threads;
@@ -111,16 +108,19 @@ def _complete_content_turn(key: str, turn: Future[None]) -> None:
 
 @asynccontextmanager
 async def _filesystem_content_turn(key: str):
-    """Use atomic lock-file creation as a cross-loop/process final guard."""
+    """The cross-loop/process half of a keyed turn: an OS file lease on `.locks`
+    (core.bucket_manager._filesystem_turn, the same one each bucket's writes take).
+
+    The kernel holds the lease while this context keeps its descriptor open and drops it
+    when the process dies, so a turn left by a killed process (a restart in the middle of
+    a regrow) is free at once, and a slow live holder is never taken over by an age rule.
+    The wait is as long as the slowest holder may take: a side-model call plus grace."""
+    from core.bucket_manager import _filesystem_turn
+
     base_dir = str(getattr(rt.bucket_mgr, "base_dir", "") or "").strip()
     if not base_dir:
         yield
         return
-
-    lock_dir = Path(base_dir) / ".locks"
-    lock_dir.mkdir(parents=True, exist_ok=True)
-    lock_path = lock_dir / f"content-{key}.lock"
-    token = f"{os.getpid()}:{threading.get_ident()}:{uuid.uuid4().hex}"
     try:
         llm_timeout = float(
             (rt.config.get("dehydration") or {}).get("timeout_seconds", 120)
@@ -129,43 +129,10 @@ async def _filesystem_content_turn(key: str):
         llm_timeout = 120.0
     if not math.isfinite(llm_timeout) or llm_timeout <= 0:
         llm_timeout = 120.0
-    stale_seconds = max(
-        _CONTENT_LOCK_STALE_MIN_SECONDS,
-        llm_timeout + _CONTENT_LOCK_STALE_GRACE_SECONDS,
-    )
-    deadline = time.monotonic() + stale_seconds + _CONTENT_LOCK_WAIT_GRACE_SECONDS
-    acquired = False
-
-    while not acquired:
-        try:
-            descriptor = os.open(
-                lock_path,
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                0o600,
-            )
-        except FileExistsError:
-            try:
-                if time.time() - lock_path.stat().st_mtime > stale_seconds:
-                    lock_path.unlink(missing_ok=True)
-                    continue
-            except OSError:
-                pass
-            if time.monotonic() >= deadline:
-                raise TimeoutError("timed out waiting for identical-content write lock")
-            await asyncio.sleep(_CONTENT_LOCK_POLL_SECONDS)
-        else:
-            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-                handle.write(token)
-            acquired = True
-
-    try:
+    wait = (max(_CONTENT_TURN_WAIT_MIN_SECONDS, llm_timeout + _CONTENT_TURN_WAIT_GRACE_SECONDS)
+            + _CONTENT_TURN_WAIT_EXTRA_SECONDS)
+    async with _filesystem_turn(base_dir, f"content-{key}", timeout_seconds=wait):
         yield
-    finally:
-        try:
-            if lock_path.read_text(encoding="utf-8") == token:
-                lock_path.unlink(missing_ok=True)
-        except OSError:
-            pass
 
 
 @asynccontextmanager

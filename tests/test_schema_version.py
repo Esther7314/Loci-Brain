@@ -101,6 +101,15 @@ def test_an_existing_from_wins_over_triggered_by(tmp_path):
     assert "triggered_by" not in meta and "from" not in meta
 
 
+def test_a_backup_leaves_the_panel_password_and_sessions_behind(old_library):
+    (old_library / ".dashboard_auth.json").write_text('{"hash": "x"}', encoding="utf-8")
+    (old_library / ".dashboard_sessions.json").write_text("{}", encoding="utf-8")
+    with zipfile.ZipFile(S.backup(old_library, "secrets")) as zf:
+        names = set(zf.namelist())
+    assert ".dashboard_auth.json" not in names and ".dashboard_sessions.json" not in names
+    assert "dynamic/a_aaaaaaaaaaaa.md" in names
+
+
 def test_a_later_backup_does_not_contain_earlier_ones(old_library):
     first = S.backup(old_library, "one")
     second = S.backup(old_library, "two")

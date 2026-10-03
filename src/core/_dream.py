@@ -771,23 +771,36 @@ async def _quoted(pool: list[Ingredient], c: dict) -> tuple[list[Ingredient], li
     return [], []
 
 
-def few_words(recs, c: dict) -> list[str]:
+def few_words(recs, c: dict, now=None) -> tuple[list[str], list[str]]:
     """Drawn at random from the `tags` of every bucket — **with no requirement that they
-    be places.**
+    be places.** Returns (the words, the ids of the memories carrying them).
 
     `tags` were deliberately redefined from "what topic is this about" to "what is inside
     it", which makes these words things **we wrote down at the moment of storing, and
     that are guaranteed to appear literally in the body.** The `_muse.is_scene_word()`
     gate then filters out machine-voiced labels (`aspect:patterns` and the like) — a tag
     the machine assigned itself is not a trace of ours.
+
+    Being words out of a body, they pass the dream's own gate (road DREAM) like every
+    other ingredient: a memory whose source was withdrawn, one kept out of sight on purpose
+    or one an avoid-hold covers lends no word. The ids are recorded on the dream, so a
+    later withdrawal of one of them can find it.
     """
+    now = now or _w.now()
+    holds = _H.hold_index(recs)
+    seen = [(meta, [str(t) for t in (meta.get("tags") or [])]) for meta, _t in recs
+            if _V.visible_for(meta, road=_V.DREAM, now=now, holds=holds)]
     freq = Counter()
-    for meta, _t in recs:
-        freq.update(str(t) for t in (meta.get("tags") or []))
+    for _meta, tags in seen:
+        freq.update(tags)
     pool = [w for w, _n in freq.most_common(int(c["word_pool_top"]))
             if M.is_scene_word(w) and 1 < len(w) <= 6]
     n = min(int(c["word_n"]), len(pool))
-    return random.sample(pool, n) if n > 0 else []
+    words = random.sample(pool, n) if n > 0 else []
+    picked = set(words)
+    sources = [str(meta.get("id") or "") for meta, tags in seen
+               if picked & set(tags) and str(meta.get("id") or "")]
+    return words, sources
 
 
 def weighted_sample(pool: list[Ingredient], n: int, c: dict,
@@ -866,12 +879,14 @@ async def gather_ingredients(c: dict | None = None) -> dict:
         x.text = _cold_text(x)
     taken |= {x.id for x in picked_cold}
     quotes = [x for x in quote_pool(recs, now, born=born) if x.id not in taken]
+    words, word_sources = few_words(recs, c, now=now)
     return {
         "压在心头": picked_pressing,
         "想不明白": picked_unclear,
         "冷档案": picked_cold,
         "原话池": quotes,
-        "几个词": few_words(recs, c),
+        "几个词": words,
+        "几个词的来处": word_sources,
         "压力": pressure_value,
         "攒着": piled_up,
         "过线的": over_line,
@@ -1328,6 +1343,7 @@ async def weave(force: bool = False, cfg: dict | None = None,
             "冷档案": [x.id for x in ingredients.get("冷档案") or []],
             "原话": [x.id for x in ingredients.get("原话") or []],
             "几个词": list(ingredients["几个词"]),
+            "几个词的来处": list(ingredients.get("几个词的来处") or []),
         },
         # The string forms of the host's sources behind the quote share: identities only,
         # never their text. A withdrawal of any of them reaches this dream.

@@ -504,8 +504,12 @@ class _Library:
             cond = str(meta["cue"].get("condition") or "").strip()[:24]
             if hold:
                 target = str(meta.get("exception_of") or "").strip()
+                # The entry it hangs on is named only to a request that may read it: an id
+                # is an existence, and out of scope nothing exists.
+                on = (f"挂在 {short_id(target)} 上；" if target and (
+                    self.scope is None or self.scope.permits_id(target)) else "")
                 text = (f"【条子】{self.label(bid)}（{_HOLD_WORD.get(meta.get('hold'), '')}，"
-                        f"挂在 {short_id(target)} 上；等的事：{cond}）{quote}"
+                        f"{on}等的事：{cond}）{quote}"
                         f"——等的事真到了再 trace(bucket_id=\"{short_id(bid)}\", status=\"resolved\") "
                         f"撤条子，没到就不用管 ({short_id(bid)})")
                 kind = HOLD

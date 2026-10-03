@@ -393,9 +393,11 @@ class Run:
         """What POST /api/v2/source/lines runs (core/_source_change.handle_lines), in this
         process, on the same library: the reply as JSON text under `as`."""
         from core import _source_change
-        host = self._host(str(self.sub(step.get("host") or "")))
+        token = str(self.sub(step.get("host") or ""))
+        host = self._host(token)
         status, out = await _source_change.handle_lines(self._store(),
-                                                        self.sub(step["source_lines"]), host)
+                                                        self.sub(step["source_lines"]), host,
+                                                        hosts=self._hosts(token))
         self._keep(step, step.get("as") or "source_lines",
                    json.dumps({"http": status, **out}, ensure_ascii=False))
         await asyncio.sleep(SETTLE_SECONDS + 1.0)   # the server notices changed files
@@ -445,7 +447,25 @@ class Run:
                                          left_out=left_out)
             after = EP.library_snapshot(dst, alias_path=str(dst / "aliases.yaml"))
             differing = [k for k in before if before[k] != after[k]]
+            self_restore = None
+            if spec.get("self_restore"):
+                # The same package back into the library it came from, every collision
+                # overwritten: what is already there byte for byte is imported as it is,
+                # nothing archived again.
+                src_store = self._store()
+                count = len(await src_store.list_all(include_archive=True))
+                back = MigrateEngine(config, src_store, EmbeddingEngine(config))
+                again = await back.parse_zip_file(path)
+                if not again.get("ok"):
+                    raise RuntimeError(f"the package did not parse: {again.get('error')}")
+                await back.apply({c["bucket_id"]: "overwrite" for c in again["conflicts"]})
+                done = back.get_status()
+                self_restore = {"phase": done["phase"], "imported": done["result"]["imported"],
+                                "refused": done["result"]["refused"],
+                                "archived_added": len(await src_store.list_all(
+                                    include_archive=True)) - count}
             out = {"identical": not differing and status["phase"] == "done",
+                   "self_restore": self_restore,
                    "differing": differing, "phase": status["phase"],
                    "apply_errors": status["apply_errors"],
                    "filtered": package["filtered"], "missing": package["missing"],

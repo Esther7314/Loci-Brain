@@ -664,19 +664,44 @@ class EmbeddingEngine:
     # -------------------- Generate and store --------------------
 
     async def _generate_async(self, text: str) -> list[float]:
+        """One vector for `text`, asked of the backend at most once at a time.
+
+        A write asks for its body's vector twice at the same moment: the look-back searches
+        with it (core/_reconsolidation) while the vector queue stores it. The cache alone
+        does not join them — neither has an answer yet — so a call already in flight for
+        the same text on the same loop is awaited instead of made again, and its answer is
+        cached whoever started it (also when that caller gave up waiting: the look-back's
+        time budget does not cancel the call the queue is waiting on)."""
         if not self._backend:
             return []
         cached = self._query_cache.get(text)
         if cached is not None:
             self._query_cache.move_to_end(text)
             return list(cached)
-        embedding = await self._backend.generate_async(text)
+        loop = asyncio.get_running_loop()
+        in_flight = self.__dict__.setdefault("_in_flight", {})
+        held = in_flight.get(text)
+        if held is None or held[0] is not loop:
+            task = loop.create_task(self._backend.generate_async(text))
+            held = (loop, task)
+            in_flight[text] = held
+            task.add_done_callback(lambda done, text=text: self._settle(text, done))
+        embedding = await asyncio.shield(held[1])
+        return list(embedding or [])
+
+    def _settle(self, text: str, task: "asyncio.Task") -> None:
+        """A backend call finished: stop sharing it, and cache what it brought back."""
+        in_flight = self.__dict__.get("_in_flight") or {}
+        if in_flight.get(text, (None, None))[1] is task:
+            in_flight.pop(text, None)
+        if task.cancelled() or task.exception() is not None:
+            return
+        embedding = task.result()
         if embedding:
             self._query_cache[text] = list(embedding)
             self._query_cache.move_to_end(text)
             if len(self._query_cache) > _QUERY_CACHE_MAXSIZE:
                 self._query_cache.popitem(last=False)
-        return embedding
 
     async def probe(self, timeout_seconds: float = 4.0) -> tuple[bool, str]:
         """Actually ask the backend for one vector. Returns `(works, why not)`.

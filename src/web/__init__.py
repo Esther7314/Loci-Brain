@@ -109,12 +109,16 @@ class _Gated:
 
             @functools.wraps(fn)
             async def guarded(request):
-                if panel_auth.gate_needed() and not panel_auth.has_session(request):
-                    # 401 is the **agreed signal**: the front-end pops the gate open when
-                    # it sees one. That line in the page —
-                    # `if (r.status === 401){ openGate(); }` — was there all along; after
-                    # the strip-down there was simply nothing left that ever returned 401.
-                    return JSONResponse({"error": "请先登录"}, status_code=401)
+                # 401 is the **agreed signal**: the front-end pops the gate open when it
+                # sees one. That line in the page — `if (r.status === 401){ openGate(); }`
+                # — was there all along; after the strip-down there was simply nothing left
+                # that ever returned 401. A `hosts:` table adds two refusals (a host's
+                # credential is never the panel; an unlocked panel stays shut), both in
+                # panel_auth.panel_refusal.
+                refused = panel_auth.panel_refusal(request)
+                if refused is not None:
+                    status, why = refused
+                    return JSONResponse({"error": why}, status_code=status)
                 return await fn(request)
 
             return inner(guarded)

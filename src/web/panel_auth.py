@@ -35,8 +35,17 @@ The bridge-facing routes are where hosts come in (core/scope.py): `hook_caller` 
 host a request is — its credential in the key header, or the legacy host where today's
 callers come without one — and `request_scope_of` resolves what that request may read.
 
+A `hosts:` table changes three things, all closed by default (single-host setups without
+a table are untouched): a caller presenting no host credential is nobody, not `legacy`; a
+request carrying a host credential is never the panel (`panel_refusal`); and the panel's
+own routes work only once the panel is locked. A table holding a host with a ceiling also
+needs MCP auth on: until the panel is locked and MCP auth is on, those hosts' credentials
+are refused on every door (`lock_problem`), the log says so, and the setup screen shows it
+red (web/loci.build_setup, `hosts_lock`).
+
 Public surface: register(mcp) · has_session(request) · gate_needed() · PUBLIC_PATHS ·
-                hosts() · hook_caller(request) · hook_ok(request) · request_scope_of()
+                hosts() · hook_caller(request) · hook_ok(request) · request_scope_of() ·
+                panel_refusal(request) · lock_problem(hosts) · mcp_auth_on()
 ========================================
 """
 
@@ -239,52 +248,155 @@ def hook_token() -> str:
         return ""
 
 
+def mcp_auth_on() -> bool:
+    """Whether the MCP endpoint asks for a credential (`mcp_require_auth`, default on —
+    the same switch server_app.HTTPRuntimeSettings reads)."""
+    from utils import parse_bool
+    try:
+        return parse_bool(sh.config.get("mcp_require_auth", True), default=True)
+    except Exception:                    # noqa: BLE001 - a broken config reads as on
+        return True
+
+
+def lock_problem(hs) -> str:
+    """Why the hosts with a ceiling are refused in this deployment, or "".
+
+    A `hosts:` table holding a host with a ceiling (core/scope.Hosts.ceilinged) promises
+    that host it sees only its own material. That promise holds only behind two locks: the
+    panel's (its routes read the whole library and hand out the export) and MCP auth (with
+    it off, the endpoint has no door). Until both are on, those hosts' credentials are
+    refused everywhere — fail closed, and say which lock is missing."""
+    if hs is None or not hs.ceilinged:
+        return ""
+    missing = []
+    if not gate_needed():
+        missing.append("面板没上锁（panel_auth 要开着，并且设了口令）")
+    if not mcp_auth_on():
+        missing.append("MCP 鉴权关着（mcp_require_auth 是 false）")
+    if not missing:
+        return ""
+    return ("hosts 表里有带上限（max_grant）的宿主，但" + "、".join(missing)
+            + "。这两道锁没齐之前，带上限的宿主凭据一律拒——不然它绕过面板或 MCP 就能读全库。")
+
+
+_LOCK_LOG_EVERY = 600.0                 # seconds; hosts() runs on every request
+_lock_logged: dict = {"message": "", "at": 0.0}
+
+
+def _say_lock_problem(message: str) -> None:
+    """Loud, once per change of the problem and every ten minutes while it lasts."""
+    now = time.time()
+    if message != _lock_logged["message"] or now - _lock_logged["at"] >= _LOCK_LOG_EVERY:
+        _lock_logged.update(message=message, at=now)
+        logger.error("[hosts] %s", message)
+
+
 def hosts():
     """The deployment's hosts (core/scope.load_hosts): `hosts:` in config, or the one
-    legacy host whose key is `hook_token()`. Read per request, like the key itself."""
+    legacy host whose key is `hook_token()`. Read per request, like the key itself; the
+    table carries why its hosts with a ceiling are refused right now (`lock_problem`)."""
     import os
     from core import scope as _scope
-    return _scope.load_hosts(sh.config, os.environ, legacy_token=hook_token())
+    hs = _scope.load_hosts(sh.config, os.environ, legacy_token=hook_token())
+    hs.unsafe = lock_problem(hs)
+    if hs.unsafe:
+        _say_lock_problem(hs.unsafe)
+    return hs
 
 
 # Who a hook request is when it is not a host: a logged-in browser, the panel itself.
 # The panel is the owner looking at their own library, not a host; it reads everything.
 PANEL = "panel"
+_MCP_TOKEN_HEADER = "loci-mcp-token"
+
+
+def _bearer(request: Request) -> str:
+    parts = str(request.headers.get("authorization") or "").strip().split(None, 1)
+    return parts[1].strip() if len(parts) == 2 and parts[0].lower() == "bearer" else ""
+
+
+def _host_credential(request: Request, hs):
+    """(the host whose credential the request carries, whether it carries one at all):
+    the key header, or a bearer / `loci-mcp-token` that is a host's (as the MCP endpoint
+    reads them, server_app.identify_host). Anything in the key header counts as carried."""
+    hook = str(request.headers.get(HOOK_HEADER) or "").strip()
+    if hook:
+        return hs.by_token(hook), True
+    for token in (_bearer(request), str(request.headers.get(_MCP_TOKEN_HEADER) or "").strip()):
+        if token:
+            host = hs.by_token(token)
+            if host is not None:
+                return host, True
+    return None, False
+
+
+def panel_refusal(request: Request):
+    """Why a panel route (neither public nor a hook route) refuses this request:
+    (HTTP status, what to say), or None to let it through.
+
+    Without a `hosts:` table: the gate as it always was — locked, it wants a session.
+    With a table, two more rules, both closed by default:
+      · a request carrying a host's credential is a host, and hosts have their own routes:
+        it is never taken for the panel (403);
+      · the panel works only once it is locked: an unlocked panel with a table would hand
+        every host — and anyone who can reach the port — the whole library (401, saying
+        to set the password first)."""
+    hs = hosts()
+    if not hs.implicit:
+        _host, carried = _host_credential(request, hs)
+        if carried:
+            return 403, (f"这个请求带着宿主凭据（{HOOK_HEADER} 或宿主的 token）——宿主只走给宿主的口，"
+                         "面板的路由不认宿主凭据。")
+        if not gate_needed():
+            return 401, ("写了 hosts 表，面板就必须先上锁：在面板「账号」里设一把口令"
+                         "（panel_auth 不能关）。没上锁之前面板的路由一律拒。")
+    if gate_needed() and not has_session(request):
+        return 401, "请先登录"
+    return None
 
 
 def hook_caller(request: Request):
     """Whether to let this bridge request through, and who is calling.
     Returns (allowed, why not, caller): caller is a `core.scope.Host`, or PANEL.
 
-    Ways in, in this order:
-      1. A host's credential in the key header -> that host, locked gate or not. A key
-         that matches no host is ignored only when there is no `hosts:` table (the one
-         legacy host; an unlocked gate has nothing to protect). With a table it is
-         refused: a restricted host whose credential went wrong must never be taken for
-         the open one.
+    With a `hosts:` table, in this order:
+      1. A host's credential (the key header, or a bearer / `loci-mcp-token` that is a
+         host's) -> that host, locked gate or not — never the panel. A key matching no
+         host is refused: a restricted host whose credential went wrong must never be
+         taken for the open one. A host with a ceiling is refused while the deployment's
+         locks are not both on (`lock_problem`).
+      2. An already-logged-in browser -> the panel.
+      3. Otherwise refused: with a table, a caller presenting nothing is nobody.
+    Without a table, as it always was:
+      1. The key header matching the legacy host -> it; a key matching nothing is ignored.
       2. An already-logged-in browser -> the panel.
       3. **The gate is unlocked** -> the legacy host (who calls today, with no key).
       4. Otherwise refused, saying what to fix."""
     hs = hosts()
+    if not hs.implicit:
+        host, carried = _host_credential(request, hs)
+        if carried and host is None:
+            return False, (f"请求头 `{HOOK_HEADER}` 里的凭据对不上 hosts 表里任何一个宿主"
+                           "（看看 Loci 这边那个宿主的 token_env 环境变量设了没有、值对不对）。"), None
+        if host is not None:
+            why = (hs.unsafe or lock_problem(hs)) if host.max_grant is not None else ""
+            if why:
+                return False, why, None
+            return True, "", host
+        if has_session(request):
+            return True, "", PANEL
+        return False, (f"写了 hosts 表：不带宿主凭据的请求一律拒，认不出是谁。在请求头 `{HOOK_HEADER}` "
+                       "里带上这个宿主的凭据。"), None
     got = str(request.headers.get(HOOK_HEADER) or "")
     if got.strip():
         host = hs.by_token(got)
         if host is not None:
             return True, "", host
-        if not hs.implicit:
-            return False, (f"请求头 `{HOOK_HEADER}` 里的凭据对不上 hosts 表里任何一个宿主"
-                           "（看看 Loci 这边那个宿主的 token_env 环境变量设了没有、值对不对）。"), None
     if has_session(request):
         return True, "", PANEL
     if not gate_needed():
-        if hs.default is None:
-            return False, (f"没带宿主凭据（请求头 `{HOOK_HEADER}`），而 hosts 表里没有 legacy 宿主，"
-                           "认不出是谁。"), None
         return True, "", hs.default
-    ok, why = _key_check(got)
-    if ok:
-        # The hook key without a legacy host to be: a `hosts:` table that left it out.
-        why = f"请求头 `{HOOK_HEADER}` 里的凭据对不上 hosts 表里任何一个宿主。"
+    _ok, why = _key_check(got)
     return False, why, None
 
 

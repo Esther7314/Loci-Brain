@@ -7,10 +7,13 @@ under one lease shared by all of them: `<ledger>.lock`, an OS lock on its first 
 process dies.
 
 Under the lease the next number is one past the highest seq among the whole lines in the
-last 64 KB of the file — the newest lines, whoever wrote them — and never below the
-highest seq in the whole file, which each writer reads once, on its first append (older
-lines out of order cannot pull a number back). A write opens the ledger once and reads its
-tail, whatever the ledger's size.
+last 64 KB of the file — the newest lines, whoever wrote them; further back when that
+window holds no whole line — and never below the highest seq in the whole file, which each
+writer reads once, on its first append (older lines out of order cannot pull a number
+back). A write opens the ledger once and reads its tail, whatever the ledger's size.
+
+Every reader reads in binary and decodes line by line: a line a crash tore, even inside a
+multi-byte character, is skipped and the lines after it are read.
 
 `rewrite()` replaces the file whole under the same lease (write a temporary file, then
 rename it over the ledger): a reader sees the old file or the new one, never half of
@@ -195,17 +198,16 @@ class LedgerMirror:
         return latest
 
     def iter_events(self) -> Iterator[dict[str, Any]]:
+        """Every whole line, in file order. Read in binary and decoded line by line, so a
+        line a crash tore (cut inside a multi-byte character, say) is skipped and never
+        stops the lines after it."""
         if not self.path.exists():
             return
-        with self.path.open("r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    yield json.loads(line)
-                except json.JSONDecodeError:
-                    continue
+        with self.path.open("rb") as f:
+            for raw in f:
+                event = _parse_line(raw)
+                if isinstance(event, dict):
+                    yield event
 
     def iter_since(self, since: int) -> Iterator[dict[str, Any]]:
         """The events numbered above `since`, in file order. A line is parsed only when
@@ -244,14 +246,12 @@ class LedgerMirror:
                 "schema_versions": [],
             }
 
-        with self.path.open("r", encoding="utf-8") as f:
-            for lineno, line in enumerate(f, start=1):
-                line = line.strip()
-                if not line:
+        with self.path.open("rb") as f:
+            for lineno, raw in enumerate(f, start=1):
+                if not raw.strip():
                     continue
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
+                event = _parse_line(raw)
+                if not isinstance(event, dict):
                     invalid_lines.append(lineno)
                     continue
                 valid_events += 1
@@ -279,34 +279,53 @@ class LedgerMirror:
 _TAIL_BYTES = 64 * 1024
 
 
+def _parse_line(raw: bytes) -> Any:
+    """One line read in binary -> its JSON value, or None for a blank or torn line."""
+    line = raw.strip()
+    if not line:
+        return None
+    try:
+        return json.loads(line.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+
+
 def _tail(f, size: int) -> tuple[int, bool]:
-    """(the highest seq among the whole lines in the last _TAIL_BYTES of an open file,
-    whether the file ends on a line break). A torn last line counts for nothing."""
+    """(the highest seq among the whole lines at the end of an open file, whether the
+    file ends on a line break). It reads the last _TAIL_BYTES, and twice as far back each
+    time that window holds no whole line (one line longer than the window — a clearing
+    that lists thousands of entries): the newest line is always counted, however long.
+    A torn last line counts for nothing."""
     if size == 0:
         return 0, True
-    start = max(0, size - _TAIL_BYTES)
-    f.seek(start)
-    chunk = f.read(size - start)
-    f.seek(0, os.SEEK_END)
-    ends_clean = chunk.endswith(b"\n")
-    lines = chunk.split(b"\n")
-    if start > 0:
-        lines = lines[1:]           # the first piece may be the end of a longer line
-    if not ends_clean:
-        lines = lines[:-1]          # a torn last line
-    newest = 0
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        quick = _tail_seq(line)
-        if quick is None:
-            try:
-                quick = _seq_of(json.loads(line))
-            except (json.JSONDecodeError, UnicodeDecodeError, AttributeError):
+    window = _TAIL_BYTES
+    while True:
+        start = max(0, size - window)
+        f.seek(start)
+        chunk = f.read(size - start)
+        ends_clean = chunk.endswith(b"\n")
+        lines = chunk.split(b"\n")
+        if start > 0:
+            lines = lines[1:]           # the first piece may be the end of a longer line
+        if not ends_clean:
+            lines = lines[:-1]          # a torn last line
+        newest, whole = 0, False
+        for line in lines:
+            line = line.strip()
+            if not line:
                 continue
-        newest = max(newest, quick)
-    return newest, ends_clean
+            quick = _tail_seq(line)
+            if quick is None:
+                parsed = _parse_line(line)
+                if not isinstance(parsed, dict):
+                    continue
+                quick = _seq_of(parsed)
+            whole = True
+            newest = max(newest, quick)
+        if whole or start == 0:
+            f.seek(0, os.SEEK_END)
+            return newest, ends_clean
+        window *= 2
 
 
 def _seq_of(event: dict[str, Any]) -> int:

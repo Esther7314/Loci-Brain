@@ -120,7 +120,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from tools import _runtime as rt
-from utils import is_closed, prov_targets
+from utils import is_closed, parse_bool, prov_targets
 from ._bigevent import BIGEVENT_TAG, SPAN_RE
 from .bucket_manager import V2_FIELDS
 
@@ -239,21 +239,40 @@ def user_tags(meta: dict) -> list[str]:
     return out
 
 
+# What the backfill reads off the wording itself rather than off where the entry stands: a
+# new version has new words, so these are read again from them, not carried — but only
+# when the backfill is who wrote them (listed in `backfilled`). The same slot set by the
+# main model is what it said and comes across like the rest.
+_READ_OFF_WORDING = ("looks_like_promise", "internally_generated", "recurrence", "evidential")
+
+
 def carried_state(old_meta: dict, *, period: bool = False) -> dict:
     """What `update()` has to write on a new version so that it stands where the old one
     stood (`_CARRIED_FIELDS`, those that are set). A period's `when` is left out: the span
     went in at creation. An entry closed only by the older `resolved` boolean comes across
-    as `status="resolved"`, the field every write path uses now."""
+    as `status="resolved"`, the field every write path uses now. A slot the backfill read off
+    the old words (`_READ_OFF_WORDING`) is left for the backfill to read off the new ones.
+    A deliberate `dont_surface` comes across: the old version's own one only means "keep
+    this out of sight" while nothing has replaced it yet."""
+    old_meta = old_meta or {}
+    read_off = {str(f) for f in old_meta.get("backfilled") or []} & set(_READ_OFF_WORDING)
     out: dict = {}
     for k in _CARRIED_FIELDS:
-        if k == "when" and period:
+        if (k == "when" and period) or k in read_off:
             continue
-        v = (old_meta or {}).get(k)
+        v = old_meta.get(k)
         if v is None or v == "" or v == []:
             continue
         out[k] = v
+    if out.get("backfilled"):
+        out["backfilled"] = [f for f in out["backfilled"] if str(f) not in read_off]
+        if not out["backfilled"]:
+            del out["backfilled"]
     if "status" not in out and is_closed(old_meta):
         out["status"] = "resolved"
+    if (parse_bool(old_meta.get("dont_surface"), default=False)
+            and not str(old_meta.get("superseded_by") or "").strip()):
+        out["dont_surface"] = True
     return out
 
 
@@ -508,25 +527,33 @@ async def save_gist(text: str, room: str, v: float, a: float,
     targets = list(cover) + ([supersedes] if supersedes and supersedes not in cover else [])
     ok_cover = await rt.bucket_mgr.update(new_id, cover=cover) if cover else True
     for cid in targets:
-        old = await rt.bucket_mgr.get(cid)
-        old_meta = (old or {}).get("metadata", {}) or {}
-        kwargs: dict = {}
-        if cid in cover:
-            old_covers = _covered_list(old_meta)
-            if old_covers and new_id not in old_covers:
-                # Rule 6: crossing is a fact, not a conflict -> explicitly covering
-                # something already covered **stacks** (append); nobody evicts anybody,
-                # both layers stay visible and both can be drilled into. (This replaced a
-                # first implementation in which the new cover took ownership.)
-                report["叠盖"].append((cid, list(old_covers)))
-            kwargs["covered_by"] = old_covers + ([new_id] if new_id not in old_covers else [])
-        if supersedes and cid == supersedes:
-            # Only the version-change case writes the chain and dont_surface (regrow's
-            # long-standing behaviour, untouched)
-            kwargs["superseded_by"] = new_id
-            kwargs["dont_surface"] = True
-        if not await rt.bucket_mgr.update(cid, **kwargs):
+        stacked: list = []
+
+        def chain_end(old_meta: dict, cid=cid, stacked=stacked) -> dict:
+            # Decided on the entry as it is on disk, under its lock: a second fold covering
+            # the same entry at the same moment appends after this one instead of writing
+            # back a roster without it.
+            kwargs: dict = {}
+            if cid in cover:
+                old_covers = _covered_list(old_meta)
+                if old_covers and new_id not in old_covers:
+                    # Rule 6: crossing is a fact, not a conflict -> explicitly covering
+                    # something already covered **stacks** (append); nobody evicts anybody,
+                    # both layers stay visible and both can be drilled into. (This replaced
+                    # a first implementation in which the new cover took ownership.)
+                    stacked[:] = [list(old_covers)]
+                kwargs["covered_by"] = old_covers + ([new_id] if new_id not in old_covers else [])
+            if supersedes and cid == supersedes:
+                # Only the version-change case writes the chain and dont_surface (regrow's
+                # long-standing behaviour, untouched)
+                kwargs["superseded_by"] = new_id
+                kwargs["dont_surface"] = True
+            return kwargs
+
+        if not await rt.bucket_mgr.update(cid, revise=chain_end):
             report["没写上"].append(cid)
+        elif stacked:
+            report["叠盖"].append((cid, stacked[0]))
     if supersedes:
         ok_sup = await rt.bucket_mgr.update(new_id, supersedes=supersedes)
         report["链没写全"] = not (ok_sup and ok_cover and supersedes not in report["没写上"])

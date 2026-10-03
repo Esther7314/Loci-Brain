@@ -372,3 +372,30 @@ def test_a_new_table_starts_with_its_header(table, tmp_path):
     text = (tmp_path / "aliases.yaml").read_text(encoding="utf-8")
     assert text.startswith("# ")
     assert yaml.safe_load(text) == {"Detroit": {"instance_of": "游戏"}}
+
+
+BROKEN = """\
+Connor:
+  instance_of: person
+  aliases: [Con
+Hank:
+  - Lieutenant
+"""
+
+
+@pytest.mark.parametrize("write", [
+    lambda: S.set_kind("Connor", "android"),
+    lambda: S.set_kind("Markus", "android"),
+    lambda: S.add_alias("Hank", "Anderson"),
+    lambda: S.mark_not_person("Detroit"),
+    lambda: S.link_name("Connor", "member_of", "CyberLife"),
+    lambda: S.merge_names("Hank", "Connor"),
+])
+def test_a_table_that_does_not_parse_is_never_written(table, write):
+    # Criterion: the writers edit the file's text line by line; on a file that does not
+    # parse they cannot know what a line belongs to, and an edit would replace a kind or
+    # turn aliases into top-level names. They refuse, and the file stays byte for byte.
+    path = table(BROKEN)
+    with pytest.raises(ValueError):
+        write()
+    assert _text(path) == BROKEN

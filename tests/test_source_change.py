@@ -378,7 +378,10 @@ def test_the_route_answers_through_the_hook_guard(library, monkeypatch):
     assert call("POST", "/api/v2/source/lines", lines)[0] == 401
     status, out = call("POST", "/api/v2/source/lines", lines, key="bot-key")
     assert (status, out["status"]) == (200, "forbidden")
+    # Within its ceiling, but the lines are life's: only their authority puts them in a run.
     status, out = call("POST", "/api/v2/source/lines", lines, key="relay-key")
+    assert (status, out["status"], out["note"]) == (200, "forbidden", "not_change_authority")
+    status, out = call("POST", "/api/v2/source/lines", lines, key="life-key")
     assert (status, out["status"], out["lines"]) == (200, "recorded", 3)
     assert store.sources.members_of("lento:home/private:U#m_0010..m_0012") == [
         "m_0010", "m_0011", "m_0012"]

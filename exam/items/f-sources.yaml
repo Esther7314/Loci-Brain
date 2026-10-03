@@ -297,3 +297,55 @@
       args: {query: 新电影}
       as: search
     - check: {segment: find, desc: "the withdrawal stands: the memory is not found", output: search, lacks: f70001}
+
+# A change for a run reaches every line it holds, so only the host that is the change
+# authority for every one of those lines sends it; the same holds for registering which
+# lines a run holds (10-03 self-review B6). Here a declares the chat, b one message in it.
+- id: F8
+  title: "a run's change and its lines come only from the authority of every line in it"
+  start: "2026-10-03T10:00:00+08:00"
+  hosts:
+    legacy: {token: t-life, scope_mode: open}
+    entry-a: {token: t-a, max_grant: [{system: lento}], authority: [{system: lento, instance: home, container: "private:U"}]}
+    entry-b: {token: t-b, max_grant: [{system: lento}], authority: [{system: lento, instance: home, container: "private:U", id: m_20261002_0003}]}
+  setup:
+    - id: f80001000000
+      at: "2026-10-02T21:00:00+08:00"
+      room: EVENT/WORLD
+      text: "小周说下周三一起去图书馆自习，早上九点门口见。"
+      sources: [{system: lento, instance: home, container: "private:U", id: m_20261002_0001, through: m_20261002_0005}]
+  slices:
+    source: {system: lento, instance: home, container: "private:U"}
+    day: "2026-10-02"
+    lines:
+      - {id: m_20261002_0001, speaker: 小周, text: "下周三有空吗？"}
+      - {id: m_20261002_0002, speaker: 我, text: "有，干嘛？"}
+      - {id: m_20261002_0003, speaker: 小周, text: "去图书馆自习吧。"}
+      - {id: m_20261002_0004, speaker: 我, text: "好，几点？"}
+      - {id: m_20261002_0005, speaker: 小周, text: "早上九点门口见。"}
+    cut:
+      - {from: 1, to: 5, gist: "约下周三去图书馆自习"}
+  steps:
+    - source_change: {change_id: a-1, host_seq: 1, change: withdrawn,
+                      source: "lento:home/private:U#m_20261002_0001..m_20261002_0005"}
+      host: t-a
+      as: whole_run
+    - check: {segment: store, desc: "the chat's authority may not withdraw a run holding another host's line", all_of: [{output: whole_run, contains: '"status": "forbidden"'}, {output: whole_run, contains: not_change_authority}]}
+    - call: recall
+      args: {query: 图书馆}
+      as: still
+    - check: {segment: find, desc: "nothing moved: the memory is still found", output: still, contains: f80001}
+    - source_lines: {source: "lento:home/private:U#m_20261002_0002..m_20261002_0004",
+                     lines: [m_20261002_0002, m_20261002_0003, m_20261002_0004]}
+      host: t-a
+      as: lines
+    - check: {segment: store, desc: "nor put that line into a run of its own", all_of: [{output: lines, contains: '"status": "forbidden"'}, {output: lines, contains: not_change_authority}]}
+    - source_change: {change_id: b-1, host_seq: 1, change: withdrawn,
+                      source: "lento:home/private:U#m_20261002_0003"}
+      host: t-b
+      as: own_line
+    - check: {segment: store, desc: "the line's own authority withdraws it", output: own_line, contains: '"status": "applied"'}
+    - call: recall
+      args: {query: 图书馆}
+      as: gone
+    - check: {segment: find, desc: "and the run standing on it goes with it", output: gone, lacks: f80001}

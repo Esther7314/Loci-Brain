@@ -10,8 +10,8 @@ entries are on disk and before the return is handed back:
   回望 (reconsolidation)  the old views the new bodies run into — core/_reconsolidation.py
   场景常来 (case_recall)  a scene word the last two weeks keep coming back to — core/_case_recall.py
 
-Both read the library as it stood before the write (the caller lists it before writing: a
-write clears the store's cache, and listing after it would re-read every file), both go
+Both read the library as it stood before the write (the caller lists it before writing, so
+the new entries are not among the views they could run into), both go
 through the gate under the request's read scope, and neither can fail the write: anything
 that goes wrong here is logged and the return goes out without these lines.
 

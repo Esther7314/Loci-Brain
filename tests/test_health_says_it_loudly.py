@@ -60,3 +60,34 @@ def test_a_library_behind_the_code_is_red(health, tmp_path):
     row = health()["库的版本"]
     assert row["status"] == "error"
     assert "scripts/migrate.py" in row["action"]
+
+
+def test_open_wants_nobody_is_bound_by_are_red_and_named(health):
+    store = sh.bucket_mgr
+
+    async def seed():
+        hidden = await store.create("Make the birthday game.", room="EVENT/SELF",
+                                    direction_of_fit="telic")
+        await store.create("Fix the bike.", room="EVENT/SELF", direction_of_fit="telic",
+                           bound=["AI"])
+        await store.create("Renew the passport.", room="EVENT/SELF",
+                           direction_of_fit="telic", when="2026-12-01")
+        await store.create("Ask after the exam.", room="EVENT/SELF",
+                           direction_of_fit="telic", cue={"condition": "exam is over"})
+        closed = await store.create("Old promise.", room="EVENT/SELF",
+                                    direction_of_fit="telic")
+        await store.update(closed, status="resolved")
+        return hidden
+    hidden = asyncio.run(seed())
+    row = health()["没人认领的想要"]
+    # Criterion: only the open, undated, condition-less want with no bound is named —
+    # exactly the ones 惦记的事 never shows.
+    assert row["status"] == "error"
+    assert row["message"].startswith("1 条") and hidden in row["message"]
+    assert "bound" in row["action"]
+
+
+def test_no_unbound_wants_is_green(health):
+    asyncio.run(sh.bucket_mgr.create("Fix the bike.", room="EVENT/SELF",
+                                     direction_of_fit="telic", bound=["AI"]))
+    assert health()["没人认领的想要"]["status"] == "ok"

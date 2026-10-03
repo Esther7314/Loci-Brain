@@ -605,6 +605,24 @@ def test_the_route_serves_the_same_text_and_the_json_keys_behind_the_hook_key(st
     assert call(b"format=xml", key="s3cret").status_code == 400
 
 
+def test_a_peek_through_the_route_stamps_nothing_and_records_nothing(store, tmp_path,
+                                                                    monkeypatch):
+    # A host's own machine read (Lento's hourly bridge) is not the model being handed the
+    # screen: it must not use up an ask-once question nor count as shown.
+    bid = run(store.create("I will bring the umbrella back next time.", room="EVENT/SELF",
+                           looks_like_promise=True))
+    call = _route(monkeypatch, store)
+    for query in (b"peek=1", b"peek=1&format=json"):
+        out = call(query)
+        assert out.status_code == 200 and bid[:6] in out.body.decode("utf-8")
+    assert not _disk(tmp_path, bid).get("last_asked")
+    assert [r for r in store.usage.read() if r["kind"] == "shown"] == []
+    # The tool is the model reading: it still stamps.
+    assert "这条像是答应过的" in run(A.surface_awaken())
+    assert _disk(tmp_path, bid).get("last_asked")
+    assert call(b"peek=maybe").status_code == 400
+
+
 def test_breath_is_a_hook_route():
     from web import panel_auth as PA
     assert PA.is_hook("/api/v2/breath")
