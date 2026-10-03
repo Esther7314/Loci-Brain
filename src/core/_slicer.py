@@ -47,15 +47,20 @@ how a run cut from those lines is known to hold the lines between its ends. When
 withdraws or deletes a line, every slice over it loses its gist and, still open, is
 dropped (`withdraw_lines`, core/_source_change.py).
 
-Nothing here knows which host it is or where the lines came from; an import (7.1) hands
-its lines to the same take_batch.
+Nothing here knows which host it is or where the lines came from. An imported
+conversation (core/import_memory.py) goes through the same slicing and the same pending
+store, with its own prompt: each of its slices also carries a `draft`, the side model's
+candidate entry for the main model to check, and its batch line carries `import` (the
+import batch, whether the imported AI is the same one as the model reading it, the
+conversation's title). Withdrawing that import batch removes its slices from the store
+whole (`purge`): drafts are not kept as history.
 
-Exports: SLICER_PROMPT_VERSION · SLICER_PROMPT · GIST_MAX · Slice · SlicerError ·
-         BatchError · SliceError · slice_lines · parse_slices · side_model ·
+Exports: SLICER_PROMPT_VERSION · SLICER_PROMPT · GIST_MAX · DRAFT_MAX · Slice ·
+         SlicerError · BatchError · SliceError · slice_lines · parse_slices · side_model ·
          read_batch · batch_id_of · fingerprint_of · slice_fingerprint · FINGERPRINT_BY ·
          guess_covering · take_batch · PendingSlices (record_batch · get · record_for ·
-         run_length · close · recut · withdraw_lines · open_batches · pending_count ·
-         rebuild_index)
+         run_length · close · recut · withdraw_lines · purge · open_batches ·
+         pending_count · rebuild_index)
 ========================================
 """
 
@@ -95,6 +100,7 @@ SLICER_PROMPT = """你在帮一个记忆系统把一段聊天原文切成几片�
 """
 
 GIST_MAX = 80                  # characters; a longer gist is cut, not refused
+DRAFT_MAX = 300                # characters of an import slice's candidate entry; cut likewise
 GUESS_TOP = 3                  # guesses kept per slice
 # The guess line: the same cosine recall uses for a purely semantic candidate
 # (bucket_manager._VECTOR_RECALL_THRESHOLD). Config: slices.guess_threshold.
@@ -140,6 +146,7 @@ class Slice:
     last: str
     count: int
     gist: str
+    draft: str = ""             # an import slice's candidate entry; "" for a host's day
 
 
 # ============================================================
@@ -204,6 +211,12 @@ def parse_slices(raw: str, n: int) -> list[tuple[int, int, str]]:
       · lines in no slice: left out. That is the model saying they carry nothing to
         remember (greetings, a lone sticker); the response counts them (`unsliced`).
       · a gist over GIST_MAX characters: cut."""
+    return [(a, b, gist) for a, b, gist, _item in _parse_entries(raw, n)]
+
+
+def _parse_entries(raw: str, n: int) -> list[tuple[int, int, str, dict]]:
+    """parse_slices with each slice's own object kept beside it (an import slice's
+    `draft` is read from it)."""
     text = clean_llm_json(raw)
     try:
         data = json.loads(text)
@@ -213,7 +226,7 @@ def parse_slices(raw: str, n: int) -> list[tuple[int, int, str]]:
         data = data.get("slices")
     if not isinstance(data, list):
         raise SlicerError('the side model\'s answer has no "slices" list')
-    found: list[tuple[int, int, str]] = []
+    found: list[tuple[int, int, str, dict]] = []
     for k, item in enumerate(data, 1):
         if not isinstance(item, dict):
             raise SlicerError(f"slice {k} is not an object")
@@ -224,44 +237,49 @@ def parse_slices(raw: str, n: int) -> list[tuple[int, int, str]]:
         if a is None or b is None or not 1 <= a <= b <= n:
             raise SlicerError(f"slice {k} names lines {item.get('from')!r}..{item.get('to')!r}, "
                               f"outside 1..{n}")
-        found.append((a, b, gist))
+        found.append((a, b, gist, item))
     found.sort(key=lambda t: (t[0], t[1]))
-    out: list[tuple[int, int, str]] = []
+    out: list[tuple[int, int, str, dict]] = []
     end = 0
-    for a, b, gist in found:
+    for a, b, gist, item in found:
         a = max(a, end + 1)
         if a > b:
             continue
-        out.append((a, b, gist))
+        out.append((a, b, gist, item))
         end = b
     return out
 
 
-async def slice_lines(lines: list[dict], *, model: ModelCall) -> list[Slice]:
+async def slice_lines(lines: list[dict], *, model: ModelCall,
+                      prompt: str = SLICER_PROMPT) -> list[Slice]:
     """Slice lines ([{id, text, at?, speaker?}], in order) with the side model.
 
     `model(system, user) -> raw text` is the side model (side_model() in production; a
-    stub in tests). One call per chunk of the batch. Raises SlicerError when a call
-    fails or answers outside the contract (parse_slices); nothing is half-returned."""
+    stub in tests). One call per chunk of the batch. `prompt` is the system prompt (an
+    import's asks for a `draft` per slice as well, kept when given). Raises SlicerError
+    when a call fails or answers outside the contract (parse_slices); nothing is
+    half-returned."""
     out: list[Slice] = []
     for chunk in _chunks(list(lines)):
         user = (f"下面是 {len(chunk)} 行聊天原文，行号在方括号里：\n"
                 + "\n".join(_prompt_line(i, line) for i, line in enumerate(chunk, 1)))
         try:
-            raw = await model(SLICER_PROMPT, user)
+            raw = await model(prompt, user)
         except SlicerError:
             raise
         except Exception as e:
             raise SlicerError(f"the side model call failed: {type(e).__name__}: {e}") from e
         if not str(raw or "").strip():
             raise SlicerError("the side model returned nothing")
-        for a, b, gist in parse_slices(str(raw), len(chunk)):
+        for a, b, gist, item in _parse_entries(str(raw), len(chunk)):
             out.append(Slice(first=str(chunk[a - 1]["id"]), last=str(chunk[b - 1]["id"]),
-                             count=b - a + 1, gist=_cut_gist(gist)))
+                             count=b - a + 1, gist=_cut_gist(gist),
+                             draft=_cut_gist(item.get("draft") or "", DRAFT_MAX)))
     return out
 
 
-def side_model(dehydrator, config: Optional[dict]) -> ModelCall:
+def side_model(dehydrator, config: Optional[dict],
+               max_tokens: int = _SLICER_MAX_TOKENS) -> ModelCall:
     """The production slicer: the backfill side model's client and key (dehydration: in
     config), with `dehydration.slicer_model` when it names another model on the same
     endpoint. The returned callable carries `model_name` for the batch line."""
@@ -271,7 +289,7 @@ def side_model(dehydrator, config: Optional[dict]) -> ModelCall:
         if dehydrator is None:
             raise SlicerError("no side model is configured (dehydration: in config)")
         dehydrator._require_api()
-        return await dehydrator._chat(system, user, max_tokens=_SLICER_MAX_TOKENS,
+        return await dehydrator._chat(system, user, max_tokens=max_tokens,
                                       temperature=0.0, model=name)
 
     call.model_name = name or str(getattr(dehydrator, "model", "") or "")
@@ -536,18 +554,21 @@ class PendingSlices:
                 st = self._slices.get(sid)
                 if st and st["state"] == OPEN:
                     st["state"] = REPLACED
+            origin = row.get("import")
             self._batches[bid] = {
                 "batch_id": bid, "seq": seq, "source": dict(row.get("source") or {}),
                 "day": row.get("day"), "revision": row.get("revision"), "lines": lines,
                 "order": {lid: i for i, (lid, _fp) in enumerate(lines)},
                 "slice_ids": [str(s.get("slice_id")) for s in slices],
-                "recorded_at": row.get("recorded_at")}
+                "recorded_at": row.get("recorded_at"),
+                "import": dict(origin) if isinstance(origin, dict) else None}
             for s in slices:
                 sid = str(s.get("slice_id") or "")
                 if sid:
                     self._slices[sid] = {
                         "slice_id": sid, "batch_id": bid, "first": str(s.get("first")),
                         "last": str(s.get("last")), "gist": str(s.get("gist") or ""),
+                        "draft": str(s.get("draft") or ""),
                         "guesses": list(s.get("guesses") or []), "edited": False,
                         "state": OPEN, "closed": None, "seq": seq}
         elif kind in ("close", "recut"):
@@ -579,9 +600,10 @@ class PendingSlices:
         return order[st["first"]], order[st["last"]]
 
     def get(self, slice_id: str, *, public: bool = False) -> Optional[dict]:
-        """One slice: {slice_id, batch_id, span: {first, last, count}, gist, guesses,
-        edited, state, closed}; `public` keeps the fields the host and the model see.
-        None when the id is unknown."""
+        """One slice: {slice_id, batch_id, span: {first, last, count}, gist, draft?,
+        guesses, edited, state, closed}; `public` keeps the fields the host and the model
+        see (`draft` only on an import slice that has one). None when the id is
+        unknown."""
         self._fresh()
         with self._guard:
             st = self._slices.get(str(slice_id or "").strip())
@@ -593,6 +615,8 @@ class PendingSlices:
                    "gist": st["gist"],
                    "guesses": [{**g, "short": _short_id(str(g.get("id") or ""))}
                                for g in st["guesses"]]}
+            if st["draft"]:
+                out["draft"] = st["draft"]
             if st["edited"]:
                 out["edited"] = True
             if public:
@@ -624,7 +648,8 @@ class PendingSlices:
 
     def open_batches(self) -> list[dict]:
         """The batches with slices still pending, newest first: [{batch_id, source, day,
-        revision, recorded_at, slices: [public slice, in line order]}]."""
+        revision, recorded_at, import?, slices: [public slice, in line order]}]; `import`
+        ({batch, same_self, title}) only on an imported conversation's batch."""
         self._fresh()
         with self._guard:
             out = []
@@ -634,10 +659,13 @@ class PendingSlices:
                 if not open_ids:
                     continue
                 open_ids.sort(key=lambda sid: self._span(self._slices[sid]))
-                out.append({"batch_id": b["batch_id"], "source": dict(b["source"]),
-                            "day": b["day"], "revision": b["revision"],
-                            "recorded_at": b["recorded_at"],
-                            "slices": [self.get(sid, public=True) for sid in open_ids]})
+                one = {"batch_id": b["batch_id"], "source": dict(b["source"]),
+                       "day": b["day"], "revision": b["revision"],
+                       "recorded_at": b["recorded_at"],
+                       "slices": [self.get(sid, public=True) for sid in open_ids]}
+                if b["import"]:
+                    one["import"] = dict(b["import"])
+                out.append(one)
             return out
 
     def refusal(self, slice_id: str) -> Optional[SliceError]:
@@ -682,10 +710,13 @@ class PendingSlices:
     async def record_batch(self, *, batch_id: str, source: dict, day: str,
                            revision: Optional[str],
                            lines: list[tuple[str, str]], slices: list[dict],
-                           model: str = "") -> tuple[dict, int]:
+                           model: str = "",
+                           origin: Optional[dict] = None) -> tuple[dict, int]:
         """Append a batch and its slices (each gets its slice_id here). The same batch_id
         again replaces the slices of the earlier one still pending; those already
-        handled stay handled. Returns (the batch line, how many were replaced)."""
+        handled stay handled. `origin` is an imported conversation's {batch, same_self,
+        title}, kept on the batch line as `import`. Returns (the batch line, how many were
+        replaced)."""
         async with self._turn():
             self._fresh()
             with self._guard:
@@ -698,12 +729,14 @@ class PendingSlices:
                     key = f"{batch_id}|{seq}|{n}|{s['first']}|{s['last']}"
                     sid = "sl_" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:8]
                     named.append({"slice_id": sid, **s})
-                row = self._append({
+                row = {
                     "kind": "batch", "batch_id": batch_id, "source": dict(source),
                     "day": day, "revision": revision,
                     "lines": [[i, fp] for i, fp in lines], "slices": named,
-                    "model": model, "prompt_version": SLICER_PROMPT_VERSION})
-                return row, replaced
+                    "model": model, "prompt_version": SLICER_PROMPT_VERSION}
+                if origin:
+                    row["import"] = dict(origin)
+                return self._append(row), replaced
 
     async def close(self, slice_id: str, how: str, by: list[str]) -> dict:
         """Close an open slice: `how` is grow / trace / drop, `by` the memories it went
@@ -721,10 +754,11 @@ class PendingSlices:
 
     async def withdraw_lines(self, where: dict, line_ids: list[str]) -> tuple[list[str], int]:
         """Lines of `where` ({system, instance, container}) may no longer be used: every
-        slice whose span holds one of them loses its gist (the side model's words about
-        those lines) and, still open, is closed as dropped — nothing could be written from
-        it. The file is rewritten whole under its lease (a temporary file renamed over
-        it). Returns (the slices it touched, how many lines of the file changed)."""
+        slice whose span holds one of them loses its gist and draft (the side model's
+        words about those lines) and, still open, is closed as dropped — nothing could be
+        written from it. The file is rewritten whole under its lease (a temporary file
+        renamed over it). Returns (the slices it touched, how many lines of the file
+        changed)."""
         wanted = {str(i) for i in line_ids}
         source = {k: str(where.get(k)) for k in ("system", "instance", "container")}
         async with self._turn():
@@ -758,18 +792,61 @@ class PendingSlices:
                 if row.get("kind") != "batch":
                     continue
                 for s in row.get("slices") or []:
-                    if str(s.get("slice_id") or "") in slice_ids and s.get("gist"):
+                    if str(s.get("slice_id") or "") not in slice_ids:
+                        continue
+                    if s.get("gist") or s.get("draft"):
                         s["gist"] = ""
+                        if "draft" in s:
+                            s["draft"] = ""
                         changed += 1
             if not changed:
                 return 0
-            tmp = self.path.with_name(self.path.name + ".rewrite")
-            with tmp.open("w", encoding="utf-8", newline="\n") as f:
-                for row in rows:
-                    f.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
-                f.flush()
-            tmp.replace(self.path)
+            self._rewrite(rows)
             return changed
+
+    def _rewrite(self, rows: list[dict]) -> None:
+        """Replace the file with `rows` (under its lease, held by the caller): a temporary
+        file renamed over it, or the file removed when nothing is left."""
+        if not rows:
+            self.path.unlink(missing_ok=True)
+            return
+        tmp = self.path.with_name(self.path.name + ".rewrite")
+        with tmp.open("w", encoding="utf-8", newline="\n") as f:
+            for row in rows:
+                f.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+            f.flush()
+        tmp.replace(self.path)
+
+    async def purge(self, import_batch: str) -> int:
+        """Remove an imported batch's slices from the store whole: every batch line whose
+        `import.batch` is `import_batch`, and every close and re-cut line of its slices.
+        The file is left as if they had never been appended (removed when nothing else is
+        in it). Returns how many slices went."""
+        from locibrain.eventsourcing.ledger_mirror import file_lease
+
+        async with self._turn():
+            with self._guard:
+                if not self.path.exists():
+                    return 0
+                with file_lease(self.path.with_name(self.path.name + ".lock")):
+                    rows = _src._read_lines(self.path)
+                    doomed: set[str] = set()
+                    for row in rows:
+                        origin = row.get("import")
+                        if (row.get("kind") == "batch" and isinstance(origin, dict)
+                                and origin.get("batch") == import_batch):
+                            doomed |= {str(s.get("slice_id") or "")
+                                       for s in row.get("slices") or []}
+                    doomed.discard("")
+                    kept = [row for row in rows
+                            if not (row.get("kind") == "batch"
+                                    and isinstance(row.get("import"), dict)
+                                    and row["import"].get("batch") == import_batch)
+                            and str(row.get("slice_id") or "") not in doomed]
+                    if len(kept) != len(rows):
+                        self._rewrite(kept)
+                self.rebuild_index()
+                return len(doomed)
 
     async def recut(self, slice_id: str, first: str, last: str) -> dict:
         """Move an open slice's span to first..last, both ids of its batch, in order. The

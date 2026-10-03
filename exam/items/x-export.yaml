@@ -1,0 +1,68 @@
+# Paper section 十一, "export and bring back": a library exported and brought back into an
+# empty one is the same library, field by field; what was withdrawn or deleted does not
+# travel, not a byte of it. The `round_trip:` step runs what GET /api/loci/export and POST
+# /api/loci/import-package run.
+- id: X1
+  title: "export, bring back into an empty library: identical, and nothing withdrawn travels"
+  start: "2026-10-03T10:00:00+08:00"
+  hosts:
+    legacy: {token: t-life, scope_mode: open, may_restore: true, authority: [{system: lento}]}
+  names:
+    小周: {aliases: [周周], instance_of: 人, member_of: [读书会]}
+    读书会: {instance_of: 群}
+  setup:
+    - id: x10001000000
+      at: "2026-09-30T20:00:00+08:00"
+      room: EVENT/SELF
+      text: "周六和小周去海边，带了一整个西瓜。"
+      sources: [{system: lento, instance: home, container: "private:U", id: m_20260930_0001}]
+    - id: x10002000000
+      at: "2026-09-30T21:00:00+08:00"
+      room: EVENT/WORLD
+      text: "小周说那把蓝色雨伞是借来的，别告诉别人。"
+      sources: [{system: lento, instance: home, container: "private:U", id: m_20260930_0002}]
+    - id: x10003000000
+      at: "2026-10-01T09:00:00+08:00"
+      room: EVENT/SELF
+      text: "答应小周下次烤蛋糕。"
+      fields: {direction_of_fit: telic, bound: [我], weight: 0.7,
+               cue: {condition: 下次烤东西的时候, phrasings: [烤蛋糕]}}
+    - id: x10004000000
+      at: "2026-10-01T10:00:00+08:00"
+      room: EVENT/SELF
+      text: "这周先别催烤蛋糕。"
+      fields: {direction_of_fit: telic, exception_of: x10003000000, hold: defer,
+               review_after: "2026-10-10"}
+    - id: x10005000000
+      at: "2026-10-01T11:00:00+08:00"
+      room: EVENT/SELF
+      text: "删掉的那条说的是旧钥匙放在哪。"
+    - id: x10006000000
+      at: "2026-06-01T11:00:00+08:00"
+      room: EVENT/SELF
+      text: "很久以前的一次长谈，从晚饭聊到天亮。"
+      fields: {summary: 一次长谈}
+      sink: true
+    - id: x10007000000
+      at: "2026-10-02T09:00:00+08:00"
+      room: MIND/TRAITS
+      text: "小周是读书会的组织者。"
+      fields: {card_of: 小周, subjects: [小周]}
+  steps:
+    - source_change: {change_id: c-x1-1, host_seq: 1, change: withdrawn,
+                      source: {system: lento, instance: home, container: "private:U", id: m_20260930_0002}}
+      host: t-life
+      as: change
+    - check: {segment: store, desc: "the withdrawal is applied", output: change, contains: '"status": "applied"'}
+    - call: trace
+      args: {bucket_id: x10005000000, delete: true}
+    - round_trip: {lacks: ["蓝色雨伞", "旧钥匙"]}
+      as: rt
+    - check: {segment: store, desc: "brought back, the library is the same field by field", output: rt, contains: '"identical": true'}
+    - check: {segment: store, desc: "the withdrawn entry is left out, by id", output: rt, contains: '"withdrawn": ["x10002000000"]'}
+    - check: {segment: store, desc: "the deleted entry is left out, by id", output: rt, contains: '"deleted": ["x10005000000"]'}
+    - check: {segment: source, desc: "not a byte of their text is in the package", output: rt, contains: '"found_in_package": []'}
+    - check: {segment: source, desc: "the source registry travels", output: rt, contains: '"_sources/changes.jsonl"'}
+    - check: {segment: source, desc: "the names table travels", output: rt, contains: '"aliases.yaml"'}
+    - check: {segment: source, desc: "the host's material is listed as staying with the host", output: rt, contains: '"host_material"'}
+    - check: {segment: store, desc: "an empty library takes the state whole", output: rt, contains: '"mode": "fresh"'}

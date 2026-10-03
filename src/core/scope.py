@@ -52,10 +52,14 @@ The fetch credential is Loci's toward the host, never the host's own toward Loci
 names another environment variable, and a value equal to the host's inbound credential is
 not used.
 
+An imported conversation (`system: import`, core/import_memory.py) is Loci's own
+material: Loci is its change authority (`LOCI_HOST`, whatever the table says) and serves
+its original itself (core/_originals.py). No host may be named `loci`.
+
 No `hosts:` table means exactly one host, `legacy` above (its key falls back to config
 `hook_token`, as the hook routes always read it), which is then the change authority for
-every source and serves no originals. The host named `legacy` is also who a
-caller presenting no host credential is: an MCP client authenticated the old way (or with
+every source but the imported ones and serves no originals. The host named `legacy` is
+also who a caller presenting no host credential is: an MCP client authenticated the old way (or with
 MCP auth off) and a hook caller on an unlocked panel. A table without `legacy` has no
 such caller — a request without a host credential is refused. Only an `open` host reads
 without a Loci-Scope; every other host gets nothing without one, and a scope that is
@@ -95,7 +99,8 @@ standing on such an entry, or on an id the library does not have.
 The view never says how many entries it withheld: a count is itself a leak.
 
 Exports: SCOPE_HEADER · TURN_HEADER · HOST_HEADER · SCOPE_ENV · HOST_TOKEN_ENV · OPEN ·
-         RESTRICTED · LEGACY · ScopeError · Host · Hosts (authority_for · provider_for) ·
+         RESTRICTED · LEGACY · LOCI · LOCI_HOST · IMPORT_SYSTEM · ScopeError · Host ·
+         Hosts (authority_for · provider_for) ·
          load_hosts · Scope ·
          parse_scope · parse_turn · RequestScope · ScopeView · unsupported_line ·
          current_request · request_scope
@@ -129,6 +134,10 @@ OPEN = "open"
 RESTRICTED = "restricted"
 LEGACY = "legacy"
 LEGACY_TOKEN_ENV = "LOCI_HOOK_TOKEN"
+# Loci itself, as the change authority for the material it holds of its own: an imported
+# conversation's lines.
+LOCI = "loci"
+IMPORT_SYSTEM = "import"
 
 SCOPE_MAX = 16 * 1024            # bytes of one Loci-Scope
 SCOPE_VERSION = 1
@@ -172,6 +181,8 @@ class Host:
     def open(self) -> bool:
         return self.scope_mode == OPEN
 
+
+LOCI_HOST = Host(LOCI, scope_mode=OPEN)
 
 _HOST_KEYS = {"token_env", "max_grant", "may_restore", "scope_mode", "fetch_url",
               "fetch_token_env", "provides", "authority"}
@@ -283,11 +294,15 @@ class Hosts:
 
     def authority_for(self, identity) -> Optional[Host]:
         """The host declared as the change authority for this source (a SourceId, a
-        record or a string form); None when none is, or two are at the same depth. With
-        no `hosts:` table the one legacy host is the authority for every source."""
+        record or a string form); None when none is, or two are at the same depth. An
+        imported conversation's authority is Loci itself (`LOCI_HOST`). With no `hosts:`
+        table the one legacy host is the authority for every other source."""
+        sid = _src._identity(identity)
+        if sid.system == IMPORT_SYSTEM:
+            return LOCI_HOST
         if self.implicit:
             return self.default
-        return _declared(self.hosts.values(), "authority", _src._identity(identity))
+        return _declared(self.hosts.values(), "authority", sid)
 
     def provider_for(self, identity) -> Optional[Host]:
         """The host declared as serving this source's original (`provides`), when it
@@ -312,6 +327,10 @@ def load_hosts(config: Mapping, environ: Mapping[str, str], *,
         errors.append("hosts: expected a mapping of host name -> settings")
         raw = {}
     for name, body in raw.items():
+        if str(name) == LOCI:
+            errors.append(f"hosts: '{LOCI}' is Loci's own name (the authority for imported "
+                          "conversations); name the host otherwise")
+            continue
         fallback = str(legacy_token or "").strip() if str(name) == LEGACY else ""
         try:
             hosts.append(_host_from(str(name), body, environ, fallback))

@@ -44,6 +44,19 @@ MIGRATE_MAX_EXPORT_META_BYTES = 1 * MIB
 MIGRATE_MAX_EMBEDDINGS_DB_BYTES = 512 * MIB
 MIGRATE_MIN_FREE_RESERVE_BYTES = 64 * MIB
 
+# The export package (core/export_package.py) carries more than memories: the schema note,
+# the library's own state files, sunk originals and attachments. Each kind has its prefix
+# and its own cap; what may be restored from `state/` is the package module's allow-list,
+# not this one.
+PACKAGE_SCHEMA_MEMBERS = ("SCHEMA.md", "schema.json")
+PACKAGE_STATE_PREFIX = "state/"
+PACKAGE_ORIGINALS_PREFIX = "originals/"
+PACKAGE_MEDIA_PREFIX = "media/"
+MIGRATE_MAX_SCHEMA_BYTES = 1 * MIB
+MIGRATE_MAX_STATE_BYTES = 128 * MIB
+MIGRATE_MAX_ORIGINAL_BYTES = 10 * MIB
+MIGRATE_MAX_MEDIA_BYTES = 25 * MIB
+
 
 class BackupArchiveError(ValueError):
     """The backup cannot be trusted or safely processed."""
@@ -77,9 +90,17 @@ def _migration_member_limit(path: str) -> int:
         return MIGRATE_MAX_EMBEDDINGS_DB_BYTES
     if path == "export_meta.json":
         return MIGRATE_MAX_EXPORT_META_BYTES
+    if path in PACKAGE_SCHEMA_MEMBERS:
+        return MIGRATE_MAX_SCHEMA_BYTES
     parts = PurePosixPath(path).parts
     if len(parts) >= 2 and parts[0] == "buckets" and path.endswith(".md"):
         return MIGRATE_MAX_BUCKET_BYTES
+    if len(parts) >= 2 and path.startswith(PACKAGE_STATE_PREFIX):
+        return MIGRATE_MAX_STATE_BYTES
+    if len(parts) == 2 and path.startswith(PACKAGE_ORIGINALS_PREFIX) and path.endswith(".txt"):
+        return MIGRATE_MAX_ORIGINAL_BYTES
+    if len(parts) >= 2 and path.startswith(PACKAGE_MEDIA_PREFIX):
+        return MIGRATE_MAX_MEDIA_BYTES
     raise BackupArchiveError(f"迁移包包含不支持的成员: {path}")
 
 

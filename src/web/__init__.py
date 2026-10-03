@@ -15,8 +15,8 @@ moved to ``bridge/`` instead.
 **Three modules remain**:
 - ``config_api``: engine settings, four routes kept and seven dropped (``/api/config``
   GET+POST, ``/api/test/dehydration``, ``/api/test/embedding``, ``/api/models``).
-- ``import_api``: the four import routes (preflight/upload/status/pause), restored after
-  the cut.
+- ``import_api``: the import routes (preflight / upload / status / batches / pause /
+  withdraw): an export stored as a source, drafted, withdrawn whole.
 - ``loci``: the current panel itself — the four rooms, the breath/recall preview, the
   archive, musing, password setup. The only module under ``web/`` written from scratch.
 
@@ -46,10 +46,7 @@ _WEB_MODULES = (
     ("web.panel_auth", panel_auth.register),
     ("web.config_api", config_api.register),
     ("web.loci", loci.register),
-    # Restored later: the four import routes. The engine behind them,
-    # core/import_memory.py, had been alive the whole time — the strip-down removed its
-    # doorway along with the upstream modules, so three buttons in the panel were
-    # quietly hitting 404.
+    # The import routes (core/import_memory.py behind them).
     ("web.import_api", import_api.register),
 )
 

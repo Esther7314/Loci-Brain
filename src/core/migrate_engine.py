@@ -3,8 +3,11 @@
 migrate_engine.py — the engine that imports a full memory package
 ========================================
 
-Takes the zip that /api/export produces (buckets/*.md + embeddings.db +
-export_meta.json) and merges it incrementally into the current system.
+Takes the zip that GET /api/loci/export produces (core/export_package.py: buckets/*.md +
+embeddings.db + export_meta.json, and in a package of format 2 the library's state, sunk
+originals and attachments) and merges it incrementally into the current system; POST
+/api/loci/import-package is its doorway. An older backup with memories and vectors only
+is still read the same way.
 
 Key behaviours:
 - Parse the zip, identify the bucket files, and read the embedding model information out
@@ -15,6 +18,9 @@ Key behaviours:
 - Conflict decisions: skip | overwrite | keep_both (keep both, reassigning the ID)
 - Matching embedding model -> merge the vector data; mismatched -> import the md files
   only, and re-vectorise automatically afterwards
+- A package's library state goes back after the entries
+  (export_package.restore_library_state): whole into a library that had no entries,
+  merged into one that had; a package of another library version is refused
 
 State machine: idle -> parsing -> parsed -> applying -> reindexing -> done | error
 
@@ -35,6 +41,7 @@ Exports: the MigrateEngine class (instantiated by server.py and injected into th
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import math
@@ -54,11 +61,16 @@ from typing import Any, Optional
 import frontmatter
 
 from locibrain.storage.backup_archive import (
+    PACKAGE_MEDIA_PREFIX as _PACKAGE_MEDIA,
+    PACKAGE_ORIGINALS_PREFIX as _PACKAGE_ORIGINALS,
+    PACKAGE_STATE_PREFIX as _PACKAGE_STATE,
     BackupArchiveError,
     extract_backup_archive_file,
     validate_sqlite_bytes,
     validate_sqlite_file,
 )
+
+_PACKAGE_PREFIXES = (_PACKAGE_STATE, _PACKAGE_ORIGINALS, _PACKAGE_MEDIA)
 
 try:
     from utils import _win_long_path, now_iso, safe_path, sanitize_name  # type: ignore
@@ -265,6 +277,12 @@ class MigrateEngine:
         self._integrity_verified: bool = False
         self._integrity_warning: str = ""
         self._backup_manifest: Optional[dict[str, Any]] = None
+        # An export package (core/export_package.py) also carries the library's state,
+        # sunk originals and attachments: member -> extracted file (or bytes on the
+        # compatibility path), restored after the entries are written.
+        self._package_info: Optional[dict[str, Any]] = None
+        self._package_members: dict[str, Any] = {}
+        self._state_report: Optional[dict[str, Any]] = None
 
         # ---- Counters for the apply phase ----
         self._apply_total: int = 0
@@ -328,6 +346,7 @@ class MigrateEngine:
             shutil.rmtree(temp_dir, ignore_errors=True)
         self._zip_db_bytes = None
         self._zip_db_path = ""
+        self._package_members = {}
         for bucket in self._parsed_buckets:
             bucket.md_bytes = None
             bucket.md_path = ""
@@ -344,6 +363,8 @@ class MigrateEngine:
         self._integrity_verified = False
         self._integrity_warning = ""
         self._backup_manifest = None
+        self._package_info = None
+        self._state_report = None
         self._total_buckets = 0
         self._apply_errors = []
         self._apply_imported = 0
@@ -500,6 +521,10 @@ class MigrateEngine:
                 "imported": self._apply_imported,
                 "skipped": self._apply_skipped,
             },
+            # An export package: its format, library version and what else it carries;
+            # after apply, what of the library's state was restored or merged.
+            "package": self._package_info,
+            "library_state": self._state_report,
             "error": self._error_message,
         }
 
@@ -631,6 +656,8 @@ class MigrateEngine:
         self._parse_temp_dir = str(parsed.get("temp_dir") or "")
         self._integrity_verified = bool(parsed.get("integrity_verified"))
         self._integrity_warning = str(parsed.get("integrity_warning") or "")
+        self._package_info = parsed.get("package")
+        self._package_members = dict(parsed.get("package_members") or {})
         manifest = parsed.get("manifest")
         self._backup_manifest = (
             {
@@ -749,9 +776,12 @@ class MigrateEngine:
         db_path = ""
         files: dict[str, bytes | str] = package["files"]
         names = set(files)
+        package_info: Optional[dict[str, Any]] = None
+        package_members: dict[str, bytes | str] = {}
 
         # 1) Read export_meta.json -> get the embedding model information
         if "export_meta.json" in names:
+            meta: dict = {}
             try:
                 meta_raw = self._read_member(
                     files["export_meta.json"],
@@ -765,6 +795,12 @@ class MigrateEngine:
                 import_backend = str(emb_info.get("backend", "") or "")
             except Exception as e:
                 logger.warning(f"[migrate] export_meta.json 解析失败，将跳过向量恢复: {e}")
+            package_info = self._package_of(meta if isinstance(meta, dict) else {}, names)
+            if package_info is not None:
+                package_members = {
+                    name: files[name] for name in names
+                    if name.startswith(_PACKAGE_PREFIXES)
+                }
 
         # 2) Check whether embeddings.db is present. A corrupt snapshot must not be allowed
         #    to masquerade as a restorable index.
@@ -854,7 +890,49 @@ class MigrateEngine:
             "integrity_verified": package["integrity_verified"],
             "integrity_warning": package["integrity_warning"],
             "manifest": package["manifest"],
+            "package": package_info,
+            "package_members": package_members,
         }
+
+    @staticmethod
+    def _package_of(meta: dict, names: set[str]) -> Optional[dict[str, Any]]:
+        """What an export package (core/export_package.py) says about itself, or None for
+        an older backup that carries memories and vectors only. A package of another
+        library version is refused whole: its fields mean what that version meant."""
+        try:
+            fmt = int(meta.get("package_format") or 0)
+        except (TypeError, ValueError):
+            fmt = 0
+        if fmt < 2:
+            return None
+        from . import schema as _schema
+        try:
+            version = int(meta.get("library_schema_version"))
+        except (TypeError, ValueError):
+            raise BackupArchiveError("导出包没说它是第几版的库，没法判断字段的意思")
+        if version != _schema.CURRENT_VERSION:
+            raise BackupArchiveError(
+                f"这个导出包是第 {version} 版的库，这里是第 {_schema.CURRENT_VERSION} 版。"
+                "版本不同，字段的意思也不同：先把两边升到同一版再导。")
+        return {
+            "format": fmt,
+            "library_schema_version": version,
+            "state_files": sorted(n for n in names if n.startswith(_PACKAGE_STATE)),
+            "originals": sum(1 for n in names if n.startswith(_PACKAGE_ORIGINALS)),
+            "media": sum(1 for n in names if n.startswith(_PACKAGE_MEDIA)),
+        }
+
+    async def _library_is_empty(self) -> bool:
+        """No entry on disk, archive included: the library a package can be restored into
+        whole (core/export_package.restore_library_state)."""
+        list_all = getattr(self._bucket_mgr, "list_all", None)
+        if not callable(list_all):
+            return False
+        try:
+            existing = await list_all(include_archive=True)
+        except TypeError:
+            existing = await list_all()
+        return not existing
 
     async def _identify_conflicts(self) -> None:
         """Find parse-time conflicts from one vault snapshot.
@@ -937,8 +1015,12 @@ class MigrateEngine:
         buckets_dir = self._config.get("buckets_dir", "buckets")
         imported_id_map: dict[str, str] = {}
         imported_files: dict[str, str] = {}
+        self._state_report = None
 
         try:
+            # Judged before anything is written: a library with no entries takes a
+            # package's state whole, one with entries has it merged.
+            fresh = bool(self._package_members) and await self._library_is_empty()
             ensure_path_index = getattr(
                 self._bucket_mgr,
                 "_ensure_bucket_path_index",
@@ -995,6 +1077,20 @@ class MigrateEngine:
                 except Exception as e:
                     message = f"向量快照合并失败，已转入后台重建: {e}"
                     logger.warning("[migrate] %s", message)
+                    self._apply_errors.append(message)
+
+            if self._package_members:
+                from . import export_package
+                self._state_report = await _to_thread_reaped(
+                    functools.partial(
+                        export_package.restore_library_state,
+                        self._bucket_mgr,
+                        self._package_members,
+                        fresh=fresh,
+                        id_map=dict(imported_id_map),
+                    )
+                )
+                for message in self._state_report.get("errors") or []:
                     self._apply_errors.append(message)
 
             self._buckets_to_reindex = [
@@ -1094,12 +1190,22 @@ class MigrateEngine:
             label=pb.arc_path,
         )
         meta, content = _parse_md_meta(raw)
+        written_id = str(meta.get("id") or "")
         meta = self._normalize_import_metadata(meta)
         content_size = len(content.encode("utf-8"))
         if content_size > self._bucket_content_limit():
             raise BackupArchiveError(
                 f"{pb.arc_path} 正文过大（{content_size} bytes > {self._bucket_content_limit()}）"
             )
+
+        # A file that already names itself by the id it is restored under goes back byte
+        # for byte, at its path in the library it came from: the Markdown is the library,
+        # and re-serialising it would be a second writer of every field.
+        if written_id == target_id:
+            verbatim_path = self._package_path(pb.arc_path, buckets_dir)
+            if verbatim_path:
+                os.makedirs(os.path.dirname(verbatim_path), exist_ok=True)
+                return content, verbatim_path, raw.decode("utf-8")
 
         # Always write an explicit ID; restoring never depends on guessing from a filename.
         meta["id"] = target_id
@@ -1135,6 +1241,19 @@ class MigrateEngine:
         return content, target_path, rendered
 
     @staticmethod
+    def _package_path(arc_path: str, buckets_dir: str) -> str:
+        """The library path a package member came from (`buckets/<dir>/...`), when it lies
+        in one of the memory folders; "" otherwise."""
+        rel = arc_path[len("buckets/"):] if arc_path.startswith("buckets/") else ""
+        parts = rel.split("/")
+        if len(parts) < 2 or parts[0] not in set(_TYPE_SUBDIR.values()):
+            return ""
+        try:
+            return str(safe_path(buckets_dir, rel))
+        except Exception:
+            return ""
+
+    @staticmethod
     def _atomic_write(path: str, rendered: str) -> None:
         # The _win_long_path prefix sidesteps Windows' 260-character MAX_PATH: a sanitised
         # nested domain path under a deep buckets_dir really does exceed it (the same
@@ -1143,7 +1262,9 @@ class MigrateEngine:
         temp_path = f"{path}.{uuid.uuid4().hex}.tmp"
         temp_path_long = _win_long_path(temp_path)
         try:
-            with open(temp_path_long, "w", encoding="utf-8") as f:
+            # newline="": the text is written as given, so a restored file is the same
+            # bytes on every platform.
+            with open(temp_path_long, "w", encoding="utf-8", newline="") as f:
                 f.write(rendered)
                 f.flush()
                 os.fsync(f.fileno())
@@ -1163,7 +1284,7 @@ class MigrateEngine:
         temp_path_long = _win_long_path(temp_path)
         target_long = _win_long_path(path)
         try:
-            with open(temp_path_long, "x", encoding="utf-8") as handle:
+            with open(temp_path_long, "x", encoding="utf-8", newline="") as handle:
                 handle.write(rendered)
                 handle.flush()
                 os.fsync(handle.fileno())

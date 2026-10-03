@@ -3,13 +3,15 @@
 migration_engine.py — the embedding migration engine
 ========================================
 
-Switching embedding backend (local <-> api) means recomputing the vector of every bucket
-in embeddings.db with the new backend. This module runs that in the background:
+Switching the embedding model (or backend) means recomputing the vector of every bucket
+in embeddings.db with the new one. core/embedding_switch.py starts it when the panel
+changes the model; this module runs it in the background:
 
 - Back up embeddings.db -> embeddings.db.backup (only on the first run)
 - Write new vectors into embeddings.db.migrating first, so a half-finished state cannot
   contaminate the main table
 - Once everything is through, swap atomically: the main db is replaced by the .migrating file
+- A bucket's meaning vector (its own column) is recomputed with its content vector
 - A single failure is skipped and recorded in failed_items[:50] without stopping the run
 - Progress lives in _pending_migration_status.json, which the front end polls every 3s
 - Resume after interruption: _migration_checkpoint.json records the set of finished ids
@@ -20,7 +22,8 @@ in embeddings.db with the new backend. This module runs that in the background:
 
 What it does not do:
 - It does not migrate buckets or rewrite bucket files
-- It does not switch the global embedding_engine — that belongs to the caller in server.py
+- It does not switch the global embedding_engine — that belongs to the caller
+  (core/embedding_switch.py, through the publish callback it is given)
 - It does not write configuration to disk
 - It does not import a full backup package exported from another instance — that is
   migrate_engine.py's job. The two filenames are very nearly the same, so make sure you
@@ -314,7 +317,8 @@ class MigrationConfig:
     # Both the source and target engines have already been constructed by the caller
     target_engine: Any           # an EmbeddingEngine instance: the migration target
     # Where bucket content comes from: an awaitable returning list[(bucket_id, content)]
-    fetch_buckets: Callable[[], Awaitable[list[tuple[str, str]]]]
+    # or list[(bucket_id, content, newest meaning)]
+    fetch_buckets: Callable[[], Awaitable[list[tuple]]]
 
 
 async def _run_migration(
@@ -378,10 +382,12 @@ async def _run_migration(
     })
 
     # 3) Run in batches
-    pending = [(bid, content) for bid, content in buckets if bid not in done_ids]
+    pending = [item for item in buckets if item[0] not in done_ids]
     for i in range(0, len(pending), BATCH_SIZE):
         batch = pending[i:i + BATCH_SIZE]
-        for bucket_id, content in batch:
+        for item in batch:
+            bucket_id, content = item[0], item[1]
+            meaning = item[2] if len(item) > 2 else ""
             cur = read_status(status_path)
             cur["current_id"] = bucket_id
             write_status(status_path, cur)
@@ -397,6 +403,17 @@ async def _run_migration(
                         })
                 else:
                     done_ids.add(bucket_id)
+                    if meaning:
+                        # The meaning vector lives in its own column of the same row; it
+                        # is best-effort here as it is on every write.
+                        store_meaning = getattr(
+                            cfg.target_engine, "generate_and_store_meaning", None)
+                        if callable(store_meaning):
+                            try:
+                                await store_meaning(bucket_id, meaning)
+                            except Exception as exc:
+                                logger.warning(
+                                    f"[migration] meaning vector {bucket_id}: {exc}")
             except Exception as e:
                 failed_count += 1
                 if len(failed_items) < MAX_FAILED_ITEMS:

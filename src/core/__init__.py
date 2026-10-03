@@ -15,7 +15,7 @@ What lives here:
   recognise the same error shapes.
 - `github_sync.py` / `import_memory.py` / `migrate_engine.py` / `migration_engine.py`:
   background engines that sit at the same level as bucket_manager (GitHub backup sync,
-  external-note import, store migration, embedding-backend migration). Each is built
+  conversation import, store migration, embedding-backend migration). Each is built
   exactly once by server.py at startup, which makes it the same kind of thing as the
   five above; they used to be scattered at top level and were collected in here.
 - `_fold.py` / `_muse.py` / `_dream.py` / `_bigevent.py` / `_when.py` / `_rooms.py`:
@@ -46,11 +46,10 @@ were before the move; only import paths changed. Cracking open monoliths like
 rides along with deletions and moves, it does not get a front of its own.
 
 Dependency direction: `core` does not depend on `tools` / `web` / `bridge` — *mostly*.
-`dehydrator.py` uses `normalize_subjects` from `tools/_subjects.py`, and
-`import_memory.py` uses a few validators from `tools/_common.py`. Those two backward
-edges predate the move and were left alone on purpose: `_subjects.py` / `_common.py`
-are really about "how a tool validates its input", and dragging them down here would
-only stir unrelated things together. They are known, not overlooked.
+`dehydrator.py` uses `normalize_subjects` from `tools/_subjects.py`. That backward
+edge predates the move and was left alone on purpose: `_subjects.py` is really about
+"how a tool validates its input", and dragging it down here would only stir unrelated
+things together. It is known, not overlooked.
 
 What is exported: each file's own docstring says so, not repeated here. `server.py` is
 the only place that imports these engine classes directly in order to construct them;

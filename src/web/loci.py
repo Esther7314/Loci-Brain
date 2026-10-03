@@ -29,6 +29,17 @@ produces data; all rendering lives in frontend/loci.html.
                                          the same text the tool returns, or `?format=json` for
                                          its structured form (hook key). Like the tool, it
                                          stamps a question it hands out as asked
+    GET  /api/loci/export             -> the export package: every entry, a vector snapshot, the
+                                         library's state, sunk originals, attachments, the
+                                         schema note and a manifest with what was filtered
+                                         out and what could not travel; never a secret
+                                         (core/export_package.py)
+    GET  /api/loci/import-package     -> where bringing a package back stands: parsed with
+                                         its collisions, applying, done (with what of the
+                                         library's state was restored or merged), error
+    GET  /api/loci/embedding/migration -> the recompute after a change of embedding model:
+                                         progress, failure, whether it can be resumed
+                                         (core/embedding_switch.py)
     GET  /api/v2/changes              -> the ledger past a point: ids, kinds, source identities
                                          and hashes, never text; without "was merely touched";
                                          only what the host's credential reaches. An open host
@@ -37,7 +48,7 @@ produces data; all rendering lives in frontend/loci.html.
                                          (`?cursor=…&limit=`) and never sees those numbers
                                          (hook key; core/_ledger.py)
 
-🔴 THE WRITE SURFACE — thirteen POST routes, and every one of them writes something.
+🔴 THE WRITE SURFACE — fifteen POST routes, and every one of them writes something.
 
     POST /api/loci/similar/action     -> a human verdict on a suspected duplicate: keep
                                          both, or sink one (trace delete=True — a soft
@@ -49,6 +60,15 @@ produces data; all rendering lives in frontend/loci.html.
     POST /api/loci/auth/set-password  -> sets the password guarding remote MCP access
     POST /api/loci/dream/wake         -> the demotion signal: drop a live "whole" dream
                                          layer down to the fragment layer (idempotent)
+    POST /api/loci/import-package     -> bring an export package back: a multipart `file`
+                                         is checked and parsed (nothing written; the
+                                         collisions come back); then {job_id, decisions,
+                                         default} writes its entries and restores the
+                                         library's state (core/migrate_engine.py), or
+                                         {job_id, cancel: true} drops the parse
+    POST /api/loci/embedding/migration -> {action: "resume"} carries on a recompute that
+                                         failed or was interrupted; {action: "abandon"}
+                                         throws it away (the old model stays)
     POST /api/v2/slices               -> the host hands over a day's raw lines; a side model
                                          slices them and the slices are stored as pending
                                          (hook key; the raw text is not kept)
@@ -1513,6 +1533,26 @@ async def build_health() -> dict:
                 "关着 —— query 门只能靠关键词，搜不到「意思相近」的",
                 "在 config.yaml 里开 embedding.enabled")
     guard("向量", sec_embedding, "检查 config.yaml 的 embedding 段")
+
+    def sec_reembed():
+        # Only said while a change of embedding model is being recomputed, or stopped
+        # half-way (core/embedding_switch.py).
+        bd = str(cfg.get("buckets_dir") or "")
+        if not bd:
+            return
+        from core import embedding_switch as _es
+        st = _es.status(bd)
+        target = (st.get("target") or {}).get("model") or st.get("target_model") or "?"
+        if st["phase"] == "running":
+            add("换向量模型", "warn",
+                f"正在用 {target} 重算：{st.get('done', 0)}/{st.get('total', 0)}"
+                f"（失败 {st.get('failed_count', 0)}）；算完之前旧模型照常用")
+        elif st["phase"] in ("failed", "interrupted"):
+            add("换向量模型", "error",
+                f"换到 {target} 的重算没完成：{st.get('message') or st.get('error') or '中途停了'}"
+                "；旧模型和旧向量照用",
+                "在「设置 → 引擎」接着算，或者放弃这一次" if st.get("resumable") else "")
+    guard("换向量模型", sec_reembed)
 
     def sec_literal():
         from core.bm25_index import dependency_status
@@ -3006,3 +3046,16 @@ def register(mcp) -> None:
         except Exception as e:
             logger.warning(f"[loci] bucket 失败: {e}")
             return JSONResponse({"error": str(e)}, status_code=500)
+
+    # ---------------------------------------------------------
+    # The export package, bringing one back, and the recompute after a change of
+    # embedding model. The handlers are web/library_api.py's; they are registered here so
+    # this file's route list stays the one list of what the panel can reach.
+    # ---------------------------------------------------------
+    from . import library_api as _lib
+    mcp.custom_route("/api/loci/export", methods=["GET"])(_lib.export)
+    mcp.custom_route("/api/loci/import-package", methods=["POST"])(_lib.import_package)
+    mcp.custom_route("/api/loci/import-package", methods=["GET"])(_lib.import_status)
+    mcp.custom_route("/api/loci/embedding/migration", methods=["GET"])(_lib.reembed_status)
+    mcp.custom_route("/api/loci/embedding/migration", methods=["POST"])(_lib.reembed_action)
+

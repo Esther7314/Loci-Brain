@@ -22,7 +22,13 @@ One slice is handled at a time (a lease on its id), and a closed one is refused 
 Under a read scope (core/scope.py) a request sees, counts and handles only the slices of
 containers its grant covers whole; any other slice reads like one that does not exist.
 
-Exports: visible_batches · render_pending · write_from_slice · with_records · trace_slice
+An imported conversation's slices (core/import_memory.py) are listed the same way, under
+their import's 是不是同一个他, each with the side model's candidate entry and how to read
+its original; they are the main model's to check and write, never merged into an
+existing memory by anything here.
+
+Exports: visible_batches · pending_seen · imports_seen · render_pending · write_from_slice ·
+         with_records · trace_slice
 ========================================
 """
 
@@ -85,6 +91,14 @@ async def pending_seen() -> int:
     return sum(len(b["slices"]) for b in await visible_batches())
 
 
+async def imports_seen() -> int:
+    """How many of the waiting slices are an import's drafts, as this request may count
+    them (breath's 「有 N 段导入的原话还没核」)."""
+    if _store() is None:
+        return 0
+    return sum(len(b["slices"]) for b in await visible_batches() if b.get("import"))
+
+
 async def _out_of_reach(store, sid: str) -> str:
     """A slice the request's read scope does not reach is answered like one that does not
     exist ("" when it is in reach, or unknown and left to the store's own refusal)."""
@@ -105,21 +119,41 @@ async def render_pending() -> str:
     total = sum(len(b["slices"]) for b in batches)
     lines = [f"待认领的切片 {total} 片："]
     shown = 0
+    imported = False
     for b in batches:
         src = b["source"]
-        lines.append(f"── {src.get('system')}:{src.get('instance')}/{src.get('container')}"
-                     f" · {b['day']}")
+        origin = b.get("import")
+        where = f"{src.get('system')}:{src.get('instance')}/{src.get('container')}"
+        if origin:
+            imported = True
+            title = f"「{origin.get('title')}」" if origin.get("title") else ""
+            who = ("是同一个他：「我」那边是我自己，写成 EVENT/SELF" if origin.get("same_self", True)
+                   else "不是同一个他：「AI」那边是另一个 AI，写成 EVENT/WORLD")
+            lines.append(f"── 导入的原话 {where}{title} · {b['day'] or '日子不详'} · {who}")
+        else:
+            lines.append(f"── {where} · {b['day']}")
         for s in b["slices"]:
             if shown >= _LIST_MAX:
                 break
             shown += 1
             edited = "（改切过，gist 是原来的）" if s.get("edited") else ""
             lines.append(f"{s['slice_id']} · {_span_text(s['span'])} · {s['gist']}{edited}")
+            if origin:
+                if s.get("draft"):
+                    lines.append(f"    候选（副模型起草的，核过再写）：{s['draft']}")
+                span = s["span"]
+                head = span["first"] if span["first"] == span["last"] else \
+                    f"{span['first']}..{span['last']}"
+                lines.append(f'    原话：recall(query="{where}#{head}", view="original")')
+                continue
             guesses = " / ".join(f"{g['short']} {g['score']:.2f}" for g in s["guesses"])
             lines.append(f"    像是已经记过的：{guesses}" if guesses
                          else "    当天没有像的记忆")
     if shown < total:
         lines.append(f"（还有 {total - shown} 片没列出来，先处理上面的）")
+    if imported:
+        lines.append("导入的：先翻原话核对候选，漏的补上，用自己的话写——grow(..., slice=\"sl_…\")"
+                     "（自动挂上引原话）；候选不对就照原话写，不值得留就丢掉。不合进已有的记忆。")
     lines.append('没记过的：grow(..., slice="sl_…")；记过了：trace(bucket_id=…, slice="sl_…")；'
                  '切错了：trace(slice="sl_…", slice_span="前id..后id")；'
                  '不值得留：trace(slice="sl_…", drop_slice=True)。')

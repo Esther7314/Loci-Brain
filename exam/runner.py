@@ -174,10 +174,14 @@ async def seed(lib: Path, clock_file: Path, entries: list[dict],
     and `dehydration_cache:` ([{text, summary}], cached under the text by Loci's own
     dehydrator)."""
     from utils import WAS_DERIVED_FROM, load_config
+    from core import schema
     from core.bucket_manager import BucketManager
     from core.embedding_engine import EmbeddingEngine
 
     config = load_config()
+    # A library this version made: stamped before its first entry, as server start stamps
+    # an empty one (otherwise entries without a version file read as a 1.4.0 library).
+    schema.stamp_new_library(lib)
     engine = EmbeddingEngine(config)
     if config.get("embedding", {}).get("enabled") and not engine.enabled:
         raise RuntimeError(f"embeddings asked for ({os.environ.get(EMBED_URL_ENV)}) "
@@ -395,6 +399,68 @@ class Run:
         self._keep(step, step.get("as") or "source_lines",
                    json.dumps({"http": status, **out}, ensure_ascii=False))
         await asyncio.sleep(SETTLE_SECONDS + 1.0)   # the server notices changed files
+
+    async def round_trip(self, step: dict) -> None:
+        """What GET /api/loci/export and POST /api/loci/import-package run, in this
+        process: the library is exported (core/export_package.build_package) and brought
+        back into a new, empty library (core/migrate_engine.MigrateEngine), and the two
+        are compared field by field (core/export_package.library_snapshot). JSON text
+        under `as`: {identical, differing, filtered, missing, not_included, state,
+        found_in_package} — the last lists which of the step's `lacks:` phrases appear
+        anywhere in the package's bytes."""
+        import zipfile
+        from utils import load_config
+        from core import export_package as EP
+        from core.bucket_manager import BucketManager
+        from core.embedding_engine import EmbeddingEngine
+        from core.migrate_engine import MigrateEngine
+
+        spec = self.sub(step.get("round_trip") or {}) or {}
+        config = load_config()
+        src_engine = EmbeddingEngine(config)
+        meta = {"exported_at": "exam", "version": loci_version(),
+                "embedding": {"model": src_engine.model, "dim": 0,
+                              "backend": getattr(src_engine, "api_format", "")}}
+        path, manifest = await EP.build_package(
+            self._store(), embedding_db_path=str(self.lib / "embeddings.db"),
+            export_meta=meta, alias_path=str(self.lib / "aliases.yaml"))
+        dst = Path(tempfile.mkdtemp(prefix="loci-exam-roundtrip-"))
+        saved = os.environ.get("LOCI_ALIAS_TABLE")
+        os.environ["LOCI_ALIAS_TABLE"] = str(dst / "aliases.yaml")
+        try:
+            with zipfile.ZipFile(path) as z:
+                blob = b"".join(z.read(n) for n in z.namelist())
+            found = [p for p in spec.get("lacks") or [] if str(p).encode("utf-8") in blob]
+            target_config = {**config, "buckets_dir": str(dst)}
+            target = BucketManager(target_config)
+            engine = MigrateEngine(target_config, target, EmbeddingEngine(target_config))
+            parsed = await engine.parse_zip_file(path)
+            if not parsed.get("ok"):
+                raise RuntimeError(f"the package did not parse: {parsed.get('error')}")
+            await engine.apply({})
+            status = engine.get_status()
+            package = manifest["package"]
+            left_out = set(package["filtered"]["deleted"]) | set(package["filtered"]["withdrawn"])
+            before = EP.library_snapshot(self.lib, alias_path=str(self.lib / "aliases.yaml"),
+                                         left_out=left_out)
+            after = EP.library_snapshot(dst, alias_path=str(dst / "aliases.yaml"))
+            differing = [k for k in before if before[k] != after[k]]
+            out = {"identical": not differing and status["phase"] == "done",
+                   "differing": differing, "phase": status["phase"],
+                   "apply_errors": status["apply_errors"],
+                   "filtered": package["filtered"], "missing": package["missing"],
+                   "not_included": package["not_included"],
+                   "state": package["sections"]["state"],
+                   "library_state": status.get("library_state"),
+                   "found_in_package": found}
+        finally:
+            if saved is None:
+                os.environ.pop("LOCI_ALIAS_TABLE", None)
+            else:
+                os.environ["LOCI_ALIAS_TABLE"] = saved
+            os.unlink(path)
+            shutil.rmtree(dst, ignore_errors=True)
+        self._keep(step, step.get("as") or "round_trip", json.dumps(out, ensure_ascii=False))
 
     def _request(self, step: dict):
         """The request a host's call carries, resolved the way the hook guard resolves it
@@ -829,6 +895,8 @@ async def run_item(item: dict, keep: bool) -> ItemResult:
                                 await run.source_lines(step)
                             elif "changes" in step:
                                 await run.changes(step)
+                            elif "round_trip" in step:
+                                await run.round_trip(step)
                             elif {"cue", "cue_delivered", "cue_dropped"} & set(step):
                                 await run.cue(step)
                             elif "concurrent" in step:
@@ -882,6 +950,10 @@ def seams() -> tuple[str, ...]:
             "acknowledgements run (core/_cue.handle_*) the same way, the host credential and "
             "Loci-Scope resolved as the hook guard resolves them; the HTTP layer is "
             "tests/test_cue.py's",
+            "a round_trip: step runs what GET /api/loci/export and POST "
+            "/api/loci/import-package run (core/export_package.build_package, "
+            "core/migrate_engine.MigrateEngine) in the runner's process, into a new empty "
+            "library; the HTTP layer is tests/test_export_package.py's",
             "an item's names: is written to the library as aliases.yaml before setup",
             "an item's dreams: and dehydration_cache: are written in setup through Loci's own "
             "_dream.save_record and Dehydrator cache",

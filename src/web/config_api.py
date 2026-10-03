@@ -79,6 +79,37 @@ def _rebuild_embedding_runtime():
     return engine
 
 
+def publish_embedding(target: dict, persist: bool) -> None:
+    """Make a recomputed model the running one (core/embedding_switch.py calls this once
+    every vector is redone and the new vectors are live): the embedding settings in
+    memory, one rebuilt engine published to every holder, config.yaml when asked (never
+    the key), and the vector outbox asked to queue what was written or edited while the
+    recompute ran."""
+    import asyncio
+
+    emb = sh.config.setdefault("embedding", {})
+    emb.update(dict(target))
+    _rebuild_embedding_runtime()
+    if persist:
+        def _mutate(save_config: dict) -> None:
+            sc_emb = save_config.get("embedding")
+            if not isinstance(sc_emb, dict):
+                sc_emb = {}
+                save_config["embedding"] = sc_emb
+            for key in ("enabled", "model", "base_url", "api_format", "backend",
+                        "timeout_seconds", "dim"):
+                if key in target:
+                    sc_emb[key] = target[key]
+        atomic_update_config_yaml(_mutate)
+    outbox = getattr(sh, "embedding_outbox", None)
+    reconcile = getattr(outbox, "reconcile", None)
+    if callable(reconcile):
+        try:
+            asyncio.get_running_loop().create_task(reconcile())
+        except RuntimeError:
+            logger.warning("no running loop to queue the vectors written during the recompute")
+
+
 def _mcp_auth_mode(config: Mapping[str, object] | object) -> str:
     """Normalize one config snapshot's mutually exclusive MCP auth mode."""
     raw = (
@@ -188,6 +219,9 @@ def register(mcp) -> None:
             "embedding": {
                 "enabled": _parse_bool(emb.get("enabled", False), default=False),
                 "model": emb.get("model", ""),
+                # The panel fills its field from this and sends it back on save, so an
+                # omitted value would overwrite the configured one with an empty string.
+                "base_url": emb.get("base_url", ""),
                 "api_format": emb.get("api_format", "openai_compat"),
                 "timeout_seconds": emb.get("timeout_seconds", 30),
                 "backend": "api",
@@ -351,6 +385,41 @@ def register(mcp) -> None:
             )
         except ValueError as e:
             return JSONResponse({"error": str(e)}, status_code=400)
+
+        # --- A change of embedding model (core/embedding_switch.py) ---
+        # Vectors from two models cannot be compared. When the model this request asks
+        # for is not the one the library's vectors came from, nothing in the request is
+        # applied until the person has seen what it costs (409 + the preview); confirmed
+        # (`embedding.reembed: "confirm"`), the rest of the request is applied and the
+        # embedding change becomes a recompute that publishes the new model only when
+        # every vector is redone.
+        reembed_target = None
+        if isinstance(embedding_payload, dict):
+            from core import embedding_switch as _es
+            changes = dict(embedding_payload)
+            if embedding_enabled is not None:
+                changes["enabled"] = embedding_enabled
+            if embedding_backend is not None:
+                changes["backend"] = embedding_backend
+            target_emb = _es.target_config(dict(sh.config.get("embedding") or {}), changes)
+            live = sh.embedding_engine
+            live_model = str(getattr(live, "model", "") or "")
+            db_path = str(getattr(live, "db_path", "") or os.path.join(
+                str(sh.config.get("buckets_dir") or ""), "embeddings.db"))
+            target_model = _es.resolved_model(sh.config, target_emb)
+            if _es.needs_reembed(db_path, target_model, live_model):
+                if _es.busy():
+                    return JSONResponse(
+                        {"error": "正在用新模型重算向量，等它跑完或者先放弃这一次，再换模型"},
+                        status_code=409)
+                if str(embedding_payload.get("reembed") or "") != "confirm":
+                    preview = await _es.preview(sh.config, target_emb, db_path, live_model)
+                    return JSONResponse(
+                        {"error": "换向量模型要先确认：旧向量全部作废、要重算",
+                         "needs_confirmation": True, "reembed": preview},
+                        status_code=409)
+                reembed_target = (target_emb, db_path)
+                body = {k: v for k, v in body.items() if k != "embedding"}
 
         startup_setting_requested = (
             deployment_public_url is not None
@@ -613,6 +682,23 @@ def register(mcp) -> None:
             except Exception as e:
                 return JSONResponse({"error": f"persist failed: {e}", "updated": updated}, status_code=500)
 
+        reembed_status = None
+        if reembed_target is not None:
+            from core import embedding_switch as _es
+            target_emb, db_path = reembed_target
+            try:
+                reembed_status = await _es.start(
+                    config=sh.config, store=sh.bucket_mgr, db_path=db_path,
+                    target=target_emb, persist=persist_requested,
+                    publish=publish_embedding)
+            except _es.SwitchBusy as e:
+                return JSONResponse({"error": str(e), "updated": updated}, status_code=409)
+            except Exception as e:
+                return JSONResponse(
+                    {"error": f"新模型没能开始重算：{e}", "updated": updated},
+                    status_code=400)
+            updated.append("embedding.reembed")
+
         desired = _desired_startup_state(
             persisted_after if persisted_after is not None else sh.config
         )
@@ -638,8 +724,11 @@ def register(mcp) -> None:
             },
             "message": (
                 "MCP 启动配置已保存，需要重启服务后生效。"
-                if restart_required else "设置已生效。"
+                if restart_required else
+                "开始用新模型重算向量：算完之前旧模型照常用，算完自动换上。"
+                if reembed_status is not None else "设置已生效。"
             ),
+            "reembed": reembed_status,
         })
 
 

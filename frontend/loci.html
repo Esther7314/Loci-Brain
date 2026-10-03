@@ -788,6 +788,11 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
           <div class="tiny muted" id="cfgEMsg" style="margin-top:8px">
             没有它：搜索少一条腿，只剩字面匹配——换个说法搜同一件事就搜不到了。
           </div>
+          <div class="frow" id="cfgEMigRow" style="margin-top:8px" hidden>
+            <span class="tiny" id="cfgEMig"></span>
+            <button class="btn ghost" id="cfgEResume" hidden>接着算</button>
+            <button class="btn ghost" id="cfgEAbandon" hidden>放弃这一次</button>
+          </div>
         </div>
       </div>
       <div class="fline">
@@ -830,8 +835,22 @@ nav.tabs button{transition:background-color .2s cubic-bezier(.3,.8,.4,1),
         <div class="fbody">
           <div class="frow">
             <button class="btn" id="expGo">导出全部记忆</button>
-            <span class="tiny muted">下载一份到本地。搬家、换机器、或者只是想留一份。</span>
+            <span class="tiny muted">下载一个 zip 到本地。搬家、换机器、或者只是想留一份。
+              撤回的、删掉的不在里面；密码和 key 也不在里面。</span>
           </div>
+          <div id="expMsg" class="tiny muted"></div>
+        </div>
+      </div>
+      <div class="fline">
+        <span class="lb">导回</span>
+        <div class="fbody">
+          <div class="frow">
+            <input type="file" id="pkgFile" accept=".zip">
+            <button class="btn" id="pkgGo">导回这个包</button>
+          </div>
+          <div class="tiny muted">「导出全部记忆」导出的那种 zip。空库导回是原样搬回；
+            库里已经有东西的话合进来，撞号的会先问你。</div>
+          <div id="pkgMsg" class="tiny"></div>
         </div>
       </div>
     </div>
@@ -1066,7 +1085,7 @@ async function loadSet(){
   let _t = "auto";
   try{ _t = localStorage.getItem("loci-theme") || "auto"; }catch(e){}
   applyTheme(_t);
-  loadSetup(); loadCfg(); loadDiag();
+  loadSetup(); loadCfg(); loadDiag(); loadMig();
 }
 
 /* ---- Status: turning the silent failures into visible ones ----
@@ -1179,16 +1198,66 @@ $("#cfgSave").onclick = async () => {
   if ($("#cfgDKey").value.trim()) body.dehydration.api_key = $("#cfgDKey").value.trim();
   if ($("#cfgEKey").value.trim()) body.embedding.api_key = $("#cfgEKey").value.trim();
   try{
-    const r = await fetch("/api/config", {method:"POST", credentials:"same-origin",
+    const send = () => fetch("/api/config", {method:"POST", credentials:"same-origin",
       headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)});
-    const j = await r.json().catch(() => ({}));
+    let r = await send();
+    let j = await r.json().catch(() => ({}));
+    // A different embedding model: every vector has to be recomputed. Nothing was saved;
+    // say what it costs and send again only if she agrees.
+    if (r.status === 409 && j.needs_confirmation){
+      if (!confirm((j.reembed && j.reembed.say) || j.error)){
+        msg.textContent = "没存：向量模型没换。"; return;
+      }
+      body.embedding.reembed = "confirm";
+      r = await send();
+      j = await r.json().catch(() => ({}));
+    }
     if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
     msg.textContent = "保存了" + ((j.updated||[]).length ? "：" + j.updated.join("、") : "");
     $("#cfgDKey").value = ""; $("#cfgEKey").value = "";
-    toast("保存了 —— 写进 config.yaml，重启也还在");
-    loadCfg(); loadSetup();
+    toast(j.reembed ? "开始用新模型重算向量 —— 算完之前旧模型照常用"
+                    : "保存了 —— 写进 config.yaml，重启也还在");
+    loadCfg(); loadSetup(); loadMig();
   }catch(e){ msg.className = "tiny err"; msg.textContent = "没成：" + e.message; }
   finally{ btn.disabled = false; }
+};
+
+/* The recompute after a change of embedding model: its progress, its failure, and the
+   two ways out of a failure. Polled only while it runs. */
+let migTimer = null;
+async function loadMig(){
+  try{
+    const st = await api("/api/loci/embedding/migration");
+    const row = $("#cfgEMigRow"), t = $("#cfgEMig");
+    const to = (st.target && st.target.model) || st.target_model || "新模型";
+    $("#cfgEResume").hidden = !st.resumable;
+    $("#cfgEAbandon").hidden = !(st.resumable || st.running);
+    if (st.phase === "running"){
+      row.hidden = false; t.className = "tiny";
+      t.textContent = "正在用 " + to + " 重算向量：" + (st.done || 0) + "/" + (st.total || 0)
+        + (st.failed_count ? "（失败 " + st.failed_count + "）" : "") + "。算完之前旧模型照常用。";
+      if (!migTimer) migTimer = setInterval(loadMig, 3000);
+      return;
+    }
+    clearInterval(migTimer); migTimer = null;
+    if (st.phase === "failed" || st.phase === "interrupted"){
+      row.hidden = false; t.className = "tiny err";
+      t.textContent = "换到 " + to + " 的重算没完成：" + (st.message || st.error || "中途停了")
+        + "。旧模型和旧向量照用。";
+    }else if (st.phase === "completed" && st.finished_at){
+      row.hidden = false; t.className = "tiny muted";
+      t.textContent = "上一次换模型：" + (st.message || "完成") + "（" + st.finished_at + "）";
+    }else row.hidden = true;
+  }catch(e){ /* the status line is extra; the rest of the page does not depend on it */ }
+}
+async function migAct(action){
+  try{ await apiPost("/api/loci/embedding/migration", {action}); }
+  catch(e){ alert("没成：" + e.message); }
+  loadMig(); loadCfg();
+}
+$("#cfgEResume").onclick = () => migAct("resume");
+$("#cfgEAbandon").onclick = () => {
+  if (confirm("放弃这一次换模型？新算的向量扔掉，旧模型和旧向量接着用。")) migAct("abandon");
 };
 /* The panel lock. Two things have to be spelled out, because they are not the same
    thing: the switch (`panel_auth`) is whether you WANT it locked; whether it is
@@ -1377,16 +1446,82 @@ async function loadDiag(){
 
 /* ---- Backup ---- */
 $("#expGo").onclick = async () => {
+  const btn = $("#expGo"), msg = $("#expMsg");
+  btn.disabled = true; msg.className = "tiny muted"; msg.textContent = "打包中…";
   try{
-    const r = await fetch("/api/export", {credentials:"same-origin"});
-    if (!r.ok) throw new Error("HTTP " + r.status);
+    const r = await fetch("/api/loci/export", {credentials:"same-origin"});
+    if (!r.ok){
+      const j = await r.json().catch(() => ({}));
+      throw new Error(j.error || ("HTTP " + r.status));
+    }
     const blob = await r.blob();
+    const cd = r.headers.get("content-disposition") || "";
+    const m = cd.match(/filename="?([^";]+)"?/);
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = "loci-" + new Date().toISOString().slice(0,10) + ".json";
+    a.download = m ? m[1] : ("loci-export-" + new Date().toISOString().slice(0,10) + ".zip");
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-  }catch(e){ alert("导不出来：" + e.message); }
+    const n = r.headers.get("x-loci-entries"), f = r.headers.get("x-loci-filtered");
+    msg.textContent = "导出了 " + (n || "?") + " 条" + (f && f !== "0" ? "（撤回和删掉的 " + f + " 条没带）" : "")
+      + "。包里的 backup_manifest.json 写着带不走、没带的都有什么。";
+  }catch(e){ msg.className = "tiny err"; msg.textContent = "导不出来：" + e.message; }
+  finally{ btn.disabled = false; }
+};
+
+/* ---- Bringing an export package back ---- */
+let pkgTimer = null;
+function pkgSay(t, bad){
+  const m = $("#pkgMsg"); m.className = "tiny " + (bad ? "err" : "muted"); m.textContent = t;
+}
+function pkgSummary(st){
+  const res = st.result || {}, lib = st.library_state || {};
+  let t = "导回完了：进来 " + (res.imported || 0) + " 条，跳过 " + (res.skipped || 0) + " 条。";
+  if (lib.mode === "fresh") t += "空库，来源登记、名字表这些原样放回了。";
+  else if (lib.mode === "merge"){
+    t += "合进了已有的库。";
+    if ((lib.not_merged || []).length)
+      t += "没合进来的：" + lib.not_merged.map(x => x.path).join("、") + "。";
+  }
+  if ((st.apply_errors || []).length) t += " 有 " + st.apply_errors.length + " 处出错，看日志。";
+  return t;
+}
+$("#pkgGo").onclick = async () => {
+  const f = $("#pkgFile").files[0];
+  if (!f){ pkgSay("先选一个导出的 zip。", 1); return; }
+  pkgSay("传上去、核对中…");
+  try{
+    const fd = new FormData(); fd.append("file", f);
+    let r = await fetch("/api/loci/import-package", {method:"POST", credentials:"same-origin", body:fd});
+    let j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+    const n = j.total_buckets || 0, clash = j.conflicts_count || 0;
+    let ask = "包里 " + n + " 条记忆，要导回到这个库吗？";
+    if (clash) ask += "\n其中 " + clash + " 条跟库里的撞号了。";
+    if (!confirm(ask)){
+      await fetch("/api/loci/import-package", {method:"POST", credentials:"same-origin",
+        headers:{"Content-Type":"application/json"}, body: JSON.stringify({job_id: j.job_id, cancel: true})});
+      pkgSay("没导。");
+      return;
+    }
+    let def = "skip";
+    if (clash) def = confirm("撞号的那 " + clash + " 条：\n确定 = 两条都留（包里那条换个新号）\n取消 = 跳过，留库里原来的")
+      ? "keep_both" : "skip";
+    r = await fetch("/api/loci/import-package", {method:"POST", credentials:"same-origin",
+      headers:{"Content-Type":"application/json"}, body: JSON.stringify({job_id: j.job_id, default: def})});
+    j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+    pkgSay("写进去了，等它跑完…");
+    clearInterval(pkgTimer);
+    pkgTimer = setInterval(async () => {
+      try{
+        const st = await api("/api/loci/import-package");
+        if (st.phase === "done"){ clearInterval(pkgTimer); pkgSay(pkgSummary(st)); }
+        else if (st.phase === "error"){ clearInterval(pkgTimer); pkgSay("✗ " + (st.error || "出错了"), 1); }
+        else pkgSay("写着：" + ((st.apply_progress || {}).done || 0) + "/" + ((st.apply_progress || {}).total || 0));
+      }catch(e){ clearInterval(pkgTimer); pkgSay("✗ " + e.message, 1); }
+    }, 1500);
+  }catch(e){ pkgSay("✗ " + e.message, 1); }
 };
 
 /* ---- Import ---- */

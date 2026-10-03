@@ -1154,7 +1154,10 @@ async def recall(
         "is). The first line says whether the host gave it, could not reach it for now "
         "(the entry's own text stands in), or no longer allows it (then nothing of the "
         "entry is shown). Use it when the exact words matter; it goes over the network, so "
-        "not for every read."
+        "not for every read.\n"
+        '"original" also reads an imported conversation Loci keeps itself: query set to its '
+        'source string ("import:imp_…/c0001#l0003..l0020") reads that stretch, query set to '
+        "a few words searches every imported line for them."
     ))] = "",
 ) -> str:
     """Look back through memories that are already stored.

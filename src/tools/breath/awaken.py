@@ -14,7 +14,9 @@ Five blocks and a line, in this order:
    no time to search for before speaking stays by the door**. The reasoning is written in
    place below.
 2. 惦记的事 (prospective) — what is wanted or coming, chosen from what is awake, each line
-   saying why it is here now (core/profile.prospective).
+   saying why it is here now (core/profile.prospective); then how many of the host's
+   slices wait to be handled, and how many stretches of an imported conversation wait to
+   be checked (core/import_memory.py).
 3. 近三天 — the overview from recall(when="3d"), free of charge.
 4. 忽然想起 (involuntary) — two old things coming back unbidden, each saying how
    (core/profile.involuntary).
@@ -133,7 +135,9 @@ async def build_breath() -> dict:
     cues = getattr(mgr, "cues", None)
     plan = prospective(all_buckets, now, settings=settings, scope=scope,
                        delivered_at=cues.delivered_at if cues is not None else None)
-    plan["slices_pending"] = await _slices.pending_seen()
+    imports = await _slices.imports_seen()
+    plan["slices_pending"] = await _slices.pending_seen() - imports
+    plan["imports_pending"] = imports
 
     mid = await recall_text_and_data(when="3d", room="", tag="", query="", max_cells=1,
                                      road=_V.RECENT)
@@ -219,6 +223,9 @@ def _prospective_lines(p: dict) -> list[str]:
                    "不是就不用管，不会再问")
     if p.get("slices_pending"):
         out.append(f"📥 有 {p['slices_pending']} 段原话切片等着认领：recall(view=\"slices\")")
+    if p.get("imports_pending"):
+        out.append(f"📥 有 {p['imports_pending']} 段导入的原话还没核：recall(view=\"slices\")"
+                   " 看候选，有空时翻原话核对、自己写")
     return out
 
 

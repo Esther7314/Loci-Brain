@@ -8,6 +8,10 @@ host. When the model asks for it (tools/recall/original.py), Loci asks the host 
 the source, once per source, and hands back what the host gave. Nothing fetched is
 stored, cached or logged: the text goes into that one reply and nowhere else.
 
+An imported conversation (`system: import`) is the one exception: Loci holds its lines
+itself and answers from them (core/import_memory.original_of), in the same shapes, as the
+host `loci`.
+
 Which host: the one declared as serving the source (`provides:` in `hosts:`,
 core/scope.Hosts.provider_for — the deepest declared place covering it; two hosts at the
 same depth name neither), with a `fetch_url`. What a host may touch (`max_grant`) never
@@ -125,6 +129,7 @@ from typing import Mapping, Optional
 import httpx
 
 from . import _sources as _src
+from .scope import IMPORT_SYSTEM, LOCI
 
 logger = logging.getLogger("loci_brain.originals")
 
@@ -417,6 +422,13 @@ async def fetch(record: dict, *, hosts, request=None, settings: Settings = Setti
     blocked = _blocked_by_registry(registry, sid)
     if blocked:
         return Answer(NOT_ALLOWED, source=label, reason=blocked)
+    if sid.system == IMPORT_SYSTEM:
+        # An imported conversation is Loci's own material: it is read from the import's
+        # store, never asked of a host (core/import_memory.py).
+        from .import_memory import original_of      # lazy: it imports this module
+        answer = original_of(registry.base_dir if registry is not None else "", sid,
+                             settings)
+        return replace(answer, source=label, host=LOCI)
     host = host_for(hosts, sid)
     if host is None:
         return Answer(NO_HOST, source=label)

@@ -32,10 +32,14 @@ side never records which memory it belongs to (that is `memories_of`, a reverse 
 A `wasQuotedFrom` prov line names a source by its string form, and a memory quoting a
 source rests on it as much as one listing it in `sources` (`quoted_records`).
 
-The host announces changes per piece, never per run, and a change to any line inside a
-run reaches the run: its state is the worst of its own identity and every line it holds
-(`state_of`), and each line's `use_changed` narrows it (`uses_of`), so a memory standing
-on the run is blocked whole until it is rewritten — nothing trims a run automatically.
+The host announces changes per piece, and a change to any line inside a run reaches the
+run: its state is the worst of its own identity and every line it holds (`state_of`), and
+each line's `use_changed` narrows it (`uses_of`), so a memory standing on the run is
+blocked whole until it is rewritten — nothing trims a run automatically. A change to a run
+whose lines are registered reaches the other way too: every line it holds, and every run
+or piece holding one of them, reads at least as badly as it (`state_of`) and stands on it
+(`names_identity`). Loci withdrawing an imported conversation is such a change: one per
+conversation, its whole run (core/import_memory.py).
 What a run holds is the host's order of its lines, registered when the host hands a
 stretch of lines over for slicing or registers a run's lines on its own (`record_order`,
 `<buckets>/_sources/line_orders.jsonl`: the ids in order, never their text, kept after the
@@ -548,12 +552,20 @@ def _identity_key(identity) -> str:
 
 
 def names_identity(have: SourceId, want: SourceId, registry=None) -> bool:
-    """Does a reference to `have` stand on `want`: the same identity, or a run holding the
+    """Does a reference to `have` stand on `want`: the same identity; a run holding the
     single piece `want` — by any of its lines when the registry knows them
-    (`SourceRegistry.lines_of`), by its first or last line when it does not."""
+    (`SourceRegistry.lines_of`), by its first or last line when it does not; or, `want`
+    being a run whose lines the registry knows, a reference holding one of those lines (a
+    change to a stretch reaches what stands on part of it)."""
     if have == want:
         return True
-    if want.through is not None or have.through is None:
+    if want.through is not None:
+        if registry is None or (have.system, have.instance, have.container) != (
+                want.system, want.instance, want.container):
+            return False
+        members = set(registry.members_of(want) or ())
+        return bool(members) and any(x.id in members for x in registry.lines_of(have))
+    if have.through is None:
         return False
     return want in (registry.lines_of(have) if registry is not None
                     else (have.first(), have.last()))
@@ -891,6 +903,8 @@ class SourceRegistry:
         self._orders: dict[tuple, list] = {}
         # source key -> the newest hold row
         self._held: dict[str, dict] = {}
+        # (system, instance, container) -> the keys of runs a change was recorded for
+        self._runs: dict[tuple, set] = {}
 
     # ---------- the index ----------
 
@@ -903,6 +917,7 @@ class SourceRegistry:
             self._seq = 0
             self._by_source = {}
             self._by_change = {}
+            self._runs = {}
             for row in _read_lines(self.changes_path):
                 self._index(row)
             self._changes_size = size
@@ -923,6 +938,14 @@ class SourceRegistry:
         key = self.change_key(host, str(row.get("change_id") or ""))
         self._seq = max(self._seq, seq)
         self._by_change[key] = row
+        if _RANGE_MARK in source:
+            try:
+                sid = SourceId.parse(source)[0]
+            except SourceRecordError:
+                sid = None
+            if sid is not None and sid.through:
+                self._runs.setdefault((sid.system, sid.instance, sid.container),
+                                      set()).add(source)
         entry = self._by_source.setdefault(source, {
             "state": ACTIVE, "host_seq": -1, "use": None, "use_changed": False,
             "revisions": [], "seqs": {}, "settled_seq": 0})
@@ -1195,14 +1218,31 @@ class SourceRegistry:
                     "revisions": sorted((dict(r) for r in entry["revisions"]),
                                         key=lambda r: int(r.get("host_seq") or 0))}
 
+    def _runs_over(self, sid: SourceId, lines: list) -> list[str]:
+        """The keys of runs of the same container a change was recorded for (other than
+        `sid` itself) whose registered lines hold one of `lines`."""
+        self._fresh()
+        with self._guard:
+            runs = sorted(self._runs.get((sid.system, sid.instance, sid.container), ()))
+        own = sid.to_string()
+        ids = {x.id for x in lines}
+        out = []
+        for key in runs:
+            if key != own and ids & set(self.members_of(key) or ()):
+                out.append(key)
+        return out
+
     def state_of(self, identity) -> str:
         """The source's state; one the registry has never heard of is active. A run is as
         bad as the worst of its own identity and every line it holds (`lines_of`): a line
-        withdrawn inside it withdraws the whole run. An open hold (`hold`) reads as HELD
-        where the recorded state is no worse."""
+        withdrawn inside it withdraws the whole run. A run a change was recorded for
+        reaches every line it holds: a piece or run holding one of them is no better than
+        that run (`_runs_over`). An open hold (`hold`) reads as HELD where the recorded
+        state is no worse."""
         sid = _identity(identity)
-        keys = [sid.to_string()] + ([x.to_string() for x in self.lines_of(sid)]
-                                    if sid.through else [])
+        lines = self.lines_of(sid)
+        keys = [sid.to_string()] + ([x.to_string() for x in lines] if sid.through else [])
+        keys += self._runs_over(sid, lines)
         worst = ACTIVE
         for key in dict.fromkeys(keys):
             entry = self._entry(key)

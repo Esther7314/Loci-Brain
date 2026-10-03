@@ -62,7 +62,11 @@ N writer processes creating M entries each through BucketManager) · `cue: {text
 turn}` (+ `host:`, `scope:`, `as`, `capture`; what POST /api/v2/cue runs, the same kind of
 declared seam as `source_change:`; the reply is JSON text holding the cards) ·
 `cue_delivered: {window, turn | cards}` and `cue_dropped: {window, cards | turns | all}`
-(the host's two acknowledgements: a card reached the model's input / left it). `$var` takes a
+(the host's two acknowledgements: a card reached the model's input / left it) · `round_trip:
+{lacks?: [phrases]}` (+ `as`; what GET /api/loci/export and POST /api/loci/import-package run:
+the library exported and brought back into a new empty one, compared field by field; JSON
+text with `identical`, `differing`, `filtered`, `missing`, `not_included` and which `lacks`
+phrases were found anywhere in the package). `$var` takes a
 captured value; `${var:6}` its first six characters, the handle tools print.
 
 Setup extras: an item's `names:` is the names table ({name: {aliases, instance_of,
