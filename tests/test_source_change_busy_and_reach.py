@@ -129,6 +129,8 @@ def test_a_change_for_a_run_with_unknown_lines_says_it_reached_the_run_only(stor
     public = L.public_row({"event_type": L.SOURCE_CHANGED, "seq": 1,
                            "payload": _changed_line(store, "c-run")})
     assert public["note"] == SC.MEMBERS_UNKNOWN, "/changes shows what the change reached"
+    assert public["reach"] == SC.REACH_RUN_ONLY
+    assert _changed_line(store, "c-run")["reach"] == SC.REACH_RUN_ONLY
     assert L.redact_line({"event_type": L.SOURCE_CHANGED,
                           "payload": _changed_line(store, "c-run")}) is None, \
         "the ledger line holds only what a source line may hold"
@@ -149,6 +151,9 @@ def test_a_change_for_a_run_with_registered_lines_says_it_reached_them(store):
     assert out["reach"] == SC.REACH_LINES and "note" not in out
     assert out["entries"] == [line_memory]
     assert "note" not in _changed_line(store, "c-run")
+    public = L.public_row({"event_type": L.SOURCE_CHANGED, "seq": 1,
+                           "payload": _changed_line(store, "c-run")})
+    assert public["reach"] == SC.REACH_LINES and "note" not in public
 
 
 def test_a_change_for_a_piece_has_no_reach(store):
@@ -157,3 +162,4 @@ def test_a_change_for_a_piece_has_no_reach(store):
     assert out["status"] == "applied" and "reach" not in out and "note" not in out
     _s, out = run(SC.handle(store, change("c-1", "withdrawn", 1), HOST))
     assert out["status"] == "duplicate" and "reach" not in out
+    assert "reach" not in _changed_line(store, "c-1")

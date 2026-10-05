@@ -22,8 +22,8 @@ the run itself, nothing resting on a line of it, and the receipt carries `note:
 members_unknown` (unless the change has a note of its own, `redeliver` say: `reach` is the
 field to read). The host sends the lines' own changes if they are to be reached. What it
 reached is fixed when the first send finds its memories, and the change's ledger line
-carries `note: members_unknown` too (shown in `/changes`). A change for a single piece has
-no `reach`.
+(`SourceChanged`, as `/changes` shows it) carries `reach` and the note too. A change for a
+single piece has no `reach`.
 
 What each kind of change does:
 
@@ -979,6 +979,8 @@ async def _carry_out(store, host, change: dict, sid, prior: dict, prog: Optional
                    "change_id": change["change_id"], "host": host.name,
                    "host_seq": change["host_seq"], "state": state,
                    "previous": prior.get("previous")}
+        if reach is not None:
+            payload["reach"] = reach
         if reach == REACH_RUN_ONLY:
             payload["note"] = MEMBERS_UNKNOWN
         event = store.ledger_mirror.append_event(

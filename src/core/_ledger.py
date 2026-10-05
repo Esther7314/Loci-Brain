@@ -79,7 +79,7 @@ FLAG_FIELDS = ("dont_surface", "pinned", "anchor", "resolved")
 # Keys a caller's extra payload may add, all of them names or booleans.
 _EXTRA_KEYS = ("changed_fields", "content_erased", "cleared", "change_id", "source")
 _SOURCE_KEYS = ("source", "change", "change_id", "host", "host_seq", "state", "previous",
-                "place", "entries", "note")
+                "place", "entries", "note", "reach")
 
 CHANGES_LIMIT = 1000
 CHANGES_LIMIT_MAX = 5000
@@ -162,8 +162,10 @@ def public_row(event: dict) -> dict:
     row: dict = {"seq": int(event.get("seq") or 0), "type": etype,
                  "recorded_at": str(event.get("recorded_at") or "")}
     if etype in SOURCE_EVENTS:
-        # `note` is one of the change's fixed words (redeliver, members_unknown), never text.
-        for k in ("source", "change", "change_id", "state", "previous", "place", "note"):
+        # `note` and `reach` are the change's fixed words (redeliver, members_unknown;
+        # lines, run_only), never text.
+        for k in ("source", "change", "change_id", "state", "previous", "place", "note",
+                  "reach"):
             if payload.get(k) not in (None, ""):
                 row[k] = str(payload[k])
         if isinstance(payload.get("entries"), list):
