@@ -83,9 +83,10 @@ def test_a_new_source_on_the_same_words_is_not_dropped(store, tmp_path):
 
 def test_a_from_on_the_same_words_is_not_dropped(store, tmp_path):
     _out, first = _grow()
-    out, second = _grow(from_=["m_0931"])
+    line = "lento:home/private:U#m_0931"
+    out, second = _grow(from_=[line])
     assert second and second != first, out
-    assert _disk(tmp_path, second)["prov"] == [{"rel": "wasQuotedFrom", "target": "m_0931"}]
+    assert _disk(tmp_path, second)["prov"] == [{"rel": "wasQuotedFrom", "target": line}]
 
 
 def test_a_cue_on_the_same_words_is_not_dropped(store, tmp_path):

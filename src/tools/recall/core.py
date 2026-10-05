@@ -1966,6 +1966,14 @@ async def recall_core(when: str, room: str, tag: str, query: str,
                 # The host's own words are not in the library; this says where to ask.
                 if quoted or _source_strings(meta):
                     lines.append(f'  （宿主那边的原话：recall(query="{q}", view="original")）')
+                # A quoted line holding only the host's bare id (written before such a
+                # line was refused) names no container: a traceability gap, said once.
+                bare_quotes = [t for t in quoted if "#" not in t]
+                if bare_quotes:
+                    how_many = "一" if len(bare_quotes) == 1 else f" {len(bare_quotes)} "
+                    lines.append(f"  ⚠️有{how_many}根引原话的线只写了编号"
+                                 f"（{'、'.join(sorted(bare_quotes))}），"
+                                 "追不到来源：原话取不回，来源撤回也够不着它。")
             # **This is unfold, and it is not a separate tool**: what a gist
             # covers is laid out here, one line each (id + gist).
             # Why not a separate tool: the drilling-down action already exists

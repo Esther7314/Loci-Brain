@@ -13,7 +13,10 @@ entries are on disk and before the return is handed back:
 Both read the library as it stood before the write (the caller lists it before writing, so
 the new entries are not among the views they could run into), both go
 through the gate under the request's read scope, and neither can fail the write: anything
-that goes wrong here is logged and the return goes out without these lines.
+that goes wrong here is logged and the return goes out without these lines. The scene
+question is asked only of a call that sees the whole library (`sees_whole_library`): its
+quiet days are kept in one file for the whole library, so whether it is asked would tell
+a call under a ceiling that the word was asked about elsewhere.
 
 Exports: noticed(library, writes, *, skip, scene_texts) -> list[str]
 ========================================
@@ -24,7 +27,7 @@ from core import _reconsolidation as _R
 from core import _when as _w
 
 from . import _runtime as rt
-from ._common import read_scope
+from ._common import read_scope, sees_whole_library
 
 
 async def noticed(library: list, writes: list[tuple[str, str]], *, skip=(),
@@ -48,7 +51,7 @@ async def noticed(library: list, writes: list[tuple[str, str]], *, skip=(),
         _R.record_shown(store, hits)
     except Exception as e:  # noqa: BLE001 - the look-back is a hint; the write is done
         rt.logger.warning(f"write return: look-back failed: {e}")
-    if scene_texts:
+    if scene_texts and sees_whole_library():
         try:
             buckets_dir = str(getattr(store, "base_dir", "") or (rt.config or {}).get("buckets_dir") or ".")
             q = _C.ask(library, list(scene_texts), buckets_dir=buckets_dir, scope=view, now=now)

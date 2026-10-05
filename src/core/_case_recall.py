@@ -29,6 +29,10 @@ How a word is counted
 ------------------------------------------------------------
 When it is not asked
 ------------------------------------------------------------
+  · the call reads under a ceiling (tools/_write_returns.noticed asks only a call that
+    sees the whole library): the asked file is one for the whole library, not one per
+    scope, so a question held back because the owner was asked last week would tell a
+    restricted caller that the word was asked about — for now the question is the owner's
   · the same word was asked about in the last QUIET_DAYS (kept in `_state/ASKED_FILE`:
     word -> day asked, pruned as it is written, so it stays a handful of lines)
   · a live cue the caller may read already hangs on the word (its condition or a phrasing

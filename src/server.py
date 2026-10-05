@@ -964,7 +964,10 @@ async def grow(
         "revision / fingerprint / fingerprint_by / span / use when the host gave them; a "
         "run of consecutive messages is one record with through = the last one's id. "
         "Every entry of the call carries them. A withdrawn or deleted source is refused. "
-        "A bare line id in from (m_0142) is linked to the record with that id. e.g. "
+        "A bare line id in from (m_0142) is linked to the record with that id; with no "
+        "record, Loci completes it from the lines hosts registered when exactly one "
+        "container holds that id, and refuses the write otherwise — write the full form "
+        "(system:instance/container#m_0142) to be safe. e.g. "
         'sources=[{"system": "lento", "instance": "home", "container": "private:U", '
         '"id": "m_0142"}].'
     ))] = None,
@@ -1446,8 +1449,11 @@ async def regrow(
         "means you weighed it again, so weigh the feeling again too."
     ))] = -1,
     from_: Annotated[list, _PydField(validation_alias="from", description=(
-        "Any new sources this version came out of (bucket_ids or the host's line ids); "
-        "at most 64 in all, counting the ones carried over. The old version's "
+        "Any new sources this version came out of (bucket_ids, or the host's lines by "
+        "their full form system:instance/container#m_0142); at most 64 in all, counting "
+        "the ones carried over. A bare line id (m_0142) is completed from the lines hosts "
+        "registered when exactly one container holds it, otherwise the call is refused. "
+        "The old version's "
         "sources carry over on their own, so only name what is new."
     ))] = [],
     mode: Annotated[str, _PydField(description=(

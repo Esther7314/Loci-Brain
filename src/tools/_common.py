@@ -26,11 +26,12 @@ What this file deliberately does not do:
 - Wraps no side effects beyond log formatting; the caller decides whether to await
 
 - read_scope: the request's read scope as the view core's gate takes
-  (core/scope.ScopeView), loaded once per request
+  (core/scope.ScopeView), loaded once per request; sees_whole_library: whether the
+  call reads with no ceiling at all (what owner-only answers ask)
 
 Exports: limits_cfg / max_bucket_bytes / max_pinned / check_content_size /
          check_grow_items_payload / count_pinned / check_pinned_quota /
-         read_scope / not_found / resolve_bucket_id / resolve_bucket_ids / with_write_key
+         read_scope / sees_whole_library / not_found / resolve_bucket_id / resolve_bucket_ids / with_write_key
 ========================================
 """
 
@@ -238,6 +239,18 @@ async def read_scope(fresh: bool = False):
     view = _scope.ScopeView(req, metas, getattr(rt.bucket_mgr, "sources", None))
     _VIEW.set((req, view))
     return view
+
+
+def sees_whole_library() -> bool:
+    """Does this call read the library with no ceiling at all: no request (a direct call,
+    a background job), or an open host carrying no `max_grant` that sent no scope (the
+    owner's own clients; the one implicit host when there is no `hosts:` table)? Decided
+    by the request's scope, not by the host's name: the same host sending a scope reads
+    under it and is not the whole library."""
+    req = _scope.current_request()
+    if req is None:
+        return True
+    return req.whole_library and req.host is not None and req.host.max_grant is None
 
 
 def not_found(q: str) -> str:

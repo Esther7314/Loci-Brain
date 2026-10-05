@@ -19,10 +19,13 @@ from that":
         fingerprint_by: adapter  # who computed the fingerprint
         span: {unit: utf16, start: 120, end: 188}   # a fragment only; half-open
         use: null                # permission; null inherits the material's
+        completed_from: registry # only when Loci filled in the container of a bare id:
+                                 # registry (its line orders) or host_scope (the host's
+                                 # one-container ceiling)
 
 Identity is system + instance + container + id, plus `through` for a run of lines: two
 runs starting at the same line and ending at different ones are two sources. Revision,
-fingerprint, span and the window it was read in are not identity. `span` is a fragment
+fingerprint, span, completed_from and the window it was read in are not identity. `span` is a fragment
 of one piece and `through` a run of whole pieces, so a record has one or the other; a
 `through` equal to `id` is that one line and is not written. The string form (logs, the
 registry, prov lines) is `lento:home/private:U#m_20260925_0142`, or
@@ -45,8 +48,12 @@ What a run holds is the host's order of its lines, registered when the host hand
 stretch of lines over for slicing or registers a run's lines on its own (`record_order`,
 `<buckets>/_sources/line_orders.jsonl`: the ids in order, never their text, kept after the
 slices are handled and after a withdrawal clears a body — they are what carries the next
-withdrawal to the memories still standing on the run). Registrations of one container that
-disagree are joined (`members_of`): a line is never taken out of a run again; a
+withdrawal to the memories still standing on the run). One delivery of a run — its first
+and last line under one watermark, or with no watermark (a delivery of its own, independent
+of every watermarked one) — holds one list of lines: a second registration of it with
+other lines or another order is a conflict (`members_differ`, `order_conflict`) and is not
+recorded; the same list again is known. Registrations of one container that disagree
+across deliveries are joined (`members_of`): a line is never taken out of a run again; a
 registration checks and appends in one turn across processes. A run whose
 lines were never registered is known only by its first and last line (`lines_of`) and is
 refused as a basis and for reading under any grant (`places_cover`, `check_writable`).
@@ -76,8 +83,22 @@ A hold (`<buckets>/_sources/held.jsonl`, `hold`): a host serving an original sai
 source is withdrawn or deleted while the registry records no such change. That answer was
 not ordered, so it is never written as the source's state; the source reads as HELD — not
 readable, not usable as a basis — until a change that settles it (withdrawn, deleted,
-restored) is applied after the hold. Restoring a source that was never withdrawn needs no
-`may_restore`.
+restored) is applied after the hold; one applied before the hold settles nothing of it.
+Restoring a source that was never withdrawn needs no `may_restore`, but it is still an
+ordered change from the source's authority. A hold on a run whose lines are registered
+reaches every line it holds and every piece or run holding one of them (`held_over`). A
+settling change for the run itself settles the whole hold; one for a single line, or for
+another run whose lines are registered, settles it for the lines that change covers only
+(`_line_settled_since`) — the run's other lines, the runs over them and the run itself
+stay held until the run's own change or until every line it holds has been settled after
+the hold (`held_of`). A run whose lines are unknown covers no line: a change for it settles
+nothing of another run's hold. A held run whose lines are unknown reaches no line, and a
+change to its first or last line settles nothing of it: it stays held until its own change.
+
+What a change for a run reaches is the run's own; it never undoes a line's own change. A
+line withdrawn by its own change stays withdrawn when the run over it is restored (a run is
+the worst of its own identity and its lines, and a line the worst of itself and the runs
+over it, `state_of`), and a hold on a line alone is settled only by that line's change.
 
 Write keys: a host that resends a write (a retry, a restart) sends the same key, and
 the same key is answered with the first result instead of a second memory. The key is
@@ -110,14 +131,14 @@ piece's own (the grant, the host's ceiling and the source's state still decide).
 is not such an object, an unknown key or a name that is not text is kept as given and read
 by the gate as a rule it cannot understand: under a scope it lets nothing through.
 
-Exports: SOURCES_FIELD · SOURCES_MAX · SourceId · SourceRecordError · normalize_sources ·
+Exports: SOURCES_FIELD · SOURCES_MAX · COMPLETED_FROM · SourceId · SourceRecordError · normalize_sources ·
          coerce_sources_arg · record_id · record_string · same_delivery · same_reference ·
          Place · places_of · places_cover · parse_use · STATES · HELD · CHANGE_KINDS ·
          OUTCOMES · next_state · SourceRegistry (apply_change · prior_change · state_of ·
          read_state · granted · reaches · order_known · use_of · uses_of · revisions_of ·
-         describe · record_order · order_conflict · members_of · adopted_revisions ·
-         run_revisions · lines_of · hold · held_of · settled_after · rebuild_index ·
-         check_writable · claimed · run_once) · names_identity · quoted_records ·
+         describe · record_order · order_conflict · members_of · lines_named ·
+         adopted_revisions · run_revisions · lines_of · hold · held_of · held_over · settled_after ·
+         rebuild_index · check_writable · claimed · run_once) · names_identity · quoted_records ·
          basis_records · memories_of · write_key · bounded_key · current_write_key ·
          write_key_scope · current_grant · grant_scope · note_written · collect_written ·
          json_line
@@ -153,7 +174,11 @@ _DELIMITERS = {"system": ":/#@", "instance": "/#@", "container": "#@", "id": "#@
                "through": "#@", "revision": "#@"}
 _RANGE_MARK = ".."              # between id and through in the string form
 _RECORD_KEYS = (*_IDENTITY, "through", "revision", "fingerprint", "fingerprint_by", "span",
-                "use")
+                "use", "completed_from")
+# How Loci itself filled in the container of a line the model named by its bare id
+# (tools/grow/rooms_path.check_sources): from the registered line orders, or from the
+# host's one-container ceiling. Not identity; absent on a record written whole.
+COMPLETED_FROM = ("registry", "host_scope")
 
 
 class SourceRecordError(ValueError):
@@ -369,6 +394,14 @@ def _normalize_record(raw, where: str) -> dict:
     if span:
         out["span"] = span
     out["use"] = _use_field(raw.get("use"), where)
+    completed = raw.get("completed_from")
+    if completed is not None:
+        if completed not in COMPLETED_FROM:
+            raise SourceRecordError(f"source{where} completed_from must be one of "
+                                    f"{list(COMPLETED_FROM)}",
+                                    f"来源{where}的 completed_from 只能是 "
+                                    f"{' / '.join(COMPLETED_FROM)}")
+        out["completed_from"] = completed
     text = record_string(out)
     if len(text) > STRING_MAX:
         raise SourceRecordError(f"source{where} string form is {len(text)} characters, over "
@@ -754,6 +787,8 @@ HELD_FILE = "held.jsonl"
 _STATE_RANK = {ACTIVE: 0, UNREADABLE: 1, HELD: 2, WITHDRAWN: 3, DELETED: 4}
 # Outcomes of registering a run's lines (`record_order`).
 RECORDED, KNOWN = "recorded", "known"
+# A conflict's reason (`order_conflict`): one delivery of a run given other lines.
+MEMBERS_DIFFER = "members_differ"
 _CHANGE_ID_MAX = 128
 # The fields that make two sends of one change_id the same change.
 _CHANGE_CONTENT = ("source", "kind", "host_seq", "revision", "fingerprint", "fingerprint_by",
@@ -926,6 +961,8 @@ class SourceRegistry:
         self._claims: dict[str, dict] = {}
         # (system, instance, container) -> [_Order], newest first
         self._orders: dict[tuple, list] = {}
+        # line id -> the containers whose registrations hold it (`lines_named`)
+        self._named: dict[str, set] = {}
         # source key -> the newest hold row
         self._held: dict[str, dict] = {}
         # (system, instance, container) -> the keys of runs a change was recorded for
@@ -1000,6 +1037,7 @@ class SourceRegistry:
             if size == self._orders_size:
                 return
             orders: dict[tuple, list] = {}
+            named: dict[str, set] = {}
             for row in _read_lines(self.orders_path):
                 try:
                     where = (str(row["system"]), str(row["instance"]), str(row["container"]))
@@ -1007,6 +1045,8 @@ class SourceRegistry:
                 except (KeyError, TypeError):
                     continue
                 revs = row.get("revisions")
+                for i in ids:
+                    named.setdefault(i, set()).add(where)
                 if ids:
                     orders.setdefault(where, []).insert(0, _Order(
                         ids, {i: n for n, i in enumerate(ids)},
@@ -1014,20 +1054,31 @@ class SourceRegistry:
                         ({str(k): _opt_text(v) for k, v in revs.items()}
                          if isinstance(revs, dict) else None)))
             self._orders = orders
+            self._named = named
             self._orders_size = size
 
     def order_conflict(self, source: dict, ids: list[str], revision: Optional[str] = None,
                        revisions: Optional[dict] = None) -> str:
         """Why registering these lines would contradict what is registered, or "". A
-        watermark (`revision`) names one delivery of a container: a second registration
-        under the same watermark carrying per-line revisions may not give a line another
+        watermark (`revision`) names one delivery of a container. One delivery of a run —
+        the same first and last line under the same watermark, or under no watermark on
+        both sides — holds one list of lines: a registration giving it another list (other
+        lines, or the same in another order) is MEMBERS_DIFFER. A registration with no
+        watermark is independent of every watermarked one. A second registration under
+        the same watermark carrying per-line revisions may not give a line another
         revision."""
-        if revision in (None, "") or revisions is None:
-            return ""
+        ids = [str(i) for i in ids if str(i or "").strip()]
+        revision = _opt_text(revision)
         where = (str(source.get("system")), str(source.get("instance")),
                  str(source.get("container")))
         self._fresh_orders()
         with self._guard:
+            for known in self._orders.get(where, []) if ids else []:
+                if (known.revision == revision and known.ids[0] == ids[0]
+                        and known.ids[-1] == ids[-1] and known.ids != ids):
+                    return MEMBERS_DIFFER
+            if revision is None or revisions is None:
+                return ""
             for known in self._orders.get(where, []):
                 if known.revision != revision or known.revisions is None:
                     continue
@@ -1048,7 +1099,9 @@ class SourceRegistry:
         (a run record naming it as its revision adopted these lines' revisions);
         `revisions` the revision of each line as delivered ({id: revision or None}; a line
         left out is unknown). Returns RECORDED, KNOWN (the same registration was there) or
-        a conflict's reason (`order_conflict`; nothing is recorded)."""
+        a conflict's reason (`order_conflict`: MEMBERS_DIFFER for one delivery of a run
+        given other lines, a sentence for a line given another revision; nothing is
+        recorded)."""
         ids = [str(i) for i in ids if str(i or "").strip()]
         if not ids:
             return KNOWN
@@ -1094,6 +1147,15 @@ class SourceRegistry:
                 if a is not None and z is not None and a <= z:
                     out.append((known, a, z))
             return out
+
+    def lines_named(self, line_id: str) -> list[SourceId]:
+        """Every registered line carrying this host id, one per container whose line orders
+        hold it, sorted: what a bare id (`m_0142`) can be completed with. An id no
+        registration holds gives []."""
+        self._fresh_orders()
+        with self._guard:
+            where = sorted(self._named.get(str(line_id or ""), ()))
+        return [SourceId(sy, inst, cont, str(line_id)) for sy, inst, cont in where]
 
     def members_of(self, identity) -> Optional[list[str]]:
         """The ids a run holds, when a registration of its container holds both its ends
@@ -1173,11 +1235,30 @@ class SourceRegistry:
             self._held = held
             self._held_size = size
 
+    def _settled_since(self, key: str, after: int) -> bool:
+        """Has a settling change (withdrawn, deleted, restored) for exactly this key been
+        applied after the registry's line `after`?"""
+        entry = self._entry(key)
+        with self._guard:
+            return entry is not None and entry["settled_seq"] > after
+
+    def _line_settled_since(self, line: SourceId, after: int) -> bool:
+        """Has a settling change covering this line of a held run been applied after the
+        registry's line `after`: one for the line itself, or for any run of its container
+        whose registered lines hold it? A run whose lines are unknown covers no line."""
+        if self._settled_since(line.to_string(), after):
+            return True
+        return any(self._settled_since(key, after) for key in self._runs_over(line, [line]))
+
     def held_of(self, identity) -> Optional[dict]:
         """The open hold on exactly this identity, or None. A hold is open until a change
         that settles whether the source may be used (withdrawn, deleted, restored) is
-        applied after it — for a held run, a change to the run or to any line it holds
-        (the host announces changes per line)."""
+        applied after it to the same identity. A held run whose lines are registered is
+        settled as well once every line it holds has had such a change after the hold —
+        a change for the line, or for a run whose registered lines hold it
+        (`_line_settled_since`); a change covering some of its lines settles the hold for
+        those lines only (`held_over`) and leaves it open. A held run whose lines are
+        unknown is settled only by its own change."""
         sid = _identity(identity)
         key = sid.to_string()
         self._fresh_held()
@@ -1186,12 +1267,25 @@ class SourceRegistry:
         if row is None:
             return None
         after = int(row.get("after_seq") or 0)
-        keys = [key] + ([x.to_string() for x in self.lines_of(sid)] if sid.through else [])
-        for k in keys:
-            entry = self._entry(k)
-            if entry is not None and entry["settled_seq"] > after:
-                return None
+        if self._settled_since(key, after):
+            return None
+        members = self.members_of(sid) if sid.through else None
+        if members and all(self._line_settled_since(sid.piece(m), after) for m in members):
+            return None
         return dict(row)
+
+    def held_over(self, identity) -> list[str]:
+        """The keys of the open holds that cover this source: a hold on exactly it
+        (`held_of`); for a run, a hold on any line it holds (`lines_of`); and a hold on
+        another run of its container that still covers one of its lines
+        (`_held_runs_over`). Empty when no open hold covers it."""
+        sid = _identity(identity)
+        return self._holds_over(sid, self.lines_of(sid))
+
+    def _holds_over(self, sid: SourceId, lines: list) -> list[str]:
+        keys = [sid.to_string()] + ([x.to_string() for x in lines] if sid.through else [])
+        out = [k for k in dict.fromkeys(keys) if self.held_of(k) is not None]
+        return out + [k for k in self._held_runs_over(sid, lines) if k not in out]
 
     def hold(self, identity, said: str, host: str = "") -> dict:
         """A host said, while serving the original, that this source is `said` (withdrawn
@@ -1276,37 +1370,50 @@ class SourceRegistry:
         return out
 
     def _held_runs_over(self, sid: SourceId, lines: list) -> list[str]:
-        """The keys of held runs of the same container (other than `sid` itself) whose
-        registered lines hold one of `lines`: a hold on a run reaches its lines the way a
-        change to it does (`_runs_over`)."""
+        """The keys of open holds on runs of the same container (other than `sid` itself)
+        that still cover one of `lines`: a hold on a run reaches its registered lines the
+        way a change to it does (`_runs_over`), except a line a settling change covered
+        after the hold (`_line_settled_since`: the line's own, or a registered run's over
+        it) — that change settled the hold for that line."""
         self._fresh_held()
         prefix = f"{sid.system}:{sid.instance}/{sid.container}#"
         with self._guard:
             runs = sorted(k for k in self._held if _RANGE_MARK in k and k.startswith(prefix))
         own = sid.to_string()
         ids = {x.id for x in lines}
-        return [k for k in runs if k != own and ids & set(self.members_of(k) or ())]
+        out = []
+        for key in runs:
+            covered = ids & set(self.members_of(key) or ()) if key != own else set()
+            if not covered:
+                continue
+            row = self.held_of(key)
+            if row is None:
+                continue
+            after = int(row.get("after_seq") or 0)
+            if any(not self._line_settled_since(sid.piece(i), after) for i in covered):
+                out.append(key)
+        return out
 
     def state_of(self, identity) -> str:
         """The source's state; one the registry has never heard of is active. A run is as
         bad as the worst of its own identity and every line it holds (`lines_of`): a line
-        withdrawn inside it withdraws the whole run. A run a change was recorded for, or a
-        run held, reaches every line it holds: a piece or run holding one of them is no
-        better than that run (`_runs_over`, `_held_runs_over`). An open hold (`hold`) reads
+        withdrawn inside it withdraws the whole run. A run a change was recorded for
+        reaches every line it holds: a piece or run holding one of them is no better than
+        that run (`_runs_over`). An open hold covering the source (`held_over`: on it, on
+        a line of it, or on a run over one of its lines not yet settled on its own) reads
         as HELD where the recorded state is no worse."""
         sid = _identity(identity)
         lines = self.lines_of(sid)
         keys = [sid.to_string()] + ([x.to_string() for x in lines] if sid.through else [])
         keys += self._runs_over(sid, lines)
-        keys += self._held_runs_over(sid, lines)
         worst = ACTIVE
         for key in dict.fromkeys(keys):
             entry = self._entry(key)
             state = entry["state"] if entry is not None else ACTIVE
-            if _STATE_RANK.get(state, 0) < _STATE_RANK[HELD] and self.held_of(key):
-                state = HELD
             if _STATE_RANK.get(state, 0) > _STATE_RANK[worst]:
                 worst = state
+        if _STATE_RANK[worst] < _STATE_RANK[HELD] and self._holds_over(sid, lines):
+            worst = HELD
         return worst
 
     def read_state(self, record) -> str:

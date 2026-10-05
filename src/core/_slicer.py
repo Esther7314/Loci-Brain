@@ -49,8 +49,9 @@ dropped (`withdraw_lines`, core/_source_change.py).
 
 A batch is refused before anything is sliced when a line in it is withdrawn, deleted or
 held in the source registry (its text may not reach the side model), and when the host
-handing it over is not the change authority a line of it is declared to have (what a run
-holds decides what a change to it reaches; core/_source_change.registration_refusal).
+handing it over is neither the change authority nor the registrar (`registers:`) for every
+line of it (what a run holds decides what a change to it reaches;
+core/_source_change.registration_refusal).
 Past that, nothing here knows which host it is or where the lines came from. An imported
 conversation (core/import_memory.py) goes through the same slicing and the same pending
 store, with its own prompt: each of its slices also carries a `draft`, the side model's
@@ -136,7 +137,7 @@ class BatchError(ValueError):
 
 
 class BatchForbidden(BatchError):
-    """The batch registers lines another host is the change authority for (HTTP 403;
+    """The batch registers lines this host may not register (HTTP 403;
     core/_source_change.registration_refusal)."""
 
 
@@ -478,8 +479,8 @@ async def take_batch(store, body, *, model: ModelCall,
                  or None)
     why = registration_refusal(hosts, host, batch["source"], ids)
     if why:
-        raise BatchForbidden(f"the batch registers lines another host is the change "
-                             f"authority for ({why}); nothing was stored")
+        raise BatchForbidden(f"the batch registers lines this host is neither the change "
+                             f"authority nor the registrar for ({why}); nothing was stored")
     registry = getattr(store, "sources", None)
     if registry is not None:
         why = registry.order_conflict(batch["source"], ids, batch["revision"], revisions)

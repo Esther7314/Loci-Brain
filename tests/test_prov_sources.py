@@ -5,8 +5,8 @@ id shows of it.
 
 `from` is still the word the tools take. What lands on disk is one typed line per
 source, the relation picked by the route: a memory named in `from` is wasDerivedFrom, a
-line id from the host's conversation (`m_0931`) is wasQuotedFrom and is never looked up,
-and regrow adds one wasRevisionOf line for the version it replaced. Up to 64 lines, none
+line of the host's conversation by its string form (`lento:home/private:U#m_0931`) is
+wasQuotedFrom and is never looked up in the library, and regrow adds one wasRevisionOf line for the version it replaced. Up to 64 lines, none
 of them cut. Checked through the tools' dispatch against a real BucketManager, with the
 results read back from the files.
 """
@@ -27,6 +27,12 @@ from tools.regrow import dispatch as regrow
 
 VIEW = "Quiet mornings are when the week gets sorted out."
 GHOST = "0123456789ab"   # the right shape, never created
+LINE = "lento:home/private:U#m_0931"
+
+
+def _q(line_id: str) -> str:
+    """A line of the host's conversation, by its string form."""
+    return f"lento:home/private:U#{line_id}"
 
 
 class _Engine:
@@ -120,14 +126,14 @@ def test_the_sixty_fifth_source_is_refused_and_nothing_is_written(store, tmp_pat
 def test_a_line_id_from_the_host_is_quoted_without_a_lookup(store, tmp_path):
     async def go():
         [event] = await _events(store, 1)
-        new = await _mind(from_=[event, "m_0931"])
+        new = await _mind(from_=[event, LINE])
         assert _disk(tmp_path, new)["prov"] == [_line("wasDerivedFrom", event),
-                                                _line("wasQuotedFrom", "m_0931")]
+                                                _line("wasQuotedFrom", LINE)]
         by_id = {ln.split()[1]: ln for ln in
                  _source_lines(await R.recall_core(when="", room="", tag="", query=new))}
-        assert "[引原话]" in by_id["m_0931"] and "查无此桶" not in by_id["m_0931"]
+        assert "[引原话]" in by_id[LINE] and "查无此桶" not in by_id[LINE]
         # The reverse chain is a library walk; a quoted line is not part of it.
-        assert await store.referenced_by("m_0931") == []
+        assert await store.referenced_by(LINE) == []
         assert await store.referenced_by(event) == [new]
     run(go())
 
@@ -156,14 +162,15 @@ def test_an_event_and_a_fold_store_prov_too(store, tmp_path):
     async def go():
         [event] = await _events(store, 1)
         before = set(_files(tmp_path))
-        await grow(kind="event", from_=["m_0001"],
+        await grow(kind="event", from_=[_q("m_0001")],
                    items=[{"room": "EVENT/SELF", "text": "We talked it over.", "v": 0.6, "a": 0.2,
                            "when": "2026-09-27"}])
         [added] = set(_files(tmp_path)) - before
-        assert dict(frontmatter.load(added).metadata)["prov"] == [_line("wasQuotedFrom", "m_0001")]
+        assert dict(frontmatter.load(added).metadata)["prov"] == [
+            _line("wasQuotedFrom", _q("m_0001"))]
 
         a = await _mind(from_=[event])
-        b = await _mind(from_=[event, "m_0002"])
+        b = await _mind(from_=[event, _q("m_0002")])
         out = await fold(text="Mornings carry the week.", room="MIND/VIEWS", v=0.6, a=0.4,
                          cover=[a, b], from_=[event])
         gist = out.split("▣gist→", 1)[1].split()[0]
@@ -177,14 +184,14 @@ def test_an_event_and_a_fold_store_prov_too(store, tmp_path):
 def test_regrow_carries_the_lines_adds_the_new_ones_and_names_the_old_version(store, tmp_path):
     async def go():
         first, second = await _events(store, 2)
-        old = await _mind(from_=[first, "m_0001"])
+        old = await _mind(from_=[first, _q("m_0001")])
         touched_before = _disk(tmp_path, old)["activation_count"]
         await regrow(bucket_id=old, text=VIEW + " Even the rainy ones.", v=0.6, a=0.3,
-                     mode="supplement", from_=[second, "m_0002"])
+                     mode="supplement", from_=[second, _q("m_0002")])
         new = _disk(tmp_path, old)["superseded_by"]
         assert _disk(tmp_path, new)["prov"] == [
-            _line("wasDerivedFrom", first), _line("wasQuotedFrom", "m_0001"),
-            _line("wasDerivedFrom", second), _line("wasQuotedFrom", "m_0002"),
+            _line("wasDerivedFrom", first), _line("wasQuotedFrom", _q("m_0001")),
+            _line("wasDerivedFrom", second), _line("wasQuotedFrom", _q("m_0002")),
             _line("wasRevisionOf", old)]
         # The chain fields are untouched by the typed line beside them.
         assert _disk(tmp_path, new)["supersedes"] == old

@@ -204,9 +204,10 @@ def test_registering_lines_is_refused_past_another_hosts_authority(library):
     with pytest.raises(SL.BatchForbidden) as got:
         run(SL.take_batch(store, batch, model=side_model, host=c, hosts=hosts))
     assert SC.NOT_AUTHORITY in str(got.value) and called == []
-    # Nobody declared: any host within its ceiling may register, as before.
+    # Nobody declared: a host within its ceiling is still not the one a line list comes from.
     free = {"source": "lento:work/c#m_1..m_2", "revision": None, "lines": ["m_1", "m_2"]}
-    assert run(SC.handle_lines(store, free, c, hosts=hosts))[1]["status"] == "recorded"
+    _s, out = run(SC.handle_lines(store, free, c, hosts=hosts))
+    assert (out["status"], out["note"]) == ("forbidden", SC.NOT_REGISTRAR), out
 
 
 def test_a_slicing_batch_refuses_lines_that_are_withdrawn_or_held(library):

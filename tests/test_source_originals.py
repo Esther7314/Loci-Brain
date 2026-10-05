@@ -279,11 +279,11 @@ def test_a_refusal_or_an_answer_loci_cannot_read_lets_nothing_through(host, case
         other.close()
 
 
-def test_gone_410_is_not_allowed_and_held_as_deleted(host):
+def test_gone_410_is_not_allowed_for_this_call_only(host):
     host.answer = (410, {})
     answer = run(O.fetch(M, hosts=_serving(host.url)))
     assert (answer.outcome, answer.reason) == (O.NOT_ALLOWED, O.GONE_HTTP)
-    assert answer.holds == (("lento:home/private:U#m_0003", "deleted"),)
+    assert answer.holds == (), "the endpoint's word, not the source's"
 
 
 def test_a_word_this_version_does_not_know_is_taken_as_not_allowed(host):

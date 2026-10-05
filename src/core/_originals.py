@@ -74,12 +74,18 @@ How an answer is taken:
       or cut, or truncated                      missing lines marked
     given, every line unavailable / not_found   UNAVAILABLE
     unavailable · a timeout · no connection     UNAVAILABLE
+      (refused, no such name)
+    HTTP 502 / 503 / 504 (the host's side is    UNAVAILABLE
+      down or slow for now)
     given, a line withdrawn / deleted /         NOT_ALLOWED for the whole source: a run is
       out_of_scope                              as bad as its worst line
     not_allowed                                 NOT_ALLOWED
     HTTP 401 / 403 (the host refused Loci)      NOT_ALLOWED
-    HTTP 410 (gone)                             NOT_ALLOWED, taken as the host's word that
-                                                the source is deleted
+    HTTP 410                                    NOT_ALLOWED (`http_410`): the endpoint says
+                                                it is gone, which says nothing of any one
+                                                source — logged as the endpoint's fault
+    the TLS handshake or the host's certificate NOT_ALLOWED (`tls_failed`): a host that
+      failing                                   cannot prove who it is is not asked around
     any other status than 200 · a redirect ·    NOT_ALLOWED: an answer Loci cannot read lets
       an answer too big, not of this shape, or  nothing through
       with a word this version does not know
@@ -91,13 +97,14 @@ is withdrawn, deleted or held (the caller's check, tools/recall/original.py); th
 override a withdrawal.
 
 What a NOT_ALLOWED does to state, by why:
-    out_of_scope (or a refusal, an unreadable answer)  this call only; nothing is recorded
-    withdrawn / deleted / HTTP 410                     `holds` names each source (or line
-                                                       of a run) the host said is gone: the
-                                                       caller holds it (core/_source_change.
-                                                       hold), so breath, recall, cards and
-                                                       dreams stop using what rests on it
-                                                       until the ordered change settles it
+    out_of_scope, HTTP 410, a TLS failure (or a       this call only; nothing is recorded,
+      refusal, an unreadable answer)                  and the next read asks again
+    withdrawn / deleted, said in a 200 answer         `holds` names each source (or line
+      (`not_allowed` with that reason, or a line      of a run) the host said is gone: the
+      missing with that word)                         caller holds it (core/_source_change.
+                                                      hold), so breath, recall, cards and
+                                                      dreams stop using what rests on it
+                                                      until the ordered change settles it
 The registry's state itself changes only by the host's ordered change notices (POST
 /api/v2/source/change), never by a fetch.
 
@@ -113,7 +120,7 @@ followed and no proxy from the environment is used, so the text reaches Loci and
 else.
 
 Exports: GIVEN · UNAVAILABLE · NOT_ALLOWED · NO_HOST · GONE_WORDS · MISSING_NOW ·
-         HOLD_WORDS · Settings · settings_from · Line · Answer · host_for · scope_wire ·
+         HOLD_WORDS · GONE_HTTP · TLS_FAILED · TEMPORARY_STATUSES · Settings · settings_from · Line · Answer · host_for · scope_wire ·
          build_request · parse_answer · fetch
 ========================================
 """
@@ -123,6 +130,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import ssl
 from dataclasses import dataclass, replace
 from typing import Mapping, Optional
 
@@ -152,6 +160,10 @@ UNREACHABLE, TIMEOUT, HOST_SAYS, NO_TOKEN, ALL_MISSING = (
 REDIRECT, TOO_BIG, MALFORMED, UNKNOWN_WORD, REQUEST_REFUSED, ORDER_UNKNOWN = (
     "redirect", "too_big", "malformed", "unknown_word", "request_refused", "order_unknown")
 GONE_HTTP = "http_410"
+TLS_FAILED = "tls_failed"
+# The statuses that say the host's side is down or slow for now: UNAVAILABLE, `why`
+# http_<code>.
+TEMPORARY_STATUSES = (502, 503, 504)
 
 
 @dataclass(frozen=True)
@@ -204,9 +216,10 @@ class Answer:
     truncated_after   GIVEN: the last line sent when later ones were left out
     cut_here          GIVEN: Loci cut the text at max_chars
     reason            NOT_ALLOWED: one of GONE_WORDS, a registry state, REDIRECT, TOO_BIG,
-                      MALFORMED, UNKNOWN_WORD, REQUEST_REFUSED, ORDER_UNKNOWN or http_<code>;
-                      "" when the host gave none
-    why               UNAVAILABLE: what went wrong (UNREACHABLE, TIMEOUT, HOST_SAYS, …)
+                      MALFORMED, UNKNOWN_WORD, REQUEST_REFUSED, ORDER_UNKNOWN, TLS_FAILED
+                      or http_<code>; "" when the host gave none
+    why               UNAVAILABLE: what went wrong (UNREACHABLE, TIMEOUT, HOST_SAYS, …, or
+                      http_<code> for one of TEMPORARY_STATUSES)
     holds             [(identity string, withdrawn | deleted)]: what the host said is gone
                       that the caller has to hold (core/_source_change.hold)
     """
@@ -364,15 +377,40 @@ def _within_budget(lines: list[Line], after: Optional[str], budget: int) -> Answ
     return Answer(GIVEN, lines=tuple(kept), truncated_after=after)
 
 
-def _by_status(status: int, sid) -> Answer:
-    """An HTTP status other than 200. 401 / 403: the host refused Loci. 410: gone — the
-    host's word that the source is deleted. Anything else, a redirect included, is an
-    answer Loci cannot read. None of them lets the memory's body stand in."""
+def _by_status(status: int) -> Answer:
+    """An HTTP status other than 200. 502 / 503 / 504: the host's side is down or slow for
+    now (UNAVAILABLE). 401 / 403: the host refused Loci. 410: the endpoint says it is gone —
+    nothing about any one source, so nothing is held. Anything else, a redirect included,
+    is an answer Loci cannot read. Only the temporary ones let the memory's body stand in."""
+    if status in TEMPORARY_STATUSES:
+        return Answer(UNAVAILABLE, why=f"http_{status}")
     if status == 410:
-        return Answer(NOT_ALLOWED, reason=GONE_HTTP, holds=((sid.to_string(), "deleted"),))
+        return Answer(NOT_ALLOWED, reason=GONE_HTTP)
     if 300 <= status < 400:
         return Answer(NOT_ALLOWED, reason=REDIRECT)
     return Answer(NOT_ALLOWED, reason=f"http_{status}")
+
+
+# How OpenSSL's errors read once a library has turned them into text ("[SSL: …] …").
+_TLS_WORDS = ("[ssl", "certificate_verify_failed", "certificate verify failed",
+              "wrong_version_number", "wrong version number")
+
+
+def _tls_failure(exc: BaseException) -> bool:
+    """Did the TLS handshake or the host's certificate fail somewhere down this error's
+    chain (`__cause__` / `__context__`)? A refused connection, a name that does not
+    resolve or a timeout is not one."""
+    seen: set[int] = set()
+    cur: Optional[BaseException] = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(cur, ssl.SSLError):
+            return True
+        text = str(cur).lower()
+        if any(word in text for word in _TLS_WORDS):
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return False
 
 
 class _TooBig(Exception):
@@ -443,10 +481,17 @@ async def fetch(record: dict, *, hosts, request=None, settings: Settings = Setti
         answer = Answer(UNAVAILABLE, why=TIMEOUT)
     except _TooBig:
         answer = Answer(NOT_ALLOWED, reason=TOO_BIG)
-    except httpx.HTTPError:
-        answer = Answer(UNAVAILABLE, why=UNREACHABLE)
+    except ssl.SSLError:
+        answer = Answer(NOT_ALLOWED, reason=TLS_FAILED)
+    except httpx.HTTPError as e:
+        answer = (Answer(NOT_ALLOWED, reason=TLS_FAILED) if _tls_failure(e)
+                  else Answer(UNAVAILABLE, why=UNREACHABLE))
     else:
-        answer = parse_answer(raw, sid, settings) if status == 200 else _by_status(status, sid)
+        answer = parse_answer(raw, sid, settings) if status == 200 else _by_status(status)
+    if answer.reason in (GONE_HTTP, TLS_FAILED):
+        # The endpoint's fault, not a word about this source: nothing is held or recorded.
+        logger.warning("[originals] the fetch endpoint of host %s failed (%s) asking for %s; "
+                       "nothing is held", host.name, answer.reason, label)
     # A withdrawal that landed while the host was answering wins over what it gave.
     blocked = _blocked_by_registry(registry, sid)
     if blocked and answer.outcome != NOT_ALLOWED:

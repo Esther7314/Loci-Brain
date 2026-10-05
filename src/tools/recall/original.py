@@ -83,7 +83,9 @@ _REASON = {"withdrawn": "宿主说撤回了", "deleted": "宿主说删了",
            _O.UNKNOWN_WORD: "宿主的说法这一版不认识，按不许处理",
            _O.REQUEST_REFUSED: "这次请求认不出能读什么",
            _O.REDIRECT: "宿主要转去别处，没跟过去", _O.TOO_BIG: "宿主的回答太大，没收",
-           _O.MALFORMED: "宿主的回答读不懂", _O.GONE_HTTP: "宿主说这条已经没了（HTTP 410）",
+           _O.MALFORMED: "宿主的回答读不懂",
+           _O.GONE_HTTP: "宿主的取原文口回了 410，这次不用原文；这不等于这条被删了，下次再问",
+           _O.TLS_FAILED: "宿主那边的 TLS 证书或身份没验过，这次不问它要原文",
            _O.ORDER_UNKNOWN: "这是连着的一段，宿主没交过里面有哪几行"}
 _MISSING = {"unavailable": "这一行宿主那边暂时取不到", "not_found": "这一行宿主那边找不到"}
 _GONE_NOTE = ("{q} 依据的来源被撤回或删除了（或宿主说过已撤回、正等确认），正文不给，原话也不取。"
@@ -150,7 +152,9 @@ def _block(answer: _O.Answer, record: dict, max_chars: int) -> list[str]:
     if answer.outcome == _O.NO_HOST:
         return [f"{answer.source}：原话在宿主那边，这儿没配谁给原话。"]
     if answer.outcome == _O.UNAVAILABLE:
-        why = _WHY.get(answer.why) or "宿主没给"
+        why = _WHY.get(answer.why) or (
+            f"宿主那边暂时出了问题（HTTP {answer.why[5:]}）" if answer.why.startswith("http_")
+            else "宿主没给")
         return [f"⚠️ {answer.source}：原话暂时取不到（{why}）。"]
     run = bool(record.get("through"))
     asked = record.get("revision")

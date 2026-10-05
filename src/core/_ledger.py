@@ -162,7 +162,8 @@ def public_row(event: dict) -> dict:
     row: dict = {"seq": int(event.get("seq") or 0), "type": etype,
                  "recorded_at": str(event.get("recorded_at") or "")}
     if etype in SOURCE_EVENTS:
-        for k in ("source", "change", "change_id", "state", "previous", "place"):
+        # `note` is one of the change's fixed words (redeliver, members_unknown), never text.
+        for k in ("source", "change", "change_id", "state", "previous", "place", "note"):
             if payload.get(k) not in (None, ""):
                 row[k] = str(payload[k])
         if isinstance(payload.get("entries"), list):

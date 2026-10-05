@@ -4,7 +4,10 @@ tests/test_sources_tools.py — what the write tools do with `sources` and write
 
 Through the tools' dispatch against a real BucketManager, read back from the files:
 a record lands with its quoted prov line; a bare host id in `from` is linked to the
-record with that id; the registry's withdrawn and deleted refuse the write and its
+record with that id, completed from Loci's registered line orders or the host's one
+container (the record says which), or refused naming it — never naming a container the
+caller may not reach (an entry that already holds one says on read that it cannot be
+traced); the registry's withdrawn and deleted refuse the write and its
 unreadable is noted; the same delivery on another memory is a hint, never a block;
 regrow carries records and leaves a withdrawn one behind; trace appends. A write key
 answers a resend with the first reply, also after a restart; no key, no dedup by key.
@@ -17,6 +20,7 @@ import pytest
 
 import tools.grow as grow_mod
 from core import _sources as S
+from core import scope as SC
 from core.bucket_manager import BucketManager
 from tools import _runtime as rt
 from tools.fold import dispatch as fold
@@ -105,10 +109,129 @@ def test_a_bare_line_id_in_from_is_linked_to_its_record(store, tmp_path):
     assert _quoted(_disk(tmp_path, bid)) == [SRC + "@2"]
 
 
-def test_a_bare_line_id_with_no_record_stays_as_it_is(store, tmp_path):
-    _out, bid = run(_event(from_=["m_0931"]))
+def test_a_bare_line_id_with_no_record_is_refused_naming_it(store, tmp_path):
+    # Criterion: a quoted line naming no container would be one reads cannot fetch and a
+    # withdrawal cannot reach; the owner's call has no host container to complete it with.
+    out, bid = run(_event(from_=["m_0931", "m_0932"]))
+    assert not bid and "只写了编号 m_0931、m_0932" in out and "Loci 不猜" in out, out
+    assert _files(tmp_path) == []
+
+
+def test_regrow_refuses_a_new_bare_line_id_and_leaves_the_old_version(store, tmp_path):
+    old = run(grow(kind="mind", room="MIND/VIEWS", text=VIEW, v=0.6, a=0.3, sources=[REC]))
+    old = old.split("🧠mind→", 1)[1].split()[0]
+    out = run(regrow(bucket_id=old, text=VIEW + " Rainy ones too.", v=0.6, a=0.3,
+                     mode="supplement", from_=["m_0009"]))
+    assert "只写了编号 m_0009" in out, out
+    assert not _disk(tmp_path, old).get("superseded_by")
+
+
+GROUP = {"system": "telegram", "instance": "bot-a", "container": "group:G"}
+GROUP_SCOPE = ('{"v": 1, "entry": {"system": "telegram", "instance": "bot-a", '
+               '"container": "group:G"}, "venue": "group", "audience": ["user:U"], '
+               '"grant": [{"system": "telegram", "instance": "bot-a", "container": "group:G"}]}')
+ONE_ROOM = SC.Host("group-bot", max_grant=(S.Place(**GROUP),), token="group-key")
+
+
+async def _as_host(host, key, **kw):
+    with SC.request_scope(SC.RequestScope.resolve(host, GROUP_SCOPE)), S.write_key_scope(key):
+        return await _event(**kw)
+
+
+def test_a_bare_line_id_is_completed_from_the_hosts_one_container(store, tmp_path):
+    out, bid = run(_as_host(ONE_ROOM, S.write_key("t-1", 1, ONE_ROOM.name), from_=["m_0003"]))
+    assert bid, out
     meta = _disk(tmp_path, bid)
-    assert _quoted(meta) == ["m_0931"] and "sources" not in meta
+    text = "telegram:bot-a/group:G#m_0003"
+    assert _quoted(meta) == [text]
+    [rec] = meta["sources"]
+    assert (rec["system"], rec["instance"], rec["container"], rec["id"]) == (
+        "telegram", "bot-a", "group:G", "m_0003")
+    assert rec["completed_from"] == "host_scope"
+    assert f"m_0003 只写了编号，按这个宿主唯一的容器补全成 {text}" in out
+
+
+PRIVATE = {"system": "lento", "instance": "home", "container": "private:U"}
+
+
+def _register(store, where, *ids):
+    store.sources.record_order(where, list(ids))
+
+
+def test_the_owner_citing_a_registered_line_gets_it_completed_from_the_registry(store, tmp_path):
+    _register(store, PRIVATE, "m_0002", "m_0003", "m_0004")
+    out, bid = run(_event(from_=["m_0003"]))
+    assert bid, out
+    meta = _disk(tmp_path, bid)
+    text = "lento:home/private:U#m_0003"
+    assert _quoted(meta) == [text]
+    [rec] = meta["sources"]
+    assert S.record_id(rec) == S.SourceId("lento", "home", "private:U", "m_0003")
+    assert rec["completed_from"] == "registry"
+    assert f"m_0003 只写了编号，按 Loci 登记过的那一处补全成 {text}" in out
+
+
+def test_a_line_registered_in_two_containers_is_refused_naming_them(store, tmp_path):
+    _register(store, PRIVATE, "m_0003")
+    _register(store, GROUP, "m_0003")
+    out, bid = run(_event(from_=["m_0003"]))
+    assert not bid and "编号 m_0003 在 2 个容器里都登记过" in out, out
+    assert "lento:home/private:U" in out and "telegram:bot-a/group:G" in out
+    assert _files(tmp_path) == []
+
+
+def test_a_ceilinged_host_never_learns_of_a_container_past_its_ceiling(store, tmp_path):
+    # Criterion: a line registered only outside the ceiling gets the generic refusal, the
+    # same words as an id registered nowhere — no container, no count.
+    _register(store, PRIVATE, "m_0003")
+    key = S.write_key("t-1", 1, "instance-bot")
+    wide = SC.Host("instance-bot", max_grant=(S.Place("telegram", "bot-a"),), token="k")
+    out, bid = run(_as_host(wide, key, from_=["m_0003"]))
+    assert not bid and "只写了编号 m_0003" in out, out
+    assert "lento" not in out and "private:U" not in out and "登记过" not in out
+    assert _files(tmp_path) == []
+
+
+def test_under_a_ceiling_only_reachable_registrations_count(store, tmp_path):
+    _register(store, PRIVATE, "m_0003")
+    _register(store, GROUP, "m_0003")
+    key = S.write_key("t-1", 1, "instance-bot")
+    wide = SC.Host("instance-bot", max_grant=(S.Place("telegram", "bot-a"),), token="k")
+    out, bid = run(_as_host(wide, key, from_=["m_0003"]))
+    assert bid, out
+    assert "private:U" not in out and "2 个容器" not in out
+    [rec] = _disk(tmp_path, bid)["sources"]
+    assert (rec["container"], rec["completed_from"]) == ("group:G", "registry")
+
+
+def test_a_writer_cannot_claim_completed_from(store, tmp_path):
+    out, bid = run(_event(sources=[{**REC, "completed_from": "registry"}]))
+    assert not bid and "completed_from" in out and _files(tmp_path) == []
+
+
+def test_completed_from_is_not_identity():
+    plain = {**REC, "fingerprint": None, "fingerprint_by": None}
+    marked = {**plain, "completed_from": "registry"}
+    assert S.record_id(plain) == S.record_id(marked)
+    assert S.record_string(plain) == S.record_string(marked)
+    assert S.same_reference(plain, marked)
+    assert len(S.normalize_sources([plain, marked])) == 1
+    with pytest.raises(S.SourceRecordError):
+        S.normalize_sources([{**plain, "completed_from": "the model"}])
+
+
+@pytest.mark.parametrize("host, key", [
+    (ONE_ROOM, None),                                            # no write key
+    (ONE_ROOM, S.write_key("t-1", 1, "another-host")),           # a key of another host
+    (SC.Host("instance-bot", max_grant=(S.Place("telegram", "bot-a"),), token="k"),
+     S.write_key("t-1", 1, "instance-bot")),                     # a ceiling wider than a room
+    (SC.Host(SC.LEGACY, scope_mode=SC.OPEN), S.write_key("t-1", 1, SC.LEGACY)),   # open
+])
+def test_a_bare_line_id_is_not_completed_without_one_container_of_this_host(
+        store, tmp_path, host, key):
+    out, bid = run(_as_host(host, key, from_=["m_0003"]))
+    assert not bid and "只写了编号 m_0003" in out, out
+    assert _files(tmp_path) == []
 
 
 def test_a_full_string_form_in_from_gets_the_record_it_spells(store, tmp_path):
@@ -232,10 +355,24 @@ def test_trace_appends_sources_and_their_quoted_lines(store, tmp_path):
     assert "撤回" in out and len(_disk(tmp_path, bid)["sources"]) == 2
 
 
+def _old_bare_entry(store) -> str:
+    """An entry written before a bare quoted line was refused."""
+    return run(store.create("We talked it over at breakfast.", room="EVENT/WORLD",
+                            prov=[{"rel": "wasQuotedFrom", "target": "m_0142"}]))
+
+
 def test_trace_links_a_bare_line_the_entry_already_had(store, tmp_path):
-    _out, bid = run(_event(from_=["m_0142"]))
+    bid = _old_bare_entry(store)
     run(trace(bucket_id=bid, sources_append=[REC]))
     assert _quoted(_disk(tmp_path, bid)) == [SRC]
+
+
+def test_an_old_bare_line_says_on_read_that_it_cannot_be_traced(store, tmp_path):
+    bid = _old_bare_entry(store)
+    shown = run(R.recall_core(when="", room="", tag="", query=bid))
+    assert "有一根引原话的线只写了编号（m_0142），追不到来源" in shown, shown
+    run(trace(bucket_id=bid, sources_append=[REC]))
+    assert "只写了编号" not in run(R.recall_core(when="", room="", tag="", query=bid))
 
 
 # ───────────────────────── a run of lines ─────────────────────────

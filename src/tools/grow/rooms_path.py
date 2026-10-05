@@ -43,9 +43,11 @@ Key behaviour:
   cards through here too
 - sources (the host's material an entry was formed from, core/_sources.py) go through
   check_sources: each record gets a quoted prov line, a bare host id in `from` is linked
-  to the record with that id, the registry refuses withdrawn and deleted sources, and the
-  receipt says when the same delivery is already on another memory. fold, regrow and
-  trace take sources through here too
+  to the record with that id (or completed from Loci's registered line orders or the
+  host's one container, or refused),
+  the registry refuses withdrawn and deleted sources, and the receipt says when the same
+  delivery is already on another memory. fold, regrow and trace take sources through here
+  too
 - Validation comes first: if any single item is invalid the whole call errors and
   no bucket is created
 - Before the return is handed back it says which old views the new bodies run into
@@ -87,6 +89,7 @@ from .._common import check_content_size, read_scope, resolve_bucket_id, resolve
 from .._write_returns import noticed
 from core._rooms import check_room, is_mind_room
 from core import _sources as _src
+from core import scope as _scope
 from .. import _subjects as _S
 from .._subjects import normalize_bound, normalize_subjects
 from utils import (PROV_MAX_LINES, PROV_TARGET_MAX, WAS_DERIVED_FROM, WAS_QUOTED_FROM,
@@ -845,7 +848,9 @@ async def _check_quoted_source(target: str) -> str:
     source a memory is written from (`SourceRegistry.check_writable`, under this turn's
     grant: outside the grant one answer whatever the source's state, inside it withdrawn,
     deleted and held refused), or the host's bare id for a line (`m_0931`), whose identity
-    is not known yet: shape only — one token, short enough to store whole."""
+    is not known yet: shape only here - one token, short enough to store whole; whether
+    it gets an identity (a record of the call, the registry, the host's one container) or
+    refuses the write is check_sources'."""
     if _re.search(r"\s", target):
         return (f"from 里「{target[:40]}」不像 id（带空格）——填 bucket_id，"
                 "或宿主那句话自己的 id（如 m_0931）。")
@@ -875,14 +880,104 @@ async def _check_quoted_source(target: str) -> str:
 # A record names one piece of the host's material (core/_sources.py). Each record on an
 # entry has a wasQuotedFrom line naming it by its string form, so prov and sources say the
 # same thing. A bare host id in `from` (m_0142) is that line before its record is known:
-# when the same call carries a record with that id the line is linked to it; when none
-# does, the line stays as it is and no record is made up. A full string form in `from`
+# when the same call carries a record with that id the line is linked to it. When none
+# does, Loci does not guess the container: the id is completed only from what Loci itself
+# was told - the line orders hosts registered (`SourceRegistry.lines_named`: exactly one
+# container the caller may reach holds the id), else the request's own host
+# (`_host_container`: a ceiling of one container, and a write key of that host) - and the
+# completed record carries `completed_from` and the receipt says so. Several reachable
+# containers holding the id refuse the write naming them; nothing to complete with
+# refuses it naming the id, the same words whether or not a container the caller may not
+# reach holds it. A line naming no source would be one reads cannot fetch and a
+# withdrawal cannot reach. Lines an entry already has are not refused (trace
+# appending sources, a new version's carried-over lines). A full string form in `from`
 # with no record of its own gets the record it spells out. Whether a source may be used at
 # all is the registry's call (check_writable): withdrawn and deleted are refused, unreadable
 # is taken with a note, and a grant set by the request layer limits a turn to its own.
 
 def _registry():
     return getattr(rt.bucket_mgr, "sources", None)
+
+
+def _host_container():
+    """The one container a bare host id of this call may be completed with, or None. Only
+    the request's own host says it, never the model: a host whose ceiling (`max_grant`) is
+    exactly one place naming a container (system, instance and container, no piece), and
+    whose write key (`<host>:<turn>#<ordinal>`, set by the request layer) is this call's.
+    An open host, a host reaching several places or a whole instance, and a call without a
+    write key complete nothing."""
+    req = _scope.current_request()
+    host = req.host if req is not None and not req.refused else None
+    grant = getattr(host, "max_grant", None)
+    if not grant or len(grant) != 1:
+        return None
+    place = grant[0]
+    if place.container is None or place.id is not None or place.through is not None:
+        return None
+    key = _src.current_write_key() or ""
+    return place if key.startswith(f"{host.name}:") else None
+
+
+def _reachable(registry, sid) -> bool:
+    """May this call stand on the line at all: within its host's ceiling (`max_grant`)
+    and its turn's grant, when it has them."""
+    req = _scope.current_request()
+    if req is not None and req.refused:
+        return False
+    ceiling = getattr(getattr(req, "host", None), "max_grant", None)
+    if ceiling is not None and not registry.reaches(ceiling, sid):
+        return False
+    grant = _src.current_grant()
+    return grant is None or registry.granted(grant, sid)
+
+
+def _complete_bare(line_id: str) -> tuple[dict | None, str, str]:
+    """A bare host id no record of the call carries -> (completed record, receipt note,
+    refusal). First the registry's line orders, counting only containers this call may
+    reach (one completes; several refuse, naming them); then the host's one container;
+    (None, "", "") when there is nothing to complete with."""
+    registry = _registry()
+    if registry is not None:
+        found = [sid for sid in registry.lines_named(line_id) if _reachable(registry, sid)]
+        if len(found) > 1:
+            where = "、".join(f"{x.system}:{x.instance}/{x.container}" for x in found)
+            return None, "", (f"编号 {line_id} 在 {len(found)} 个容器里都登记过（{where}），"
+                              f"写全是哪一个：from 里写 system:instance/container#{line_id}。"
+                              "这次什么都没写。")
+        if found:
+            one = found[0]
+            rec = _completed_record(_src.Place(one.system, one.instance, one.container),
+                                    line_id, "registry")
+            if rec is not None:
+                return rec, (f"from 里的 {line_id} 只写了编号，按 Loci 登记过的那一处补全成 "
+                             f"{_src.record_string(rec)}。"), ""
+    place = _host_container()
+    rec = _completed_record(place, line_id, "host_scope") if place is not None else None
+    if rec is not None:
+        return rec, (f"from 里的 {line_id} 只写了编号，按这个宿主唯一的容器补全成 "
+                     f"{_src.record_string(rec)}。"), ""
+    return None, "", ""
+
+
+def _completed_record(place, line_id: str, how: str):
+    """The record a bare id completed with this container names, marked with how it was
+    completed, or None when the id cannot stand in a source's identity (it would not read
+    back as itself)."""
+    raw = {"system": place.system, "instance": place.instance, "container": place.container,
+           "id": line_id, "completed_from": how}
+    try:
+        [rec] = _src.normalize_sources([raw])
+        sid, _revision = _src.SourceId.parse(_src.record_string(rec))
+    except (_src.SourceRecordError, ValueError):
+        return None
+    return rec if sid == _src.record_id(rec) else None
+
+
+def _bare_refusal(ids: list[str]) -> str:
+    named = "、".join(ids)
+    example = f"system:instance/container#{ids[0]}"
+    return (f"引原话那根线只写了编号 {named}，没写系统和容器，Loci 不猜：写全再来"
+            f"（from 里写 {example}，或在 sources 里带上它那条记录）。这次什么都没写。")
 
 
 def _same(stored, given: dict) -> str:
@@ -962,17 +1057,23 @@ async def check_sources(raw, prov: list[dict] | None, exclude=(), *,
     refusal). `exclude` are the entries this write replaces or edits, left out of the
     already-recorded hint. Nothing given and nothing to link: (``[]``, prov, [], "").
 
-    `from_call` says `prov` is this call's own `from`. False (trace appending to an
-    entry) means it is what the entry already has: a string form there is not made into
-    a record again, and a bare id that names several new records stays as it is."""
+    `from_call` says `prov` is this call's own `from`: a bare id there that no record of
+    the call carries is completed (`_complete_bare`: the registry's line orders, then the
+    host's one container) or refused. False (trace appending to an entry) means it is what the entry already has:
+    a string form there is not made into a record again, and a bare id that names no new
+    record, or several, stays as it is."""
     try:
         records = _src.normalize_sources(_src.coerce_sources_arg(raw))
     except _src.SourceRecordError as e:
         return [], prov, [], (f"sources 不对：{e.zh}。每条写 {{system, instance, container, "
                               "id}，可选 through / revision / fingerprint / fingerprint_by / "
                               "span / use。")
+    if any("completed_from" in r for r in records):
+        return [], prov, [], ("sources 不对：completed_from 是 Loci 自己补全编号时记的，"
+                              "不用写；只写 {system, instance, container, id} 和宿主给的字段。")
     lines = list(prov or [])
     strings = [_src.record_string(r) for r in records]
+    bare: list[int] = []        # this call's bare ids that no record of the call carries
     for i, line in enumerate(lines):
         if line["rel"] != WAS_QUOTED_FROM:
             continue
@@ -996,6 +1097,28 @@ async def check_sources(raw, prov: list[dict] | None, exclude=(), *,
                                   "——from 里写那一条的全称。")
         if len(named) == 1:
             lines[i] = {"rel": WAS_QUOTED_FROM, "target": named[0]}
+        elif not named and from_call:
+            bare.append(i)
+    completed: list[str] = []
+    made: list[tuple[int, dict]] = []
+    unresolved: list[str] = []
+    for i in bare:
+        rec, note, refusal = _complete_bare(lines[i]["target"])
+        if refusal:
+            return [], prov, [], refusal
+        if rec is None:
+            unresolved.append(lines[i]["target"])
+        else:
+            made.append((i, rec))
+            completed.append(note)
+    if unresolved:
+        return [], prov, [], _bare_refusal(list(dict.fromkeys(unresolved)))
+    for i, rec in made:
+        text = _src.record_string(rec)
+        lines[i] = {"rel": WAS_QUOTED_FROM, "target": text}
+        if text not in strings:
+            records.append(rec)
+            strings.append(text)
     if not records:
         return [], prov, [], ""
     if len(records) > _src.SOURCES_MAX:
@@ -1012,7 +1135,7 @@ async def check_sources(raw, prov: list[dict] | None, exclude=(), *,
     if len(lines) > PROV_MAX_LINES:
         return [], prov, [], (f"from 加 sources 一共 {len(lines)} 条来源，超过 {PROV_MAX_LINES}"
                               "——一条记忆挂不了这么多来源，拆开分别存。")
-    notes += await _already_recorded(records, set(exclude))
+    notes = completed + notes + await _already_recorded(records, set(exclude))
     return records, lines, notes, ""
 
 
@@ -1025,9 +1148,10 @@ async def _normalize_from(from_ids, missing_hint: str = "") -> tuple[list[dict] 
       write tool uses), so what lands on disk is always the full id;
     - a memory's id (12 hex, or a `feel_…` id) has to exist, archive included, and
       becomes a wasDerivedFrom line;
-    - anything else is the host's own id for a line of the conversation (`m_0931`):
-      it is not in the library, so nothing is looked up, and it becomes a
-      wasQuotedFrom line once _check_quoted_source lets it through.
+    - anything else that is an entry of the library all the same (seeded test data) is
+      a memory too; otherwise it is the host's own id for a line of the conversation
+      (`m_0931`) and becomes a wasQuotedFrom line once _check_quoted_source lets it
+      through (check_sources then completes or refuses a bare one).
 
     More than PROV_MAX_LINES distinct sources is refused outright, never cut.
     `missing_hint` is appended to the "these ids do not exist" refusal."""
@@ -1052,6 +1176,11 @@ async def _normalize_from(from_ids, missing_hint: str = "") -> tuple[list[dict] 
         if is_bucket_id(fid):
             if not await rt.bucket_mgr.get_including_archive(fid):
                 missing.append(fid)
+            lines.append({"rel": WAS_DERIVED_FROM, "target": fid})
+            continue
+        # An id of another shape that is nonetheless an entry of this library (seeded
+        # test data) is a memory, not the host's line id.
+        if await rt.bucket_mgr.get_including_archive(fid):
             lines.append({"rel": WAS_DERIVED_FROM, "target": fid})
             continue
         quote_err = await _check_quoted_source(fid)

@@ -91,3 +91,23 @@ def test_no_unbound_wants_is_green(health):
     asyncio.run(sh.bucket_mgr.create("Fix the bike.", room="EVENT/SELF",
                                      direction_of_fit="telic", bound=["AI"]))
     assert health()["没人认领的想要"]["status"] == "ok"
+
+
+def test_entries_with_a_bare_quoted_line_are_counted(health):
+    async def seed():
+        bare = await sh.bucket_mgr.create(
+            "We talked it over.", room="EVENT/SELF",
+            prov=[{"rel": "wasQuotedFrom", "target": "m_0142"}])
+        await sh.bucket_mgr.create(
+            "We talked it over again.", room="EVENT/SELF",
+            prov=[{"rel": "wasQuotedFrom", "target": "lento:home/private:U#m_0143"}])
+        return bare
+    bare = asyncio.run(seed())
+    row = health()["引原话追不到来源"]
+    assert row["status"] == "warn"
+    assert row["message"].startswith("1 条") and bare in row["message"]
+    assert "sources_append" in row["action"]
+
+
+def test_no_bare_quoted_line_is_green(health):
+    assert health()["引原话追不到来源"]["status"] == "ok"

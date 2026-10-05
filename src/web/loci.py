@@ -136,6 +136,7 @@ logger = sh.logger
 
 _PROFILE_TAG = "__档案事实__"
 _BIGEVENT_TAG = "__大event__"
+_BARE_QUOTES_NAMED = 10   # the health row names this many entries with a bare quoted line
 # The default is 88. Below 85 the thirteen emotional-root seeds start mixing in, and those
 # are supposed to resemble each other.
 _SIM_DEFAULT = 88.0
@@ -1379,6 +1380,15 @@ async def build_setup() -> dict:
             "它——和任何能连上这个端口的人——绕过去就能读全库，所以这时候带上限的宿主一律被拒。",
             "" if not hs.unsafe else
             "在上面「账号」里设一把口令（panel_auth 别关），config 里 mcp_require_auth 别关")
+    # Two hosts declaring one place at the same depth (core/scope.load_hosts): neither is
+    # taken there, which refuses quietly unless it is said here.
+    if hs is not None and getattr(hs, "collisions", ()):
+        row("hosts_collision", "宿主表里撞车的地方", False,
+            "；".join(hs.collisions),
+            "hosts 表里两个宿主在同一处、同一深度都写了 authority / provides / registers。"
+            "这一处谁都不算：那里的变化通知一律拒、原话取不到、行列表也登记不进来；"
+            "两个宿主别处的东西照常。",
+            "在 config 的 hosts 表里把这一处只留给一个宿主，或者让其中一个写得更深一层")
 
     # ---- Read-only facts: not "is this configured correctly", but "where things are" ----
     ver = ""
@@ -1683,6 +1693,29 @@ async def build_health() -> dict:
         else:
             add("没人认领的想要", "ok", "开着的想要都有人认领，或有日子、有条件")
     need_buckets("没人认领的想要", sec_unbound_wants)
+
+    # ---- Quoted lines that name no source ----
+    def sec_bare_quotes():
+        # A wasQuotedFrom line holding only the host's bare id (m_0142) names no container:
+        # its original cannot be fetched and a withdrawal cannot reach the entry through
+        # it. A new write refuses such a line (tools/grow/rooms_path.check_sources); these
+        # are the entries written before.
+        from utils import WAS_QUOTED_FROM, read_prov
+        ids = [str(m.get("id") or "") for m in visible
+               if any(ln["rel"] == WAS_QUOTED_FROM and "#" not in ln["target"]
+                      for ln in read_prov(m))]
+        ids = [i for i in ids if i]
+        if ids:
+            shown = "、".join(ids[:_BARE_QUOTES_NAMED]) + (
+                f" 等 {len(ids)} 条" if len(ids) > _BARE_QUOTES_NAMED else "")
+            add("引原话追不到来源", "warn",
+                f"{len(ids)} 条记忆有引原话的线只写了编号，没写系统和容器——"
+                f"原话取不回，来源撤回也够不着它们：{shown}",
+                "知道是哪段对话的，用 trace(bucket_id=…, sources_append=[{system, instance, "
+                "container, id}]) 补上那条记录，编号对上的线会接过去")
+        else:
+            add("引原话追不到来源", "ok", "引原话的线都写全了来源")
+    need_buckets("引原话追不到来源", sec_bare_quotes)
 
     # ---- Are the things that should be there still there ----
     def _tags_of(m) -> list[str]:
@@ -2492,7 +2525,7 @@ def register(mcp) -> None:
         (recall(view="slices")). A `fingerprint_by` in the body is accepted and not used:
         a slice's fingerprint is Loci's own (core/_slicer.py). 400 for a malformed batch
         or one holding a line the registry reads as withdrawn, deleted or held; 403 past the
-        host's max_grant or for lines another host is the change authority for; 502 when
+        host's max_grant or for lines it is neither authority nor registrar for; 502 when
         the side model fails — then nothing is stored, and the host may send the same batch
         again."""
         from starlette.responses import JSONResponse

@@ -38,19 +38,27 @@ Hosts
           - {system: telegram, instance: bot-a}
         provides:                          # the sources whose originals this host serves
           - {system: telegram, instance: bot-a}
+        registers:                         # the runs whose line lists it submits on the
+          - {system: telegram, instance: bot-a}   # authority's behalf
         fetch_url: http://127.0.0.1:3010/api/loci/source   # where Loci asks for them
         fetch_token_env: LOCI_FETCH_TOKEN_ENTRY_A           # Loci's own credential there
 
 `max_grant` says what a host may touch; it never says whose a source is. Who is the change
-authority for a source (`authority`, core/_source_change.py) and who serves its original
-(`provides` with `fetch_url` and `fetch_token_env`, core/_originals.py) are declared,
-place by place: the deepest declared place covering a source names its host, and two
-hosts declaring the same place name neither (`Hosts.authority_for`, `Hosts.provider_for`).
-A source no host declares has no authority (its changes are refused) and no provider (its
-original cannot be fetched). An authority place has to lie within the host's `max_grant`.
-The fetch credential is Loci's toward the host, never the host's own toward Loci: it
-names another environment variable, and a value equal to the host's inbound credential is
-not used.
+authority for a source (`authority`, core/_source_change.py), who serves its original
+(`provides` with `fetch_url` and `fetch_token_env`, core/_originals.py) and who besides the
+authority may register which lines a run holds (`registers`,
+core/_source_change.registration_refusal) are declared, place by place: the deepest
+declared place covering a source names its host, and two hosts declaring covering places
+of the same depth name neither (`Hosts.authority_for`, `Hosts.provider_for`,
+`Hosts.registrar_for`). Such a collision refuses only what it covers — every other source
+of both hosts stands — and is reported: `load_hosts` names both hosts, the key and the
+place in `Hosts.errors` (and `Hosts.collisions`), logs it once, and the setup screen shows
+it red (web/loci.build_setup, `hosts_collision`). A source no host declares the authority
+of has its changes refused; one no host provides cannot have its original fetched; a run's
+lines are registered only by the authority of each line or the host that registers it. An
+authority or registers place has to lie within the host's `max_grant`. The fetch
+credential is Loci's toward the host, never the host's own toward Loci: it names another
+environment variable, and a value equal to the host's inbound credential is not used.
 
 An imported conversation (`system: import`, core/import_memory.py) is Loci's own
 material: Loci is its change authority (`LOCI_HOST`, whatever the table says) and serves
@@ -104,7 +112,8 @@ The view never says how many entries it withheld: a count is itself a leak.
 
 Exports: SCOPE_HEADER · TURN_HEADER · HOST_HEADER · SCOPE_ENV · HOST_TOKEN_ENV · OPEN ·
          RESTRICTED · LEGACY · LOCI · LOCI_HOST · IMPORT_SYSTEM · ScopeError · Host ·
-         Hosts (authority_for · provider_for · ceilinged · unsafe) ·
+         Hosts (authority_for · provider_for · registrar_for · claimants · collisions ·
+         ceilinged · unsafe) ·
          load_hosts · Scope ·
          parse_scope · parse_turn · RequestScope · ScopeView · unsupported_line ·
          current_request · request_scope
@@ -180,6 +189,7 @@ class Host:
     fetch_token: str = field(default="", repr=False, compare=False)
     provides: tuple = ()                 # places whose originals it serves
     authority: tuple = ()                # places whose changes it sends
+    registers: tuple = ()                # places whose runs' line lists it submits
 
     @property
     def open(self) -> bool:
@@ -189,7 +199,9 @@ class Host:
 LOCI_HOST = Host(LOCI, scope_mode=OPEN)
 
 _HOST_KEYS = {"token_env", "max_grant", "may_restore", "scope_mode", "fetch_url",
-              "fetch_token_env", "provides", "authority"}
+              "fetch_token_env", "provides", "authority", "registers"}
+# The keys declaring places whose host is resolved one per source (`_declared`).
+_DECLARING = ("authority", "provides", "registers")
 
 
 def _places(name: str, raw, key: str) -> tuple:
@@ -240,23 +252,27 @@ def _host_from(name: str, raw, environ: Mapping[str, str], fallback_token: str) 
                   "Loci fetches nothing from it until the two differ")
         fetch_token = ""
     authority = _places(name, raw, "authority")
+    registers = _places(name, raw, "registers")
     if max_grant is not None:
-        for place in authority:
-            if not any(place.within(top) for top in max_grant):
-                raise ValueError(f"host {name}: authority {place.label()} is past its max_grant")
+        for key, places in (("authority", authority), ("registers", registers)):
+            for place in places:
+                if not any(place.within(top) for top in max_grant):
+                    raise ValueError(f"host {name}: {key} {place.label()} is past its "
+                                     "max_grant")
     return Host(name=name, scope_mode=mode, max_grant=max_grant,
                 may_restore=parse_bool(raw.get("may_restore"), default=False), token=token,
                 fetch_url=fetch_url, fetch_token=fetch_token,
-                provides=_places(name, raw, "provides"), authority=authority)
+                provides=_places(name, raw, "provides"), authority=authority,
+                registers=registers)
 
 
 def _depth(place) -> int:
     return sum(1 for level in _src.PLACE_KEYS if getattr(place, level) is not None)
 
 
-def _declared(hosts: Iterable[Host], attr: str, sid) -> Optional[Host]:
-    """The host whose `attr` places declare this source: the deepest covering place wins;
-    two hosts declaring covering places of the same depth name neither."""
+def _claimants(hosts: Iterable[Host], attr: str, sid) -> list[Host]:
+    """The hosts whose `attr` places declare this source at the deepest depth any does:
+    one host, several (a collision), or none."""
     best: list[Host] = []
     best_depth = -1
     for host in hosts:
@@ -267,16 +283,51 @@ def _declared(hosts: Iterable[Host], attr: str, sid) -> Optional[Host]:
             best, best_depth = [host], depth
         elif depth == best_depth:
             best.append(host)
+    return best
+
+
+def _declared(hosts: Iterable[Host], attr: str, sid) -> Optional[Host]:
+    """The host whose `attr` places declare this source: the deepest covering place wins;
+    two hosts declaring covering places of the same depth name neither."""
+    best = _claimants(hosts, attr, sid)
     return best[0] if len(best) == 1 else None
 
 
-class Hosts:
-    """The hosts of one deployment. `implicit` = no `hosts:` table was written."""
+def _collisions(hosts: Iterable[Host]) -> list[str]:
+    """Every place two or more hosts declare under the same key (the same label is the
+    same depth): there neither is taken. Each named once, with its hosts and key."""
+    out: list[str] = []
+    for key in _DECLARING:
+        by_label: dict[str, list[str]] = {}
+        for host in hosts:
+            for label in dict.fromkeys(p.label() for p in getattr(host, key)):
+                by_label.setdefault(label, []).append(host.name)
+        for label, names in by_label.items():
+            if len(names) > 1:
+                out.append(f"hosts: {' and '.join(names)} both declare {key} {label}; at the "
+                           f"same depth neither is taken there ({_COLLISION_EFFECT[key]}), "
+                           "everything else of theirs stands")
+    return out
 
-    def __init__(self, hosts: Iterable[Host], implicit: bool, errors: Iterable[str] = ()):
+
+_COLLISION_EFFECT = {
+    "authority": "its changes are refused as no_change_authority",
+    "provides": "its original cannot be fetched",
+    "registers": "neither may register its runs' lines on that ground",
+}
+
+
+class Hosts:
+    """The hosts of one deployment. `implicit` = no `hosts:` table was written. `errors`
+    are the table's problems (a host left out, a collision); `collisions` the places two
+    hosts declare at the same depth, each already among `errors` too."""
+
+    def __init__(self, hosts: Iterable[Host], implicit: bool, errors: Iterable[str] = (),
+                 collisions: Iterable[str] = ()):
         self.hosts = {h.name: h for h in hosts}
         self.implicit = implicit
         self.errors = tuple(errors)
+        self.collisions = tuple(collisions)
         # Why the hosts with a ceiling are refused in this deployment, or "": the request
         # layer fills it in (web/panel_auth.lock_problem — the panel unlocked, MCP auth off).
         self.unsafe = ""
@@ -326,12 +377,31 @@ class Hosts:
         host = _declared(self.hosts.values(), "provides", _src._identity(identity))
         return host if host is not None and host.fetch_url else None
 
+    def registrar_for(self, identity) -> Optional[Host]:
+        """The host entrusted with registering the line lists of runs over this source
+        (`registers`) on its authority's behalf; None when none is, or two are at the same
+        depth. Nobody registers for an imported conversation: its lines are Loci's own."""
+        sid = _src._identity(identity)
+        if sid.system == IMPORT_SYSTEM:
+            return None
+        return _declared(self.hosts.values(), "registers", sid)
+
+    def claimants(self, key: str, identity) -> tuple:
+        """The hosts declaring this source under `key` (authority · provides · registers)
+        at the deepest depth any does: one is the declared host, two or more a collision,
+        none nobody."""
+        if key not in _DECLARING:
+            raise ValueError(f"claimants: key is one of {_DECLARING}")
+        return tuple(_claimants(self.hosts.values(), key, _src._identity(identity)))
+
 
 def load_hosts(config: Mapping, environ: Mapping[str, str], *,
                legacy_token: str = "") -> Hosts:
     """`hosts:` from config. Absent: the one legacy host (credential `legacy_token`, the
     hook key as panel_auth reads it). A host entry that is malformed is left out and
-    logged — its credential then matches nothing, which refuses rather than opens."""
+    logged — its credential then matches nothing, which refuses rather than opens. Two
+    hosts declaring the same place under one key both stay; the collision is named in
+    `errors` and `collisions` and logged once."""
     raw = (config or {}).get("hosts")
     if raw is None:
         return Hosts([Host(LEGACY, scope_mode=OPEN, token=str(legacy_token or "").strip())],
@@ -353,7 +423,10 @@ def load_hosts(config: Mapping, environ: Mapping[str, str], *,
             errors.append(str(e))
     for e in errors:
         _say_once(f"{e} — that host is left out and its credential refused")
-    return Hosts(hosts, implicit=False, errors=errors)
+    collisions = _collisions(hosts)
+    for c in collisions:
+        _say_once(c)
+    return Hosts(hosts, implicit=False, errors=errors + collisions, collisions=collisions)
 
 
 _LOGGED: set[str] = set()

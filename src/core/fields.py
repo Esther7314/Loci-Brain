@@ -162,7 +162,9 @@ FIELDS: tuple[Field, ...] = (
     # ---- sources ----
     _F("sources", "sources", "The host's material it was formed from, one record each: "
        "{system, instance, container, id, through?, revision, fingerprint, "
-       "fingerprint_by, span?, use}. The material itself stays with the host; the "
+       "fingerprint_by, span?, use, completed_from?}; completed_from (registry or "
+       "host_scope) says Loci filled in the container of a line the writer named only by "
+       "its bare id, and is not identity. The material itself stays with the host; the "
        "record's state (active, unreadable, withdrawn, deleted, held) is in the source "
        "registry."),
     _F("invalidation", "sources", "Marks that a basis changed under it: a list of {kind, "
