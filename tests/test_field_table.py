@@ -4,34 +4,40 @@ tests/test_field_table.py — every field the store writes is described in core/
 
 The export package's schema note is generated from that table, so a field the store
 accepts and the table does not name would travel without a meaning. The keys are read off
-the code itself: create()'s keyword arguments as they land in the frontmatter, the keys
-update() handles one by one, its pass-through list, V2_FIELDS and the text limits.
+the code itself (core/_bucket_write.py): create()'s keyword arguments as they land in the
+frontmatter, the keys update() handles one by one, its pass-through list, V2_FIELDS and the
+text limits. create() and _update_locked() run in named steps (`_create_*`, `_update_*`),
+and each step is read along with them.
 """
 
 import ast
 from pathlib import Path
 
+from core import _bucket_write as W
 from core import bucket_manager as BM
 from core import fields as F
 
-SOURCE = Path(BM.__file__).read_text(encoding="utf-8")
+SOURCE = Path(W.__file__).read_text(encoding="utf-8")
 TREE = ast.parse(SOURCE)
 
 # update() arguments that are gestures on a field, not fields of their own.
 GESTURES = {"content", "media_append", "meaning_append"}
 
 
-def _function(name: str) -> ast.AST:
-    for node in ast.walk(TREE):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
-            return node
-    raise AssertionError(f"{name} not found in bucket_manager.py")
+def _functions(name: str, steps: str) -> list[ast.AST]:
+    """`name` and every function whose name starts with `steps`."""
+    found = [node for node in ast.walk(TREE)
+             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+             and (node.name == name or node.name.startswith(steps))]
+    if not any(node.name == name for node in found):
+        raise AssertionError(f"{name} not found in _bucket_write.py")
+    return found
 
 
 def _update_keys() -> set[str]:
-    fn = _function("_update_locked")
     keys: set[str] = set()
-    for node in ast.walk(fn):
+    nodes = [n for fn in _functions("_update_locked", "_update_") for n in ast.walk(fn)]
+    for node in nodes:
         # `"x" in kwargs`
         if (isinstance(node, ast.Compare) and isinstance(node.left, ast.Constant)
                 and isinstance(node.left.value, str)
@@ -52,9 +58,9 @@ def _update_keys() -> set[str]:
 
 
 def _create_keys() -> set[str]:
-    fn = _function("create")
     keys: set[str] = set()
-    for node in ast.walk(fn):
+    nodes = [n for fn in _functions("create", "_create_") for n in ast.walk(fn)]
+    for node in nodes:
         if isinstance(node, ast.Dict):
             for k in node.keys:
                 if isinstance(k, ast.Constant) and isinstance(k.value, str):

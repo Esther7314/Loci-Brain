@@ -11,6 +11,9 @@ What lives here:
 - `bucket_manager.py` / `decay_engine.py` / `dehydrator.py` / `bm25_index.py` /
   `embedding_engine.py`: the engines that actually touch disk, compute decay, call
   the summariser LLM, score BM25, and keep the vectors.
+- `_bucket_*.py`: BucketManager's parts — the write path, search scoring, reads, the
+  parsed listing, lifecycle, clearing, files, field rules. bucket_manager.py's
+  docstring maps which is which; the class itself stays there.
 - `errors.py`: the error types that run through all of the above — everyone has to
   recognise the same error shapes.
 - `import_memory.py` / `package_import.py` / `reembed.py`:
