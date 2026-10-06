@@ -30,7 +30,7 @@ from . import _when as _w
 from .profile import _BIGEVENT_TAG, _PROFILE_TAG
 from .similarity import stored_ids
 from .visibility import on_timeline
-from utils import read_from_ids
+from utils import get_version, read_from_ids
 
 _BARE_QUOTES_NAMED = 10   # the health row names this many entries with a bare quoted line
 
@@ -686,13 +686,6 @@ async def setup(config, bucket_mgr, embedding_engine, panel: PanelLock, in_docke
     setup_hosts(r, panel)
 
     # ---- Read-only facts: not "is this configured correctly", but "where things are" ----
-    ver = ""
-    try:
-        vp = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "VERSION")
-        with open(vp, "r", encoding="utf-8") as f:
-            ver = f.read().strip()
-    except OSError:
-        ver = ""
     # The count goes through the timeline gate — the same ruler recall, rooms and the
     # subjects screen use, so one thing does not carry two numbers.
     try:
@@ -709,7 +702,7 @@ async def setup(config, bucket_mgr, embedding_engine, panel: PanelLock, in_docke
             "buckets_dir": str(cfg.get("buckets_dir") or os.environ.get("LOCI_BUCKETS_DIR") or ""),
             "log_file": os.environ.get("LOCI_LOG_FILE", ""),
             "alias_table": apath,
-            "version": ver,
+            "version": get_version(),
             "buckets": n_buckets,
             "in_docker": in_docker,
             "tz_display": os.environ.get("LOCI_TZ", "").strip() or "Asia/Shanghai",
