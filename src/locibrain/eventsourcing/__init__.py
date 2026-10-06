@@ -1,6 +1,1 @@
-from __future__ import annotations
-
-from locibrain.eventsourcing.contracts import EventProjectionMutation, EventSourcedEnvelope
-from locibrain.eventsourcing.kernel import EventSourcedMemoryKernel
-
-__all__ = ["EventProjectionMutation", "EventSourcedEnvelope", "EventSourcedMemoryKernel"]
+"""The append-only memory ledger and the footprint line breath reads from it."""
