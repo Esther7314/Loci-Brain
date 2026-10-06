@@ -50,10 +50,7 @@ import httpx
 import numpy as np
 from openai import AsyncOpenAI
 
-try:
-    from utils import parse_bool, positive_float
-except ImportError:  # pragma: no cover
-    from .utils import parse_bool, positive_float  # type: ignore
+from utils import parse_bool, positive_float
 
 from locibrain.integrations.provider_detect import (
     is_known_cloud_embedding_endpoint,
@@ -762,10 +759,7 @@ class EmbeddingEngine:
     def _store_embedding(
         self, bucket_id: str, embedding: list[float], content_hash: str = ""
     ) -> None:
-        try:
-            from utils import now_iso  # type: ignore
-        except ImportError:
-            from .utils import now_iso  # type: ignore
+        from utils import now_iso  # type: ignore
         conn = sqlite3.connect(self.db_path)
         try:
             conn.execute(
@@ -801,10 +795,7 @@ class EmbeddingEngine:
             return False
 
     def _store_meaning_embedding(self, bucket_id: str, embedding: list[float]) -> None:
-        try:
-            from utils import now_iso  # type: ignore
-        except ImportError:
-            from .utils import now_iso  # type: ignore
+        from utils import now_iso  # type: ignore
         conn = sqlite3.connect(self.db_path)
         try:
             conn.execute(

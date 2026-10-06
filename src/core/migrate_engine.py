@@ -87,12 +87,8 @@ from locibrain.storage.backup_archive import (
 
 _PACKAGE_PREFIXES = (_PACKAGE_STATE, _PACKAGE_ORIGINALS, _PACKAGE_MEDIA)
 
-try:
-    from utils import (_win_long_path, atomic_write_text, now_iso, read_from_ids,  # type: ignore
-                       safe_path, sanitize_name)
-except ImportError:  # pragma: no cover
-    from .utils import (_win_long_path, atomic_write_text, now_iso,  # type: ignore
-                        read_from_ids, safe_path, sanitize_name)
+from utils import (_win_long_path, atomic_write_text, now_iso, read_from_ids,  # type: ignore
+                   safe_path, sanitize_name)
 
 logger = logging.getLogger("loci_brain.migrate")
 
