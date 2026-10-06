@@ -461,11 +461,6 @@ _SUNK_SEARCH_DISCOUNT = 0.6
 # is not to be missed, not to come first; and adding 25 hits the 100 ceiling where nothing
 # can be told apart any more.
 
-# The pure functions for the topic/emotion/time/touch scoring dimensions, and their weight
-# constants, live in locibrain.retrieval.bucket_scoring. Nothing here imports them any
-# more: search() scores on semantic+bm25 only, and the _calc_*_score wrapper methods were
-# deleted as dead code on 2026-08-25 (they had no remaining callers, in tests or elsewhere).
-
 
 def _clamp01(value, default: float) -> float:
     """Clamp any input into [0.0, 1.0]; on failure return `default`.
