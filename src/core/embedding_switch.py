@@ -100,14 +100,14 @@ def thresholds() -> list[dict]:
     from . import _reconsolidation, _slicer
     from . import bucket_manager
     from tools import fold
-    from tools.grow import rooms_path
+    from tools.grow import _backfill
     from tools.recall import core as recall_core
     rows = [
         (_reconsolidation.SIMILARITY_LINE, "余弦", "core/_reconsolidation.SIMILARITY_LINE",
          "回望：新写的东西跟哪条旧看法算「撞意思」"),
         (fold._MERGE_COS_THRESHOLD, "余弦", "tools/fold._MERGE_COS_THRESHOLD",
          "两条概括说的是不是一回事、要不要问合并"),
-        (rooms_path._DUP_COS_THRESHOLD, "余弦", "tools/grow/rooms_path._DUP_COS_THRESHOLD",
+        (_backfill._DUP_COS_THRESHOLD, "余弦", "tools/grow/_backfill._DUP_COS_THRESHOLD",
          "回填时「可能是同一件事」的提示"),
         (bucket_manager._VECTOR_RECALL_THRESHOLD, "余弦",
          "core/bucket_manager._VECTOR_RECALL_THRESHOLD", "recall 里「意思」那个标记"),

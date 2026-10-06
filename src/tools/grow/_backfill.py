@@ -7,11 +7,13 @@ A grow write stores the body with placeholder metadata (_placeholder_meta) and h
 id back at once; the backfill then reads the entry, asks the side model once, and fills
 only the slots still blank. This file is that decision: what the side model is told, the
 answer turned into update() keywords against the entry as it is on disk, the stamped
-stand-ins when no answer comes, and the names table's two permitted writes. Running it
-(_backfill_one, _backfill_batch, backfill_sweep) is tools/grow/rooms_path's.
+stand-ins when no answer comes, the "possibly the same thing" tag and its similarity
+line, and the names table's two permitted writes. Running it (_backfill_one,
+_backfill_batch, backfill_sweep) is tools/grow/rooms_path's.
 
 Exports: _placeholder_meta() · _current_meta(bucket_id) · _backfill_context(meta, mind)
          _ask_backfill(bucket_id, text, context, kinds) · _backfill_updates(...)
+         _possibly_same(bucket_id, text) · _DUP_COS_THRESHOLD
          _record_kinds(bucket_id, pairs)
 ========================================
 """
@@ -179,6 +181,43 @@ async def _ask_backfill(bucket_id: str, text: str, context: dict,
         rt.logger.warning(f"backfill {bucket_id} 回填答案是空的或读不懂，重试一次" if attempt == 0
                           else f"backfill {bucket_id} 两次都没有能用的答案，名字和摘要用正文开头顶上")
     return None, True
+
+
+# The similarity line for "possibly the same thing". It is **the same number** as
+# the elbow on the dashboard's similarity page (a full pairwise cosine scan of the
+# library puts the elbow at 80). The panel's thresholds page reads it from here by this
+# path (core/embedding_switch.thresholds).
+_DUP_COS_THRESHOLD = 0.80
+
+
+async def _possibly_same(bucket_id: str, text: str) -> list[str]:
+    """The 「疑似同件:xx」 tag for a new event whose body sits at or above the line from an
+    entry already in the library, or [] (no vectors, nothing close, or the lookup failed).
+
+    Nothing is merged and nothing is blocked: similarity is checked once in the
+    background, and the tag is for human eyes to settle later. The threshold errs high
+    rather than low — fewer stickers is better than more. It queries the **vector
+    cosine** directly: "is this the same thing" is a question about semantic distance,
+    not about retrieval ranking. A new body running into an old view is not tagged here:
+    the write's own return says it (core/_reconsolidation.py, before the return is
+    handed back).
+    """
+    similar: list[str] = []
+    try:
+        ee = getattr(rt.bucket_mgr, "embedding_engine", None)
+        if ee and getattr(ee, "enabled", False):
+            sims = await ee.search_similar(text, top_k=3)
+            _top = next(((sid, s) for sid, s in sims if str(sid) != bucket_id), None)
+            if _top:
+                rt.logger.info(f"[近似] {bucket_id} top={str(_top[0])[:6]} cos={float(_top[1]):.2f}")
+            for sid, s in sims:
+                sid = str(sid)
+                if sid and sid != bucket_id and float(s) >= _DUP_COS_THRESHOLD:
+                    similar.append(f"疑似同件:{sid[:6]}")
+                    break
+    except Exception:
+        pass
+    return similar
 
 
 def _time_fill(ans: BackfillAnswer, meta: dict, *, mind: bool, telic: bool,

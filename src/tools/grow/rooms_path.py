@@ -93,7 +93,7 @@ from core import _sources as _src
 from utils import prov_targets
 
 from ._backfill import (_ask_backfill, _backfill_context, _backfill_updates, _current_meta,
-                        _placeholder_meta, _record_kinds)
+                        _placeholder_meta, _possibly_same, _record_kinds)
 from ._cards import card_room_rule, check_card, live_card  # re-exported: see Exports
 from ._checks import (_WANT_DURATION_RE, _WHEN_RE, _check_hold, _check_v2, _hold_receipt,
                       _in_the_future, _retired_fields_msg, _retired_item_fields, check_cue,
@@ -118,13 +118,6 @@ _LONG_HINT = 600
 # core/_fold.save_gist imports it from here when it runs, so replacing it here (tests do)
 # replaces it for all of them.
 
-# The similarity line for "possibly the same thing". It is **the same number** as
-# the elbow on the dashboard's similarity page (a full pairwise cosine scan of the
-# library puts the elbow at 80).
-# It lives here, next to _backfill_one that reads it, because the panel's thresholds page
-# names it by this path (core/embedding_switch.thresholds).
-_DUP_COS_THRESHOLD = 0.80
-
 
 async def _backfill_one(bucket_id: str, text: str, kind: str) -> None:
     """Fill in one bucket's blanks in the background, from one side-model call: name,
@@ -148,32 +141,8 @@ async def _backfill_one(bucket_id: str, text: str, kind: str) -> None:
         rt.logger.warning(
             f"backfill {bucket_id}: 回填答案里这几块形状不对，没用上：{', '.join(answer.problems)}"
             + ("（人名表这次一个字没写）" if "subjects" in answer.problems else ""))
-    similar: list[str] = []
-
-    # The "possibly the same thing" hint: nothing is merged and nothing is
-    # blocked. Similarity is checked once in the background, and above the
-    # threshold the new bucket gets a 「疑似同件:xx」 tag for human eyes to settle
-    # later.
-    # The threshold errs high rather than low — fewer stickers is better than more.
-    # It queries the **vector cosine** directly: "is this the same thing" is a
-    # question about semantic distance, not about retrieval ranking.
-    # A new body running into an old view is not tagged here: the write's own
-    # return says it (core/_reconsolidation.py, before the return is handed back).
-    if kind == "event":
-        try:
-            ee = getattr(rt.bucket_mgr, "embedding_engine", None)
-            if ee and getattr(ee, "enabled", False):
-                sims = await ee.search_similar(text, top_k=3)
-                _top = next(((sid, s) for sid, s in sims if str(sid) != bucket_id), None)
-                if _top:
-                    rt.logger.info(f"[近似] {bucket_id} top={str(_top[0])[:6]} cos={float(_top[1]):.2f}")
-                for sid, s in sims:
-                    sid = str(sid)
-                    if sid and sid != bucket_id and float(s) >= _DUP_COS_THRESHOLD:
-                        similar.append(f"疑似同件:{sid[:6]}")
-                        break
-        except Exception:
-            pass
+    # The "possibly the same thing" hint is an event's only (_backfill._possibly_same).
+    similar = await _possibly_same(bucket_id, text) if kind == "event" else []
 
     try:
         written = await rt.bucket_mgr.update(
