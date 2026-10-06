@@ -422,7 +422,7 @@ def test_an_avoid_hold_keeps_a_quoted_memory_out_and_a_defer_does_not(store):
 # ── thread candidates, regrown wants, warmth, nightmares ────────────────────
 
 def test_thread_candidates_ride_with_the_dream_and_write_nothing(store, monkeypatch):
-    from web import loci as L
+    from web import loci_dream as L
 
     async def no_muse():
         return {"worth_poking": False}

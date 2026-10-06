@@ -1144,7 +1144,7 @@ async def both_sides(force: bool = False, scope=None) -> tuple[list, int, int, d
     (clusters, scattered, default-coordinate count, gestures, stats).
 
     Two callers share this one: `tools/muse/__init__.py` (the two-step tool surface) and
-    `web/loci.py::build_muse_pending` ("is it time to muse", which needs only the count and
+    `web/loci_dream.py::build_muse_pending` ("is it time to muse", which needs only the count and
     the age).
     **They must never compute their own.** A page saying "3 clusters have piled up" while
     muse() sees 4 is two different brains.

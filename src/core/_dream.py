@@ -94,7 +94,7 @@ covers anything, so an entry circled into one keeps its own mark untouched.
 
 Weaving reads the whole library (no read scope): it runs only on a breath that reads the
 whole library, and a dream is handed out only to a request that reads the whole library
-(web/loci.py, `_scope_withholds`). A host asked for an original is told the same: no
+(web/_guards.py, `_scope_withholds`). A host asked for an original is told the same: no
 scope, the whole library.
 
 Why "a few words" and not "a place": a list of rooms from the Home system was rejected —

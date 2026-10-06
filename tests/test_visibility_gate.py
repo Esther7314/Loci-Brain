@@ -356,7 +356,7 @@ def test_linked_entries_carry_their_state_and_stay_one_line(store):
 # ── a dream handed out, through both doors ──────────────────────────────────
 
 def test_a_withheld_dream_is_absent_from_both_doors_and_is_not_recalled(store, monkeypatch):
-    from web import loci as L
+    from web import loci_dream as L
 
     async def no_muse():
         return {"worth_poking": False}
