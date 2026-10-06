@@ -17,7 +17,9 @@ What lives here:
   background engines that sit at the same level as bucket_manager (conversation
   import, export-package import, recomputing the vectors after an embedding-model change). Each is built
   exactly once by server.py at startup, which makes it the same kind of thing as the
-  five above.
+  five above. The package import's steps are its siblings `_package_read.py` /
+  `_package_plan.py` / `_package_write.py` / `_package_vectors.py` (package_import.py's
+  docstring says which does what).
 - `ledger_mirror.py` / `footprint.py` / `media_store.py` / `backup_archive.py` /
   `embedding_outbox.py` / `provider_detect.py`: the append-only ledger and the footprint
   line breath reads from it, attachment storage, the archive format exports and imports
