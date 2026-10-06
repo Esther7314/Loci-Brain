@@ -27,6 +27,8 @@ import httpx
 
 from utils import _win_long_path
 
+from . import _sources as _src
+
 logger = logging.getLogger("loci_brain.github_sync")
 
 _API = "https://api.github.com"
@@ -174,12 +176,12 @@ class GitHubSync:
                 if not files:
                     self.last_status = "ok"
                     self.last_error = ""
-                    self.last_sync = _now_iso()
+                    self.last_sync = _src._now()
                     self.last_count = 0
                     return {"ok": True, "uploaded": 0, "message": "无可同步文件"}
 
                 count = await self._batch_commit(files)
-                self.last_sync = _now_iso()
+                self.last_sync = _src._now()
                 self.last_status = "ok"
                 self.last_error = ""
                 self.last_count = count
@@ -381,7 +383,7 @@ class GitHubSync:
                         skipped += 1
                         errors.append(f"{rel}: {e}")
 
-                self.last_sync = _now_iso()
+                self.last_sync = _src._now()
                 restore_ok = skipped == 0
                 self.last_status = "ok" if restore_ok else "error"
                 return {
@@ -567,7 +569,7 @@ class GitHubSync:
         return {
             "schema_version": 1,
             "source": "loci-brain",
-            "generated_at": _now_iso(),
+            "generated_at": _src._now(),
             "repo": self.repo,
             "branch": self.branch,
             "path_prefix": self.path_prefix,
@@ -841,10 +843,6 @@ class GitHubSync:
             logger.warning(f"[github_sync] secondary rate limit, retry in {wait}s (attempt {attempt + 1})")
             await asyncio.sleep(wait)
         return resp
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def _is_empty_repo_response(resp: httpx.Response) -> bool:

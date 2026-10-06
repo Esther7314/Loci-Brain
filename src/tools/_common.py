@@ -194,7 +194,7 @@ async def _quota_turn(name: str):
 # ============================================================
 # Short ids: the handle a read tool prints is the handle a write tool accepts
 # ------------------------------------------------------------
-# breath and recall hand the model a 6-character handle (`recall/core.py::_short_id`
+# breath and recall hand the model a 6-character handle (`core/_slicer.py::_short_id`
 # cuts a 12-hex id to 6). A model that reads an item off breath and closes it
 # with trace passes exactly that handle on, so every tool that takes an id runs
 # it through here first, and every check downstream (exists? archived?

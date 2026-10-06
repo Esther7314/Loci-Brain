@@ -459,8 +459,8 @@ def speaker_label(role: str, same_self: bool, human: str = "用户") -> str:
 def source_string(batch: str, container: str, first: str, last: str = "") -> str:
     """The string form of a stretch of an imported conversation (a single line when
     `last` is empty or the same)."""
-    head = f"{IMPORT_SYSTEM}:{batch}/{container}#{first}"
-    return head if not last or last == first else f"{head}..{last}"
+    through = last if last and last != first else None
+    return _src.SourceId(IMPORT_SYSTEM, batch, container, first, through).to_string()
 
 
 def _line_ids(count: int) -> list[str]:

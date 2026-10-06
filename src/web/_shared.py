@@ -255,10 +255,7 @@ def replace_embedding_engine(engine) -> None:
     try:
         from tools import _runtime as tools_runtime  # type: ignore
     except ImportError:  # pragma: no cover
-        try:
-            from ..tools import _runtime as tools_runtime  # type: ignore
-        except ImportError:
-            tools_runtime = None
+        tools_runtime = None
     if tools_runtime is not None:
         tools_runtime.embedding_engine = engine
     outbox = globals().get("embedding_outbox")

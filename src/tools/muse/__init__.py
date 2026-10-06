@@ -65,7 +65,7 @@ def _date_label(dt) -> str:
     return dt.strftime("%m-%d") if dt.year == _w.now().year else dt.strftime("%Y-%m-%d")
 
 
-def _short_id(bid: str) -> str:
+def _partial_id(bid: str) -> str:
     """Step one shows only the first 6 characters — **it hands out directions,
     not memories** (the full 12 belong to step two)."""
     return f"{str(bid)[:6]}…"
@@ -77,7 +77,7 @@ def _mind_evidence(t: "M.Cluster") -> str:
     into another."""
     parts = [f"架 v{t.shelf_v:.2f} a{t.shelf_a:.2f}"]
     if t.from_core:
-        shared = ("共祖 " + "、".join(_short_id(x) for x in t.shared_from[:2])) if t.shared_from else "同一条链"
+        shared = ("共祖 " + "、".join(_partial_id(x) for x in t.shared_from[:2])) if t.shared_from else "同一条链"
         parts.append(f"from 链 {len(t.from_core)} 条（{shared}）")
     if t.semantic_add:
         parts.append(f"语义补 {len(t.semantic_add)} 条（最低 {t.min_sim:.2f}）")

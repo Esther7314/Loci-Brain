@@ -77,7 +77,6 @@ import json
 import re
 import threading
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
@@ -526,13 +525,10 @@ _HOW_WORD = {"grow": "写成了", "trace": "挂到了", "drop": "丢掉了"}
 _LOCK_KEY = "pending-slices"
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
 def _short_id(bucket_id: str) -> str:
-    """The handle a read tool prints (recall's _short_id): a 12-hex id cut to 6, any
-    other id in full. The write tools take it back (tools/_common.resolve_bucket_id)."""
+    """The handle a read tool prints: a 12-hex id cut to 6; a readable id like feel_...
+    in full (cutting it would make it useless). recall and the panel print it through
+    tools/recall/core; the write tools take it back (tools/_common.resolve_bucket_id)."""
     return bucket_id[:6] if re.fullmatch(r"[0-9a-f]{12}", bucket_id) else bucket_id
 
 
@@ -611,7 +607,7 @@ class PendingSlices:
                 st["first"], st["last"], st["edited"] = str(row["first"]), str(row["last"]), True
 
     def _append(self, row: dict) -> dict:
-        row = {**row, "seq": self._seq + 1, "recorded_at": _now()}
+        row = {**row, "seq": self._seq + 1, "recorded_at": _src._now()}
         _src._append_line(self.path, row)
         self._index(row)
         self._size = _src._size(self.path)

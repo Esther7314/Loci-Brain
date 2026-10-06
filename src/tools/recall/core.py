@@ -16,7 +16,8 @@ from datetime import datetime, timedelta
 from core import _bigevent as _big    # a big event: one sentence laid over a stretch of time
 from core import _fold as _F          # fold / gist: what is covered no longer surfaces on its own
 from core import _sources as _src     # outside material: source records and their registry state
-from core import _usage               # the usage log: what a lookup handed back
+from core._slicer import _short_id    # the handle a read tool prints for an id
+from core import _usage              # the usage log: what a lookup handed back
 from core import visibility as _V     # the one gate: what may be put in front of the model
 from .. import _runtime as rt
 from .._common import read_scope, resolve_bucket_id
@@ -620,12 +621,6 @@ async def _find_roots(entries: list[dict]) -> dict[str, dict | None]:
 # ------------------------------------------------------------
 # Statistics for one cell
 # ------------------------------------------------------------
-
-def _short_id(bucket_id: str) -> str:
-    """A 12-hex id is cut to 6 as a handle; a readable id like feel_... is given
-    in full (cutting it would make it useless)."""
-    return bucket_id[:6] if re.fullmatch(r"[0-9a-f]{12}", bucket_id) else bucket_id
-
 
 def _score_tag(e: dict) -> str:
     """Show relevance next to the handle. Only entries that went through the query
