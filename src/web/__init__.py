@@ -129,14 +129,5 @@ class _Gated:
 def register_all(mcp) -> None:
     """Register every route module migrated into web/. One more line per module."""
     gated = _Gated(mcp)
-
-    def _register():
-        for _name, register in _WEB_MODULES:
-            register(gated)
-
-    return _shared.run_v3_web_operation(
-        "register_all",
-        {"modules": [name for name, _register_fn in _WEB_MODULES]},
-        _register,
-        module="web.*",
-    )
+    for _name, register in _WEB_MODULES:
+        register(gated)

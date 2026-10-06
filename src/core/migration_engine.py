@@ -75,7 +75,6 @@ _migration_lock = threading.Lock()
 _migration_owner_guard = threading.Lock()
 _migration_owner: "MigrationReservation | None" = None
 _migration_task: asyncio.Task | None = None
-_v3_runtime: Any = None
 
 
 @dataclass(frozen=True)
@@ -122,15 +121,6 @@ def release_migration_reservation(reservation: MigrationReservation) -> bool:
         _migration_owner = None
         _migration_lock.release()
     return True
-
-
-def attach_v3_runtime(runtime) -> None:
-    global _v3_runtime
-    _v3_runtime = runtime
-
-
-def get_v3_runtime():
-    return _v3_runtime
 
 
 # ============================================================
@@ -704,8 +694,6 @@ __all__ = [
     "start_migration",
     "is_running",
     "reset_for_test",
-    "attach_v3_runtime",
-    "get_v3_runtime",
     "BATCH_SIZE",
     "BATCH_INTERVAL_SEC",
 ]

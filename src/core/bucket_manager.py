@@ -488,10 +488,9 @@ class BucketManager:
     and body for content. Natively compatible with Obsidian browsing/editing.
     """
 
-    def __init__(self, config: dict, embedding_engine=None, v3_runtime=None):
+    def __init__(self, config: dict, embedding_engine=None):
         # Keep raw config so create() can look up bucket_type_defaults at write time.
         self.config = config
-        self.v3_runtime = v3_runtime
         # --- Read storage paths from config ---
         self.base_dir = config["buckets_dir"]
         self.media_store = MediaStore(
@@ -578,35 +577,9 @@ class BucketManager:
         self._external_changes_detected = 0
         self._last_external_change = ""
 
-    def attach_v3_runtime(self, runtime) -> None:
-        self.v3_runtime = runtime
-
     def attach_embedding_outbox(self, outbox) -> None:
         """Attach the durable derived-index queue after both objects exist."""
         self.embedding_outbox = outbox
-
-    def _record_v3_bucket_event(
-        self,
-        action: str,
-        bucket_id: str,
-        bucket_type: str,
-        content: str,
-        metadata: dict | None,
-    ) -> None:
-        runtime = getattr(self, "v3_runtime", None)
-        recorder = getattr(runtime, "record_bucket_event", None)
-        if not callable(recorder):
-            return
-        try:
-            recorder(
-                action=action,
-                bucket_id=bucket_id,
-                bucket_type=bucket_type,
-                content=content,
-                metadata=metadata or {},
-            )
-        except Exception as exc:
-            logger.warning(f"v3 bucket event record failed for {action}:{bucket_id}: {exc}")
 
     def _record_ledger_event(
         self,
@@ -1234,34 +1207,6 @@ class BucketManager:
                         exc,
                     )
 
-        for bucket_id in sorted(added_ids):
-            bucket = new_by_id[bucket_id]
-            self._record_v3_bucket_event(
-                "external_create",
-                bucket_id,
-                str((bucket.get("metadata") or {}).get("type") or "dynamic"),
-                str(bucket.get("content") or ""),
-                dict(bucket.get("metadata") or {}),
-            )
-        for bucket_id in sorted(updated_ids):
-            bucket = new_by_id[bucket_id]
-            self._record_v3_bucket_event(
-                "external_update",
-                bucket_id,
-                str((bucket.get("metadata") or {}).get("type") or "dynamic"),
-                str(bucket.get("content") or ""),
-                dict(bucket.get("metadata") or {}),
-            )
-        for bucket_id in sorted(removed_ids):
-            bucket = old_by_id[bucket_id]
-            self._record_v3_bucket_event(
-                "external_delete",
-                bucket_id,
-                str((bucket.get("metadata") or {}).get("type") or "dynamic"),
-                str(bucket.get("content") or ""),
-                dict(bucket.get("metadata") or {}),
-            )
-
         logger.info(
             "External vault change reconciled / 外部记忆文件变更已对账: "
             "added=%s changed=%s removed=%s",
@@ -1685,13 +1630,6 @@ class BucketManager:
         # Best effort: a failure only logs a warning and does not affect the fact that the
         # bucket is already on disk.
         await self._sync_meaning_embedding(bucket_id, metadata.get("meaning") or [])
-        self._record_v3_bucket_event(
-            "create",
-            bucket_id,
-            str(metadata.get("type") or bucket_type),
-            linked_content,
-            metadata,
-        )
         self._record_ledger_event(
             "TraceCreated",
             bucket_id,
@@ -2643,13 +2581,6 @@ class BucketManager:
         # meaning each trigger their own regeneration.
         if "meaning" in kwargs or "meaning_append" in kwargs:
             await self._sync_meaning_embedding(bucket_id, post.get("meaning") or [])
-        self._record_v3_bucket_event(
-            "update",
-            bucket_id,
-            str(post.get("type") or "dynamic"),
-            post.content or "",
-            dict(post.metadata),
-        )
         self._record_ledger_event(
             "TraceUpdated",
             bucket_id,
@@ -2929,9 +2860,6 @@ class BucketManager:
             self._invalidate_bm25()
             await self._index_after_write(bucket_id, post.content or "")
             await self._sync_meaning_embedding(bucket_id, post.get("meaning") or [])
-            self._record_v3_bucket_event(
-                "restore", bucket_id, original_kind, post.content or "", dict(post.metadata)
-            )
             self._record_ledger_event(
                 "TraceRestored",
                 bucket_id,
@@ -3119,13 +3047,6 @@ class BucketManager:
 
         self._invalidate_bm25()
         logger.info(f"Soft-deleted bucket (moved to archive) / 软删除记忆桶: {bucket_id}")
-        self._record_v3_bucket_event(
-            "delete",
-            bucket_id,
-            str(post.get("type") or "dynamic"),
-            post.content or "",
-            dict(post.metadata),
-        )
         self._record_ledger_event(
             "TraceDeletedToArchive",
             bucket_id,
@@ -3724,13 +3645,6 @@ class BucketManager:
 
         self._invalidate_bm25()
         logger.info(f"Archived bucket / 归档记忆桶: {bucket_id} → archive/{primary_domain}/")
-        self._record_v3_bucket_event(
-            "archive",
-            bucket_id,
-            str(post.get("type") or "archived"),
-            post.content or "",
-            dict(post.metadata),
-        )
         self._record_ledger_event(
             "TraceArchived",
             bucket_id,

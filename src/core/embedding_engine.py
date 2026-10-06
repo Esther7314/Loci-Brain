@@ -372,7 +372,6 @@ class EmbeddingEngine:
     """SQLite storage, search and metadata checks, holding one BaseEmbeddingEngine."""
 
     def __init__(self, config: dict):
-        self.v3_runtime = None
         # A small in-process LRU of text -> embedding, to collapse repeated vector requests
         # that arrive close together.
         self._query_cache: "OrderedDict[str, list[float]]" = OrderedDict()
@@ -511,9 +510,6 @@ class EmbeddingEngine:
         # 5) Initialise SQLite and verify the metadata
         self._init_db()
         self._check_meta_consistency()
-
-    def attach_v3_runtime(self, runtime) -> None:
-        self.v3_runtime = runtime
 
     # -------------------- SQLite initialisation --------------------
 

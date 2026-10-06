@@ -345,27 +345,6 @@ async def trace_core(
         return metadata_err
     if rt.mark_op:
         rt.mark_op("trace")
-    rt.record_v3_tool_event("trace", {
-        "bucket_id": bucket_id,
-        "name": name,
-        "domain": domain,
-        "valence": valence,
-        "arousal": arousal,
-        "tags": tags,
-        "pinned": pinned,
-        "delete": delete,
-        "hard_delete": hard_delete,
-        "restore": restore,
-        "delete_reason_length": len(delete_reason),
-        "old_str_length": len(old_str),
-        "new_str_length": len(new_str) if new_str_provided else 0,
-        "status": status,
-        "weight": weight,
-        "dont_surface": dont_surface,
-        "room": room,
-        "when": when,
-        "folds_append": folds_append,
-    })
 
     if not bucket_id or not bucket_id.strip():
         return "请提供有效的 bucket_id。"

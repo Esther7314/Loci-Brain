@@ -61,9 +61,6 @@ from typing import Iterator
 from starlette.requests import Request
 from starlette.responses import Response
 
-from locibrain.app.execution import ExecutionEnvelope
-from locibrain.policy.update_policy import evaluate_update_manifest as _evaluate_update_manifest
-
 logger = logging.getLogger("loci_brain")
 
 # --- Runtime environment probe: Docker vs bare metal ---
@@ -202,7 +199,6 @@ embedding_outbox = None
 import_engine = None
 migrate_engine = None
 github_sync_instance = None
-v3_runtime = None
 
 
 def init(cfg: dict) -> None:
@@ -271,54 +267,6 @@ def replace_embedding_engine(engine) -> None:
             outbox.set_embedding_engine(engine)
         except Exception:
             logger.warning("Failed to refresh embedding outbox engine", exc_info=True)
-
-
-def evaluate_v3_update_manifest(manifest, content_by_path):
-    """Evaluate hot-update manifests through v3 policy when available."""
-    runtime = globals().get("v3_runtime")
-    evaluator = getattr(runtime, "evaluate_update_manifest", None)
-    if callable(evaluator):
-        try:
-            return evaluator(manifest, content_by_path)
-        except Exception as exc:
-            logger.warning(f"v3 update manifest evaluation failed, falling back: {exc}")
-    return _evaluate_update_manifest(manifest, content_by_path)
-
-
-def run_v3_web_operation(
-    operation: str,
-    payload: dict | None,
-    handler,
-    *,
-    module: str,
-    permissions: tuple[str, ...] = (),
-    required_permissions: tuple[str, ...] = (),
-    actor_name: str = "dashboard",
-    source: str = "web",
-    capability: str = "",
-    writes_memory: bool = False,
-    protected_paths: tuple[str, ...] = (),
-    feature_flags: tuple[str, ...] = (),
-):
-    """Run a web operation through the optional v3 execution side channel."""
-    runtime = globals().get("v3_runtime")
-    runner = getattr(runtime, "run_operation", None)
-    if not callable(runner):
-        return handler()
-    envelope = ExecutionEnvelope(
-        module=module,
-        operation=operation,
-        payload=payload or {},
-        actor_name=actor_name,
-        source=source,
-        permissions=permissions,
-        required_permissions=required_permissions,
-        capability=capability,
-        writes_memory=writes_memory,
-        protected_paths=protected_paths,
-        feature_flags=feature_flags,
-    )
-    return runner(envelope, handler)
 
 
 # --- Heartbeat / last-activity timestamp (originally in server.py; moved here so the

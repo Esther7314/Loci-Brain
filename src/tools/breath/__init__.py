@@ -45,6 +45,5 @@ from .awaken import surface_awaken
 async def dispatch() -> str:
     if rt.mark_op:
         rt.mark_op("breath")
-    rt.record_v3_tool_event("breath", {})
     await rt.decay_engine.ensure_started()
     return await surface_awaken()
