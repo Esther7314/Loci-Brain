@@ -48,7 +48,7 @@ from openai import AsyncOpenAI
 
 from utils import clean_llm_json, count_tokens_approx, positive_float
 
-from locibrain.integrations.provider_detect import (
+from .provider_detect import (
     is_gemini_native_host,
     strip_native_resource_prefix,
 )

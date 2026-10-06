@@ -58,7 +58,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable, Optional
 
-from locibrain.eventsourcing.ledger_mirror import file_lease
+from .ledger_mirror import file_lease
 
 logger = logging.getLogger("loci_brain.usage")
 

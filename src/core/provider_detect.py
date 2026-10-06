@@ -1,6 +1,6 @@
 """
 ========================================
-locibrain.integrations.provider_detect — provider detection and model-name normalization
+core/provider_detect.py — provider detection and model-name normalization
 ========================================
 
 dehydrator.py (the LLM used for compression) and embedding_engine.py (vectorization)

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from locibrain.security.public_origin import (
+from bridge.public_origin import (
     normalize_public_origin,
 )
 

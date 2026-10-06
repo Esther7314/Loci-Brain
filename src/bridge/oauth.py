@@ -44,7 +44,7 @@ import threading as _threading
 from starlette.requests import Request
 from starlette.responses import Response
 
-from locibrain.security.public_origin import (
+from bridge.public_origin import (
     configured_public_origin,
     normalize_http_resource,
     normalize_public_origin,

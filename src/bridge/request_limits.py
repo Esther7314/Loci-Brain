@@ -147,7 +147,7 @@ _MIB = 1024 * 1024
 # boundaries, the part headers, the few small fields beside it).
 IMPORT_UPLOAD_BYTES = 50 * _MIB         # web/import_api.py: an exported conversation file
 PACKAGE_UPLOAD_BYTES = 512 * _MIB       # web/library_api.py: an export package
-                                        # (locibrain.storage.backup_archive.MAX_ARCHIVE_BYTES)
+                                        # (core/backup_archive.MAX_ARCHIVE_BYTES)
 MULTIPART_SLACK_BYTES = 1 * _MIB
 
 # The routes that take an upload, each with its own ceiling in place of the management

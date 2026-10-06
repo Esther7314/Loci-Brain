@@ -72,7 +72,7 @@ from typing import Any, Optional
 
 import frontmatter
 
-from locibrain.storage.backup_archive import (
+from .backup_archive import (
     PACKAGE_MEDIA_PREFIX as _PACKAGE_MEDIA,
     PACKAGE_ORIGINALS_PREFIX as _PACKAGE_ORIGINALS,
     PACKAGE_STATE_PREFIX as _PACKAGE_STATE,

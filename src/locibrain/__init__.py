@@ -1,3 +1,1 @@
-from .version import __version__, read_version
-
-__all__ = ["__version__", "read_version"]
+"""Holds only domain/memory_messages.py, which tools/trace/core.py imports."""

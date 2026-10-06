@@ -15,7 +15,7 @@ import json
 from core import _ledger as L
 from core import _sources as S
 from core import _usage as U
-from locibrain.eventsourcing.ledger_mirror import LedgerMirror
+from core.ledger_mirror import LedgerMirror
 
 
 def run(coro):

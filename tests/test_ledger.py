@@ -25,7 +25,7 @@ from core import _ledger as L
 from core import _sources as S
 from core.bucket_manager import BucketManager
 from core.scope import Host
-from locibrain.eventsourcing.ledger_mirror import LedgerMirror
+from core.ledger_mirror import LedgerMirror
 from utils import WAS_DERIVED_FROM
 
 SRC = Path(__file__).resolve().parent.parent / "src"
@@ -56,7 +56,7 @@ def test_threads_writing_at_once_get_distinct_gapless_numbers(tmp_path):
 _CHILD = """
 import sys
 sys.path.insert(0, {src!r})
-from locibrain.eventsourcing.ledger_mirror import LedgerMirror
+from core.ledger_mirror import LedgerMirror
 ledger = LedgerMirror({path!r})
 for i in range({n}):
     ledger.append_event(event_type="TraceCreated", trace_id="p{k}-%d" % i,

@@ -27,6 +27,7 @@ WHY THIS FILE EXISTS
     Found by an external review, not by us — which is itself the argument for the test:
     the one thing nobody re-reads is the number they are sure about.
 """
+import os
 import re
 from pathlib import Path
 
@@ -78,12 +79,23 @@ def test_the_runtime_reads_the_same_number():
     assert get_version() == _read(ROOT / "src" / "VERSION")
 
 
-def test_the_package_reads_the_same_number():
-    # Criterion: the second reader, which resolves the version differently (it goes to the
-    # root file). Two readers with two strategies is precisely how the two files drifted
-    # apart without anyone noticing.
-    from locibrain.version import read_version
-    assert read_version() == _read(ROOT / "VERSION")
+def test_the_runtime_falls_back_to_the_same_number(monkeypatch):
+    # Criterion: get_version is the one reader, and it has two strategies — src/VERSION
+    # first, the root file when that cannot be read. The root strategy must land on the
+    # same number too; two strategies is precisely how the two files drifted apart
+    # without anyone noticing.
+    import builtins
+    from utils import get_version
+    real_open = builtins.open
+    src_file = os.path.normcase(str(ROOT / "src" / "VERSION"))
+
+    def without_src_version(path, *args, **kwargs):
+        if os.path.normcase(os.path.abspath(str(path))) == src_file:
+            raise FileNotFoundError(path)
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", without_src_version)
+    assert get_version() == _read(ROOT / "VERSION")
 
 
 def test_the_changelog_documents_the_current_version():

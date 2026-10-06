@@ -62,7 +62,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterable, Optional
 
-from locibrain.eventsourcing.ledger_mirror import file_lease
+from .ledger_mirror import file_lease
 from utils import replace_file
 
 from . import _when as _w

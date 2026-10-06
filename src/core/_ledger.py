@@ -3,7 +3,7 @@
 core/_ledger.py — what a ledger line may hold, and the read-only `/changes` face
 ========================================
 
-The ledger (`<buckets>/_ledger/events.jsonl`, locibrain/eventsourcing/ledger_mirror.py)
+The ledger (`<buckets>/_ledger/events.jsonl`, core/ledger_mirror.py)
 gets one line per memory mutation and, since source changes reached Loci, one line per
 source change and per place a change cleared. Each line is numbered by `seq`; a host
 reconciles against those numbers (`applied_seq` in a change's receipt, `since=` here).
@@ -223,7 +223,7 @@ def _cursor_key(ledger) -> bytes:
     sees half a key, and two processes racing to make it end up with the same one. A key
     file shorter than a key (an older crash between creating and writing it) never signed
     a cursor that verifies: it is made again."""
-    from locibrain.eventsourcing.ledger_mirror import file_lease
+    from .ledger_mirror import file_lease
 
     path = Path(ledger.path).with_name(CURSOR_KEY_FILE)
     try:

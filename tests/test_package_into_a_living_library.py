@@ -376,7 +376,7 @@ def test_a_package_past_nine_thousand_members_is_written_and_read():
     import io
 
     from core import package_import as ME
-    from locibrain.storage import backup_archive as BA
+    from core import backup_archive as BA
 
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:

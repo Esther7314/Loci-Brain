@@ -52,7 +52,7 @@ from openai import AsyncOpenAI
 
 from utils import parse_bool, positive_float
 
-from locibrain.integrations.provider_detect import (
+from .provider_detect import (
     is_known_cloud_embedding_endpoint,
     normalize_model_for_endpoint,
     strip_native_resource_prefix,

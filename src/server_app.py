@@ -18,7 +18,7 @@ from typing import Any, Awaitable, Callable, Mapping
 import httpx
 from starlette.middleware.cors import CORSMiddleware
 
-from locibrain.security.public_origin import (
+from bridge.public_origin import (
     configured_public_origin,
     normalize_public_origin,
 )

@@ -18,6 +18,11 @@ What lives here:
   import, export-package import, recomputing the vectors after an embedding-model change). Each is built
   exactly once by server.py at startup, which makes it the same kind of thing as the
   five above.
+- `ledger_mirror.py` / `footprint.py` / `media_store.py` / `backup_archive.py` /
+  `embedding_outbox.py` / `provider_detect.py`: the append-only ledger and the footprint
+  line breath reads from it, attachment storage, the archive format exports and imports
+  share, the write-behind queue of the vector index, and provider detection for the
+  summariser and embedding clients.
 - `_fold.py` / `_muse.py` / `_dream.py` / `_bigevent.py` / `_when.py` / `_rooms.py`:
   engine pieces — the bones of fold/gist, the rule for when to muse, the rule for when
   to dream, how a period draws its circle in time, the calendar and timezone

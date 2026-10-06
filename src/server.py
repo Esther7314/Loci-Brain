@@ -54,7 +54,7 @@ from core.bucket_manager import BucketManager
 from core.dehydrator import Dehydrator
 from core.decay_engine import DecayEngine
 from core.embedding_engine import EmbeddingEngine
-from locibrain.storage.embedding_outbox import EmbeddingOutbox
+from core.embedding_outbox import EmbeddingOutbox
 from core.import_memory import ImportEngine
 from core.strict_args import harden as _harden_tool
 from core.package_import import MigrateEngine

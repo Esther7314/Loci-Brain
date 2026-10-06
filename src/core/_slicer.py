@@ -805,7 +805,7 @@ class PendingSlices:
                 return hit, changed
 
     def _blank_gists(self, slice_ids: set) -> int:
-        from locibrain.eventsourcing.ledger_mirror import file_lease
+        from .ledger_mirror import file_lease
 
         if not slice_ids or not self.path.exists():
             return 0
@@ -846,7 +846,7 @@ class PendingSlices:
         `import.batch` is `import_batch`, and every close and re-cut line of its slices.
         The file is left as if they had never been appended (removed when nothing else is
         in it). Returns how many slices went."""
-        from locibrain.eventsourcing.ledger_mirror import file_lease
+        from .ledger_mirror import file_lease
 
         async with self._turn():
             with self._guard:

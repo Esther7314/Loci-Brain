@@ -71,7 +71,7 @@ def _export_meta() -> dict:
 
 async def export(request: Request) -> Response:
     from core import export_package
-    from locibrain.storage.backup_archive import BackupArchiveError
+    from core.backup_archive import BackupArchiveError
 
     try:
         path, manifest = await export_package.build_package(
@@ -122,7 +122,7 @@ async def _upload_to_disk(upload, limit: int) -> str:
 
 
 async def import_package(request: Request) -> Response:
-    from locibrain.storage.backup_archive import MAX_ARCHIVE_BYTES
+    from core.backup_archive import MAX_ARCHIVE_BYTES
 
     from .loci import _origin_reject, _write_body
 

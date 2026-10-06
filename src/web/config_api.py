@@ -31,8 +31,8 @@ import httpx
 from starlette.requests import Request
 from starlette.responses import Response
 
-from locibrain.security.deployment_profile import normalize_public_https_origin
-from locibrain.security.public_origin import configured_public_origin
+from bridge.public_origin import configured_public_origin
+from .deployment_profile import normalize_public_https_origin
 
 from . import _shared as sh
 

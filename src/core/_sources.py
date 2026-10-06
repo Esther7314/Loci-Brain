@@ -807,7 +807,7 @@ def _append_line(path: Path, row: dict) -> None:
     left the last one torn (a torn line is skipped on read), and the write is flushed
     to disk before it counts. The append holds the file's own lease (`<file>.lock`), so
     two processes appending at once cannot interleave whatever lock their callers hold."""
-    from locibrain.eventsourcing.ledger_mirror import file_lease
+    from .ledger_mirror import file_lease
 
     path.parent.mkdir(parents=True, exist_ok=True)
     data = (json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
@@ -1111,7 +1111,7 @@ class SourceRegistry:
             revisions = {str(k): _opt_text(v) for k, v in revisions.items() if str(k) in wanted}
         where = (str(source.get("system")), str(source.get("instance")),
                  str(source.get("container")))
-        from locibrain.eventsourcing.ledger_mirror import file_lease
+        from .ledger_mirror import file_lease
 
         # The check and the append are one turn across threads and processes: two
         # registrations racing would otherwise both pass the check and both land, giving

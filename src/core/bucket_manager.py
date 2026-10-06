@@ -46,7 +46,7 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import date, datetime
 
-from locibrain.eventsourcing.footprint import FootprintSnapshot
+from .footprint import FootprintSnapshot
 
 # The unified error system: clamping an out-of-range value reports OB-W001/OB-W002
 # (rule.md §11)
@@ -262,8 +262,8 @@ from . import _ledger
 from . import _usage
 from ._cue_ledger import CueLedger
 from ._slicer import PendingSlices
-from locibrain.storage.media_store import MediaStore
-from locibrain.eventsourcing.ledger_mirror import LedgerMirror
+from .media_store import MediaStore
+from .ledger_mirror import LedgerMirror
 
 try:
     # ⚠️ A mine caught during acceptance: after the move into core, the old top-level path
