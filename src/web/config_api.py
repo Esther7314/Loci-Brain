@@ -1,13 +1,11 @@
 """
 ========================================
-web/config_api.py — engine config / API-key tests / model listing (four routes kept, seven dropped)
+web/config_api.py — engine config / API-key tests / model listing (four routes)
 ========================================
 
-This file used to hold nine routes, and two separate doorways governed the same settings:
-both `/api/config` and `/api/env-config` could edit the compress/embed fields. That was
-the source of the twin-doorway trap — hitting save on a stale, unrefreshed page wrote the
-old values straight back over the new ones. **The current panel keeps exactly one
-doorway**:
+**Exactly one doorway governs the settings.** Two doorways onto the same fields are a
+trap: hitting save on a stale, unrefreshed page writes the old values straight back over
+the new ones.
 
 - /api/config (GET/POST): read runtime config and hot-update it (including hot-swapping
   the embedding backend). `config.yaml` is the single source of truth.
@@ -15,11 +13,10 @@ doorway**:
   vectorization.
 - /api/models: list the models available from the target provider.
 
-The seven that were dropped (`/dashboard`, `/api/env-vars`, `/api/env-config` GET+POST,
-`/api/mcp-token/regenerate`, `/api/transport`) each have a comment at the point of
-deletion.
-These four are no longer authenticated at this layer either — the `sh._require_auth` gate
-was removed, matching the rest of the panel routes.
+There is no environment-variable editor, no token rotation and no transport switch; the
+notes beside the routes say why.
+These four are not authenticated at this layer, like the rest of the panel routes (the
+gate is web/panel_auth.py).
 
 Public surface: register(mcp).
 ========================================
@@ -170,14 +167,8 @@ def register(mcp) -> None:
             else runtime_public_url,
         }
 
-    # Four kept, seven dropped: `/dashboard` (the page itself), `/api/env-vars` and
-    # `/api/env-config` (the twin-doorway trap — two places governing one setting, so
-    # deleting it fixed a real bug as a side effect), `/api/mcp-token/regenerate` (auth
-    # went, so the token is no longer needed), and `/api/transport` (transport is fixed at
-    # http). Seven routes gone entirely. The panel keeps one doorway and `config.yaml` is
-    # the single source of truth. The four survivors follow below, and `/api/*` is no
-    # longer authenticated at this layer — the `sh._require_auth` gate came out with the
-    # rest.
+    # Four routes. The panel keeps one doorway and `config.yaml` is the single source of
+    # truth; `/api/*` is not authenticated at this layer.
 
     @mcp.custom_route("/api/config", methods=["GET"])
     async def api_config_get(request: Request) -> Response:
@@ -721,12 +712,11 @@ def register(mcp) -> None:
         })
 
 
-    # Dropped: `/api/mcp-token/regenerate`. The static secret behind
-    # `mcp_auth_mode="token"` can now only be changed by editing the `mcp_token` field in
-    # config.yaml by hand, or by setting the `LOCI_MCP_TOKEN` environment variable
-    # (`_is_valid_static_mcp_token` accepts both; env wins). The panel no longer offers a
-    # one-click rotation button. `oauth`, the default mode, goes through the authorization
-    # page in bridge/oauth.py and is unaffected.
+    # No token-rotation route: the static secret behind `mcp_auth_mode="token"` is changed
+    # only by editing the `mcp_token` field in config.yaml by hand, or by setting the
+    # `LOCI_MCP_TOKEN` environment variable (`_is_valid_static_mcp_token` accepts both; env
+    # wins). `oauth`, the default mode, goes through the authorization page in
+    # bridge/oauth.py.
 
     # =============================================================
     # /api/test/dehydration — check whether the dehydration LLM's API key works
@@ -762,10 +752,9 @@ def register(mcp) -> None:
 
     # =============================================================
     # /api/test/embedding — check whether embedding really works
-    # Only compression used to be testable; there was no way to verify vectorization, so
-    # "compression fine, vectorization silently failing" was completely invisible to the
-    # user. This actually issues one embedding request and reports success or failure to
-    # the front-end as it happened.
+    # Without it, "compression fine, vectorization silently failing" is completely
+    # invisible to the user. This actually issues one embedding request and reports
+    # success or failure to the front-end as it happened.
     # =============================================================
     @mcp.custom_route("/api/test/embedding", methods=["POST"])
     async def api_test_embedding(request: Request) -> Response:
@@ -872,12 +861,10 @@ def register(mcp) -> None:
         except Exception as e:
             return JSONResponse({"ok": False, "error": str(e)[:300]})
 
-    # Dropped: `/api/env-config` (GET+POST) entirely. It governed the same settings as
-    # `/api/config` — the compress/embed fields were editable from both sides — and that
-    # was the source of the twin-doorway trap: hitting save on a stale, unrefreshed page
-    # wrote the old values back over the new ones. Deleting it fixed a real bug as a side
-    # effect. The panel keeps `/api/config` as its one doorway, and `config.yaml` is the
-    # single source of truth.
-    # `/api/transport` is gone too: transport is fixed at http, and the `transport` key in
+    # No environment-config route: a second doorway onto the compress/embed fields is the
+    # twin-doorway trap (hitting save on a stale, unrefreshed page writes the old values
+    # back over the new ones). The panel keeps `/api/config` as its one doorway, and
+    # `config.yaml` is the single source of truth.
+    # No transport switch either: transport is fixed at http, and the `transport` key in
     # `config.yaml` gets no hot-switch entry point. Changing transport means editing
     # config.yaml or the environment by hand and restarting.

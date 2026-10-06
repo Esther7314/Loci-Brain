@@ -119,13 +119,11 @@ def parse_stamp(value) -> datetime | None:
         return None
 
     if _DATE_ONLY.match(s):
-        # This used to call parse_date bare — so `2026-09-31` (September has no 31st)
-        # would **raise**, while the first line of this function's docstring promises
-        # "None if unreadable". Worse, every caller upstream is written against
-        # "None = this one has no time" and not one of them wraps it in a try: a single
-        # bucket like that does not quietly drop out of the timeline, it **capsizes the
-        # entire recall**. (The `_LEADING_DATE` branch below has always been wrapped —
-        # one function, two tempers.)
+        # Not parse_date bare: `2026-09-31` (September has no 31st) would **raise**,
+        # while this function's docstring promises "None if unreadable". Every caller
+        # upstream is written against "None = this one has no time" and not one of them
+        # wraps it in a try: a single bucket like that would not quietly drop out of the
+        # timeline, it would **capsize the entire recall**.
         return parse_date_or_none(s)
 
     # ISO 8601: fromisoformat on Python 3.11+ accepts Z, and +08:00, and microseconds

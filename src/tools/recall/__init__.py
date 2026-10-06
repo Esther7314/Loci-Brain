@@ -15,14 +15,13 @@ whatever comes back always goes through the same zoom.
     recall(view="slices")                         the host's raw lines, sliced and waiting
                                                   for me to handle (tools/_slices.py)
 
-    ⚠️ Every example above uses a form `_parse_when()` actually accepts. Two of them
-       used to be `when="7月底"` and `when="那阵子"`, which it does not: it takes
+    ⚠️ Every example above uses a form `_parse_when()` actually accepts. It takes
        48h / 7d / 今天 / 昨天 / 前天 / 本周 / 上周 / 本月 / 上月 / 今年 / 2026-07 /
-       2026-07-15 / 起..止, and nothing else. An example that does not run is worse
+       2026-07-15 / 起..止, and nothing else (not `7月底`, not `那阵子`). An example that does not run is worse
        than no example — it is the documentation asserting a capability that is absent.
 
-🔪 **`by` was removed**: `by="touched"` (there is no such act as "digesting"
-   here) and `by="回看"` (superseded by `slices`). The rule behind it:
+🔪 **There is no `by`**: no `by="touched"` (there is no such act as "digesting"
+   here) and no `by="回看"` (`slices` does that). The rule behind it:
    **every parameter must map onto a sentence that actually surfaces in the mind.**
 
 Three density tiers:

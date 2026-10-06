@@ -218,11 +218,10 @@ async def backfill_sweep(before: str = "") -> int:
     succeeds, and it is naturally idempotent.
     Older grow buckets have no room, so they are never swept by mistake.
 
-    The source_tool criterion was later dropped. It used to accept only
-    grow/regrow, which meant migrated older buckets (source_tool=hold/import...)
-    could never be repaired — 444 of them were missed for two months.
-    "room has a value but summary is missing" is a complete criterion on its own;
-    where the bucket came from is irrelevant.
+    The criterion does not look at source_tool: migrated older buckets
+    (source_tool=hold/import...) need repairing too, and limiting it to grow/regrow
+    would leave them unrepaired forever. "room has a value but summary is missing"
+    is a complete criterion on its own; where the bucket came from is irrelevant.
 
     `before` (a stored `created` stamp, the moment the sweep was started): only entries
     written before it are taken. The sweep starts on the first grow after a restart, in

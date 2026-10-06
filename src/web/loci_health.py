@@ -85,10 +85,11 @@ async def build_setup() -> dict:
     e_model = str(emb.get("model") or "")
     e_base = str(emb.get("base_url") or "")
     e_ok = e_on and bool(e_model) and (bool(e_key) or "localhost" in e_base or "ollama" in e_base)
-    # 🔴 Being configured and being usable are two different things, and this row used to
-    #    check only the first. On a fresh install the bundled compose file starts an Ollama
+    # 🔴 Being configured and being usable are two different things, and this row checks
+    #    both. On a fresh install the bundled compose file starts an Ollama
     #    container with **no model pulled**: everything comes up, every service reports
-    #    healthy, THIS ROW SHOWS A GREEN TICK, and the first real write is what fails.
+    #    healthy, a config-only check SHOWS A GREEN TICK, and the first real write is what
+    #    fails.
     #    So when the configuration looks complete, ask the backend for one actual vector.
     #    Configuration is the one moment someone is prepared to hear about configuration.
     e_detail = ""
@@ -131,7 +132,7 @@ async def build_setup() -> dict:
         "按人找记忆就永远只找到一半。",
         "面板「整理 → 人名表」上点一下就是往这张表里写")
 
-    # 5. Which timezone "today" is cut in. (The container's own TZ no longer matters:
+    # 5. Which timezone "today" is cut in. (The container's own TZ does not matter:
     #    stamps are written as UTC by name, see utils.now_iso.)
     tz = _w.tz_status()
     row("tz", "时区", not tz["problem"],
@@ -140,8 +141,7 @@ async def build_setup() -> dict:
         "每天有几个小时的记忆会算到隔壁那天去，「今天存的东西今天翻不到」。",
         "在启动环境里设 LOCI_TZ，例如 Asia/Shanghai、America/Los_Angeles")
 
-    # 6. The panel lock — after the strip-down /api/* stopped authenticating, so that gate
-    #    never appeared again
+    # 6. The panel lock (web/panel_auth.py) — /api/* has no other gate
     locked = False
     try:
         from . import panel_auth as _pa
@@ -273,12 +273,12 @@ async def build_health() -> dict:
         checks.append({"label": label, "status": status,
                        "message": message, "action": action})
 
-    # WARNING: this whole function used to run as one straight line. A failed bucket read, a
-    # malformed metadata shape, a config section that was not a dict — an exception anywhere
-    # meant **the entire health check returned 500**. Meanwhile the disk and dream sections
-    # were `except: pass`, so two checks quietly disappeared and the summary still read
-    # healthy. **A health check must not be all-or-nothing about itself.**
-    # Each check now runs independently; one that blows up records a red row in place and the
+    # WARNING: **a health check must not be all-or-nothing about itself.** Run as one
+    # straight line, a failed bucket read, a malformed metadata shape, a config section that
+    # is not a dict — an exception anywhere — would make **the entire health check return
+    # 500**; swallowed with `except: pass`, a check quietly disappears and the summary still
+    # reads healthy.
+    # Each check runs independently; one that blows up records a red row in place and the
     # rest carry on.
     def guard(label, fn, action=""):
         try:
@@ -300,9 +300,8 @@ async def build_health() -> dict:
     try:
         all_buckets = await sh.bucket_mgr.list_all(include_archive=False)
         metas = [(b.get("metadata", {}) or {}) for b in all_buckets]
-        # The wording used to say "N entries including the archive", but N was the count
-        # above, which **excludes** the archive — the label did not match the number. The
-        # archive has to be counted separately.
+        # The count above **excludes** the archive, so "N entries including the archive"
+        # needs the archive counted separately — or the label would not match the number.
         n_with_archive = len(await sh.bucket_mgr.list_all(include_archive=True))
     except Exception as e:
         buckets_ok = False
@@ -451,8 +450,8 @@ async def build_health() -> dict:
     guard("数据持久性", sec_persist)
 
     def sec_disk():
-        # This used to be `except: pass` — the disk check going quiet at exactly the moment
-        # it most needed to speak.
+        # No `except: pass` here (guard() records the failure) — the disk check must not go
+        # quiet at exactly the moment it most needs to speak.
         free_gb = shutil.disk_usage(bd).free / (1024**3)
         add("磁盘", "ok" if free_gb > 2 else "warn", f"还剩 {free_gb:.1f} GB",
             "" if free_gb > 2 else "腾点地方，写不进去就存不了记忆")
@@ -480,13 +479,11 @@ async def build_health() -> dict:
         # *that* might mean writes are broken, and only then is a warning warranted.
         fresh = 0
         for m in visible:
-            # This used to be fromisoformat(str(created)[:19]) — exactly the slice that is
-            # banned elsewhere. It cuts off the timezone suffix, producing a naive datetime,
-            # while `now = _w.now()` above is timezone-aware; subtracting the two raises
-            # TypeError, which the surrounding except then swallowed -> fresh was always 0 ->
-            # the panel reported "nothing stored at all" every single day. This was the last
-            # surviving [:19] in the codebase, and it was spotted in a screenshot. Silently
-            # wrong, and frightening in exactly the wrong direction.
+            # Never fromisoformat(str(created)[:19]): the slice cuts off the timezone suffix,
+            # producing a naive datetime, while `now = _w.now()` above is timezone-aware;
+            # subtracting the two raises TypeError, the surrounding except swallows it ->
+            # fresh is always 0 -> the panel reports "nothing stored at all" every single
+            # day. Silently wrong, and frightening in exactly the wrong direction.
             ts = _w.parse_stamp(m.get("created"))
             if ts is not None and (now - ts).days < 7:
                 fresh += 1
@@ -602,15 +599,11 @@ async def build_health() -> dict:
         """A `from` that no longer resolves — **there are two kinds, and they are not the
         same thing.**
 
-        This check used to merge both into one sentence: "the source of N memories points at
-        a bucket that does not exist, most likely because that source was hard-deleted."
-        Asked whether the health check was actually correct, a look at the data showed that
-        of 26 such entries, **24 had their source sitting safely in the archive** —
-        `trace(delete=True)` is a soft delete and a direct id lookup always recovers it —
-        and only 2 were genuinely missing.
-        So the number was right and the sentence was wrong, in the worst possible direction:
-        describing something perfectly normal as "hard-deleted" sends someone hunting for an
-        incident that never happened.
+        Most such sources sit safely in the archive — `trace(delete=True)` is a soft delete
+        and a direct id lookup always recovers it — and only a few are genuinely missing.
+        One sentence for both ("most likely hard-deleted") would be wrong in the worst
+        possible direction: describing something perfectly normal as "hard-deleted" sends
+        someone hunting for an incident that never happened.
         """
         live_ids = {str(m.get("id") or "") for m in metas}
         try:
@@ -650,20 +643,19 @@ async def build_health() -> dict:
     # normal**: dreams are time-driven and disappear if left alone, and a backlog that never
     # reaches the threshold simply means a night without dreams.
     def sec_dreams():
-        # Same story: this used to be `except OSError: pass`, so a missing directory made
-        # the whole check vanish.
+        # Same story: no `except OSError: pass`, or a missing directory would make the
+        # whole check vanish.
         from core import _dream as _D
         n = len(_D.load_dreams())
         add("盘上的梦", "ok",
             f"{n} 个还在（时间到了自己会没）" if n else "空的（攒不到线就一夜无梦，正常）")
     guard("盘上的梦", sec_dreams, "确认 buckets/night_fall/dreams 目录在")
 
-    # This used to hardcode three states (ok/warn/error), while the health check **has a
-    #    fourth, `note`** — "you have not started yet", "this one is optional": neutral
-    #    statements, not problems.
-    #    The consequence: the page said "14 items" while the three summary numbers added up
-    #    to 13. **The health check was under-reporting itself**, and the health check is
-    #    precisely the thing whose job is to tell the truth.
+    # Besides ok/warn/error the health check **has a fourth state, `note`** — "you have not
+    #    started yet", "this one is optional": neutral statements, not problems. With three
+    #    hardcoded states the page would say "14 items" while the summary numbers add up to
+    #    13: **the health check under-reporting itself**, when it is precisely the thing
+    #    whose job is to tell the truth.
     #    (The smoke test that asserts the summary matches the item count catches this.)
     # The rule: **count whatever states actually appear**, never a hardcoded list — a
     #    hardcoded list would miss the same way again when a fifth state is added.
@@ -710,12 +702,9 @@ async def api_loci_setup(request: Request) -> Response:
 async def api_logs(request: Request) -> Response:
     """Logs: read the tail of server.log. **Read-only.**
 
-    Restored. This route used to live in `web/system.py` and went with it when the twenty
-    upstream modules were cut — while the panel's entire log section kept calling it,
-    getting HTML back from the 404, and blowing up in the front-end's `.json()`. What the
-    user saw was "the response was not JSON". **The writing side was alive the whole
-    time** (utils.setup_logging writes to <buckets>/.logs/server.log); nobody could read
-    it.
+    The panel's whole log section calls it; without it the section gets HTML back from a
+    404 and blows up in the front-end's `.json()`. The writing side is
+    utils.setup_logging, which writes to <buckets>/.logs/server.log.
 
     `level` filters upward by severity: choosing WARNING also returns ERROR and CRITICAL.
     Someone selecting "warnings" wants to know whether anything is wrong, not "warnings

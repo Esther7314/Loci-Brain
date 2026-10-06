@@ -22,14 +22,10 @@ Key behaviour:
 
 What this does NOT do (the boundary):
 - No business logic for the individual tools; all of that lives under tools/*.
-- The `night_fall` tool and both of its hook points were retired entirely (there is an
-  epitaph for it further down this file). Dream weaving is `tools/_dream.py` now, and
-  **it has no MCP tool surface**: it weaves in the background after waking, dreams are
-  fetched with `GET /api/dream/current`, and how a dream reaches the conversation is the
-  bridge's problem.
-- `seed`, the thirteen emotional roots, was also withdrawn from the MCP surface.
-  **Disabled, not deleted**: `tools/seed/` and the buckets on disk are untouched. Its
-  epitaph is further down this file too.
+- No dream tool. Dream weaving is `core/_dream.py`, and **it has no MCP tool surface**:
+  it weaves in the background after waking, dreams are fetched over HTTP (web/loci_dream.py),
+  and how a dream reaches the conversation is the bridge's problem.
+- No `seed` tool (the thirteen emotional roots): see the note below the tool imports.
 - No HTTP route handlers (they are all under web/*), and no LLM prompts (dehydrator owns
   those).
 - No direct reads or writes of bucket files (bucket_manager owns those).
@@ -80,29 +76,23 @@ from tools import muse as _t_muse      # musing: the threshold engine's second i
 # are delivered through the bridge.
 # It is imported here only for the silent hook on waking: sweep the expired ones, and weave
 # if the backlog is over the line.
-# WARNING: do not name this `_t_dream`. The long-unregistered upstream `dream` tool once
-#    held that name, and colliding with it makes the hook **silently do nothing**. The first
-#    version did collide: one line in the log saying the module has no such attribute, while
-#    the smoke test for "do not weave below the threshold" stayed green — because it never
-#    ran at all. **That is exactly how a green light lies.** (`tools/dream/` has since been
-#    deleted entirely and the name is free again, but the lesson stays.)
+# A name collision here makes the hook **silently do nothing**: one line in the log saying
+#    the module has no such attribute, while a smoke test for "do not weave below the
+#    threshold" stays green because it never runs at all. **That is exactly how a green
+#    light lies.**
 from core import _dream as _dream_engine
 from tools import trace as _t_trace
 from tools import pulse as _t_pulse
-# `from tools import seed as _t_seed` — **removed**.
-#    Reasoning: once events became episodic memories, the **original words** for "what did
+# There is no `seed` tool (the thirteen emotional roots).
+#    Reasoning: events are episodic memories, so the **original words** for "what did
 #    this feel like at the time" are right there in the text. **What was actually said then
-#    beats a word looked up in a dictionary.** Supporting evidence: the manual had `seed`
-#    marked in red as one of the most-often-forgotten tools — **a tool that needs a warning
-#    label to get used was never really in hand at all.**
-#    WARNING: one thing is lost — the cross-memory emotional index. "When was I ever afraid"
-#       has no tag to search by any more; only vector search reaches it.
+#    beats a word looked up in a dictionary.** And **a tool that needs a warning label to
+#    get used was never really in hand at all.**
+#    WARNING: what this gives up is the cross-memory emotional index. "When was I ever
+#       afraid" has no tag to search by; only vector search reaches it.
 #       **Judged acceptable.**
-#    **Not one row of the thirteen roots' data is deleted** (the night_fall precedent:
-#       disable, do not delete). The `tools/seed/` directory stays, the buckets on disk stay;
-#       there is simply no import chain that reaches them any more. The `domain[0]=="seed"`
-#       filter in `core/visibility.timeline_kind()` is unchanged, so they still do not enter
-#       the timeline.
+#    The roots' buckets on disk are kept. The `domain[0]=="seed"` filter in
+#       `core/visibility.timeline_kind()` keeps them off the timeline.
 
 # --- Load config & init logging ---
 config = load_config()
@@ -437,14 +427,10 @@ _wsh.init_runtime(
     github_sync_instance=github_sync_instance,
     restart_github_auto_task=_restart_github_auto_task,
 )
-# This is where startup used to load the on-disk dashboard cookie sessions back into memory,
-# so a container restart did not log everyone out. That whole session mechanism went with
-# web/auth.py in the strip-down: /api/* is not authenticated at this layer any more, and
-# there are no sessions to load. Read the header of web/_shared.py before adding anything
-# back here.
+# There are no dashboard cookie sessions to load: /api/* is not authenticated at this
+# layer. Read the header of web/_shared.py before adding anything session-like here.
 
-# Register every web/ route module. The HTTP layer has moved out entirely; see
-# web/__init__.register_all.
+# Register every web/ route module; see web/__init__.register_all.
 _web.register_all(mcp)
 
 
@@ -683,8 +669,8 @@ async def _run_with_notice(coro: Awaitable[str], op: str = "", args: dict | None
 
 
 # =============================================================
-# /breath-hook has moved to web/hooks.py. (/dream-hook was removed: dreaming is not an
-# obligation, so it is never triggered automatically.)
+# There is no /breath-hook or /dream-hook route. Dreaming is not an obligation, so
+# nothing outside triggers it.
 # =============================================================
 
 
@@ -714,15 +700,8 @@ _tools_runtime.init(
 # =============================================================
 @mcp.tool()
 async def breath() -> str:
-    # The nine outer parameters (query, domain, importance_min, ...) were deleted.
-    #    They could **never** be passed in: breath's schema on the tool surface is forcibly
-    #    emptied (see the adapter below), so those were a row of parameters nobody could use,
-    #    doing nothing but making a reader think they were still alive.
-    # The parameterized retrieval underneath them **was deleted too**: the catalog, feel,
-    #    importance, surface and search branches of `tools/breath/`, plus `_verbatim` —
-    #    six files, 1110 lines. Once the parameters were gone, none of it had an entry point
-    #    left, and **a road with no entrance makes the next person to read this (me) believe
-    #    it is still in use**.
+    # breath takes no parameters (its schema on the tool surface is forcibly emptied, see
+    #    the adapter below) and has no parameterized retrieval underneath.
     #    Finding things is recall's job. breath only wakes up: one action, one screen.
     """Wake up. Call this once before you say anything. It takes no arguments.
 
@@ -756,10 +735,9 @@ async def breath() -> str:
     Do not use this tool when:
     · You are looking for something. Use recall. This one only handles waking up."""
     result = await _with_notice(_t_breath.dispatch(), op="breath", args={})
-    # --- The nightly auto-weave hook now runs our own engine; night_fall is fully retired ---
-    # What was kept is the judgement behind it: **anything that only happens if someone
-    # remembers to do it will not happen.** So weaving hangs off waking up, rather than
-    # depending on the model remembering to call it.
+    # --- The nightly auto-weave hook ---
+    # **Anything that only happens if someone remembers to do it will not happen.** So
+    # weaving hangs off waking up, rather than depending on the model remembering to call it.
     # But **not one word is added to breath** — that is a hard boundary. Two silent things
     #    happen here and nothing else: (1) sweep the dreams whose time is up (delete the
     #    file, leave a trace) and (2) if the backlog is over the line and nothing was woven
@@ -767,13 +745,6 @@ async def breath() -> str:
     #    The dream that comes out is **not stuffed into this return value**: how a dream
     #    reaches the conversation, and how it is removed from the context afterwards, is the
     #    bridge's job.
-    # What was retired is upstream night_fall's design — surface only on resonance, delete
-    #    after four missed catches, invisible even to its own author once written.
-    # This used to read `if not query or not str(query).strip():`, from the era when there
-    # was still a query parameter, meaning "only do dream upkeep on a bare call".
-    # With the parameters gone, breath is always bare, so the condition is always true —
-    # and `query` became an undefined name, meaning **every single call would NameError right
-    # here**. An import check cannot see that; it only explodes at runtime.
     # It runs on every breath that reads the whole library: dreams are the life line's,
     # woven from everything, so a host waking under a read scope (or refused) does not
     # drive them.
@@ -825,22 +796,15 @@ except (AttributeError, RuntimeError, TypeError, ValueError) as _breath_compat_e
 
 
 
-# -- Night Fall (the dreaming mod) is fully retired ------------------------------------
-# It came from the upstream project ysuu525/Night-Fall. The decision was to build the
-# dreaming mechanism from scratch rather than adapt theirs, because **it was someone else's
-# doing**: a three-hour latency, delete after four missed catches, surface only on
-# resonance, and invisible even to its own author once written. **Not one of those is what
-# this system wanted.**
-# Three attachment points were removed: (1) the `night_fall` MCP tool, (2) breath's wake-up
-# hook, replaced by tools/_dream's maintain(), and (3) breath_advanced's auto-surface.
-# The twelve files under `src/night_fall/` **stay on disk as reference** but have been
-# **removed from the import chain entirely** — the string `night_fall` should never appear
-# in this file again, except in this epitaph.
-# The new engine is `tools/_dream.py`: four material sources -> one independent call ->
+# -- Dreaming ---------------------------------------------------------------------------
+# The engine is `core/_dream.py`: four material sources -> one independent call ->
 # two layers (whole dream plus fragments) -> fragments follow a time-based lifecycle ->
 # leave a trace.
-# Retrieval does not go through the MCP tool surface: `GET /api/dream/current` (web/loci.py)
-# plus the engine functions weave() and current_dream().
+# Retrieval does not go through the MCP tool surface: `GET /api/dream/current`
+# (web/loci_dream.py) plus the engine functions weave() and current_dream().
+# It is not upstream Night-Fall's design (a three-hour latency, delete after four missed
+# catches, surface only on resonance, invisible even to its own author once written):
+# **not one of those is what this system wants.**
 
 
 
@@ -1078,18 +1042,16 @@ async def grow(
 
 
 # --- A removed parameter must be **unrecognized**, never silently ignored -------------
-# Three parameters were removed: `content`, `importance` and `meaning`.
+# grow takes no `content`, `importance` or `meaning`.
 #   - `content` (hand over one long passage and let the system split it into several
-#     entries) was **the only place in the whole system where the system decided how many
-#     things this was**, which cuts directly against the design. `items=[...]` already
-#     covers it completely, and does it more honestly.
-#   - `importance` and `meaning` were retired earlier; the parameters only stayed behind so
-#     an old call could be answered in plain language.
-# But **deleting them alone is dangerous**: FastMCP by default drops fields that are not in
-#   the schema and then calls the function, so the old spelling **fails silently** — the
-#   caller believes they handed over a long passage, and nothing happened at all.
-#   Following the precedent set for breath, recall and trace, grow's parameter model is set
-#   to forbid: passing an old parameter raises immediately. The error exists to be read.
+#     entries) would be **the only place in the whole system where the system decides how
+#     many things this is**, which cuts directly against the design. `items=[...]` covers
+#     it completely, and does it more honestly.
+# Leaving them out of the schema alone is dangerous: FastMCP by default drops fields that
+#   are not in the schema and then calls the function, so the old spelling **fails
+#   silently** — the caller believes they handed over a long passage, and nothing happened
+#   at all. So grow's parameter model is set to forbid, as for breath, recall and trace:
+#   passing an unknown parameter raises immediately. The error exists to be read.
 try:
     _grow_tool = mcp._tool_manager.get_tool("grow")
     if _grow_tool is None:
@@ -1231,13 +1193,12 @@ async def recall(
 # FastMCP by default **quietly drops** fields that are not in the schema and then calls the
 # function. So an old spelling like `by="..."` degrades silently into the default view —
 # the caller believes they are looking at the full, uncollapsed list and are handed a
-# collapsed screen instead, **with no signal whatsoever**.
-# That is the mirror image of the disease the parameter cleanup was meant to cure: a knob
-# that no longer exists but still appears to be doing something.
-# Following the precedent of breath's compatibility adapter just above, recall's parameter
-# model is set to forbid, so an unknown or misspelled parameter raises immediately.
-# **The error exists to be read**: wherever the manual still teaches `by=`, the first call
-# that spells it that way finds out it is gone.
+# collapsed screen instead, **with no signal whatsoever**: a knob that does not exist
+# still appearing to do something.
+# As with breath's compatibility adapter just above, recall's parameter model is set to
+# forbid, so an unknown or misspelled parameter raises immediately.
+# **The error exists to be read**: wherever a manual teaches `by=`, the first call that
+# spells it that way finds out it does not exist.
 try:
     _recall_tool = mcp._tool_manager.get_tool("recall")
     if _recall_tool is None:
@@ -1528,19 +1489,16 @@ async def regrow(
     )
 
 
-# --- regrow must also fail to recognize removed parameters (**third time, same trap**) --
-# `regrow` dropped `when` and `room`; metadata belongs to trace now. But it was the
-#    **only one of the eight tools without forbid** — so `regrow(bucket_id=...,
-#    room="MIND/VIEWS")` **neither errors nor takes effect**: FastMCP quietly drops the
-#    field that is not in the schema and calls the function, the room is untouched, and the
-#    receipt says nothing about it.
+# --- regrow must also fail to recognize unknown parameters --------------------------------
+# `regrow` takes no `when` or `room`; metadata belongs to trace. Without forbid,
+#    `regrow(bucket_id=..., room="MIND/VIEWS")` would **neither error nor take effect**:
+#    FastMCP quietly drops the field that is not in the schema and calls the function, the
+#    room is untouched, and the receipt says nothing about it.
 #    **Accepting it silently is far worse than an error: the caller believes it changed, and
 #    it did not.**
-# The history of this trap: forbid was added to breath/grow/recall/trace, missing fold and
-#    muse; the pass that added fold and muse (just above) **missed regrow**.
-#    That is three times — so the rule is no longer "remember to add it for each new tool",
-#    it is **that a smoke test goes red because of it** (`smoke_grow`). A list kept by human
-#    memory will be missed eventually. An assertion will not.
+# The rule is not "remember to add it for each new tool", it is **that a smoke test goes
+#    red without it** (`smoke_grow`). A list kept by human memory will be missed
+#    eventually. An assertion will not.
 try:
     _regrow_tool = mcp._tool_manager.get_tool("regrow")
     if _regrow_tool is None:
@@ -1807,7 +1765,7 @@ try:
         raise RuntimeError("registered trace tool is missing")
     # All three steps (forbid · rebuild · re-publish the cached schema) live in
     # core/strict_args.harden — see that module for what happens when a caller copies
-    # only the first two, which is what the sweep below used to do.
+    # only the first two.
     _harden_tool(_trace_public_tool)
 except (AttributeError, RuntimeError, TypeError, ValueError) as _trace_schema_exc:
     logger.warning(
@@ -1820,12 +1778,11 @@ except (AttributeError, RuntimeError, TypeError, ValueError) as _trace_schema_ex
 
 
 
-# `pulse` was withdrawn from the MCP tool surface.
+# `pulse` is not on the MCP tool surface.
 #    The reasoning: the other tools are all "what am I doing to a memory", and this one
 #    alone is "is this machine healthy" — a health check is not a memory action, and should
-#    not occupy a tool slot. **Disabled, not deleted**: the implementation is still in
-#    `tools/pulse/`, reached through the panel's read-only `GET /api/loci/pulse`
-#    (see web/loci.py).
+#    not occupy a tool slot. The implementation is in `tools/pulse/`, reached through the
+#    panel's read-only `GET /api/loci/pulse` (see web/loci_health.py).
 
 
 
@@ -1843,10 +1800,10 @@ try:
             _t = _surface._tool_manager.get_tool(_tool_name)
             if _t is None:
                 continue
-            # ⚠️ This used to inline the flip and **drop the re-publish step** that the
-            #    trace block above had, so eight tools rejected unknown arguments while
-            #    still advertising that they accepted them. Go through harden(); it is
-            #    the only thing that keeps the two halves from drifting apart again.
+            # ⚠️ Go through harden(), never an inline flip: flipping without the re-publish
+            #    step leaves a tool rejecting unknown arguments while still advertising
+            #    that it accepts them. harden() is the only thing that keeps the two halves
+            #    from drifting apart.
             if _harden_tool(_t):
                 logger.info("strict-argument adapter installed for %s", _tool_name)
 except (AttributeError, RuntimeError, TypeError, ValueError) as _strict_all_exc:
@@ -1855,18 +1812,11 @@ except (AttributeError, RuntimeError, TypeError, ValueError) as _strict_all_exc:
 
 
 
-# **The `seed` tool was withdrawn from the MCP surface.**
-#    Its wrapper was deleted along with `from tools import seed`; the reasoning is in the
-#    comment near the imports above.
-#    Following the night_fall / `I` / `dream` precedent: **disabled, not deleted** — the two
-#    files under `tools/seed/` are still on disk, not one of the thirteen roots' buckets was
-#    touched, and the only way back to them is a direct id lookup through `recall`.
-#    WARNING: do not casually register it again. Read those three lines of reasoning first,
-#    especially "a tool that needs a warning label was never really in hand".
-#    Also needs updating: the four places the docs mention seed — the tool count, the red
-#       line in the "when to reach for it" table, the "name it with seed first" paragraph
-#       under `grow`, and the "seed is only touched at two moments" note under fold and
-#       digestion.
+# **There is no `seed` tool** — the reasoning is in the comment near the imports above.
+#    The thirteen roots' buckets are on disk; the only way to them is a direct id lookup
+#    through `recall`.
+#    WARNING: do not casually register one. Read that reasoning first, especially "a tool
+#    that needs a warning label was never really in hand".
 
 
 
@@ -1900,10 +1850,10 @@ except (AttributeError, RuntimeError, TypeError, ValueError) as _strict_all_exc:
 
 
 # ============================================================
-# OAuth 2.0 — MCP remote auth. Moved to bridge/oauth.py in the strip-down: this is not a
-# panel route, it is how a remote client authenticates to /mcp itself. "Auth is on by
-# default" is a settled position for the open-source build, and it must not die along with
-# the panel (bridge/__init__.py carries the full reasoning).
+# OAuth 2.0 — MCP remote auth, in bridge/oauth.py: this is not a panel route, it is how a
+# remote client authenticates to /mcp itself. "Auth is on by default" is a settled position
+# for the open-source build, and it must not depend on the panel (bridge/__init__.py carries
+# the full reasoning).
 # The two validators the start-time MCP auth middleware needs are imported back here:
 # mcp_auth_mode=="oauth" (the default) uses _is_valid_mcp_token, mcp_auth_mode=="token" uses
 # _is_valid_static_mcp_token, and one of the two is injected into the middleware.
@@ -1968,9 +1918,8 @@ if __name__ == "__main__":
             embedding_outbox=embedding_outbox,
             ensure_ollama_child=_ollama_child.ensure_child_on_boot,
             stop_ollama_child=_ollama_child.stop_child,
-            # Tunnel support was removed entirely: load_tunnel_config, start_tunnel and
-            # stop_tunnel were already Optional[...] = None, so omitting them means
-            # "no tunnel".
+            # No tunnel: load_tunnel_config, start_tunnel and stop_tunnel are
+            # Optional[...] = None, so omitting them means "no tunnel".
             restart_github_auto_task=_restart_github_auto_task,
             github_auto_interval=_gh_auto_interval,
             boot_marker_path=os.path.join(
@@ -1994,9 +1943,8 @@ if __name__ == "__main__":
             host_resolver=_hosts,
         )
         # (The tool count is not reported here. The line above, about folding N secondary
-        #  tools into the primary instance for M exposed in total, reports the real number.
-        #  This line used to hardcode "14 tools", which became a lie the moment the count
-        #  dropped to nine.)
+        #  tools into the primary instance for M exposed in total, reports the real number;
+        #  a hardcoded count here goes stale the moment a tool is added or withdrawn.)
         logger.info("CORS middleware enabled for remote transport / 已启用 CORS 中间件")
         logger.info(
             "MCP request body limit: %s",

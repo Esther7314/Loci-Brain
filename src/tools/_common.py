@@ -52,8 +52,8 @@ from . import _runtime as rt
 # ============================================================
 # Named constants
 # ------------------------------------------------------------
-# No bare magic numbers. These used to be scattered across helper defaults and
-# business logic; collected here, ① every tunable can be read at a glance and
+# No bare magic numbers. Collected here rather than spread across helper defaults
+# and business logic, ① every tunable can be read at a glance and
 # ② the thresholds that encode a principle (the importance>=9 ceiling) are
 # traceable. Before changing any of them, remember what the ceiling is for:
 # importance only means anything while it is scarce.
@@ -314,7 +314,7 @@ def _push_warning_safe(code: str, msg: str) -> None:
     """Call errors.push_warning safely; degrade silently if the import fails.
 
     Why: push_warning is called four times across the two quota helpers, and each
-    call site used to repeat the same three-layer try/except import dance.
+    call site would otherwise repeat the same three-layer try/except import dance.
     Centralised here:
       ① the calling code becomes one clean line;
       ② the import fallback logic exists in exactly one place;

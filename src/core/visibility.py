@@ -3,11 +3,10 @@
 core/visibility.py — the one gate: may this memory be put in front of the model
 ========================================
 
-Every road that puts a memory in front of the model asks `visible_for()` first. The
-rules used to live wherever a road happened to need them — recall's timeline filter,
-the quota helpers' "terminal" test, `dont_surface` checked on some roads and forgotten
-on others — and a road that forgot one rule leaked quietly: no error, the entry simply
-came up. One gate, one table of roads, so a road's rules can be read in one place and a
+Every road that puts a memory in front of the model asks `visible_for()` first. Rules
+kept wherever a road happens to need them — a timeline filter here, a "terminal" test
+there, `dont_surface` checked on some roads and forgotten on others — leak quietly when
+a road forgets one: no error, the entry simply comes up. One gate, one table of roads, so a road's rules can be read in one place and a
 new road starts from the table instead of from memory.
 
 ------------------------------------------------------------

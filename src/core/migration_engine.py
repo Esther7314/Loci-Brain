@@ -186,11 +186,11 @@ def target_signature(target_backend: str, target_model: str, target_dim: int) ->
     """A unique signature for the migration target: resuming only applies when the target
     is the same one as last time.
 
-    The checkpoint used to store done_ids alone and record nothing about the target — so a
-    migration to backend A that failed halfway, followed by a migration to backend B, would
-    treat A's done_ids as already finished for B, reuse A's vectors sitting in the same
-    staging db, and swap them atomically into the main store. A signature mismatch has to
-    mean starting over entirely.
+    With done_ids alone and nothing about the target, a migration to backend A that failed
+    halfway, followed by a migration to backend B, would treat A's done_ids as already
+    finished for B, reuse A's vectors sitting in the same staging db, and swap them
+    atomically into the main store. A signature mismatch has to mean starting over
+    entirely.
     """
     return f"{target_backend}:{target_model}:{target_dim}"
 

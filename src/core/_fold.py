@@ -13,20 +13,18 @@ the same theory the forgetting curve came from.
 ------------------------------------------------------------
 Three ways of drawing the circle, one action
 ------------------------------------------------------------
-| what gets covered | what the caller hands in | what it used to be called |
+| what gets covered | what the caller hands in | the tool that does it |
 |---|---|---|
 | a new version of one insight | one id | `regrow` |
-| a set of fragments | a set of ids | (new) condensing |
-| a stretch of days | a time range | `grow(kind="big")` |
+| a set of fragments | a set of ids | `fold(cover=...)` |
+| a stretch of days | a time range | `fold(when=...)` |
 
-🔴 **`regrow` is not "do we still need it"; it always was this same action with n=1.**
+🔴 **`regrow` is this same action with n=1.**
 The difference between "I changed my mind" and "I summarised these" lives **in the
 body text**, not in the action.
-So both old entry points stay and both map down to here (following the precedent set by
-trace's resolved -> status).
 
 ------------------------------------------------------------
-🔴 The final form: **draw a circle and write a name on it; only merged thoughts keep books**
+🔴 **Draw a circle and write a name on it; only merged thoughts keep books**
 ------------------------------------------------------------
 **In eight words: events use time, minds use a snapshot.**
 
@@ -45,25 +43,21 @@ trace's resolved -> status).
    laid on top when `recall` covers that stretch of time (rule 5 of the nine in
    `_bigevent.py`, returning unchanged: **cover, do not replace**).
 
-📌 **Why this was reworked — recorded so it does not get copied back in**: the first
-   version had the time-circle resolve its range into a frozen list of ids
-   (`resolve_span_ids`, since retired). That was copied from consolidation/ACP — **they
-   compress and replace, so they have no choice but to freeze the roster**; here
-   **nothing is ever deleted, things are only given names**, so the bookkeeping half was
-   copied for nothing, and it quietly turned "who was in this stretch of days" from a
-   fact into a snapshot. The warning in section 7 had already been written down, and
-   half of it got copied anyway.
+📌 **Why a period keeps no roster — written down so one does not get copied in**:
+   consolidation/ACP freeze a list of ids because **they compress and replace, so they
+   have no choice**; here **nothing is ever deleted, things are only given names**, so a
+   frozen roster would buy nothing and would quietly turn "who was in this stretch of
+   days" from a fact into a snapshot.
 
-🔪 **"Cover a set of events" was cut entirely**: a through-line is something you look at
+🔪 **There is no "cover a set of events"**: a through-line is something you look at
    with `recall(query=)` — search for the thing and the whole run of memories about it
-   comes up. **"Fold a single entry" was withdrawn too**: that job belongs to regrow (see
-   the epitaph in tools/fold).
+   comes up. **Folding a single entry is regrow's job**, not fold's.
 
 ------------------------------------------------------------
-Three hard rules (rule 1 narrowed to mind in the final form)
+Three hard rules (rule 1 is the mind half)
 ------------------------------------------------------------
 1. 🔴 **`cover` always stores a definite list of ids** (the snapshot half). A time range
-   is **no longer** resolved into ids — a period keeps no books; see above.
+   is **never** resolved into ids — a period keeps no books; see above.
 2. 🔴 **`from` and `cover` are two parameters with different meanings, and must never be
    merged**:
    `from`  = which entries I grew **out of** (they **go on living independently**)
@@ -340,8 +334,7 @@ def check_span(span: str) -> tuple[datetime | None, datetime | None, str]:
     m = SPAN_RE.match(str(span or "").strip())
     if not m:
         return None, None, SPAN_HELP
-    # These two lines used to call through bare, and this is **the only gate a period
-    # passes through**. Getting past `SPAN_RE` only proves the shape is right
+    # Not called bare: this is **the only gate a period passes through**. Getting past `SPAN_RE` only proves the shape is right
     # (`2026-13-45..` is a perfectly legal shape), so a day that does not exist would
     # raise here instead of coming back with "that date is not a real day".
     t0 = _w.parse_date_or_none(m.group(1))

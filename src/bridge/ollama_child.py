@@ -1,17 +1,11 @@
 """
 ========================================
 bridge/ollama_child.py — keeping the local Ollama child process alive
-(moved here from web/ollama_local.py during the strip-down)
 ========================================
 
-The old web/ollama_local.py was a one-click setup panel: detect the host -> install
-Ollama without elevation -> keep the child process up -> panel routes. When the upstream
-panels were cut, **the whole panel half went with them** — downloading, verifying and
-unpacking an Ollama release, the progress bar, and the three `/api/embedding/local/*`
-routes. Not one button could reach any of it any more, so keeping it would have been
-keeping dead code.
+This keeps an installed Ollama running; it does not download, verify or install one.
 
-**The keep-the-child-running half stays.** The docs state flatly that local embedding
+The docs state flatly that local embedding
 requires a local Ollama, which makes this core supporting machinery: server.py's lifespan
 calls `ensure_child_on_boot()` / `stop_child()` directly, not via any panel button. A
 standalone-container deployment does not need it — both functions return immediately when
@@ -20,8 +14,7 @@ standalone-container deployment does not need it — both functions return immed
 
 Public surface:
 - ensure_child_on_boot() / stop_child(): called by server.py's lifespan on start and stop.
-- find_ollama_bin(): returns None when Ollama is not installed, and no longer kicks off
-  an automatic install wizard.
+- find_ollama_bin(): returns None when Ollama is not installed; it never installs it.
 ========================================
 """
 
@@ -71,8 +64,7 @@ def find_ollama_bin() -> "str | None":
     """Locate the ollama executable: PATH first, then each platform's no-elevation
     install location.
 
-    Returns None when it cannot be found — it **no longer triggers an install**. That
-    was the panel wizard's job, and the wizard is gone.
+    Returns None when it cannot be found — it **never triggers an install**.
     """
     p = shutil.which("ollama")
     if p:

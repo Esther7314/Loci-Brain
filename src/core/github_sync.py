@@ -47,11 +47,11 @@ _MANIFEST_FILENAME = "_loci_backup_manifest.json"
 class _LazyMarkdownFiles(Mapping[str, bytes]):
     """A path index whose file bodies are read only when requested.
 
-    GitHub backup used to retain every Markdown file as ``bytes`` and then
-    retain a second decoded ``str`` copy for every tree entry.  On a 512 MiB
-    instance that makes the scheduled backup itself an OOM trigger.  Keeping
-    only paths here lets ``_batch_commit`` hold at most one bounded chunk of
-    bodies while preserving the historical mapping-shaped private API.
+    Retaining every Markdown file as ``bytes``, plus a second decoded ``str``
+    copy for every tree entry, would make the scheduled backup itself an OOM
+    trigger on a 512 MiB instance.  Keeping only paths here lets
+    ``_batch_commit`` hold at most one bounded chunk of bodies behind a
+    mapping-shaped private API.
     """
 
     def __init__(self, paths: Mapping[str, str]) -> None:

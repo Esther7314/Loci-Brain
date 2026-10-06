@@ -17,37 +17,30 @@ What lives here:
   background engines that sit at the same level as bucket_manager (GitHub backup sync,
   conversation import, store migration, embedding-backend migration). Each is built
   exactly once by server.py at startup, which makes it the same kind of thing as the
-  five above; they used to be scattered at top level and were collected in here.
+  five above.
 - `_fold.py` / `_muse.py` / `_dream.py` / `_bigevent.py` / `_when.py` / `_rooms.py`:
-  engine pieces moved out of `tools/` — the bones of fold/gist, the rule for when to
-  muse, the rule for when to dream, how a period draws its circle in time, the
-  calendar and timezone conventions, the whitelist of the four rooms. They lived
-  under `tools/` only because the MCP tools happened to reach them first, but a rule
-  belongs to no single tool. (Splitting a rule across two homes has cost us twice: a
-  room rename that had to be made in both copies, and a `weight=0` falsy-fallback bug
-  that got fixed on one side and left standing on the other.)
+  engine pieces — the bones of fold/gist, the rule for when to muse, the rule for when
+  to dream, how a period draws its circle in time, the calendar and timezone
+  conventions, the whitelist of the four rooms. They are here, not under `tools/`,
+  because a rule belongs to no single tool. (A rule split across two homes drifts: a
+  room rename has to be made in both copies, a falsy-fallback fix lands on one side
+  and not the other.)
 - `_holds.py`: what a hold is and when it holds (a short exception hung on a standing
   entry); breath's roads, the dream pools and the decay sweep all ask it.
 - `visibility.py`: the one gate — may this memory be put in front of the model, on this
   road. Every road that shows a memory (breath, recall, muse, dreams) asks it.
-- `profile.py`: the single source for `door_note()` / `event_pool()`. It used to live
-  in `tools/breath/awaken.py`, but that rule is not breath's private property — the
-  profile page in `web/loci.py` and the awakening in `tools/breath/awaken.py` have to
-  read the same one, so it moved here and both sides import it instead of each
-  keeping its own copy. Awake / asleep (`is_accessible`) and breath's 惦记的事 and
+- `profile.py`: the single source for `door_note()` / `event_pool()`. That rule is not
+  breath's private property — the profile page in `web/loci_reads.py` and the
+  awakening in `tools/breath/awaken.py` have to read the same one, so both import it
+  from here instead of each keeping its own copy. Awake / asleep (`is_accessible`) and breath's 惦记的事 and
   忽然想起 (`prospective`, `involuntary`) live beside them.
 - `_invalidation.py`: breath's 依据变了的 — which memories stand on ground that moved
   (an overturned basis, a source revised or withdrawn, a panel correction), card them one
   layer at a time, and the keep-as-is gesture trace writes.
 
-⚠️ **Moved, not rewritten**: the contents of this layer are word for word what they
-were before the move; only import paths changed. Cracking open monoliths like
-`bucket_manager.py` / `recall/core.py` is explicitly out of scope here — refactoring
-rides along with deletions and moves, it does not get a front of its own.
-
 Dependency direction: `core` does not depend on `tools` / `web` / `bridge` — *mostly*.
 `dehydrator.py` uses `normalize_subjects` from `tools/_subjects.py`. That backward
-edge predates the move and was left alone on purpose: `_subjects.py` is really about
+edge is left alone on purpose: `_subjects.py` is really about
 "how a tool validates its input", and dragging it down here would only stir unrelated
 things together. It is known, not overlooked.
 

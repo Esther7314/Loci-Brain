@@ -76,8 +76,8 @@ async def api_loci_want_resolve(request: Request) -> Response:
         from tools.trace.core import trace_core
         # `closed_by` records that a PERSON closed this, rather than that I noticed it
         # myself — see the note in tools/trace/core.py. Nothing compares this value; it
-        # is free text that exists to be read. It used to name one specific person,
-        # which meant every install would write that name into its own data.
+        # is free text that exists to be read. It names no specific person, or every
+        # install would write that name into its own data.
         msg = str(await trace_core(bucket_id=bucket_id, status=new_status, closed_by="user"))
         return JSONResponse({"ok": True, "id": bucket_id, "status": new_status, "msg": msg})
     except Exception as e:

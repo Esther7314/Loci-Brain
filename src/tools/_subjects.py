@@ -20,11 +20,10 @@ Tags come in three kinds, and subjects are **the new third kind**:
 📌 Extraction is deepseek's job precisely so that writing a memory does not get
    heavier. All we maintain is the alias table.
 
-📌 One thing gained for free: once subjects became tags, the real gap found
-   earlier (`SELF/WORLD` pressing "did I live it or hear about it" and "who is it
-   about" onto a single axis) **disappeared by itself** — the rooms could safely
-   be cut down to four, and a third party no longer has to be forced into the
-   WORLD branch.
+📌 One thing gained for free: with subjects as tags, `SELF/WORLD` does not have
+   to press "did I live it or hear about it" and "who is it about" onto a single
+   axis — four rooms are enough, and a third party does not have to be forced into
+   the WORLD branch.
 
 The names table: `aliases.yaml` in the data volume (hand-maintained; the backfill
 may only add a name it does not have, with a kind, or give a kind to a name that has

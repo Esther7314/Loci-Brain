@@ -28,11 +28,10 @@ async def api_loci_auth_state(request: Request) -> Response:
     """Where this password currently lives and whether one needs to be set. Public, and
     carries no information about the password itself.
 
-    WARNING: the `authed` field — whether a cookie session was logged in — was removed:
-    /api/* is not authenticated at this layer any more, and there is no such thing as a
-    session here. This password now governs exactly one thing: whether the remote MCP
-    OAuth authorization page (bridge/oauth.py) accepts you. It no longer governs access
-    to this panel screen.
+    WARNING: there is no `authed` field: /api/* is not authenticated at this layer, and
+    there is no such thing as a session here. This password governs exactly one thing:
+    whether the remote MCP OAuth authorization page (bridge/oauth.py) accepts you. It does
+    not govern access to this panel screen.
     """
     from starlette.responses import JSONResponse
     try:
@@ -65,13 +64,12 @@ async def api_loci_set_password(request: Request) -> Response:
     So a file-based password has to exist before the environment variable can be removed,
     or nobody can get in at all.
 
-    WARNING: the original gate here was "you must already be logged in", meaning a valid
-    cookie session. The strip-down removed cookie sessions entirely (/api/* is not
-    authenticated at this layer), **and this gate must not loosen along with it** — this
-    password is not the panel's door, it is the door to the remote MCP OAuth
-    authorization page (bridge/oauth.py), and taking it over means being handed an MCP
-    token that reads and writes every memory.
-    The gate was rewritten not to depend on a session: **first-time setup**
+    WARNING: there are no cookie sessions (/api/* is not authenticated at this layer),
+    **and this gate must not be loose for that reason** — this password is not the
+    panel's door, it is the door to the remote MCP OAuth authorization page
+    (bridge/oauth.py), and taking it over means being handed an MCP token that reads and
+    writes every memory.
+    The gate does not depend on a session: **first-time setup**
     (`_is_setup_needed()`, meaning neither the file nor the environment holds a password)
     is allowed through; **when a password already exists**, the body must carry the
     correct `current_password`, verified through the same `_verify_password_for_rotation`

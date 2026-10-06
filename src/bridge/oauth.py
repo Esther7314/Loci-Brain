@@ -3,18 +3,12 @@
 bridge/oauth.py — remote MCP authentication (OAuth 2.1 + PKCE)
 ========================================
 
-Moved here from web/oauth.py during the strip-down. This is not a panel route: it is how
-a remote client proves its identity to `/mcp` itself. "Auth is on by default" is a settled
-position for the open-source build; a deployment may turn it off in config, but the
-mechanism must not die along with the panel (see bridge/__init__.py). Not a word of the
-content or the logic changed in the move — only the home, `from . import _shared` becoming
-an absolute import, and `_run_public_password_verification` now resolving to the function
-of the same name in `_shared.py` (which lives in the web layer but is still a shared
-dependency). That function used to live in web/auth.py; auth.py was removed wholesale, so
-the function moved into `_shared.py` together with the rest of the password and
-login-rate-limit family — the OAuth authorization page relies on it to resist brute force,
-and it is built on the same primitives as the deleted dashboard cookie login, so the two
-could not be pulled apart.
+This is not a panel route: it is how a remote client proves its identity to `/mcp`
+itself. "Auth is on by default" is a settled position for the open-source build; a
+deployment may turn it off in config, but the mechanism must not depend on the panel (see
+bridge/__init__.py). `_run_public_password_verification` lives in web/_shared.py with the
+rest of the password and login-rate-limit family: the OAuth authorization page relies on
+it to resist brute force, and it shares their primitives.
 
 The OAuth flow an MCP client walks when connecting over HTTPS: dynamic registration ->
 authorization page (enter the dashboard password) -> exchange the code -> receive a Bearer

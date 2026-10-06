@@ -123,11 +123,9 @@ The trigger: weave only above the line — **a night with no dream is normal**
 ------------------------------------------------------------
 Lifecycle: a dream is forgotten, and genuinely so
 ------------------------------------------------------------
-⚠️ 🔴 **This was amended deliberately** and supersedes the older design quoted below.
-   The old text of this cell read: "the whole version exists only in the return value of
-   the weave that produced it; it is never persisted."
-   It now reads: **the whole version is persisted and stays alive; its only death is the
-   degrade signal.** To whoever reads this next: that is not a bug, it is the rule.
+⚠️ 🔴 **The whole version is persisted and stays alive; its only death is the degrade
+   signal.** This is deliberate. To whoever reads this next: that is not a bug, it is the
+   rule.
 
     at night   weave (whole + fragment) -> **the whole version is persisted** (same file
                as the fragment, under a new layer `完整`).
@@ -185,7 +183,7 @@ Exports
 ------------------------------------------------------------
 DREAM_PROMPT · DREAM_DEFAULTS · dream_config()
 weave() (weave one; returns the whole version, and **persists it too** — see the
-         amendment above)
+         lifecycle above)
 current_dream() (fetch the current layer, counting as one recall)
 withheld_ingredients() (the ingredients of a dream that may no longer be seen; any one
          withholds the whole dream from being handed out)
@@ -1046,8 +1044,7 @@ async def call_model(ingredients: dict, c: dict) -> dict:
 
 
 # ============================================================
-# Disk: both the fragment and the whole version are persisted (after the amendment, the
-# whole version is no longer "alive only in the return value")
+# Disk: both the fragment and the whole version are persisted
 # ============================================================
 def dreams_dir(buckets_dir: str | None = None) -> str:
     bd = buckets_dir or str((rt.config or {}).get("buckets_dir") or ".")
@@ -1134,14 +1131,14 @@ def layer_of(rec: dict, now: datetime, c: dict) -> str:
     turns both count, whichever arrives first** — except for `完整`, which is exempt from
     that rule (see below).
 
-    🔴 By amendment: **the whole layer does not decay with time.** As long as the record
+    🔴 **The whole layer does not decay with time.** As long as the record
        still carries a `完整` field it stays in the `完整` layer and never even reaches the
        time/turn tests below. Its only death is `degrade_on_wake()` — the degrade signal —
        which strips that field and resets the start point to the moment of degradation.
        So this test has to **short-circuit first**, and must not be mixed in with the
        three-layer comparison.
 
-    🔴 **Down only, never up** (the three-layer half; the amendment did not touch this):
+    🔴 **Down only, never up** (the three-layer half):
        a recall pushes the start point back, and on time alone that would let the
        one-sentence layer be pushed back up into the fragment layer — which is not
        delaying, it is **growing backwards**. The rule allows recall to delay, not to
@@ -1278,15 +1275,9 @@ async def weave(force: bool = False, cfg: dict | None = None,
     """Weave one dream.
 
     Returns the version including the whole text, and **the whole version is persisted
-    too** — see the amendment described in this module's header. Its only death is
+    too** — see the lifecycle in this module's header. Its only death is
     `degrade_on_wake()`.
 
-    ⚠️ This docstring used to say the opposite: that the whole version existed only in
-       this return value and never reached disk. That was true before the amendment, and
-       it sat here contradicting the file's own header — which documents the change and
-       adds "to whoever reads this next: that is not a bug, it is the rule." Two
-       statements of the rule, in one file, disagreeing. The one that had gone stale is
-       the one nearer the code, which is also the one a reader trusts most.
     Returns `None` when below the line (`force=True` skips the pressure line; for the
     bridge and for dry runs).
 
@@ -1294,10 +1285,8 @@ async def weave(force: bool = False, cfg: dict | None = None,
     (`last_dreamt`), so this entry is picked less often for a while. **Not one character
     of `weight` is touched, and none of `arousal` either.**
 
-    ⚰️ This used to **zero** the `weight` of every want it dreamt about, on the grounds
-       that "it no longer presses on me". That was overturned: **wanting to dream about
-       something does not mean the thing has been let go of.** See the long note above
-       `cooldown_factor()`.
+    `weight` stays because **wanting to dream about something does not mean the thing has
+    been let go of.** See the long note above `cooldown_factor()`.
     """
     c = cfg or _c()
     ingredients = ingredients if ingredients is not None else await gather_ingredients(c)     # if the hook already loaded them, do not rescan the whole store
@@ -1325,7 +1314,7 @@ async def weave(force: bool = False, cfg: dict | None = None,
         # prepared here is the field and the layer rule that reads it
         "轮次": 0,
         "碎片": dream["碎片"],
-        # 🔴 By amendment the whole version **is persisted**: the `完整` field IS the whole
+        # 🔴 The whole version **is persisted**: the `完整` field IS the whole
         #    version, and `layer_of()` treats its presence as the `完整` layer, exempt from
         #    time decay.
         #    `完整字数` is kept rather than removed — an old smoke assertion reads it, and
@@ -1392,7 +1381,7 @@ async def weave(force: bool = False, cfg: dict | None = None,
     # Re-attached to the returned copy because `rec` is written to disk without it being
     # read back; the persisted record carries it as well (see `save_record` above).
     out["完整"] = dream["完整"]
-    out["记下了"] = noted      # ⚰️ this key used to be called 「清零了」 and held the wants that had been zeroed
+    out["记下了"] = noted      # the wants whose `last_dreamt` this weave noted
     return out
 
 
@@ -1487,10 +1476,8 @@ async def handable_dreams(dreams: list[dict]) -> list[dict]:
 async def current_dream(recall: bool = True, cfg: dict | None = None) -> dict | None:
     """Fetch the dream at its current layer. `None` when there is no dream.
 
-    ⚠️ Since the amendment the whole version is persisted and survives until the degrade
-    signal, so the layer here can also be `完整`. (The older rule — "on waking you only
-    get the fragment" — only held while the whole version was never persisted at all.)
-    **Whether the whole version is still available depends on the timeline between the
+    ⚠️ The whole version is persisted and survives until the degrade signal, so the layer
+    here can also be `完整`. **Whether the whole version is still available depends on the timeline between the
     reader and this dream**: through a genuine night with nobody sending messages,
     degrade_on_wake() has never been called and the full text still comes out of here.
     Once the dream has been handed over and the user sends their next message, the caller

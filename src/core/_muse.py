@@ -51,10 +51,9 @@ Two sides, two sets of gestures (separate pools)
 | **composition drift** `composition_drift()` | the centroid of existing vectors (**a ruler only, never a reason**) | a **boundary**: memories look different before and after 07-04 |
 | **blank ledger** `blank_ledger()` | **the range of a period** (a circle I drew by hand) | a stretch of days no period covers |
 
-🔴 **The test for "does it have a name yet" is range coverage** (this replaced
-   `covered_by`): an event **whose date falls inside the range of any living period**
-   has a name.
-   A period no longer writes `covered_by` at all (it is a pure naming layer storing only
+🔴 **The test for "does it have a name yet" is range coverage**, not `covered_by`: an
+   event **whose date falls inside the range of any living period** has a name.
+   A period never writes `covered_by` (it is a pure naming layer storing only
    a name and a range), so asking a field cannot answer the question — it is
    **computed on the spot** (`era_spans()` + `mark_named()`). Two things come free:
    a backfilled entry landing inside an old range **acquires its name automatically**
@@ -898,9 +897,8 @@ def blank_ledger(items: list[Item], era_n: int, cfg: dict, now: datetime) -> lis
        name — **that must not happen.** Without a map, "where is nothing covered" is a fake
        question: that is not a blank, that is a drawing nobody has started.
        (The first version of the map is written by hand — **narrate first, point later.**)
-    ⚠️ "Unnamed" now means **range coverage** (a period's range, set on the spot onto
-       `named` by `mark_named()`), no longer a question about `covered_by` — periods keep
-       no books. A backfilled entry landing inside an old range acquires its name
+    ⚠️ "Unnamed" means **outside every period's range** (set on the spot onto `named` by
+       `mark_named()`), not a question about `covered_by` — periods keep no books. A backfilled entry landing inside an old range acquires its name
        automatically and is never counted as a blank a second time.
     """
     if int(era_n) < 1:
@@ -1170,10 +1168,8 @@ async def both_sides(force: bool = False, scope=None) -> tuple[list, int, int, d
     return out
 
 
-# ⚰️ `dream_pool()` (which returned a list of candidate ids) was deleted.
-#    It served night_fall's ingredient end, and once night_fall retired there was no second
-#    caller; meanwhile the new engine (`tools/_dream.py`) wants **the Items themselves**
-#    (body + v/a + date), not a string of ids. Keeping it would have meant two copies of
-#    "which pool a dream eats".
-#    🔴 **Ingredient selection goes through here and nowhere else**: `POOL_SPECS["dream"]`
-#    plus `pool_of(recs, "dream", ...)` is the only entry point.
+# 🔴 **A dream's ingredient selection goes through here and nowhere else**:
+#    `POOL_SPECS["dream"]` plus `pool_of(recs, "dream", ...)` is the only entry point, and
+#    it hands the dream engine (`core/_dream.py`) **the Items themselves** (body + v/a +
+#    date), not a string of ids. A second helper would mean two copies of "which pool a
+#    dream eats".

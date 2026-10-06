@@ -3,14 +3,13 @@
 tools/grow/__init__.py — grow tool entry point
 ========================================
 
-grow is "I file something into memory". Short content (<30 chars) took the
-shortpath,
-⚰️ the tool face no longer accepts long prose (see the epitaph at the end of dispatch); the two old paths, shortpath and core, are kept in the archive but no longer have an entry point
-a standalone event bucket.
+grow is "I file something into memory": kind="event" writes each item as a
+standalone event bucket, kind="mind" writes one insight. The tool face does not
+accept long prose to be split up.
 
 Key behaviour:
 - The entry point validates items
-- Which branch to take is decided by stripped length < 30 characters
+- Which path to take is decided by `kind`; a call without one is refused
 
 What this file deliberately does not do:
 - No token-level budgeting (grow cares about "how many pieces", not "how much to show")
@@ -108,12 +107,9 @@ async def _dispatch(
     # See the comment at the top of rooms_path.py.
     kind = (kind or "").strip().lower()
 
-    # ⚰️ The two retired parameters `importance` / `meaning` were **removed
-    #    entirely**. They used to be kept so that passing one produced a
-    #    human-readable complaint; that job now belongs to extra="forbid" on the
-    #    tool face (the grow block in server.py) — passing one is rejected by
-    #    parameter validation, which is cleaner than keeping a pair of fake
-    #    parameters around.
+    # There is no `importance` / `meaning`: passing one is rejected by parameter
+    #    validation (extra="forbid" on the tool face, the grow block in server.py),
+    #    which is cleaner than keeping a pair of fake parameters around.
     if kind in ("event", "mind", "big"):
         global _sweep_started
         if not _sweep_started:
@@ -145,12 +141,9 @@ async def _dispatch(
                                weight=weight, test_data=test_data, cue=cue,
                                card_of=card_of, sources=sources, when=when)
     if kind == "big":
-        # ⚰️ `kind="big"` was pulled from the tool face.
-        #    Underneath it called fold's own bones (`_F.save_gist`) — it was a
-        #    **pure alias**. Naming a stretch of time had two entry points, and
-        #    two entry points sooner or later tell two different stories.
-        #    What is left is the single path fold(when="起..止"). The grow_big
-        #    implementation is still there; nothing calls it.
+        # `kind="big"` is answered with the way to fold: naming a stretch of time
+        #    has a single path, fold(when="起..止"). Two entry points sooner or
+        #    later tell two different stories.
         return ('立一个「时期」（给一段日子起个名字）用 fold：\n'
                 '  fold(when="2026-08-15..2026-08-18", room="EVENT/SELF", '
                 'text="那阵子在做什么", v=…, a=…)\n'
@@ -160,8 +153,7 @@ async def _dispatch(
                 '"mind"（我从中看出什么）。'
                 '给一段日子起名字是 fold 的活。')
 
-    # No kind: refused, with what to write. (The kind-less items path merged into
-    # existing entries and fed the old plan's auto-closing; both are gone.)
+    # No kind: refused, with what to write.
     return ('grow 要说存的是什么：kind="event" + items=[{room, text, v, a, when?}, ...] '
             '存发生了什么（想要的事也是事件，加 direction_of_fit="telic"）；'
             'kind="mind" + room + text + from 存你从中看出的一句。')

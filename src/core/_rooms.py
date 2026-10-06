@@ -34,7 +34,7 @@ go digging through history for it)
 ✅ **Free win**: once the subject moved into labels, the real gap (`SELF/WORLD`
    — "was I there or did I hear about it" — and "who is it about" pressed onto a single
    axis) **disappears on its own**, and SELF/WORLD goes back to meaning what it says.
-   A third party in the story no longer has to be crammed into the WORLD branch.
+   A third party in the story does not have to be crammed into the WORLD branch.
 
 ------------------------------------------------------------
 🔴 Only the four names exist

@@ -103,10 +103,9 @@ def parse_span(meta: dict) -> tuple[datetime | None, datetime | None]:
     m = SPAN_RE.match(w)
     if m:
         # `SPAN_RE` validates the **shape** only, not that the day actually exists.
-        # These two lines used to call through bare, so one period bucket holding
-        # `when="2026-13-45.."` would **take down period coverage for an entire recall**
-        # — not "one cover missing", the whole pass capsized (`covering()`'s try wrapped
-        # only list_all, while parse_span runs inside the loop, outside that try).
+        # Called bare, one period bucket holding `when="2026-13-45.."` would **take down
+        # period coverage for an entire recall** — not "one cover missing", the whole pass
+        # (parse_span runs inside `covering()`'s loop, outside any try).
         # If it slips through here, treat it as not written correctly and drop to the
         # old-bucket fallback below: the same treatment as an empty `when`.
         start = _w.parse_date_or_none(m.group(1))
@@ -122,11 +121,10 @@ def fmt_span(meta: dict) -> str:
     m = SPAN_RE.match(w)
 
     def _short(d: str) -> str:
-        # This used to be a bare `int()`. `when="2026-7-31..2026-8-5"` — single-digit
-        # months, **very easy to produce by hand** — makes it raise
-        # `invalid literal for int()`, while `parse_span` does not raise on the very
-        # same input: the compute layer survives and the display layer blows up.
-        # The rule: this cell would rather be empty. An empty cell is visible; an
+        # A bare `int()` would raise on `when="2026-7-31..2026-8-5"` — single-digit
+        # months, **very easy to produce by hand** — while `parse_span` does not raise
+        # on the very same input: the compute layer would survive and the display layer
+        # blow up. The rule: this cell would rather be empty. An empty cell is visible; an
         # exception takes the whole page with it.
         try:
             return f"{int(d[5:7])}-{int(d[8:10])}"
@@ -183,28 +181,19 @@ def covering(buckets: list, t0: datetime | None, t1: datetime | None,
     Both ends empty (no time filter) means the question is "right now", which is the set
     whose end has not arrived yet.
 
-    🔴 This function used to call `await rt.bucket_mgr.list_all()` itself; now the caller
-       hands the list in. That is not a style change, it bought two concrete things:
+    🔴 The caller hands the list in; this function never fetches it. Two reasons:
 
-       ① **A bug disappeared.** The browse view calls this once per cell, per day — a
-          single recall could call it seven or eight times, each pass rescanning the
-          whole store, and **the caller could not see itself doing it**. (The earlier
-          "one recall, four list_all calls" was exactly this shape; it looked like a
-          missing cache until it was measured and turned out to be repeat calls.) With
-          the list handed down from above, the caller can see at a glance how many times
-          it fetched it.
-       ② **It became unit-testable.** Testing this one function used to mean building an
-          entire world first — a global runtime carrying the bucket manager, the decay
-          engine, vectors, logging, config, ten things. Now you pass in a list.
+       ① **Repeat scans stay visible.** The browse view calls this once per cell, per
+          day — a single recall can call it seven or eight times. Fetching here would
+          rescan the whole store on every call, and **the caller could not see itself
+          doing it**. With the list handed down from above, the caller can see at a
+          glance how many times it fetched it.
+       ② **It is unit-testable.** No global runtime carrying the bucket manager, the
+          decay engine, vectors, logging and config is needed; you pass in a list.
 
-       📌 The rule worth keeping is this one, not the cut itself:
-          **Go first for the places where "make it testable" and "make the bug harder to
-          write" are the same edit.** Here they were literally one change — which is
-          exactly why it came second in the order of cuts.
-
-    ⚠️ It is no longer async: it touches neither disk nor network now, it is pure
-       computation. Call sites must drop their `await` (leaving it in yields a coroutine
-       where a list is expected, which fails loudly on the spot rather than silently).
+    ⚠️ It is not async: it touches neither disk nor network, it is pure computation.
+       (An `await` on it yields a coroutine where a list is expected, which fails loudly
+       on the spot rather than silently.)
     """
     now = _w.now()
     out = []

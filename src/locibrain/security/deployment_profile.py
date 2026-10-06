@@ -10,9 +10,6 @@ public exposure, transport, and OAuth.
 What this does NOT do: no file reads or writes, no HTTP route registration, no changes to
 environment variables, no service restarts.
 Public surface: normalize_public_https_origin() (used by web/config_api.py).
-The onboarding-wizard surface — profile_catalog(), build_profile_patch(),
-validate_profile_patch(), effective_configuration_report() — was deleted as dead code
-on 2026-08-25: no route or caller ever wired it up.
 ========================================
 """
 

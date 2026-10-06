@@ -209,16 +209,13 @@ async def _fold(text: str = "", room: str = "", v=-1, a=-1,
     if room_err:
         return room_err
 
-    # ⚰️ **The "fold exactly one" branch was pulled from the tool face.**
-    #    A cover of exactly one used to mean re-versioning — the same thing regrow
-    #    does, through the same code. One thought with two entry points cannot be
-    #    explained, so it now splits as:
+    # 🔴 fold never writes a version chain (`supersedes` stays empty). One thought
+    #    with two entry points cannot be explained, so it splits as:
     #      regrow = this entry has a new version (thinking / events / periods alike)
     #      fold   = fold it up (several collapsed into one sentence / naming a
     #               stretch of days)
-    #    🔴 The "n=1 writes the version chain" code below was **not** deleted:
-    #       regrow still uses it (regrow is fold's n=1 special case). Only fold's
-    #       entry point into it was withdrawn.
+    #    The "n=1 writes the version chain" code in `save_gist` is regrow's (regrow
+    #    is fold's n=1 special case).
     supersedes = ""
 
     new_id, report = await F.save_gist(

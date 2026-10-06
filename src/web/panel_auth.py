@@ -3,22 +3,20 @@
 web/panel_auth.py — the panel's gate
 ========================================
 
-The strip-down removed the whole cookie-session family along with web/auth.py, on the
-grounds that a machine on a trusted home LAN does not need authentication. That holds for
-**one particular machine**; it does not hold for **software handed to other people** —
-someone will put the port on the public internet. And the `#gate` overlay only appears
-when an API returns 401, so with no authentication nothing ever returns 401 and the gate
-never shows up again: **it looks like there is a lock, and there is not.**
+"A machine on a trusted home LAN does not need authentication" holds for **one
+particular machine**; it does not hold for **software handed to other people** — someone
+will put the port on the public internet. And the `#gate` overlay only appears when an
+API returns 401, so with no authentication nothing ever returns 401 and the gate never
+shows up: **it looks like there is a lock, and there is not.**
 
-So this module puts the gate back. **No wheels were reinvented**: password hashing, rate
-limiting, security-question recovery and atomic persistence are all alive and well in
-`_shared.py`. Only two things are added here — four routes, and a signed cookie.
+So this module is the gate. **No wheels are reinvented**: password hashing, rate
+limiting, security-question recovery and atomic persistence live in `_shared.py`. Only
+two things are added here — four routes, and a signed cookie.
 
 Three security rules (read these before changing anything):
 
 1. **No password set means no lock.** A fresh install must be usable the moment it opens;
-   locking a door before a key exists locks the owner out of their own house. (That has
-   actually happened once, for twenty minutes.)
+   locking a door before a key exists locks the owner out of their own house.
 2. **The session key is derived from the password hash** rather than stored in a file of
    its own: `sha256("loci-panel-v1:" + hash)`. That buys one thing for free — **changing
    the password invalidates every existing session**, with no separate revocation
@@ -80,17 +78,16 @@ PUBLIC_PATHS = frozenset([
     "/loci",                         # the page itself must open, or the gate has nowhere to appear
 ])
 
-# **The four bridge-facing routes**, moved down out of the exemption list above.
+# **The four bridge-facing routes** are not in the exemption list above.
 #
-#    They used to sit in PUBLIC_PATHS, justified as "the caller is the bridge, not a
-#    browser, and it has no cookie". **The justification was right and the solution was
-#    wrong** — that removes the door rather than giving the bridge a key. The consequence:
-#    someone who set a panel password believed it was locked, while these four stood open
-#    the whole time, **both readable and state-changing** (`dream/wake` moves recall_count
-#    and the lifecycle along). Harmless enough on loopback; the moment a tunnel, a reverse
-#    proxy, a LAN, or a misconfiguration is involved, the boundary is simply open.
+#    "The caller is the bridge, not a browser, and it has no cookie" is true, but exempting
+#    them would remove the door rather than give the bridge a key: someone who set a panel
+#    password would believe it was locked, while these four stood open, **both readable
+#    and state-changing** (`dream/wake` moves recall_count and the lifecycle along).
+#    Harmless enough on loopback; the moment a tunnel, a reverse proxy, a LAN, or a
+#    misconfiguration is involved, the boundary is simply open.
 #
-# The rule now, in one line: **once it is locked, there are no exceptions.**
+# The rule, in one line: **once it is locked, there are no exceptions.**
 #      Gate unlocked (no password set) -> unchanged, anyone may call these four.
 #      Gate locked                     -> these four need a key (in a header), or an
 #                                         already-logged-in browser.
@@ -124,12 +121,12 @@ _PUBLIC_PREFIXES = ("/loci/vendor/",)   # the page's static assets
 
 
 # **The auth file being unreadable is not the same as "no password was set".**
-#    `_load_password_hash()` used to answer both with None, and every judgment below read
-#    that None as rule 1 ("no key exists, so do not lock"). A corrupt or unreadable
-#    `.dashboard_auth.json` therefore **unlocked the panel** — the one moment a lock matters
-#    most is the moment its own storage is broken. It now raises instead, and everything
+#    If `_load_password_hash()` answered both with None, every judgment below would read
+#    that None as rule 1 ("no key exists, so do not lock"), and a corrupt or unreadable
+#    `.dashboard_auth.json` would **unlock the panel** — the one moment a lock matters
+#    most is the moment its own storage is broken. So it raises instead, and everything
 #    here leans the way `hook_ok` already leans: **broken means locked**, and the log says
-#    how to fix it. Rule 1 is untouched: it applies to a store that reads fine and simply
+#    how to fix it. Rule 1 applies only to a store that reads fine and simply
 #    holds no password.
 _STORAGE_BROKEN_HINT = ("面板的口令存储读不出来（buckets 目录下的 .dashboard_auth.json 坏了、"
                         "被截断了、或者没权限读）。门按「锁着」处理，登录和会话一律拒。"

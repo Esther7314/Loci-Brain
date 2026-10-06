@@ -144,7 +144,7 @@ try:
 except (TypeError, ValueError):
     RELEVANCE_FLOOR = 35.0
 # System tag prefixes: never allowed onto any tag line a human reads (「疑似同件:xxx」
-# used to leak through)
+# included)
 _SYS_TAG_PREFIXES = ("__", "aspect:", "疑似同件:", "相似认知:")
 # Machine-voiced tags are **filtered out and never shown**, a lesson caught on
 # muse's first screen:
@@ -327,9 +327,9 @@ def kind_badge(meta: dict) -> str:
 def _parse_when(when: str) -> tuple[datetime | None, datetime | None, str]:
     """Returns (start, end, error). An empty string = no time filter.
 
-    ⚠️ Everything here goes through `tools/_when` (local timezone). It used to use
-    the container's `datetime.now()`, which is UTC — ask for 「今天」 at 2 a.m. and
-    the container answers with the previous afternoon.
+    ⚠️ Everything here goes through `core/_when` (local timezone), never the
+    container's `datetime.now()`, which is UTC — ask for 「今天」 at 2 a.m. and the
+    container would answer with the previous afternoon.
     """
     w = when.strip()
     if not w:
@@ -421,16 +421,16 @@ def _ts_of(meta: dict) -> datetime | None:
     """A memory's time coordinate: **when first, created as fallback**. This is
     the only definition; there is no second one.
 
-    ⚠️ There used to be a `by="touched"` branch reading `last_active` ("order by
-    most recently touched, for digesting"). **`by` was cut entirely** — there is
-    no such act as "digesting" here; every event and every thought grows anew.
-    The rule: **every parameter must map onto a sentence that actually surfaces in
-    the mind**, and "order by most recently touched" is not such a sentence.
+    ⚠️ Nothing orders by `last_active` ("most recently touched, for digesting"):
+    there is no such act as "digesting" here; every event and every thought grows
+    anew. The rule: **every parameter must map onto a sentence that actually
+    surfaces in the mind**, and "order by most recently touched" is not such a
+    sentence.
 
-    Returns **a timezone-aware local time**. It used to be
-    `datetime.fromisoformat(s[:19])` — that slice cuts off `Z` / `+08:00` along
-    with everything else, forcing a timestamp that stated its timezone into "no
-    idea which timezone", and then comparing it against a UTC now().
+    Returns **a timezone-aware local time**. Never `datetime.fromisoformat(s[:19])`
+    — that slice cuts off `Z` / `+08:00` along with everything else, forcing a
+    timestamp that stated its timezone into "no idea which timezone", to be
+    compared against a UTC now().
     """
     for k in ("when", "created"):
         ts = _w.parse_stamp(meta.get(k))
@@ -463,9 +463,9 @@ async def _collect(when, room, tag, query, all_buckets=None) -> tuple[list[dict]
     tag = tag.strip()
 
     # The query gate: fetch generously (300) -> pass every gate -> only then keep
-    # the top _SEARCH_TOPK by relevance. (It used to truncate before filtering, so
-    # the slots were wasted on hits that failed the gates and the qualifying
-    # memory at rank k+1 disappeared forever.)
+    # the top _SEARCH_TOPK by relevance. (Truncating before filtering would waste
+    # the slots on hits that fail the gates, and the qualifying memory at rank k+1
+    # would disappear forever.)
     scores: dict[str, float] = {}
     literals: set[str] = set()   # buckets with a literal hit: the relevance floor treats them as max(score, floor)
     how: dict[str, tuple[bool, bool]] = {}   # id -> (some query words appear, close in meaning)
@@ -521,9 +521,9 @@ async def _collect(when, room, tag, query, all_buckets=None) -> tuple[list[dict]
             continue
         # The tag gate is a **containment match**: searching 「床」 has to find
         # 「床上」 and 「床头」 too.
-        # It used to be exact equality — and tags are never complete (「床」 appears
-        # in 16 bodies but made it into the tags of only one), so equality matching
-        # dropped half of an already sparse signal.
+        # Not exact equality: tags are never complete (「床」 can appear in 16 bodies
+        # and make it into the tags of only one), so equality matching would drop
+        # half of an already sparse signal.
         if tag and not any(tag in str(t) for t in (meta.get("tags") or [])):
             continue
         ts = _ts_of(meta)
@@ -808,12 +808,10 @@ def _fmt_header(label: str, st: dict) -> str:
 def _fmt_highlights(st: dict) -> str:
     """What stands out, **one per line**, with the gist given in full.
 
-    The question that ended the old layout, asked three times over: "the gist is
-    still incomplete, so what exactly are you looking at?" — three of them used to
-    be crammed onto one line, each cut to 26 characters, and reading it told you
-    only that something had happened, never what.
-    The truncation was an oversight, not a design: collapsing collapses **how many
-    entries there are**, never **what each one says**.
+    Three crammed onto one line, each cut short, would tell you only that something
+    had happened, never what ("the gist is still incomplete, so what exactly are
+    you looking at?"). Collapsing collapses **how many entries there are**, never
+    **what each one says**.
     """
     return "\n".join(f"   {mark}{kind_badge(e['meta'])}{_label_of(e)}"
                      f"({_short_id(e['id'])}{_score_tag(e)})"
@@ -824,10 +822,9 @@ def _split_calendar(entries: list[dict], unit: str) -> list[tuple[str, list[dict
     """Split by **calendar week / calendar month** (used by the week and month
     bands of the time-gradient view).
 
-    It used to be `_split_cells_fixed(gsec)`: 7-day / 30-day blocks counted from
-    the oldest entry. The result was that 31 January and 1 February could land in
-    the same "month" while 1 January and 31 January were split into two.
-    When a person says "by week" or "by month" they mean weeks and months on the
+    Not 7-day / 30-day blocks counted from the oldest entry: with those, 31 January
+    and 1 February can land in the same "month" while 1 January and 31 January are
+    split into two. When a person says "by week" or "by month" they mean weeks and months on the
     calendar, not "168 hours counted from some particular memory".
     """
     keyf = _w.year_week if unit == "week" else _w.year_month
@@ -848,11 +845,9 @@ def _split_calendar(entries: list[dict], unit: str) -> list[tuple[str, list[dict
     return labeled
 
 
-# ⚰️ Two people's names used to be hard-coded here (_ME_NAMES / _HER_NAMES).
-#    Once the rooms were cut down to four, room_implied_tags() returns an empty
-#    set unconditionally, so **nothing used those two sets any more** — and they
-#    were deleted along with the names. The path that still filters names is
-#    dehydrator._person_tags(), which reads them from configuration.
+# No person names live in this file: room_implied_tags() returns an empty set
+#    unconditionally. The path that filters names is dehydrator._person_tags(),
+#    which reads them from configuration.
 
 
 def room_implied_tags(room: str) -> set[str]:
@@ -876,14 +871,14 @@ def room_implied_tags(room: str) -> set[str]:
     ------------------------------------------------------------
     🔴 This function currently **degenerates to an empty set on purpose**; it is
     not broken:
-    once the rooms were cut down to four, a room name **no longer implies any
-    person** (`EVENT/SELF` says only "I was there", not who with). "Who it is
-    about" moved wholesale into the `subjects` field.
-    So the right home for this deduplication moves with it: once subjects is wired
+    with four rooms, a room name **does not imply any person** (`EVENT/SELF` says
+    only "I was there", not who with). "Who it is about" lives in the `subjects`
+    field.
+    So the right home for this deduplication is there: once subjects is wired
     into retrieval, this becomes "if subjects was filtered on, that same name in
     the tags carries zero information" — **the same rule, a different field**.
     Until then, returning an empty set is correct: removing names now would
-    **delete real information** (the room no longer guarantees that person was
+    **delete real information** (the room does not guarantee that person was
     present).
     """
     return set()
@@ -973,8 +968,8 @@ def _fmt_card(label: str, st: dict) -> str:
         for mark, e in st["highlights"]:
             prefix = "扎眼的     " if first else "           "
             # The gist is **never cut**: this card is breath's middle-term block
-            # (it goes through slices=1), and it used to truncate at 46
-            # characters — two lines out of three broke off mid-sentence.
+            # (it goes through slices=1), and a cut at 46 characters breaks two
+            # lines out of three off mid-sentence.
             # 📌 The rule: **collapsing collapses how many entries there are, never
             #    what each one says.** A gist is only about 60 characters to begin
             #    with.
@@ -1142,7 +1137,7 @@ def _big_lines(all_buckets: list, t0, t1, seen: set[str]) -> list[str]:
     ⚠️ This **only ever adds a line**: the per-entry area and the statistics below
        lose nothing (a period collapses no rows) — which is where the rule
        "information may only grow, never shrink" lands.
-    🔴 **Only one per cell** (it used to be up to 3). Periods accumulate over time,
+    🔴 **Only one per cell**. Periods accumulate over time,
        and browsing wants a gradient, not a list. `covering()` returns newest
        first, so taking the first one gives the period closest to this cell.
     """
@@ -1202,17 +1197,16 @@ async def _render_browse(entries, gates, room, tag, all_buckets=None) -> str:
     dividing time; a person only thinks "some time ago"**. So the far end
     **stops being divided into cells at all** and 2-3 representatives are picked
     from the whole stretch.
-    That also cured another ailment: before the change, **1 entry and 75 entries
-    took up exactly the same amount of space**.
+    That also keeps **1 entry and 75 entries from taking up exactly the same amount
+    of space**.
     """
     now = _w.now()
     today = _w.today()
     # 🔴 **The whole browse fetches the library exactly once here.** The period
-    #    lines below used to fetch it themselves (once per cell, once per day,
-    #    once for the far end — seven or eight times in a single browse), and
-    #    those fetches were **hidden inside `covering()`, invisible to every
-    #    caller**.
-    #    Now the list lives here and whoever needs it reaches for it, so one extra
+    #    lines below are drawn once per cell, once per day and once for the far
+    #    end — seven or eight times in a single browse — and fetching inside
+    #    `covering()` would hide those fetches from every caller.
+    #    The list lives here and whoever needs it reaches for it, so one extra
     #    fetch would be right there in plain sight.
     #    ⚠️ Periods need **the whole library**, not the entries this call filtered
     #       down to — whether a period covers this cell has nothing to do with
@@ -1295,7 +1289,7 @@ async def _render_browse(entries, gates, room, tag, all_buckets=None) -> str:
     if far:
         st = _cell_stats(far)
         a = far[0]["ts"]
-        # The title **no longer reports a precise date band**: saying "some time
+        # The title **does not report a precise date band**: saying "some time
         # ago" and then hanging `08-01~08-02` off it contradicts itself — that is
         # still a machine's way of dividing time. The date stays only after each
         # representative, where it is a handle rather than a classification.
@@ -1338,14 +1332,12 @@ async def _render_browse(entries, gates, room, tag, all_buckets=None) -> str:
         for meta, content, bid in covers[:1]:      # one period per cell
             spans_shown.add(bid)
             lines.append(_big_line(meta, content, bid))
-        # ⚰️ **The gist's mind lines were pulled out of the browse view.**
-        #    This used to list, one per line, every gist covering some of the
-        #    entries in this stretch.
+        # **The browse view does not list the gists covering this stretch.**
         #    🔴 The rule: **what recall is there to show is events.** Thinking can
         #       appear under "what stands out", but it should not be crowded into
         #       the same position as events and periods —
-        #       and once there are a few gists, the cell becomes nothing but title
-        #       lines (periods are capped at 3; gists had no cap at all).
+        #       and with a few gists listed, the cell would become nothing but title
+        #       lines (gists have no cap).
         #    ⚠️ Entries folded away **still do not appear individually and still
         #       count in the statistics**; to see which gist covers one, use
         #       `recall(query=<full id>)` or the search path, both unchanged.
@@ -1484,15 +1476,14 @@ def _render_search(entries, gates, floor: float = None, ledger: dict | None = No
     attached, how it matched (`_how_mark`) and how long ago it was written. Hits that
     grew from the same root are one line (`_search_rows`), and lines holding an open
     promise go first.
-    🔴 **The default view was turned back to this one**: a bare query used to
-    switch to scene clusters, so "find that one thing" had to take a detour. The
-    rule: **order by time plus score by default, and ask for scene clusters
-    explicitly** (`view="scene"`). That also killed off "supplying `when` changes
-    the shape of the view", another case of one parameter doing two jobs — `when`
-    now governs range only, and shape is decided by `view` alone.
+    🔴 **This is the default view**, so "find that one thing" never takes a detour.
+    The rule: **order by time plus score by default, and ask for scene clusters
+    explicitly** (`view="scene"`). Supplying `when` never changes the shape of the
+    view — that would be one parameter doing two jobs: `when` governs range only,
+    and shape is decided by `view` alone.
 
-    A later change made the score govern filtering only, never ordering: the
-    results of "find one thing" only show how it got here when they are laid out
+    The score governs filtering only, never ordering: the results of "find one
+    thing" only show how it got here when they are laid out
     along the timeline; sorting by relevance stirs July and August together.
     Time is a discount, not a gate: older entries stay out of the way by default
     through the decay discount, and when you really are looking for one and hit it
@@ -1557,11 +1548,10 @@ def _render_scene_clusters(entries, gates, floor: float = None, ledger: dict | N
     """Recall as scenes: how this thing got from there to here.
 
     🔴 **It has to be asked for explicitly**: `recall(query=…, view="scene")`.
-    It used to be the default view for a bare query, which meant the same query
-    changed shape depending on whether `when` was supplied — **one parameter doing
-    two jobs**, and the source of the confusion.
-    The default went back to "time plus score" (find that one thing), and scene
-    clusters are reserved for "how this thing got here".
+    As a default it would make the same query change shape depending on whether
+    `when` was supplied — **one parameter doing two jobs**. The default is "time
+    plus score" (find that one thing), and scene clusters are reserved for "how
+    this thing got here".
 
     The structure a mind actually holds is not a flat list but **clusters with a
     main scene and subordinate ones** — a representative can carry sub-scenes
@@ -1687,14 +1677,9 @@ async def recall_text_and_data(when: str, room: str, tag: str, query: str,
     and JSON skins are these two. `road`: what was collected also has to pass that road
     of the gate (breath's `recent`), so both skins are made from what it lets through.
 
-    🔴 The panel's endpoint used to call `recall_data()` and `recall_core()`
-       separately, and each of those runs its own `_collect` — meaning **the same
-       search was computed twice**. Measured with a query: 3 seconds through the
-       tool face, 8.6 through the panel, and that extra pass was the difference.
-       ⚠️ The irony: `recall_data`'s docstring had always said the two skins share
-          one collection underneath and **never compute their own**. That sentence
-          described the intent; the code had never honoured it.
-       Now it really does collect once.
+    🔴 Calling `recall_data()` and `recall_core()` separately runs `_collect` in
+       each — **the same search computed twice** (measured with a query: 3 seconds
+       through the tool face, 8.6 through the panel). This collects once.
 
     ⚠️ Each skin gets its own **shallow copy** of entries: rendering sorts and
        slices, and sharing one list would mean whoever ran first decided the
@@ -2033,8 +2018,8 @@ async def recall_core(when: str, room: str, tag: str, query: str,
     # 🔴 ONE fetch of the library for this whole call, and only on the path that needs it.
     #    Browsing needs it twice — once to filter down to what is being looked at, and
     #    once more for the periods, which have to be checked against the WHOLE library
-    #    rather than the filtered result. Both used to fetch it themselves, so a single
-    #    browse scanned everything twice and neither half could see the other doing it.
+    #    rather than the filtered result. If each fetched it itself, a single browse
+    #    would scan everything twice and neither half could see the other doing it.
     #    A query does not need it at all: search returns its own hits.
     all_buckets = None
     if not query.strip():

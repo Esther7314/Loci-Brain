@@ -3,20 +3,14 @@
 core/profile.py — the single contract shared by the awakening and the profile page
 ========================================
 
-The rules behind "the note at the door" and "something suddenly comes back" used to be
-implemented twice in parallel (once in `tools/breath/awaken.py` for the awakening, once
-in `web/loci.py` for the profile page). They were merged into one copy, which then moved
-here: this contract does not belong to breath alone — the profile page and the awakening
-have to read the same rules, and living under `tools/breath/` invited the assumption that
-it was breath's private property. It now sits with the other engine pieces
-(`_fold` / `_rooms` / `_when`), and both `tools/breath/awaken.py` and `web/loci.py`
-import it, so there is exactly one copy of the rules.
+The rules behind "the note at the door" and "something suddenly comes back" live here,
+once: this contract does not belong to breath alone — the profile page
+(`web/loci_reads.py`) and the awakening (`tools/breath/awaken.py`) have to read the same
+rules, and both import them from here. It sits with the other engine pieces
+(`_fold` / `_rooms` / `_when`) so nothing invites the assumption that it is breath's
+private property.
 
-⚠️ **Moved, not rewritten**: `door_note()` and `event_pool()`, along with every comment
-explaining their rules, came across word for word; only the import paths followed the
-new home.
-
-Three things were later added on top of this contract, all decided on the **read** side,
+On top of this contract, these are all decided on the **read** side,
 with no new persisted field (the one tag convention below excepted):
 ① **The three kinds of want-clock**: the kind is not a stored field, it is inferred from
    how `when` was filled in — empty = `等触发` (waiting for a trigger), a duration mark
@@ -67,8 +61,8 @@ from . import _holds as _H        # a live hold keeps its entry off the three ro
 from . import _invalidation as _I  # a panel correction looked at and kept leaves 依据变了的
 from . import _when as _w          # "today" on the local calendar
 from ._muse import is_scene_word  # 忽然想起 links on the same scene words muse clusters on
-# is_mind_room is deliberately no longer imported: the secondary "a rule has to live in
-# MIND" filter at the door was taken out (see the long note further down)
+# is_mind_room is deliberately not imported: the door does not filter rules by room
+# (see the long note further down)
 from ._rooms import is_event_room
 from . import visibility as _V    # the one gate: what may be put in front of the model
 
@@ -202,8 +196,8 @@ def event_pool(all_buckets: list, now: datetime | None = None, *, scope=None) ->
     mind with `dont_surface`.
 
     🔴 Five gates; miss any one of them and it fails silently:
-    ① `is_event_room()` accepts both old and new room names. Both sides used to write
-       `.find("/EVENT/") > 0` themselves, and the new name `EVENT/SELF` contains no
+    ① `is_event_room()` accepts both old and new room names. A hand-written
+       `.find("/EVENT/") > 0` would miss the new name `EVENT/SELF`, which contains no
        `/EVENT/` at all, so the pool would **go silently empty** with no error.
     ② Machinery (the name page, periods) is not a memory.
     ③ **Covered entries stay out of this pool.** Coming across something suddenly is a
@@ -311,23 +305,17 @@ def door_note(all_buckets: list, now: datetime, *, scope=None) -> dict:
                 pass
 
         # Weighing on me: a want with **no date at all**, or one whose **date passed
-        # without it being closed**. Neither used to surface anywhere — and a want has
-        # only two endings, both of which have to be marked by hand; nothing closes
-        # itself.
-        # 🔴 No automatic closing was added (that would quietly erase things left
+        # without it being closed**. A want has only two endings, both of which have to
+        # be marked by hand; nothing closes itself.
+        # 🔴 There is no automatic closing (that would quietly erase things left
         #    undone). Instead **the number of days it has hung is pushed into view**:
         #    on day 40 with still nothing done, that number asks the question by itself.
         if _telic and _remindable and not _reminded:
             _c = _w.parse_stamp(meta.get("created"))
-            # ⚠️ Caught while building dreaming: this used to read
-            #    `float(meta.get("weight") or 0.5)`, and in Python `0.0 or 0.5` is 0.5 —
-            #    so **an entry whose weight was genuinely zeroed got ranked as 0.5**.
-            #    The whole point of dreaming is that "a want that was dreamt about has its
-            #    weight cleared = it stops pressing on me", and this falsy fallback ate
-            #    that outcome entirely (field cleared, still pressing in plain view).
+            # ⚠️ Not `float(meta.get("weight") or 0.5)`: in Python `0.0 or 0.5` is 0.5,
+            #    so **an entry whose weight is genuinely 0 would be ranked as 0.5** and
+            #    keep pressing in plain view.
             #    Only a missing field or an empty string counts as 0.5; **a real 0 is 0**.
-            #    (This had once been fixed in awaken only, leaving the profile page still
-            #    carrying the bug — the reason both now share this file.)
             _wt = meta.get("weight")
             _held = (now.date() - _c.date()).days if _c else 0
             # The three want-clocks only change how "how loud" is computed; the meaning
@@ -344,19 +332,15 @@ def door_note(all_buckets: list, now: datetime, *, scope=None) -> dict:
             continue
         # A rule is **something pinned**. That is the whole test.
         #
-        # ⚰️ The secondary filter — "and the room has to be MIND, or the first 40
-        #    characters of the body have to say 'rule of conduct'" — was **taken out**.
-        #    The reason: **pinning something IS a judgement, already made.** Overruling it
-        #    with a room amounts to letting an old bulk migration, which mapped rooms by
+        # 🔴 No second filter ("and the room has to be MIND, or the body has to say 'rule
+        #    of conduct'"): **pinning something IS a judgement, already made.** Overruling
+        #    it with a room amounts to letting an old bulk migration, which mapped rooms by
         #    name and understands nothing about content, **overturn a judgement made
-        #    deliberately today.**
-        #    That filter really did bite: three pinned notes, kept on purpose after going
-        #    through them one by one, showed **not a single character at the door** purely
-        #    because they happened to land in EVENT/SELF. No error, no warning, just
-        #    absent. **A silent filter is worse than a rejection**: a rejection gets
-        #    fixed, while silence leaves you believing the thing is there.
-        #    Good side effect: the mess in the room field no longer blocks the door and
-        #    can be cleaned up at leisure.
+        #    deliberately today** — a pinned note that happens to sit in EVENT/SELF would
+        #    show **not a single character at the door**, with no error and no warning.
+        #    **A silent filter is worse than a rejection**: a rejection gets fixed, while
+        #    silence leaves you believing the thing is there. It also means the mess in the
+        #    room field does not block the door and can be cleaned up at leisure.
         # 🔴 **A superseded or covered version is not a rule**: an old version is off the
         #    timeline already, and a covered one is kept off by the `door` road —
         #    otherwise the door would display a rule I have already changed my mind about.
@@ -632,7 +616,7 @@ def due_now(meta: dict, now: datetime) -> bool:
 # ------------------------------------------------------------
 # 惦记的事 (prospective)
 # ------------------------------------------------------------
-# One list for what used to be two blocks (⏰ reminders and 🫀 weighing on me), chosen
+# One list covering both ⏰ reminders and 🫀 weighing on me, chosen
 # from what is awake. Every line says why it is here now, and there are only two kinds of
 # reason:
 #   dated    N days left / today / N days overdue. A want, something heard about the

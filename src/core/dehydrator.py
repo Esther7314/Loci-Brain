@@ -59,8 +59,8 @@ logger = logging.getLogger("loci_brain.dehydrator")
 # ============================================================
 # Tunable constants
 # ------------------------------------------------------------
-# rule.md §①: no bare magic numbers. These used to be scattered across the five _api_*
-# methods; gathered here, the whole tuning surface is visible at a glance. The prompt
+# rule.md §①: no bare magic numbers. Gathered here rather than spread across the _api_*
+# methods, the whole tuning surface is visible at a glance. The prompt
 # templates themselves stay below, where readability wins.
 # ============================================================
 
@@ -130,10 +130,10 @@ _MAX_TAG_LEN = 128       # one tag, alias or domain (bucket_manager caps at the 
 # Tags that merely point at "the two people this store is about" — their names, and bare
 # pronouns — never make it into tags. The reasoning is in the comments inside
 # parse_backfill.
-# 🔴 The names themselves were **moved out of the code.** They used to be hard-coded here,
-#    which amounts to publishing living people's names; and anyone cloning this repo would
-#    have inherited a filter for someone else's household, which is useless to them.
-#    The names now come from `AI_NAME` / `LOCI_OWNER_NAME` and the `people:` section of
+# 🔴 The names themselves are **not in the code.** Hard-coding them would amount to
+#    publishing living people's names, and anyone cloning this repo would inherit a filter
+#    for someone else's household, which is useless to them.
+#    The names come from `AI_NAME` / `LOCI_OWNER_NAME` and the `people:` section of
 #    config.yaml. All that stays in code is the **generic pronouns**, which hold for
 #    everyone.
 # Terms of endearment and role words are deliberately absent from this list — those
@@ -712,9 +712,9 @@ class Dehydrator:
     def _content_key(self, content: str) -> str:
         """The cache key = hash(prompt version + person name + model config + original text).
 
-        The cache used to be keyed on content_hash alone, so once the dehydration prompt
-        changed or the person's name changed, an old third-person summary still came back
-        as a cache hit — meaning the perspective fix did not reach existing content. Mixing
+        Keyed on content_hash alone, a changed dehydration prompt or person's name would
+        still return an old summary as a cache hit, and the change would never reach
+        existing content. Mixing
         the prompt version, the name, api_format, base_url and model into the key means
         that after switching model or endpoint the next breath re-dehydrates with the new
         configuration instead of reusing the old model's summary."""
@@ -753,10 +753,9 @@ class Dehydrator:
     def _require_api(self) -> None:
         """Raise a RuntimeError with one shared message when the API is unavailable.
 
-        dehydrate / merge / digest each used to repeat
-        `if not self.api_available: raise RuntimeError("...")`. With this, a caller writes
-        one line, `self._require_api()`, and the wording is changed in one place for all of
-        them.
+        dehydrate / merge / digest each write one line, `self._require_api()`, instead of
+        repeating `if not self.api_available: raise RuntimeError("...")`, and the wording
+        is changed in one place for all of them.
         """
         if not self.api_available:
             raise RuntimeError("脱水 API 不可用，请检查 config.yaml 中的 dehydration 配置")
@@ -826,12 +825,10 @@ class Dehydrator:
     ) -> str:
         """The single OpenAI-compatible chat call.
 
-        Five _api_* methods used to repeat the same boilerplate:
-          * build the messages
-          * call client.chat.completions.create
-          * check that response.choices is non-empty
-          * take choices[0].message.content and fall back to an empty string
-        Now:
+        It holds the boilerplate every _api_* method would otherwise repeat: build the
+        messages, call client.chat.completions.create, check that response.choices is
+        non-empty, take choices[0].message.content and fall back to an empty string.
+        So:
           * the caller passes a system and user prompt plus optional max_tokens / temperature
           * defaults come from self.max_tokens / self.temperature (decided by config.yaml)
           * it always returns a str (an empty one if the response is malformed, leaving the
@@ -1270,10 +1267,6 @@ class Dehydrator:
         if "".join(parts) != text:            # the verbatim gate: if it does not rejoin into the original, discard the whole split
             return [text]
         return parts
-
-    # ⚰️ `cut()` — which asked the model where to split a long body — was deleted.
-    #    Its only caller was `grow_core`, and that path went away along with the principle
-    #    that the system does not decide on your behalf how many things this is.
 
     # ---------------------------------------------------------
     # API call: diary digest

@@ -53,9 +53,8 @@ async def _write_body(request: Request) -> dict:
     """Body reading for write endpoints: verify the origin and the Content-Type first, then
     parse.
 
-    Raising `PermissionError` means "answer 403"; raising `ValueError` means "answer 400".
-    (This used to call `sh._read_json_object` directly, and malformed JSON bubbled all the
-    way out as a 500.)
+    Raising `PermissionError` means "answer 403"; raising `ValueError` means "answer 400",
+    so malformed JSON never bubbles all the way out as a 500.
     """
     why = _origin_reject(request)
     if why:

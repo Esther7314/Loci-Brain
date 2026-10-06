@@ -578,8 +578,8 @@ class SecurityHeadersMiddleware:
     # Let another self-hosted front-end on the same machine embed this page in an
     # iframe. Point the list below at your own front-end origin.
     #
-    #    This used to be `frame-ancestors 'none'` plus `X-Frame-Options: DENY` —
-    #    nobody may embed it — so any such iframe rendered as a blank rectangle.
+    #    With `frame-ancestors 'none'` plus `X-Frame-Options: DENY` — nobody may
+    #    embed it — any such iframe renders as a blank rectangle.
     #
     #    WARNING: this is not "opening the door", it is naming one origin. Every
     #    other origin is still refused.

@@ -13,8 +13,8 @@ summary is left in the main store, and the vector is untouched).
 Key behaviours:
 - Progress, not score: time since last recalled ÷ (baseline × emotion factor
   [× half for closed]), with valence weighted above arousal — painful things fade
-  faster, happy ones last longer, which is the exact opposite of the old formula.
-  🔴 **The activation-count factor was deleted.** "Things recalled often do not sink" is
+  faster, happy ones last longer.
+  🔴 **There is no activation-count factor.** "Things recalled often do not sink" is
   already carried by last_active resetting to zero, and that is enough; a count on top
   of that is compound interest, and being brought up often is not the same as being
   truest.
@@ -63,10 +63,9 @@ logger = logging.getLogger("loci_brain.decay")
 # ============================================================
 # Tunable constants
 # ------------------------------------------------------------
-# rule.md §⑩: no bare magic numbers. These constants used to be scattered through
-# calculate_score() and run_decay_cycle(); gathering them here means ① the formulas
-# became far easier to read, ② any tuning happens in one place, and ③ unit tests can
-# import the constants directly and assert against them.
+# rule.md §⑩: no bare magic numbers. The constants of calculate_score() and
+# run_decay_cycle() are gathered here so ① the formulas read easily, ② any tuning happens
+# in one place, and ③ unit tests can import the constants directly and assert against them.
 #
 # ⚠️ Before changing any of these numbers, read the philosophy in rule.md §1.0: "memory
 # only fades, it never disappears". Decay is not deletion, it is a score sinking.
@@ -493,10 +492,10 @@ class DecayEngine:
         # --- Self-heal: backfill missing vectors (periodic; see _self_heal_embeddings) ---
         backfilled_embeddings = await self._self_heal_embeddings(buckets)
 
-        # --- Warm bm25 up while we are here (found in use): the lazy rebuild used to wait
-        # for the first search, so the first search after a restart scored against an
-        # **empty index** — bm25 is 37.5% of the two-dimension scheme, and that first
-        # search came out visibly lower (measured: some entries 74 -> 37). The first decay
+        # --- Warm bm25 up while we are here: a lazy rebuild waiting for the first search
+        # would make the first search after a restart score against an **empty index** —
+        # bm25 is 37.5% of the two-dimension scheme, and that first search comes out
+        # visibly lower (measured: some entries 74 -> 37). The first decay
         # cycle runs a few seconds after boot and already holds `buckets`, so it builds the
         # index ahead of time. Once built, a search keeps it level itself (search()). ---
         try:

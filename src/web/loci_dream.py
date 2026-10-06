@@ -61,10 +61,10 @@ async def build_muse_pending() -> dict:
     from core import _when as W
 
     cfg = M.muse_config(sh.config)
-    # This takes **the same pass** the tool surface takes, view cache included. It used to
-    #    run its own `load_records + propose_mind + propose_gist` over the whole store — a
-    #    third parallel implementation, so the page could say "3 clusters" while muse() saw
-    #    4, which is two different minds. The cache key is the buckets' write generation;
+    # This takes **the same pass** the tool surface takes, view cache included. Its own
+    #    `load_records + propose_mind + propose_gist` over the whole store would be a
+    #    parallel implementation, and the page could say "3 clusters" while muse() saw 4,
+    #    which is two different minds. The cache key is the buckets' write generation;
     #    better to invalidate too eagerly than to disagree.
     clusters, _scattered, _default_coords, fingers, _stats = await M.both_sides()
 

@@ -7,19 +7,17 @@ The counterpart of tools/_runtime.py: modules under web/ and bridge/ take their 
 dependency (config) and their cross-cutting helpers (password hashing, login rate
 limiting, security-question recovery) from here.
 
-Since the strip-down this is **no longer "dashboard authentication"**. The cookie-session
-family (_sessions / _is_authenticated / _require_auth / ...) went with web/auth.py: the
-panel's /api/* routes are not authenticated at this layer any more.
-**The password and rate-limit primitives stayed** because the remote MCP OAuth
-authorization page in bridge/oauth.py still needs the same password, and the same brute-
-force resistance around it. That is "one password, two doorways", not "authentication is
-still alive here".
+This is **not "dashboard authentication"**: there are no cookie sessions, and the panel's
+/api/* routes are not authenticated at this layer.
+**The password and rate-limit primitives are here** because the remote MCP OAuth
+authorization page in bridge/oauth.py needs the same password, and the same brute-force
+resistance around it. That is "one password, two doorways", not "authentication lives
+here".
 
 Why it is a separate file at all:
-- server.py historically laid all 93 @mcp.custom_route handlers flat in one 5000-line
-  file, which was unmaintainable.
+- Routes live in many modules; server.py holds none of them.
 - Password verification is bridge/oauth.py's single cross-cutting dependency, so it needs
-  exactly one source. Without that, splitting the file duplicates it everywhere.
+  exactly one source. Without that, splitting the routes duplicates it everywhere.
 
 Key behaviour:
 - init(config): server.py injects the config at startup; functions then read
@@ -36,10 +34,9 @@ What this does NOT do:
   registered with register(mcp).
 - It holds no business engines. bucket_mgr and the rest still live in server.py /
   tools/_runtime, and would be injected the same way if ever needed here.
-- It no longer deals with cookie sessions; that half does not exist.
+- It does not deal with cookie sessions; there are none.
 
-Public surface: init, plus the password and login rate-limit helpers. The names match the
-originals in server.py exactly, so they can be imported straight back.
+Public surface: init, plus the password and login rate-limit helpers.
 ========================================
 """
 
@@ -357,12 +354,10 @@ def _write_env_var(name: str, value: str) -> None:
 
 
 # --- Dashboard auth constants ---
-# The cookie-session family (_sessions / _session_ttl_seconds / _load_sessions /
-# _save_sessions / _revoke_session / ...) went with web/auth.py in the strip-down: panel
-# cookie login is genuinely dead, and /api/* is not authenticated at this layer.
-# **The password and login rate-limit family was not cut**: bridge/oauth.py's
-# /oauth/authorize page still relies on it to resist brute force. That is the same
-# password, not a second thing.
+# There is no panel cookie login, and /api/* is not authenticated at this layer.
+# **The password and login rate-limit family is here** because bridge/oauth.py's
+# /oauth/authorize page relies on it to resist brute force. That is the same password,
+# not a second thing.
 _PASSWORD_SALT_BYTES = 16            # secrets.token_hex(this) -> 32-char hex salt
 _auth_mutation_lock = threading.RLock()
 _credential_generation = 0
@@ -802,15 +797,10 @@ def _credential_proof_matches(
 
 # ------------------------------------------------------------
 # Concurrency and rate-limit primitives for public password verification
-# (moved here from web/auth.py during the strip-down)
 # ------------------------------------------------------------
-# auth.py was removed wholesale — panel cookie login is dead — but this small cluster could
-# not go down with it: bridge/oauth.py's /oauth/authorize page, where the user types the
-# dashboard password to authorize a remote MCP client, verifies the *same* password and has
-# to pass the *same* login throttling. One password, not two separate things.
-# auth.py also had `_run_password_work` and `_setup_lock` (first-run setup and password
-# change). Only auth.py's own routes called those, so they died with the panel and were not
-# moved.
+# bridge/oauth.py's /oauth/authorize page, where the user types the dashboard password to
+# authorize a remote MCP client, verifies the *same* password and has to pass the *same*
+# login throttling. One password, not two separate things.
 class _CrossLoopSemaphore:
     """Small async context manager backed by a process-wide thread semaphore.
 

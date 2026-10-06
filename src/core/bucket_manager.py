@@ -437,9 +437,6 @@ _METADATA_TEXT_LIMITS = {
     "_pre_anchor_source_tool": _SOURCE_TOOL_MAX,
 }
 
-# ⚰️ The three temporal-ripple constants were deleted along with the function — the
-#    reasoning is on the memorial above touch().
-#    (Leaving unused constants behind makes a reader believe the mechanism is still alive.)
 _MAX_METADATA_DEPTH = 16
 _MAX_METADATA_NODES = 10_000
 
@@ -455,11 +452,10 @@ _RESOLVED_RANK_PENALTY = 0.3   # a resolved bucket is demoted in ordering only
 # recalibrated once something has genuinely sunk.
 _FADED_SEARCH_DISCOUNT = 0.85
 _SUNK_SEARCH_DISCOUNT = 0.6
-# _LITERAL_MATCH_BONUS was deleted: a literal hit went from "+25 to the score" to "the
-# result carries a literal_hit flag and the recall layer floors it with max(score, the
-# relevance line)". Its name in the design table is "the literal-hit floor" — what it wants
-# is not to be missed, not to come first; and adding 25 hits the 100 ceiling where nothing
-# can be told apart any more.
+# There is no literal-match bonus: a literal hit carries a literal_hit flag and the recall
+# layer floors it with max(score, the relevance line). Its name in the design table is "the
+# literal-hit floor" — what it wants is not to be missed, not to come first; and a +25 bonus
+# would hit the 100 ceiling where nothing can be told apart any more.
 
 
 def _clamp01(value, default: float) -> float:
@@ -1008,10 +1004,10 @@ class BucketManager:
             self._active_cache = None
             self._active_file_state = {}
             self._last_file_state_check = 0.0
-        # This used to clear _bucket_path_index as well. Why that was removed: after every
-        # managed write, the next create()'s collision check triggered a full re-parse of
-        # every frontmatter in the store (886 files on a Windows bind mount ≈5.4s a time —
-        # which was the hidden half of hold being slow and grow timing out). The path index
+        # _bucket_path_index is NOT cleared here: clearing it after every managed write made
+        # the next create()'s collision check re-parse every frontmatter in the store (886
+        # files on a Windows bind mount ≈5.4s a time — enough to make hold slow and grow
+        # time out). The path index
         # does not need wholesale invalidation for a **managed** write:
         #   ① create() inserts its own new entry after writing (under the same guard);
         #   ② every hit is verified with os.path.isfile, so a moved or deleted file drops
@@ -1057,7 +1053,7 @@ class BucketManager:
         """A managed create or update changed one bucket: its new parsed form goes into the
         active cache in place, as _cache_bump does for touch, instead of dropping the whole
         listing. A full re-parse is ~0.8 s for 1700 entries locally and 2–3 s on a bind
-        mount, and whatever reads next (breath, the cue poke right after a write) used to
+        mount, and whatever reads next (breath, the cue poke right after a write) would
         pay it. Costs one file parse, done here while the caller still holds the bucket's
         lock. The generation still moves (a builder that parsed the old file must not
         publish) and BM25 is marked for its incremental sync. A file outside the active
@@ -1786,8 +1782,8 @@ class BucketManager:
         fails, delete the new copy and keep the original as the sole truth.
         Existing destination files are never overwritten.
 
-        A managed move has to keep the ID -> path index in step. _invalidate_bm25 no longer
-        clears that index wholesale, so a file moved here without updating the mapping would
+        A managed move has to keep the ID -> path index in step. _invalidate_bm25 does not
+        clear that index wholesale, so a file moved here without updating the mapping would
         cause the next hit on the old path to mark the index not-ready -> another full
         re-parse of the store (5s+).
         The caller passes bucket_id where it can; without it this degrades to removing the
@@ -2437,12 +2433,10 @@ class BucketManager:
                   # re-tagging pass can still **find** those buckets — a fallback fills
                   # the field in, which makes every "this one is unfinished" check stop
                   # matching it.
-                  # 📌 And note where this line sits: right under the `last_dreamt`
-                  #    epitaph, which is the same mistake written down — a field added at
-                  #    one end, never listed here, silently dropped by update(), and the
-                  #    symptom looking like a bug somewhere else entirely. What catches
-                  #    it is not remembering, it is the assertion that the stamp really
-                  #    reached disk.
+                  # 📌 Same trap as the two fields above: a field added at one end and
+                  #    never listed here is silently dropped by update(), and the symptom
+                  #    looks like a bug somewhere else entirely. What catches it is not
+                  #    remembering, it is an assertion that the stamp really reached disk.
                   "name_source", "summary_source",
                   # invalidation: the records saying a basis of this memory changed under
                   # it (regrow's overturn writes them on every descendant). Normalised
@@ -2477,11 +2471,10 @@ class BucketManager:
                 elif k == "anchor":
                     # anchor is a bool; a False deletes the field outright to keep the
                     # frontmatter clean.
-                    # The fix: the pass-through path used to bypass ANCHOR_LIMIT, so a bulk
+                    # The pass-through path is held to ANCHOR_LIMIT too: otherwise a bulk
                     # script or the front end calling update(anchor=True) directly could push
-                    # the anchor total past the cap of 24. A check is added here, counting
-                    # only on a False->True transition; setting anchor again on a bucket that
-                    # already has it does not count.
+                    # the anchor total past the cap of 24. Only a False->True transition
+                    # counts; setting anchor again on a bucket that already has it does not.
                     if kwargs[k]:
                         already_anchor = parse_bool(
                             post.get("anchor", False), default=False
@@ -3071,8 +3064,7 @@ class BucketManager:
              · folded it into a summarising sentence (`fold`)
            **`recall` finding it -> no call.** Scrolling past it while browsing -> no call.
 
-        📌 The rule, which overturned an earlier proposal that a search hit should extend
-           its life:
+        📌 The rule — a search hit does not extend a memory's life:
            "things recalled repeatedly are remembered firmly — **but that case is the
            minority**", together with **"a faded entry still has its summary; it is not
            forgotten outright"**.
@@ -3082,13 +3074,9 @@ class BucketManager:
            it sounds like it does — not enough to justify importing the whole "look something
            up often and it lives longer" model, which is a practice curve, not memory.
 
-        ⚠️ The old English comment here said `Called on every recall hit` (inherited from
-           upstream). **That sentence had been false for a long time**, and was corrected
-           along with this.
-
-        ⚰️ The `ripple` parameter is kept only so the call sites do not have to change;
-           **it does nothing whatever you pass** (temporal ripple was deleted — the
-           reasoning is on the memorial below).
+        `ripple` is accepted only so the call sites do not have to change; **it does
+        nothing whatever you pass** (why there is no temporal ripple: the note below
+        touch_many).
         """
         async with self._bucket_turn(bucket_id):
             await self._touch_locked(bucket_id)
@@ -3129,8 +3117,8 @@ class BucketManager:
     async def touch_many(self, bucket_ids: list, ripple: bool = False, road: str = "write") -> None:
         """touch in bulk. One failure does not affect the others.
 
-        ⚰️ `ripple` does nothing whatever you pass (temporal ripple was deleted); it is kept
-        only so the call sites do not have to change.
+        `ripple` does nothing whatever you pass (see the note below); it is accepted only
+        so the call sites do not have to change.
 
         Every caller is a write standing on these memories, so this is also where the
         usage log records them as used as a source (core/_usage.py).
@@ -3144,32 +3132,24 @@ class BucketManager:
                 logger.warning(f"touch_many: 触碰 {bid} 失败: {e}")
         self.usage.record(_usage.SOURCE, touched, road)
 
-    # ⚰️ **Temporal ripple was deleted.**
-    #    What it did: every time a bucket was touched, it added 0.3 to the
-    #    `activation_count` of the handful of buckets **adjacent to it in time** — "recall
-    #    one thing and you incidentally wake the things around it".
+    # 🔴 **There is no temporal ripple** — touching a bucket does not wake the buckets
+    #    **adjacent to it in time** ("recall one thing and you incidentally wake the things
+    #    around it").
+    #    · Nothing reads `activation_count`: the forgetting formula has no count factor
+    #      ("things recalled often do not sink" is last_active's job), so bumping it would
+    #      be **visible nowhere at all**.
+    #    · It would not be cheap: every ripple means a `list_all()` pass over the whole
+    #      store (hundreds of files), to change a number nobody reads.
     #
-    #    🔴 Why it went: **it was dead, and it was not cheap.**
-    #    · Dead: nothing had read `activation_count` since the count factor was cut out of
-    #      the forgetting formula, and the rule became "things recalled often do not sink,
-    #      and last_active handles that". From that day the number only went up and was
-    #      never read, so the 0.3 the ripple added was **visible nowhere at all**.
-    #    · Not cheap: every ripple meant a `list_all()` pass over the whole store (hundreds
-    #      of files), in order to change a number nobody read.
+    #    📌 The deeper reason: "things recalled repeatedly are remembered firmly — **but
+    #      that case is the minority**". That is the practice-makes-permanent model
+    #      (Ebbinghaus), and it is **not the memory we are after**. What we are after is
+    #      "what mattered, what moved something, lasts", not "what got looked up most lasts".
     #
-    #    📌 The deeper reason for deleting it — deeper than "it was dead" — is worth keeping:
-    #      "things recalled repeatedly are remembered firmly — **but that case is the
-    #      minority**".
-    #      That is the practice-makes-permanent model (Ebbinghaus), and it is **not the
-    #      memory we are after**. What we are after is "what mattered, what moved something,
-    #      lasts", not "what got looked up most lasts".
-    #      The ripple was the last remaining leg of that other model, and the rest of it had
-    #      already walked out.
-    #
-    #    ⚠️ The `activation_count` field itself **stays for now**: it costs nothing sitting
-    #       in the frontmatter, and deleting it would mean touching thousands of files.
-    #       **But nothing reads it any more** — anyone who sees it and thinks of building a
-    #       rule on it should come back and read this first.
+    #    ⚠️ The `activation_count` field still sits in old frontmatter: it costs nothing
+    #       there, and removing it would mean touching thousands of files. **But nothing
+    #       reads it** — anyone who sees it and thinks of building a rule on it should come
+    #       back and read this first.
 
     async def search(
         self,
@@ -3232,15 +3212,13 @@ class BucketManager:
         else:
             candidates = all_buckets
 
-        # --- Layer 1.5: the embedding semantic score. It is a scoring dimension only and no
-        #     longer narrows the candidate set. ---
-        # This used to replace the candidate set with "the buckets present in
-        # embeddings.db", which meant:
-        #   - any bucket lacking an embedding (the embed key failed at write time, or an old
-        #     script bulk-imported without backfilling vectors) was filtered out wholesale as
-        #     soon as the query matched any vector at all -> breath's retrieval counts stopped
-        #     agreeing with pulse.
-        # The fix: keep vector_scores for Layer 2's semantic dimension, but leave `candidates`
+        # --- Layer 1.5: the embedding semantic score. It is a scoring dimension only and
+        #     never narrows the candidate set. ---
+        # Narrowing to "the buckets present in embeddings.db" would filter out wholesale any
+        # bucket lacking an embedding (the embed key failed at write time, or an old script
+        # bulk-imported without backfilling vectors) as soon as the query matched any vector
+        # at all -> breath's retrieval counts would stop agreeing with pulse.
+        # So vector_scores feed Layer 2's semantic dimension and `candidates` is left
         # alone. A bucket with no embedding scores semantic_score=0 and can still be hit on
         # topic/emotion/time/importance.
         # ``None`` means this caller wants BucketManager to query the engine.
@@ -3694,11 +3672,10 @@ class BucketManager:
             for _root, fname, full_path in self._iter_md_files(dirs):
                 stem = fname[:-3]
                 index.setdefault(stem, full_path)
-                # The root cause once tracked down: a managed filename looks like
-                # `<name>_<id>.md`, and only the whole stem used to be indexed as a key — so
-                # when the frontmatter failed to parse (stored_id="") the bare id could not be
-                # found, the index was ready but missing that entry, the bucket became an
-                # orphan, and it fell through to the filename-scan fallback in
+                # A managed filename looks like `<name>_<id>.md`. Indexing only the whole
+                # stem would lose the bare id whenever the frontmatter fails to parse
+                # (stored_id=""): the index would be ready but missing that entry, the bucket
+                # an orphan, falling through to the filename-scan fallback in
                 # `_find_bucket_file()` (which also logs a loud warning).
                 # Same rule as `_scan_bucket_file_by_name()`'s `stem.endswith(f"_{bucket_id}")`
                 # test: parse the `_<id>` suffix out and index that as a key too, so nothing

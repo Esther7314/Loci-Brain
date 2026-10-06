@@ -4,12 +4,11 @@ tools/regrow/ — a new version of one memory
 ========================================
 
 The same memory has a new version (A -> A'): the new one takes over, the old one
-stays on file and no longer surfaces alongside it.
+stays on file and does not surface alongside it.
 
 🔴 **This entry point is `fold`'s n=1 special case**: underneath it runs the same
-code in `tools/_fold.py` (the new bucket gets `cover=[old id]`, the old one gets
-`covered_by`), and neither the version chain nor anything said to the caller
-changed. The difference between "I changed my mind" and "I summed several up"
+code in `core/_fold.py` (the new bucket gets `cover=[old id]`, the old one gets
+`covered_by`) and writes the version chain. The difference between "I changed my mind" and "I summed several up"
 lives **in the body text**, not in the gesture.
 
 The boundary with the other two acts (never mix them):
@@ -30,16 +29,16 @@ without it):
   surfacing as before; the mark is shown wherever one is read by id, and breath's
   「依据变了的」 block reads it.
 
-Four things fixed during review:
+Four guards:
 - The whole flow is wrapped in a _keyed_turn on the old id (a cross-process
-  lock): two concurrent regrows of the same entry can no longer fork it
+  lock): two concurrent regrows of the same entry cannot fork it
 - Archived buckets are rejected outright (update() will not write an archived
   bucket, so forcing it would leave half a chain — trace restore first)
 - Sources appended via from go through grow's _normalize_from (a memory has to
   exist, the host's line ids are quoted); when the chain is full they go in one
   at a time and however many fit, fit
-- Backfill self-healing: backfill_sweep also recognises source_tool=regrow (that
-  change lives over in rooms_path)
+- Backfill self-healing: backfill_sweep refills a regrown bucket like any other
+  (tools/grow/rooms_path.py)
 
 The return also says which old views the new version runs into (回望,
 tools/_write_returns.py); its own lineage — what it stands on, the versions it replaces,
@@ -59,8 +58,8 @@ from core import _sources as _src
 from .. import _runtime as rt
 from core._bigevent import is_big as _is_big
 from .._common import _keyed_turn, read_scope, resolve_bucket_id, with_write_key
-# is_mind_room is no longer used to keep events out (that gate was removed; see
-# the epitaph inside regrow below)
+# is_mind_room is deliberately not imported: regrow does not keep events out (see the
+# note inside regrow below)
 # from core._rooms import is_mind_room
 from utils import PROV_MAX_LINES, WAS_REVISION_OF, now_iso, prov_targets, read_prov
 from ..grow.rooms_path import _normalize_from, check_sources
@@ -206,27 +205,23 @@ async def _regrow(bucket_id: str = "", text: str = "", v=-1, a=-1, from_=None,
         # changes metadata. A room is metadata — it does not affect what this
         # memory says, and changing it is more like correction fluid than a new
         # version. Moving rooms goes through trace(bucket_id=..., room=...).
-        # ⚰️ This function briefly accepted `room`, on the grounds that "moving
-        #    is part of re-versioning". That is one field with two entry points —
-        #    exactly the disease killed off deliberately elsewhere in this system.
+        #    Accepting `room` here too would be one field with two entry points.
         room = str(old_meta.get("room") or "")
         is_big = _is_big(old_meta)
-        # 🔴 There used to be a gate here that only let through thinking (the two
-        #    MIND rooms) and periods; ordinary events were kept out, on the
-        #    grounds that "what happened should not be rewritten". **It was
-        #    removed.**
+        # 🔴 No gate keeps ordinary events out (letting through only thinking and
+        #    periods, on the grounds that "what happened should not be rewritten").
         #
-        #    Not because that principle is wrong, but because **this gate was not
-        #    what protected it**: regrow never edits the original anyway. The new
-        #    version takes over and the old one stays on file (superseded_by links
-        #    them, and a direct id lookup still returns it verbatim).
-        #    The real cost was "one thought, three different gestures" —
+        #    Not because that principle is wrong, but because **such a gate would
+        #    not be what protects it**: regrow never edits the original anyway. The
+        #    new version takes over and the old one stays on file (superseded_by
+        #    links them, and a direct id lookup still returns it verbatim).
+        #    The gate's cost would be "one thought, three different gestures" —
         #      the thinking changed -> regrow · the event was misremembered ->
         #      store a correction alongside · I remembered wrong -> fold one over
         #    — which cannot be explained, and jams you on the spot the moment you
         #    sit down to write the tool description.
         #
-        #    After the removal: **regrow = this entry has a new version** (used
+        #    So: **regrow = this entry has a new version** (used
         #    for thinking, events and periods alike), **fold = fold it up**
         #    (several collapsed into one sentence / naming a stretch of days).
         #    Two tools, two sentences, no overlap left — and with it goes the
@@ -274,10 +269,9 @@ async def _regrow(bucket_id: str = "", text: str = "", v=-1, a=-1, from_=None,
         # There is no opening to change time here either: `when` is "where this
         # hangs in time", metadata rather than content — changing a period's span
         # or filling in an event's date both go through trace(bucket_id=..., when=...).
-        # 📌 Periods used to be the exception here ("the span is half its body, so
-        #    it counts as content"). That exception was dropped too: a point and a
-        #    span are the same kind of thing, both "where it hangs". A period's
-        #    actual content is **the name**.
+        # 📌 Periods are no exception ("the span is half its body, so it counts as
+        #    content"): a point and a span are the same kind of thing, both "where
+        #    it hangs". A period's actual content is **the name**.
         new_when = str(old_meta.get("when") or "") if is_big else ""
 
         is_test = bool(old_meta.get("provenance", {}).get("kind") == "test"

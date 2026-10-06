@@ -312,14 +312,12 @@ async def api_loci_similar_action(request: Request) -> Response:
     sink = sink one: go through trace(delete=True), a soft delete into the archive that a
            direct id lookup always recovers.
 
-    WARNING: **the authorization check added here was the most serious issue found in
-    review.** This used to accept a single `id` and call `trace(delete=True)` on it. But
-    trace's delete branch runs **before** its protected check — meaning that once logged
-    in, anyone could construct `{"action":"sink","id":<any bucket id>}` and sink the
-    profile fact, a big event, or a pinned core bucket, even one that never appeared on
-    the similarity page at all.
-    Both ends of the pair must now be supplied, and the server verifies for itself that
-    the pair really exists.
+    WARNING: **both ends of the pair must be supplied, and the server verifies for itself
+    that the pair really exists.** Accepting a single `id` and calling
+    `trace(delete=True)` on it would be the hole: trace's delete branch runs **before**
+    its protected check, so once logged in, anyone could construct
+    `{"action":"sink","id":<any bucket id>}` and sink the profile fact, a big event, or a
+    pinned core bucket, even one that never appeared on the similarity page at all.
     """
     from starlette.responses import JSONResponse
     try:

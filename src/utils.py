@@ -46,8 +46,8 @@ from typing import Callable, Optional
 # ============================================================
 # Named constants
 # ------------------------------------------------------------
-# No bare magic numbers. These values used to be scattered through function bodies; they
-# are gathered here so that (1) the whole "tuning panel" is visible at a glance and
+# No bare magic numbers. These values are gathered here rather than spread through function
+# bodies, so that (1) the whole "tuning panel" is visible at a glance and
 # (2) changing one place changes every use.
 # ============================================================
 
@@ -172,12 +172,11 @@ def config_file_path() -> str:
       4. <project_root>/config.yaml — the fallback default.
 
     Why this is its own function: load_config reads it, the dashboard routes (config_api,
-    buckets, github, embedding) write it, and the entrypoint initializes it. Every one of
-    those used to hardcode <repo_root>/config.yaml. The moment the config moved into the
-    data directory — which was itself a fix for a single-file Docker bind mount being
-    created as a directory on Windows and crash-looping the container — reads and writes
-    forked to different paths, and any key the dashboard saved was lost on restart.
-    Centralizing it here means LOCI_CONFIG_PATH takes effect in one place and reads and
+    buckets, github, embedding) write it, and the entrypoint initializes it. If each
+    hardcoded its own path, reads and writes could fork to different files, and any key
+    the dashboard saved would be lost on restart. (The config lives in the data directory
+    because a single-file Docker bind mount is created as a directory on Windows and
+    crash-loops the container.) Centralizing it here means LOCI_CONFIG_PATH takes effect in one place and reads and
     writes always hit the same file."""
     env_cfg = os.environ.get("LOCI_CONFIG_PATH", "").strip()
     if env_cfg:
@@ -504,9 +503,9 @@ def load_config(config_path: Optional[str] = None) -> dict:
     )
 
     # --- Environment variable overrides (highest priority) ---
-    # This used to be six near-identical if-blocks, each doing the same thing:
+    # Each one does the same thing:
     #   "if the env var is non-empty -> write it to some nested key in config"
-    # They all go through _apply_env_override() now, so adding one is adding one table row.
+    # They all go through _apply_env_override(), so adding one is adding one table row.
 
     # v1.x compatibility: a refactor must not silently break the old variable names. An
     # explicitly set new variable always wins.
@@ -688,7 +687,8 @@ def _deep_merge(base: dict, override: dict) -> dict:
 def _apply_env_override(config: dict, env_name: str, *path: str) -> None:
     """Write one environment variable into a nested dict along `path`, if it is non-empty.
 
-    Why this exists: load_config() used to contain six near-identical override blocks —
+    Why this exists: without it, load_config() would hold one near-identical block per
+    override —
         env = os.environ.get("XXX", "")
         if env:
             config["a"]["b"] = env
@@ -777,8 +777,8 @@ def _resolve_log_dir(explicit: str | None) -> str:
     Priority:
         the explicit argument > $LOCI_LOG_DIR > <buckets_dir>/.logs > /tmp as a last resort
 
-    Why it is separate: setup_logging() used to inline four if-fallback blocks, and the
-    branches crowded together were hard to read. On its own it can be unit-tested directly,
+    Why it is separate: four if-fallback blocks inlined in setup_logging() crowd together
+    and are hard to read. On its own it can be unit-tested directly,
     and changing the priority order does not mean touching the body of setup_logging.
     """
     if explicit:
@@ -960,10 +960,10 @@ def _persisted_names() -> dict:
     """The two names stored in config.yaml, cached on mtime — they change once every few
     months.
 
-    Why the names have to be storable in config.yaml at all: they used to come **only** from
-    the container's environment variables, which forced that field in the panel to be
-    read-only — and for someone who has just installed this, "go edit docker-compose and
-    restart" is a wall they hit on step one.
+    Why the names have to be storable in config.yaml at all: coming **only** from the
+    container's environment variables would force that field in the panel to be read-only
+    — and for someone who has just installed this, "go edit docker-compose and restart" is
+    a wall they hit on step one.
     The order is **config first, environment as fallback**: what is typed into the panel has
     to count, or that input box is lying to the user. Saving something that does not take
     effect is the worst version of this.

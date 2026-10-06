@@ -33,9 +33,6 @@ Exports: trace_core(bucket_id, name, domain, valence, arousal, tags, pinned,
                     media_replace, hard_delete, delete_reason, restore,
                     old_str, new_str, closed_by, mark_asked, direction_of_fit,
                     bound, cue, card_of, sources_append, invalidation) -> str
-⚰️ Seven dead parameters were removed: importance / resolved / digested /
-   content / why_remembered / meaning_append / meaning_replace (see the epitaph
-   at _retired below)
 ========================================
 """
 
@@ -64,18 +61,11 @@ from .._common import (
 )
 
 
-# ⚰️ `_retired_trace_fields()` was deleted.
-# Its job was to produce a human-readable complaint when a retired field was
-# passed, but trace's arg model is `extra="forbid"`: **those names cannot get in
-# through the tool face at all**, so the function body was unreachable.
-# The seven parameters below it (importance/resolved/digested/content/
-# why_remembered/meaning_append/meaning_replace) went with it — both of the only
-# two callers were checked: server.py passes only the live ones, and the panel in
-# `web/loci.py` uses only delete/status/closed_by/mark_asked.
-# ⚠️ **`importance` as an internal field was left alone**: pinning a principle
-#    still locks it to 10, and the quota still reads it.
-#    What was removed is the entry point for changing it from outside, not the
-#    field.
+# Retired fields need no complaint here: trace's arg model is `extra="forbid"`, so
+# **those names cannot get in through the tool face at all**.
+# ⚠️ **`importance` as an internal field stays**: pinning a principle locks it to 10,
+#    and the quota reads it. What trace lacks is an entry point for changing it from
+#    outside, not the field.
 
 
 _DATE_RE = __import__("re").compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -86,12 +76,10 @@ def _check_real_dates(*dates: str) -> str | None:
     """The right shape does not mean the calendar has that day. `2026-09-31` and
     `2026-13-45` look perfectly legal.
 
-    🔴 The write path used to check shape only, accept the value and **write it
-       into the library**, while the read path (`parse_span`) called through
-       bare — **one mistyped date could make that whole stretch of memory
-       permanently unreadable**.
-       The read half now falls back instead of throwing, but the place that
-       really has to stop it is here:
+    🔴 A write path that checks shape only would **write it into the library**,
+       and one mistyped date could make that whole stretch of memory unreadable.
+       The read half (`parse_span`) falls back instead of throwing, but the place
+       that really has to stop it is here:
        **do not let a day that does not exist into the library**; once it is in,
        any amount of leniency is just covering it up.
     """
@@ -591,15 +579,15 @@ async def trace_core(
         if pinned in (0, 1):
             updates["pinned"] = bool(pinned)
             if pinned == 1:
-                # --- The gate in front of pin (built once, later loosened) ---
-                # What gets pinned is still a **principle** ("how I mean to act"),
-                # but this gate no longer **blocks**:
+                # --- The gate in front of pin ---
+                # What gets pinned is a **principle** ("how I mean to act"),
+                # but this gate does not **block**:
                 # it is not a judgement code can make well. A regex cannot tell
                 # "I am always impatient" (should be stopped) from "the things I
                 # value have always grown slowly" (should be kept); both are
                 # descriptive sentences.
                 # So it pins regardless and hangs the reminder off the success
-                # receipt (see the epitaph in tools/_pin.py).
+                # receipt (the reasoning is in tools/_pin.py).
                 # What it reads is still **the body as it will be after this
                 # pin**: if the same call is also editing the body through
                 # content or a partial replacement, it must look at the edited
@@ -651,9 +639,8 @@ async def trace_core(
         #    about**.
         #    Neither room nor time affects what this memory says — changing them
         #    is more like correction fluid, and should not produce a new version.
-        # ⚰️ `regrow` briefly accepted `room` (on the grounds that "moving is part
-        #    of re-versioning") — that is one field with two entry points, exactly
-        #    the disease deliberately killed off elsewhere in this system. Removed.
+        #    `regrow` does not take `room`: one field with two entry points is
+        #    exactly what this system avoids.
         if room:
             room_err = check_room(room, "")
             if room_err:
@@ -899,7 +886,7 @@ async def trace_core(
         out += "\n" + card_note
     out += "".join("\n" + note for note in source_notes)
     # pin's reminder trails the **success receipt**: it is not an error, the pin
-    # is already on disk (see the epitaph in tools/_pin.py)
+    # is already on disk (see tools/_pin.py)
     if pin_hint:
         out += "\n\n" + pin_hint
     return out

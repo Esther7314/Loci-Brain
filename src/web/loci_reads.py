@@ -259,10 +259,8 @@ def _node_ts(meta: dict) -> datetime | None:
     """Where a star sits in the sky: `when` first, `created` as fallback — the same rule
     recall uses.
 
-    It goes through `tools/_when`, the same ruler recall uses, and returns timezone-aware
-    local time.
-    (This used to carry the same `[:19]` slice found elsewhere, which cuts off the Z or the
-    +08:00 offset.)
+    It goes through `core/_when`, the same ruler recall uses, and returns timezone-aware
+    local time (never a `[:19]` slice, which cuts off the Z or the +08:00 offset).
     """
     for k in ("when", "created"):
         ts = _w.parse_stamp(meta.get(k))
@@ -492,17 +490,13 @@ def _collect_events(all_buckets: list) -> list[dict]:
     """The pool behind the "something comes back to you" section of the waking screen.
     **The rule is not here** — it is in the contract source.
 
-    This function used to be a **parallel implementation** of the pool logic in
-    `tools/breath/awaken.py`. (Copying the same line into two files is not sharing a
-    source.) It now does exactly one thing: call `tools.breath.awaken.event_pool()` and
-    reshape the dict into what the front-end wants.
-    WARNING: the direction is fixed at **web -> tools**, never the reverse. The MCP surface
-       must not depend on the panel.
-    WARNING: the cost of parallel implementations has been paid here before. When the rooms
-       were renamed, `.find("/EVENT/") > 0` was written out in both places and **both went
-       silently empty together**. A second instance turned up later: the "folded entries do
-       not enter the pool" gate was added only on the awaken side, so they kept surfacing on
-       the page.
+    It does exactly one thing: call `core.profile.event_pool()` and reshape the dict into
+    what the front-end wants. (Copying the same line into two files is not sharing a
+    source.)
+    WARNING: the direction is fixed at **web -> core/tools**, never the reverse. The MCP
+       surface must not depend on the panel.
+    WARNING: a parallel implementation drifts: a room rename has to be made in both copies,
+       a gate added on one side lets entries keep surfacing on the other.
     """
     from tools.recall.core import _room_cn, _label_of, _short_id
     from core._rooms import normalize_room
@@ -527,8 +521,7 @@ def _pick_recollect(pool: list[dict], n: int = 2) -> list[dict]:
     The cap is 2 because the waking screen's contract is one to two entries (`awaken.py`
     hardcodes `min(2, ...)`).
     It is clamped here rather than in the route, so that adding another route, or calling
-    this function directly some day, cannot get around the contract. (The route used to
-    allow up to n=5.)
+    this function directly some day, cannot get around the contract.
     """
     import random
     if not pool:
@@ -548,19 +541,15 @@ async def build_profile() -> dict:
     """The note by the door: name, principles with their provenance, reminders, and what is
     weighing on the mind. **Every rule lives in the contract source.**
 
-    This used to be a **parallel implementation** of `tools/breath/awaken.py`. Its own
-    comment said "change one and you must change the other" — and the unchanged side was
-    duly caught: the falsy `or 0.5` fallback on `weight` had been fixed in awaken but was
-    still here, so a want whose weight had been cleared by a dream **kept pressing down on
-    the page anyway**.
-    There is now one rule and one place: `tools.breath.awaken.door_note()`. This function
-    only turns the dict into JSON.
+    There is one rule and one place: `core.profile.door_note()`, the same one the waking
+    screen reads. This function only turns the dict into JSON.
 
-    WARNING: the "things that keep coming up about a person" section was removed. It ranked
-    by activation_count, and **what gets mentioned most is not what is most true**. Reading
-    a dossier of "what this person is like" on waking and then treating them according to
-    the dossier turns a person into a character sheet. The rule is now about timing instead:
-    **only what there is no time to look up before speaking belongs by the door.**
+    WARNING: there is no "things that keep coming up about a person" section. Ranking by
+    how often something is mentioned is wrong: **what gets mentioned most is not what is
+    most true**. Reading a dossier of "what this person is like" on waking and then
+    treating them according to the dossier turns a person into a character sheet. The
+    rule is about timing instead: **only what there is no time to look up before speaking
+    belongs by the door.**
     """
     from tools.recall.core import _room_cn, _label_of, _short_id
     from core._rooms import normalize_room
@@ -640,10 +629,10 @@ async def build_profile() -> dict:
                           f"新版没带 {_PROFILE_TAG}——门口那格是空的"
                           if not facts and door["facts_covered"] else ""),
         "rules": rules,
-        # freq_i / freq_you were removed. A front-end still reading those keys gets
-        # undefined rather than an empty array, so the section simply disappears. That is
-        # intended: half-rendering an empty section makes it much harder to notice it should
-        # no longer be there than having it vanish outright.
+        # No freq_i / freq_you keys: a front-end still reading them gets undefined rather
+        # than an empty array, so the section simply disappears. That is intended:
+        # half-rendering an empty section makes it much harder to notice it should not be
+        # there than having it vanish outright.
         "reminders": reminders,
         "heavy": heavy,
         "edited": edited,     # the notification pool: user-edited entries not yet handled
@@ -658,7 +647,7 @@ async def build_profile() -> dict:
 async def api_loci_recall(request: Request) -> Response:
     from starlette.responses import JSONResponse
     q = request.query_params
-    # `by` was removed; `view="scene"` took its place.
+    # There is no `by`; `view="scene"` does that job.
     # The filters on this page match the tool surface's parameter list **word for word**:
     # never leave the panel with a knob the tool does not have.
     gates = {k: (q.get(k) or "").strip()
@@ -678,10 +667,9 @@ async def api_loci_recall(request: Request) -> Response:
     except (TypeError, ValueError):
         floor = None
     try:
-        # This used to call recall_data() and recall_core() separately, and each of them
-        #    runs its own _collect — **the same search computed twice**.
-        #    Measured with a query: 3 seconds on the tool surface, 8.6 seconds here, and
-        #    the difference was that second pass.
+        # Not recall_data() and recall_core() separately: each runs its own _collect —
+        #    **the same search computed twice** (measured with a query: 3 seconds on the
+        #    tool surface, 8.6 seconds here).
         #    recall_text_and_data() gathers once, and both skins share it.
         from tools.recall.core import recall_text_and_data
         data = await recall_text_and_data(**gates, floor=floor, max_cells=slices)

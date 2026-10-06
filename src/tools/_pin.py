@@ -3,15 +3,15 @@
 tools/_pin.py — the gate in front of pin
 ========================================
 
-The meaning of `pin` has not changed. It is still:
+The meaning of `pin` is:
 
     from "this one matters"  ->  "this one is how I mean to act"
 
-What changed is **how hard this gate pushes**: from "reject on the spot" to
-"pin it anyway, and add one line of reminder".
+This gate does not reject on the spot: it **pins it anyway, and adds one line of
+reminder**.
 
 ------------------------------------------------------------
-🔴 Why it was loosened
+🔴 Why it does not block
 ------------------------------------------------------------
    The gate does not need to be tight. It can be loose. **This is not a
    judgement code can make well** — that is the whole of it.
@@ -24,21 +24,19 @@ And the reason runs one layer deeper than "the word list is too narrow":
   are **both descriptive sentences** — one should be stopped, one should be kept.
   **A regex cannot tell those two apart; it matches sentence shape, not content.**
   A gate with zero resolution on the thing it exists to stop can only do damage
-  when it is tight: a genuine principle that had been pinned for weeks was
-  rejected by it, and the only way to pin it back was to bend the wording into a
-  shape the regex recognised — at that moment what got edited was the sentence,
-  not the judgement behind it.
+  when it is tight: it rejects genuine principles, and the only way to pin one is
+  to bend the wording into a shape the regex recognises — at that moment what gets
+  edited is the sentence, not the judgement behind it.
 
-📌 The general rule that came out of building this gate in the first place ("if a
-   rule needs a hand-written warning to stop it being misused, the box has the
-   wrong thing in it") **has not been overturned**; here it just points the other
-   way: the box is fine, **this is simply not something code should be judging.**
+📌 The general rule ("if a rule needs a hand-written warning to stop it being
+   misused, the box has the wrong thing in it") **still holds**; here it just
+   points the other way: the box is fine, **this is simply not something code should be judging.**
    So the warning does not go back up on the wall of CLAUDE.md — it is attached
    to **the moment the action happens**. Read at the instant of pinning, it is
    worth more than the same words hanging on a wall.
 
 ------------------------------------------------------------
-What the gate does now
+What the gate does
 ------------------------------------------------------------
 · It blocks nothing. pinned=1 always goes through.
 · When the body does not read as "how I mean to act", it **appends one reminder**
@@ -63,17 +61,15 @@ import re
 # a piece of thinking that happens to mention what to do, not to a principle.
 _HEAD_CHARS = 60
 
-# The forms it recognises. Since the gate was loosened this table **only decides
-# whether to add a remark**, not whether the pin lands, so widening or narrowing it
-# can no longer edit what I wrote. A few entries were added after real principles
-# tripped over the older list:
+# The forms it recognises. This table **only decides whether to add a remark**, not
+# whether the pin lands, so widening or narrowing it cannot edit what I wrote:
 #   我要 / 我不      —— the most direct statement of intent
 #   先…再            —— sequencing ("baseline first, then touch the code")
 #   别(?!人)         —— prohibition; (?!人) rules out 「别人」, a frequent false hit
 #   不准 / 不许       —— another way of saying the same prohibition
 #   必须 / 就说 / 就停 —— hard constraints
 #   停下 / ——停       —— interruption ("the moment I catch myself smoothing an
-#                       answer over — stop"), which the old list used to reject
+#                       answer over — stop")
 #   每次 / 遇到…就     —— triggers
 #   发现…立即         —— conditional triggers
 #   记得 / 宁可 / 优先 —— weaker, but genuinely a statement of intent
