@@ -23,6 +23,8 @@ What lives here:
   line breath reads from it, attachment storage, the archive format exports and imports
   share, the write-behind queue of the vector index, and provider detection for the
   summariser and embedding clients.
+- `memory_messages.py`: the shared wording trace returns when an entry sinks or is
+  reactivated.
 - `_fold.py` / `_muse.py` / `_dream.py` / `_bigevent.py` / `_when.py` / `_rooms.py`:
   engine pieces — the bones of fold/gist, the rule for when to muse, the rule for when
   to dream, how a period draws its circle in time, the calendar and timezone

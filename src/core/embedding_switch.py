@@ -17,7 +17,7 @@ with vectors present) goes like this:
             the pacing between batches), and the similarity lines that were tuned on the
             old model and may need retuning — read from the code that uses them.
   2. start  the same request with `embedding.reembed: "confirm"` starts the recompute
-            (`start`, core/migration_engine.py): the new model's vectors are written to a
+            (`start`, core/reembed.py): the new model's vectors are written to a
             staging database beside the live one; the live one is not touched.
   3. finish when every entry has its new vector, the staging database replaces the live
             one in one rename, and only then is the new model published to the running

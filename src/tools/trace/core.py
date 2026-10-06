@@ -41,7 +41,7 @@ from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from typing import Optional
 
-from locibrain.domain.memory_messages import resolved_hint
+from core.memory_messages import resolved_hint
 from utils import (PROV_FIELD, PROV_MAX_LINES, WAS_QUOTED_FROM, is_telic, parse_bool,
                    read_prov)
 from .. import _runtime as rt
