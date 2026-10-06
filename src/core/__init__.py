@@ -48,6 +48,10 @@ What lives here:
   the tools and the engine pieces above read it at call time.
 - `names.py`: the names table — normalising subjects, which spellings are one name, what
   kind each name is. The tools, the summariser, cue cards and the export package read it.
+- `similarity.py` / `starfield.py` / `census.py` / `health.py`: what the panel's reads
+  compute — suspected duplicates and their pair cache, the starfield, the room and subject
+  counts, the health check and the settings page's top block. The web builders read the
+  library, config and engines off `web/_shared` and hand them in as arguments.
 
 Dependency direction: `core` does not depend on `web` / `bridge`, and depends on `tools`
 only through three lazy upward calls, each commented where it is made:

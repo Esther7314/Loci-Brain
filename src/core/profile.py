@@ -45,7 +45,7 @@ Exports: door_note(all_buckets, now) / event_pool(all_buckets, now=None) /
          due_day(meta, today) / awake_reasons(meta, now, …) / is_accessible(meta, now, …) /
          is_open_promise(meta) / written_days_ago(meta, today) / due_now(meta, now) /
          prospective(all_buckets, now, …) / involuntary(all_buckets, now, …) /
-         entry_label(meta, content) / short_id(bucket_id) / owed_names(bound)
+         label_of(e) / entry_label(meta, content) / short_id(bucket_id) / owed_names(bound)
 ========================================
 """
 
@@ -425,6 +425,21 @@ def owed_names(bound) -> str:
         if shown not in out:
             out.append(shown)
     return "、".join(out)
+
+
+def label_of(e: dict) -> str:
+    """The display text for a memory `{"meta", "content"}`: gist > name (timestamp
+    stripped) > the start of the body. Every one of them is text written down at storage
+    time. recall and the starfield show it whole; entry_label below is the same rule cut
+    to one line."""
+    meta = e["meta"]
+    s = str(meta.get("summary") or "").strip()
+    if s:
+        return s
+    name = re.sub(r"^[\d\- :]+", "", str(meta.get("name") or "")).strip()
+    if name:
+        return name
+    return re.sub(r"\s+", " ", e["content"])[:40]
 
 
 def entry_label(meta: dict, content: str) -> str:

@@ -103,12 +103,16 @@ ordered table, and the list here is the one list of what the panel can reach.
                                          may be handed again (hook key)
 
 Where each group lives (a new route goes into its group's module and gets its line in
-`register`, which adds the routes in this order):
+`register`, which adds the routes in this order). A read that computes something over the
+store is a core function plus a thin builder here: the builder reads the library, config
+and engines off `web/_shared` at call time, hands them to the core function, and the
+route turns its dict into JSON (core/starfield.py, core/census.py, core/similarity.py,
+core/health.py, core/profile.py):
 
     web/loci_pages.py     /loci, /loci/vendor
     web/loci_reads.py     recall, rooms, graph, profile, recollect, subjects, bucket,
                           and the builders behind them
-    web/loci_similar.py   similar, similar/action, and the pair cache
+    web/loci_similar.py   similar, similar/action
     web/loci_verdicts.py  want/resolve, want/asked, event/correct, subjects/action
     web/loci_password.py  auth/state, auth/set-password
     web/loci_health.py    health, setup, logs, pulse, and build_health / build_setup

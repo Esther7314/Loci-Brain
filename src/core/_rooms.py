@@ -47,7 +47,7 @@ step 1 -> 2), so nothing reads them any more:
     the four, and as the empty string otherwise (a bucket that belongs to no room).
 
 Exports: EVENT_ROOMS / MIND_ROOMS / ALL_ROOMS / ROOMS
-         check_room(room, kind) · normalize_room(room)
+         check_room(room, kind) · normalize_room(room) · ROOM_CN / room_cn(room)
          is_mind_room(room) · is_event_room(room) · room_matches(room, gate)
 ========================================
 """
@@ -91,6 +91,28 @@ def normalize_room(room) -> str:
     """
     r = str(room or "").strip()
     return r if r in ALL_ROOMS else ""
+
+
+# The Chinese display names of the four rooms. Always normalize_room() before
+# looking one up, so a room that is not one of the four shows as itself rather than
+# crashing a lookup (use room_cn(), never a bare .get()).
+# TRAITS is about a person, any person: myself, the other, anyone else.
+ROOM_CN: dict[str, str] = {
+    "EVENT/SELF":  "我亲历的",
+    "EVENT/WORLD": "我听说看到的",
+    "MIND/TRAITS": "人是什么样",
+    "MIND/VIEWS":  "我怎么看",
+}
+
+
+def room_cn(room) -> str:
+    """A room's Chinese display name, accepting both old and new names; anything
+    unrecognised is echoed back as-is (never turned into a blank). recall prints it and
+    the panel's reads show it, so it lives with the rooms rather than with either."""
+    r = normalize_room(room)
+    if r:
+        return ROOM_CN.get(r, r)
+    return str(room or "") or "没房间"
 
 
 def is_mind_room(room) -> bool:

@@ -23,7 +23,7 @@ from core import runtime as rt
 from .._common import read_scope, resolve_bucket_id
 from core import _when as _w          # "today" as the user lives it (local timezone) — never call datetime.now() directly
 from core._rooms import (ALL_ROOMS, check_gate, is_mind_room, normalize_room,
-                      room_matches)
+                      room_cn, room_matches)
 from core import profile as _P        # what counts as an open promise; days since written
 from utils import (HAD_PRIMARY_SOURCE, WAS_DERIVED_FROM, WAS_QUOTED_FROM, WAS_REVISION_OF,
                    read_from_ids, read_prov)
@@ -625,17 +625,8 @@ def _score_tag(e: dict) -> str:
     return f" {float(s):.2f}"
 
 
-def _label_of(e: dict) -> str:
-    """The display text for a memory: gist > name (timestamp stripped) > the start
-    of the body. Every one of them is text written down at storage time."""
-    meta = e["meta"]
-    s = str(meta.get("summary") or "").strip()
-    if s:
-        return s
-    name = re.sub(r"^[\d\- :]+", "", str(meta.get("name") or "")).strip()
-    if name:
-        return name
-    return re.sub(r"\s+", " ", e["content"])[:40]
+# The display text for a memory (core/profile.label_of); the starfield shows the same.
+_label_of = _P.label_of
 
 
 def _cell_stats(entries: list[dict]) -> dict:
@@ -957,25 +948,8 @@ def _fmt_card(label: str, st: dict) -> str:
     return "\n".join(lines)
 
 
-# The Chinese display names of the four rooms. Always normalize_room() before
-# looking one up, so a room that is not one of the four shows as itself rather than
-# crashing a lookup (use _room_cn(), never a bare .get()).
-# TRAITS is about a person, any person: myself, the other, anyone else.
-ROOM_CN: dict[str, str] = {
-    "EVENT/SELF":  "我亲历的",
-    "EVENT/WORLD": "我听说看到的",
-    "MIND/TRAITS": "人是什么样",
-    "MIND/VIEWS":  "我怎么看",
-}
-
-
-def _room_cn(room) -> str:
-    """A room's Chinese display name, accepting both old and new names; anything
-    unrecognised is echoed back as-is (never turned into a blank)."""
-    r = normalize_room(room)
-    if r:
-        return ROOM_CN.get(r, r)
-    return str(room or "") or "没房间"
+# A room's Chinese display name (core/_rooms.room_cn); the panel's reads show the same.
+_room_cn = room_cn
 
 
 def entry_json(e: dict) -> dict:
