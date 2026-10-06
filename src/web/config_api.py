@@ -39,26 +39,15 @@ from locibrain.security.public_origin import configured_public_origin
 
 from . import _shared as sh
 
-try:
-    from utils import (  # type: ignore
-        get_ai_name as _get_ai_name,
-        get_owner_name as _get_owner_name,
-        get_owner_count as _get_owner_count,
-        positive_float as _positive_float,
-        parse_bool as _parse_bool,
-        atomic_update_config_yaml,
-        read_config_yaml,
-    )
-except ImportError:  # pragma: no cover
-    from ..utils import (  # type: ignore
-        get_ai_name as _get_ai_name,
-        get_owner_name as _get_owner_name,
-        get_owner_count as _get_owner_count,
-        positive_float as _positive_float,
-        parse_bool as _parse_bool,
-        atomic_update_config_yaml,
-        read_config_yaml,
-    )
+from utils import (  # type: ignore
+    get_ai_name as _get_ai_name,
+    get_owner_name as _get_owner_name,
+    get_owner_count as _get_owner_count,
+    positive_float as _positive_float,
+    parse_bool as _parse_bool,
+    atomic_update_config_yaml,
+    read_config_yaml,
+)
 
 logger = sh.logger
 _MAX_PROVIDER_KEY_CHARS = 8192

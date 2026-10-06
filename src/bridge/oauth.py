@@ -57,10 +57,7 @@ from locibrain.security.public_origin import (
 )
 from web import _shared as sh
 
-try:
-    from utils import parse_bool  # type: ignore
-except ImportError:  # pragma: no cover
-    from ..utils import parse_bool  # type: ignore
+from utils import parse_bool  # type: ignore
 
 logger = sh.logger
 
@@ -817,10 +814,7 @@ def _oauth_authorize_html(client_id: str, redirect_uri: str, state: str,
                            code_challenge: str, resource: str = "",
                            scope: str = _MCP_SCOPE, error: str = "") -> str:
     e = _html_escape.escape
-    try:
-        from utils import get_ai_name  # type: ignore
-    except ImportError:  # pragma: no cover
-        from ..utils import get_ai_name  # type: ignore
+    from utils import get_ai_name  # type: ignore
     ai_name = e(get_ai_name())
     with _oauth_client_state_lock:
         stored_client = _oauth_clients.get(client_id, {})
