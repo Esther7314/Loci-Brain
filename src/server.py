@@ -1778,19 +1778,6 @@ except (AttributeError, RuntimeError, TypeError, ValueError) as _strict_all_exc:
 from bridge.oauth import _is_valid_mcp_token, _is_valid_static_mcp_token  # noqa: F401
 
 
-# ============================================================
-# Cloudflare Tunnel management was **removed entirely**.
-# The decision rested on facts rather than guesses: the live config.yaml had zero tunnel
-# configuration and the live container's startup logs had zero tunnel entries — it was never
-# used, because outbound traffic goes through a self-hosted gateway's domain.
-# The open-source build does not carry it either: anyone who wants public exposure can
-# configure their own reverse proxy, which sits better with the data-sovereignty position.
-# All three lifespan hooks — load_tunnel_config, start_tunnel, stop_tunnel — came out with
-# it. server_app.py needed no change: those three fields on RuntimeLifecycle were already
-# Optional, and omitting them simply means "no tunnel".
-# ============================================================
-
-
 # --- Entry point ---
 if __name__ == "__main__":
     transport = config.get("transport", "stdio")
@@ -1835,8 +1822,6 @@ if __name__ == "__main__":
             embedding_outbox=embedding_outbox,
             ensure_ollama_child=_ollama_child.ensure_child_on_boot,
             stop_ollama_child=_ollama_child.stop_child,
-            # No tunnel: load_tunnel_config, start_tunnel and stop_tunnel are
-            # Optional[...] = None, so omitting them means "no tunnel".
             boot_marker_path=os.path.join(
                 os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                 ".boot_fails",

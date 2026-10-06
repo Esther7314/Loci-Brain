@@ -204,7 +204,7 @@ def config_file_path() -> str:
     return os.path.join(_project_root(), "config.yaml")
 
 
-# Every dashboard endpoint that writes to config.yaml (tunnel, config_api, buckets, ...)
+# Every dashboard endpoint that writes to config.yaml (today web/config_api.py)
 # shares this one lock and this one atomic write. Nobody may bypass it and
 # open(path, "w") over the whole file themselves.
 # Why: an open(w) over the whole file that fails partway leaves a blank or torn config;
