@@ -343,7 +343,7 @@ HOLD_LEVELS = frozenset({"defer", "avoid"})
 # are the ways it might be said, filled in later by the backfill; [] until then.
 # card_of = the name this MIND entry is the card of (the names table's key, normalised by
 # the tool that writes it). Only a MIND entry is a card; which MIND room, and one live card
-# per name, are the write tools' checks (tools/grow/rooms_path.check_card).
+# per name, are the write tools' checks (tools/grow/_cards.check_card).
 # sources = the pieces of the host's material this memory was formed from, one record each
 # (core/_sources.py: identity, revision, fingerprint, span, use). Whether a source may be
 # used is the registry's question, asked by the write tools before they get here.

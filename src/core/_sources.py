@@ -176,7 +176,7 @@ _RANGE_MARK = ".."              # between id and through in the string form
 _RECORD_KEYS = (*_IDENTITY, "through", "revision", "fingerprint", "fingerprint_by", "span",
                 "use", "completed_from")
 # How Loci itself filled in the container of a line the model named by its bare id
-# (tools/grow/rooms_path.check_sources): from the registered line orders, or from the
+# (tools/grow/_sources_check.check_sources): from the registered line orders, or from the
 # host's one-container ceiling. Not identity; absent on a record written whole.
 COMPLETED_FROM = ("registry", "host_scope")
 

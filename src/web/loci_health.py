@@ -528,7 +528,7 @@ async def build_health() -> dict:
     def sec_bare_quotes():
         # A wasQuotedFrom line holding only the host's bare id (m_0142) names no container:
         # its original cannot be fetched and a withdrawal cannot reach the entry through
-        # it. A new write refuses such a line (tools/grow/rooms_path.check_sources); these
+        # it. A new write refuses such a line (tools/grow/_sources_check.check_sources); these
         # are the entries written before.
         from utils import WAS_QUOTED_FROM, read_prov
         ids = [str(m.get("id") or "") for m in visible
