@@ -10,7 +10,7 @@ files along code paths so each can be read and edited on its own.
 Key behaviour:
 - Package marker only; no runtime initialisation happens here
 - The actual runtime context (config / bucket_mgr / dehydrator ...) is injected
-  by server.py after startup through tools._runtime.init(...)
+  by server.py after startup through core.runtime.init(...)
 
 What this file deliberately does not do:
 - No submodule imports here, so that starting server.py is not forced to load

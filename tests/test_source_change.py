@@ -65,7 +65,7 @@ def _meta(store, bid) -> dict:
 
 @pytest.fixture
 def library(tmp_path, monkeypatch):
-    from tools import _runtime as rt
+    from core import runtime as rt
     store = BucketManager({"buckets_dir": str(tmp_path)})
     monkeypatch.setattr(rt, "bucket_mgr", store)
     monkeypatch.setattr(rt, "config", {"buckets_dir": str(tmp_path)})
@@ -289,7 +289,7 @@ def test_the_other_outcomes(library):
 
 
 def test_a_line_inside_a_run_reaches_the_memory_carrying_the_run(tmp_path, monkeypatch):
-    from tools import _runtime as rt
+    from core import runtime as rt
     store = BucketManager({"buckets_dir": str(tmp_path)})
     monkeypatch.setattr(rt, "bucket_mgr", store)
     store.sources.record_order({"system": "lento", "instance": "home", "container": "c"},
@@ -469,7 +469,7 @@ def test_a_memory_only_quoting_the_source_is_reached_by_its_withdrawal(library):
 
 
 def test_a_cleared_body_keeps_what_carries_the_next_withdrawal(tmp_path, monkeypatch):
-    from tools import _runtime as rt
+    from core import runtime as rt
     store = BucketManager({"buckets_dir": str(tmp_path)})
     monkeypatch.setattr(rt, "bucket_mgr", store)
     where = {"system": "lento", "instance": "home", "container": "c"}

@@ -99,7 +99,7 @@ SHE_SAID = re.compile(r"她(说|的原话|定的|拍的|要求|提的)")
 #      these prompts carry version numbers, so a reword invalidates every cached tag.
 # Neither is a leftover from the translation, and neither is find-and-replaceable.
 DELIBERATE_SHE = {
-    "src/tools/_subjects.py": [
+    "src/core/names.py": [
         ("我 你 他 她 它 咱 咱们 我们 你们 他们 她们 它们 自己 大家 别人 人家 对方 谁",
          "① the pronoun gate: this list is what stops 她/她们 being filed as subjects"),
     ],
@@ -184,7 +184,7 @@ BASELINE = {
     "names": 0,
     # 🔴 2026-08-22: 0, and the last eight did **not** go away — they were stamped.
     #   The owner ruled that neither kind may be translated: the pronoun stop-list in
-    #   tools/_subjects.py is a GATE (delete the words and pronouns start being stored as
+    #   core/names.py is a GATE (delete the words and pronouns start being stored as
     #   real subjects), and the six in core/dehydrator.py sit inside live LLM prompts,
     #   where rewording *is* changing behaviour and invalidates every cached tag.
     #   So they are exempted one line at a time in DELIBERATE_SHE, each with a reason,

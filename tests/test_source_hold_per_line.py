@@ -169,7 +169,7 @@ def test_restoring_a_run_does_not_settle_a_hold_on_one_of_its_lines(tmp_path):
 
 @pytest.fixture
 def library(tmp_path, monkeypatch):
-    from tools import _runtime as rt
+    from core import runtime as rt
     store = BucketManager({"buckets_dir": str(tmp_path)})
     monkeypatch.setattr(rt, "bucket_mgr", store)
     monkeypatch.setattr(rt, "config", {"buckets_dir": str(tmp_path)})

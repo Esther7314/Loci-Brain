@@ -16,7 +16,7 @@ import pytest
 
 from core import _fold as F
 from core.bucket_manager import BucketManager
-from tools import _runtime as rt
+from core import runtime as rt
 from tools.grow import rooms_path
 from tools.regrow import dispatch as regrow
 

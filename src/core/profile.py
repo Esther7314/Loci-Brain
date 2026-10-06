@@ -60,6 +60,7 @@ from . import _fold as _F         # anything covered stops surfacing on its own
 from . import _holds as _H        # a live hold keeps its entry off the three roads
 from . import _invalidation as _I  # a panel correction looked at and kept leaves 依据变了的
 from . import _when as _w          # "today" on the local calendar
+from . import names as _names     # the names table: which spellings stand for the AI
 from ._muse import is_scene_word  # 忽然想起 links on the same scene words muse clusters on
 # is_mind_room is deliberately not imported: the door does not filter rules by room
 # (see the long note further down)
@@ -404,7 +405,7 @@ def short_id(bucket_id: str) -> str:
 
 # What `bound` holds for the AI when nothing better is known: the placeholder, and the
 # first-person words a bound list may still carry from before they were normalised
-# (tools/_subjects.normalize_bound turns 我 / 自己 into the AI's name).
+# (core/names.normalize_bound turns 我 / 自己 into the AI's name).
 _AI_PLACEHOLDERS = frozenset({"AI", "我", "自己"})
 
 
@@ -413,15 +414,14 @@ def owed_names(bound) -> str:
     the configured AI name, or a spelling the names table files under it) is 「我」, every
     other name as stored; 「我、小林」. "" when nobody is bound. Text only: the stored names
     and every JSON skin keep the names as they are."""
-    from tools._subjects import canonical  # lazy: tools imports core
     ai = get_ai_name()
-    mine = set(_AI_PLACEHOLDERS) | {ai, canonical(ai) or ai}
+    mine = set(_AI_PLACEHOLDERS) | {ai, _names.canonical(ai) or ai}
     out: list[str] = []
     for raw in bound or []:
         n = str(raw or "").strip()
         if not n:
             continue
-        shown = "我" if (n in mine or (canonical(n) or n) in mine) else n
+        shown = "我" if (n in mine or (_names.canonical(n) or n) in mine) else n
         if shown not in out:
             out.append(shown)
     return "、".join(out)

@@ -20,7 +20,7 @@ from core import _when as W
 from core.bucket_manager import BucketManager
 from core.profile import (CUED, DATED, HOLD, PROMISED, RECENT, BreathSettings,
                           awake_reasons, breath_settings, is_accessible)
-from tools import _runtime as rt
+from core import runtime as rt
 from tools.recall import core as R
 
 NOW = datetime(2026, 10, 14, 10, 0, 0, tzinfo=W.LOCAL_TZ)

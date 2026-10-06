@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 ========================================
-tools/_dream.py — the dream-weaving engine
+core/_dream.py — the dream-weaving engine
 ========================================
 
 ------------------------------------------------------------
@@ -219,7 +219,7 @@ from . import _muse as M
 from . import _sources as _src
 from . import visibility as _V    # the one gate: what may be put in front of the model
 from ._rooms import is_event_room
-from tools import _runtime as rt
+from . import runtime as rt
 from . import _when as _w
 
 # ============================================================
@@ -701,13 +701,13 @@ def cold_pool(recs, now: datetime, born: set[str] | None = None) -> list[Ingredi
 
 def quote_pool(recs, now: datetime, born: set[str] | None = None) -> list[Ingredient]:
     """The quote share's pool: memories formed from the host's material — a quoted line,
-    a book's passage, a source record (`tools/recall/original.source_records_of`) — in
+    a book's passage, a source record (`core/_originals.source_records_of`) — in
     either room, weighted by arousal with the time decay. Whether one is drawn is the
     hosts' answer (`_quoted`)."""
-    from tools.recall.original import source_records_of
+    from core import _originals as _O
     out: list[Ingredient] = []
     for meta, it in _share_candidates(recs, now, born):
-        records = source_records_of(meta)
+        records = _O.source_records_of(meta)
         if not records:
             continue
         out.append(Ingredient(id=it.id, text=it.text, v=it.v, a=it.a, weight=it.a,
@@ -736,25 +736,24 @@ async def _quoted(pool: list[Ingredient], c: dict) -> tuple[list[Ingredient], li
     (core/_originals.fetch) with no read scope: weaving reads the whole library.
     A source refused (withdrawn, deleted, not allowed, an answer that cannot be read) —
     this memory is not drawn, try the next; what a host said is gone is held for every road
-    (tools/recall/original.hold_what_hosts_said). Otherwise it is drawn: what the hosts gave
+    (core/_originals.hold_what_hosts_said). Otherwise it is drawn: what the hosts gave
     is fed; when nothing was given (the host unreachable, none serving it) the memory's own
     body is — once the memory is read again and still stands on nothing withdrawn, deleted
     or held.
     Returns ([the ingredient] or [], the string forms of every source asked for it). The
     fetched text is fed and nothing else: it is neither stored nor logged here."""
     from core import _originals as _O
-    from tools.recall.original import deployment_hosts, hold_what_hosts_said
     if not pool:
         return [], []
     settings = _O.settings_from(rt.config)
-    hosts = deployment_hosts()
+    hosts = _O.deployment_hosts()
     registry = getattr(rt.bucket_mgr, "sources", None)
     for x in weighted_sample(pool, int(c["quote_tries"]), c):
         asked = x.records[:settings.max_sources]
         answers = await asyncio.gather(*(
             _O.fetch(rec, hosts=hosts, request=None, settings=settings, registry=registry)
             for rec in asked))
-        await hold_what_hosts_said(answers, rt.bucket_mgr)
+        await _O.hold_what_hosts_said(answers, rt.bucket_mgr)
         if any(a.outcome == _O.NOT_ALLOWED for a in answers):
             continue
         fresh = await rt.bucket_mgr.get_including_archive(x.id)
@@ -1230,8 +1229,9 @@ async def leave_a_trace(rec: dict) -> str:
        There is exactly one way to keep the feeling: **`grow` it myself** — the instant it
        is written down it is a memory.
     """
+    # Upward call, kept lazy: the trace is grown through the grow tool (tools imports core).
     from tools import grow as _grow
-    day = (_w.parse_stamp(rec.get("织于")) or _w.now()).strftime("%m-%d")
+    day =(_w.parse_stamp(rec.get("织于")) or _w.now()).strftime("%m-%d")
     text = f"{day} {TRACE_WORDS}"
     out = await _grow.dispatch(kind="event", internally_generated=True, items=[
         {"room": "EVENT/SELF", "text": text, "v": 0.5, "a": 0.3}])

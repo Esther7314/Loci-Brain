@@ -16,7 +16,7 @@ keeping the local Ollama child process up) lives in ``bridge/`` instead.
   ``library_api``; ``loci.register`` assembles them.
 
 Shared dependencies (config, password and login rate-limit helpers) live in
-``web/_shared.py`` (the counterpart of ``tools/_runtime.py``).
+``web/_shared.py`` (the counterpart of ``core/runtime.py``).
 
 Note that ``_shared.py`` carries no **cookie sessions or authentication** — the panel's
 ``/api/*`` routes are not authenticated at that layer; the gate lives in

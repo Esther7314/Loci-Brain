@@ -78,8 +78,8 @@ def _flag(value, default: bool) -> bool:
 
 
 def _engine():
-    """The import engine: server.py constructs it and injects it onto tools/_runtime."""
-    from tools import _runtime as rt
+    """The import engine: server.py constructs it and injects it onto core/runtime."""
+    from core import runtime as rt
     return getattr(rt, "import_engine", None)
 
 
@@ -111,7 +111,7 @@ async def _read_form(request: Request, need_file: bool = True):
 
 
 def _hosts():
-    from tools.recall.original import deployment_hosts
+    from core._originals import deployment_hosts
     return deployment_hosts()
 
 

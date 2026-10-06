@@ -14,7 +14,7 @@ import pytest
 
 from core import bucket_manager as BM
 from core.bucket_manager import BucketManager
-from tools import _runtime as rt
+from core import runtime as rt
 from tools.grow import rooms_path
 
 

@@ -29,7 +29,7 @@ Exports: dispatch() -> str
 ========================================
 """
 
-from .. import _runtime as rt
+from core import runtime as rt
 from .awaken import surface_awaken
 
 

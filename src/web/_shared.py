@@ -3,7 +3,7 @@
 web/_shared.py — runtime dependencies and password tooling shared across the panel/MCP boundary
 ========================================
 
-The counterpart of tools/_runtime.py: modules under web/ and bridge/ take their runtime
+The counterpart of core/runtime.py: modules under web/ and bridge/ take their runtime
 dependency (config) and their cross-cutting helpers (password hashing, login rate
 limiting, security-question recovery) from here.
 
@@ -33,7 +33,7 @@ What this does NOT do:
 - It defines no routes. Routes live in web/<module>.py and bridge/<module>.py and are
   registered with register(mcp).
 - It holds no business engines. bucket_mgr and the rest still live in server.py /
-  tools/_runtime, and would be injected the same way if ever needed here.
+  core/runtime, and would be injected the same way if ever needed here.
 - It does not deal with cookie sessions; there are none.
 
 Public surface: init, plus the password and login rate-limit helpers.
@@ -178,7 +178,7 @@ def data_dir_persistence(buckets_dir: str) -> dict:
 # --- Injected runtime config; server.py calls init() at startup ---
 config: dict = {}
 
-# --- Injected engines and runtime info (the tools/_runtime pattern; server.py calls
+# --- Injected engines and runtime info (the core/runtime pattern; server.py calls
 #     init_runtime() at startup) ---
 # Route modules read these as sh.<name>, so that server.py and the routes cannot drift
 # apart holding two copies.
@@ -246,14 +246,15 @@ def replace_embedding_engine(engine) -> None:
                     exc_info=True,
                 )
 
-    # MCP tools keep a separate runtime container. Without updating it, reads
-    # keep using the old model while Dashboard writes use the new one.
+    # MCP tools (and the engine pieces under core/) keep a separate runtime
+    # container. Without updating it, reads keep using the old model while
+    # Dashboard writes use the new one.
     try:
-        from tools import _runtime as tools_runtime  # type: ignore
+        from core import runtime as core_runtime  # type: ignore
     except ImportError:  # pragma: no cover
-        tools_runtime = None
-    if tools_runtime is not None:
-        tools_runtime.embedding_engine = engine
+        core_runtime = None
+    if core_runtime is not None:
+        core_runtime.embedding_engine = engine
     outbox = globals().get("embedding_outbox")
     if outbox is not None:
         try:
@@ -271,7 +272,7 @@ _LAST_OP_TS = _SERVER_START_TS
 def _mark_op(name: str = "") -> None:
     """Record one tool/endpoint activity timestamp for /api/heartbeat to report.
 
-    server.py injects this function as tools._runtime.mark_op at startup, so any tool call
+    server.py injects this function as core.runtime.mark_op at startup, so any tool call
     updates it; /api/heartbeat reads _LAST_OP_TS. One source on both sides, so the two
     cannot disagree.
     """

@@ -41,15 +41,13 @@ Two more forms read the material Loci holds itself, an imported conversation
     query="<words>"     the imported lines holding every word, each with its source
                         string form (`render_search`); withdrawn ones are never listed
 
-Exports: render_original(query) -> str · render_source(query) · render_search(query) ·
-         source_records_of(meta) · deployment_hosts() · hold_what_hosts_said(answers, store)
+Exports: render_original(query) -> str · render_source(query) · render_search(query)
 ========================================
 """
 
 from __future__ import annotations
 
 import asyncio
-import os
 import re
 
 from core import _originals as _O
@@ -57,9 +55,8 @@ from core import _sources as _src
 from core import _usage
 from core import scope as _scope
 from core import visibility as _V
-from utils import WAS_QUOTED_FROM, read_prov
+from core import runtime as rt
 
-from .. import _runtime as rt
 from .._common import read_scope, resolve_bucket_id
 
 ROAD = "recall.original"
@@ -90,50 +87,6 @@ _REASON = {"withdrawn": "宿主说撤回了", "deleted": "宿主说删了",
 _MISSING = {"unavailable": "这一行宿主那边暂时取不到", "not_found": "这一行宿主那边找不到"}
 _GONE_NOTE = ("{q} 依据的来源被撤回或删除了（或宿主说过已撤回、正等确认），正文不给，原话也不取。"
               "它在开口前「依据变了的」里：只凭还剩的来源重写（regrow），或者收起来（trace delete=True）。")
-
-
-def deployment_hosts():
-    """The deployment's hosts, read per call the way the request layer reads them
-    (web/panel_auth.hosts): `hosts:` in config, the legacy host's key falling back to the
-    hook key."""
-    cfg = rt.config or {}
-    legacy = (str(os.environ.get(_scope.LEGACY_TOKEN_ENV) or "").strip()
-              or str(cfg.get("hook_token") or "").strip())
-    return _scope.load_hosts(cfg, os.environ, legacy_token=legacy)
-
-
-def source_records_of(meta: dict) -> list[dict]:
-    """The sources to ask for: the entry's records, then the sources its wasQuotedFrom
-    lines name by string form; each identity-and-revision once. A record that no longer
-    reads as one (a hand edit), or a quoted target that is not a source string form, is
-    skipped."""
-    out: list[dict] = []
-    seen: set[str] = set()
-    for rec in meta.get(_src.SOURCES_FIELD) or []:
-        try:
-            key = _src.record_string(rec)
-        except (KeyError, TypeError, AttributeError):
-            continue
-        if key not in seen:
-            seen.add(key)
-            out.append(dict(rec))
-    for line in read_prov(meta):
-        if line["rel"] != WAS_QUOTED_FROM:
-            continue
-        try:
-            sid, revision = _src.SourceId.parse(line["target"])
-        except _src.SourceRecordError:
-            continue
-        key = sid.to_string(revision)
-        if key in seen:
-            continue
-        seen.add(key)
-        rec = {"system": sid.system, "instance": sid.instance, "container": sid.container,
-               "id": sid.id, "revision": revision}
-        if sid.through:
-            rec["through"] = sid.through
-        out.append(rec)
-    return out
 
 
 def _fenced(lines: list[str]) -> list[str]:
@@ -184,19 +137,6 @@ def _block(answer: _O.Answer, record: dict, max_chars: int) -> list[str]:
         out.append(f"┆ …（宿主只给到 {answer.truncated_after}，后面的没给）")
     out.append("└─ 原文完")
     return out
-
-
-async def hold_what_hosts_said(answers, store) -> None:
-    """Hold every source a host said is withdrawn or deleted (`Answer.holds`) that the
-    registry does not record so: nothing resting on it is used until the ordered change
-    settles it (core/_source_change.hold)."""
-    from core import _source_change as _SC
-    for answer in answers:
-        for identity, said in answer.holds:
-            try:
-                await _SC.hold(store, identity, said, answer.host)
-            except (ValueError, _src.SourceRecordError) as e:
-                rt.logger.warning(f"[originals] could not hold {identity}: {e}")
 
 
 async def _look(q: str, fresh: bool = False):
@@ -316,19 +256,19 @@ async def render_original(query: str) -> str:
     if refusal:
         return refusal
     meta = b.get("metadata", {}) or {}
-    records = source_records_of(meta)
+    records = _O.source_records_of(meta)
     if not records:
         return (f"{q} 没挂宿主的来源，没有原话可取。它自己记的正文：recall(query=\"{q}\")。")
 
     settings = _O.settings_from(rt.config)
     asked = records[:settings.max_sources]
-    hosts = deployment_hosts()
+    hosts = _O.deployment_hosts()
     request = _scope.current_request()
     registry = getattr(rt.bucket_mgr, "sources", None)
     answers = await asyncio.gather(*(
         _O.fetch(rec, hosts=hosts, request=request, settings=settings, registry=registry)
         for rec in asked))
-    await hold_what_hosts_said(answers, rt.bucket_mgr)
+    await _O.hold_what_hosts_said(answers, rt.bucket_mgr)
     # The second look: whatever landed while the hosts were answering wins.
     b, verdict, refusal = await _look(q, fresh=True)
     if refusal:

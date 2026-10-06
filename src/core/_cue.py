@@ -104,6 +104,7 @@ from . import _holds as _H
 from . import _invalidation as _I
 from . import _usage
 from . import _when as _w
+from . import names as _names
 from . import scope as _scope
 from . import visibility as _V
 from .profile import (_EDITED_BY_USER_TAG, _PROFILE_TAG, due_now, entry_label,
@@ -236,10 +237,8 @@ def table_spellings(extra: tuple = ()) -> list[tuple[str, str, int]]:
     """(name, spelling, least CJK length) for every spelling of the names table that stands
     for one name only — a key needs _MIN_CJK_KEY characters, an alias _MIN_CJK_ALIAS — then
     each name in `extra` that the table does not know, spelled as itself."""
-    from tools import _subjects as _S
-
-    records = _S.load_names_table()
-    flat = _S.load_alias_table()
+    records = _names.load_names_table()
+    flat = _names.load_alias_table()
     out: list[tuple[str, str, int]] = []
     for name, rec in records.items():
         for spelling, min_cjk in [(name, _MIN_CJK_KEY)] + [(a, _MIN_CJK_ALIAS) for a in rec.aliases]:
@@ -274,10 +273,8 @@ def pick_names(msg: _Message, spellings: list[tuple[str, str, int]]) -> dict[str
 def own_names() -> set[str]:
     """The AI's and the owner's names, normalised, with the table's name for each: a card
     or a look-back on them would fire on nearly every message."""
-    from tools import _subjects as _S
-
     own = {_norm(n) for n in (get_ai_name(), get_owner_name()) if n}
-    return own | {_norm(_S.canonical(n)) for n in own if n}
+    return own | {_norm(_names.canonical(n)) for n in own if n}
 
 
 def _quoted(msg: _Message, span: tuple[int, int], matched: str) -> str:
@@ -598,9 +595,7 @@ class _Library:
     # names
 
     def name_cards(self, msg: _Message) -> list[Card]:
-        from tools import _subjects as _S
-
-        records = _S.load_names_table()
+        records = _names.load_names_table()
         if not records:
             return []
         own = own_names()

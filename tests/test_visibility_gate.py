@@ -38,7 +38,7 @@ from core import visibility as V
 from core.bucket_manager import BucketManager
 from core._invalidation import block as invalidation_block
 from core.profile import door_note, edited_by_user, event_pool, involuntary, prospective
-from tools import _runtime as rt
+from core import runtime as rt
 from tools.recall import core as R
 
 NOW = datetime(2026, 8, 22, 21, 0, 0, tzinfo=W.LOCAL_TZ)

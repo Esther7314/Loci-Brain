@@ -25,7 +25,7 @@ from core import _sources as S
 from core import _when as W
 from core import scope as SC
 from core.bucket_manager import BucketManager
-from tools import _runtime as rt
+from core import runtime as rt
 from tools.recall import core as R
 
 GROUP = {"system": "telegram", "instance": "bot-a", "container": "group:G"}

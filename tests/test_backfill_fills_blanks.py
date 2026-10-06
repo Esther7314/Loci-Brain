@@ -17,8 +17,8 @@ import json
 import pytest
 
 from core import dehydrator as D
-from tools import _runtime as rt
-from tools import _subjects as S
+from core import runtime as rt
+from core import names as S
 from tools.grow import rooms_path as R
 
 BODY = "答应小王下周一两点一起去看《沙丘》，在老地方见。"

@@ -40,7 +40,7 @@ Exports: dispatch(text, room, v, a, cover, when, from_, test_data, sources) -> s
 ========================================
 """
 
-from .. import _runtime as rt
+from core import runtime as rt
 from core import _fold as F
 from core import _sources as _src
 from core import _holds as _H

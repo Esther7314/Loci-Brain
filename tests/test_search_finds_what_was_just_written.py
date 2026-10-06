@@ -16,7 +16,7 @@ import pytest
 
 from core import bm25_index as B
 from core.bucket_manager import BucketManager
-from tools import _runtime as rt
+from core import runtime as rt
 from tools.recall import core as R
 
 

@@ -43,7 +43,7 @@ Exports: build_breath() -> dict · render_breath(breath) -> str · stamp_asked(b
 import random
 import re
 
-from .. import _runtime as rt
+from core import runtime as rt
 from .. import _slices
 from .._common import read_scope
 from core import _invalidation as _I
@@ -52,7 +52,7 @@ from core import visibility as _V      # the gate's `recent` road for 近三天
 from core import _when as _w         # "today" as the user lives it (local timezone)
 from core.profile import (_PROFILE_TAG, breath_settings, door_note, involuntary,
                           owed_names, prospective, short_id)
-from ..recall.core import recall_text_and_data, _ts_of
+from ..recall.core import recall_text_and_data
 
 # How many principle lines fit on the note by the door.
 # 📌 This was briefly raised to 12 once, as an **IOU**: removing the secondary
@@ -148,9 +148,9 @@ async def build_breath() -> dict:
     changed = _I.block(all_buckets, getattr(mgr, "sources", None), scope=scope)
     cap = settings.invalidation_lines
 
-    # Same definition as recall: _ts_of(meta) = when first, created as fallback. Computed
+    # Same definition as recall: _w.ts_of(meta) = when first, created as fallback. Computed
     # live, never a hard-coded date (see the 📍 note in render_breath).
-    ts_pool = [t for t in (_ts_of(e["meta"]) for e in door["entries"]) if t is not None]
+    ts_pool = [t for t in (_w.ts_of(e["meta"]) for e in door["entries"]) if t is not None]
     return {
         "core": _core(door),
         "prospective": plan,

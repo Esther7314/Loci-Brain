@@ -127,7 +127,7 @@ def test_two_sends_of_one_change_at_once_run_it_once(library, monkeypatch):
 def test_a_generic_tag_is_not_the_entrys_words(tmp_path, monkeypatch):
     from core import _dream
     from core.bucket_manager import BucketManager
-    from tools import _runtime as rt
+    from core import runtime as rt
     store = BucketManager({"buckets_dir": str(tmp_path)})
     monkeypatch.setattr(rt, "bucket_mgr", store)
     generic = "日常生活记录"

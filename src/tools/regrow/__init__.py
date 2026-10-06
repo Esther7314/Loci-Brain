@@ -55,7 +55,7 @@ Exports: dispatch(bucket_id, text, v, a, from_, mode, sources) -> str · MODES
 from core import _fold as _F           # fold's bones: regrow is its n=1 case
 from core import _reconsolidation as _R
 from core import _sources as _src
-from .. import _runtime as rt
+from core import runtime as rt
 from core._bigevent import is_big as _is_big
 from .._common import _keyed_turn, read_scope, resolve_bucket_id, with_write_key
 # is_mind_room is deliberately not imported: regrow does not keep events out (see the

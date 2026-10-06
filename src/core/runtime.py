@@ -1,20 +1,23 @@
 """
 ========================================
-tools/_runtime.py — the runtime context shared by every tool module
+core/runtime.py — the runtime context shared by the tools and the engine pieces
 ========================================
 
-This file solves one engineering problem: after the split, every tool submodule
-needs access to config / bucket_mgr / dehydrator / decay_engine /
-embedding_engine / logger — the global objects server.py creates — but a
-submodule must not import server.py back (that would be a circular import).
+This file solves one engineering problem: every tool submodule, and the engine
+pieces under core/ that run on the live library (fold, muse, dream, big events),
+need access to config / bucket_mgr / dehydrator / decay_engine /
+embedding_engine / logger — the global objects server.py creates — but none of
+them may import server.py back (that would be a circular import).
 
 The approach: once server.py has initialised every component it calls init(...)
-to push the references in; every tool module then does
-`from . import _runtime as rt` and reads `rt.bucket_mgr`.
+to push the references in; every reader then does
+`from core import runtime as rt` and reads `rt.bucket_mgr` at call time.
+It lives in core/ because core reads it too, and it imports nothing, so any
+layer can import it at module top.
 
 Key behaviour:
 - A lightweight container holding references to the shared objects
-- init() writes once; tool modules only read afterwards, never write
+- init() writes once; readers only read afterwards, never write
 
 What this file deliberately does not do:
 - Creates no objects, loads no configuration, initialises no logging

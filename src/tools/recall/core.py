@@ -19,7 +19,7 @@ from core import _sources as _src     # outside material: source records and the
 from core._slicer import _short_id    # the handle a read tool prints for an id
 from core import _usage              # the usage log: what a lookup handed back
 from core import visibility as _V     # the one gate: what may be put in front of the model
-from .. import _runtime as rt
+from core import runtime as rt
 from .._common import read_scope, resolve_bucket_id
 from core import _when as _w          # "today" as the user lives it (local timezone) — never call datetime.now() directly
 from core._rooms import (ALL_ROOMS, check_gate, is_mind_room, normalize_room,
@@ -417,28 +417,6 @@ def _parse_when(when: str) -> tuple[datetime | None, datetime | None, str]:
 # Fetching and filtering
 # ------------------------------------------------------------
 
-def _ts_of(meta: dict) -> datetime | None:
-    """A memory's time coordinate: **when first, created as fallback**. This is
-    the only definition; there is no second one.
-
-    ⚠️ Nothing orders by `last_active` ("most recently touched, for digesting"):
-    there is no such act as "digesting" here; every event and every thought grows
-    anew. The rule: **every parameter must map onto a sentence that actually
-    surfaces in the mind**, and "order by most recently touched" is not such a
-    sentence.
-
-    Returns **a timezone-aware local time**. Never `datetime.fromisoformat(s[:19])`
-    — that slice cuts off `Z` / `+08:00` along with everything else, forcing a
-    timestamp that stated its timezone into "no idea which timezone", to be
-    compared against a UTC now().
-    """
-    for k in ("when", "created"):
-        ts = _w.parse_stamp(meta.get(k))
-        if ts is not None:
-            return ts
-    return None
-
-
 # What recall lists and counts lives in the gate (core/visibility.on_timeline): the
 # timeline's kind filter and the lookup listing's rules together. The panel's counters
 # import it under this name, so the number on a page and the number recall shows are one.
@@ -526,7 +504,7 @@ async def _collect(when, room, tag, query, all_buckets=None) -> tuple[list[dict]
         # half of an already sparse signal.
         if tag and not any(tag in str(t) for t in (meta.get("tags") or [])):
             continue
-        ts = _ts_of(meta)
+        ts = _w.ts_of(meta)
         if ts is None:
             continue
         if t0 and ts < t0:

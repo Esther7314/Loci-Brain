@@ -22,7 +22,7 @@ import pytest
 
 from core import _fold as F
 from core.profile import door_note, _PROFILE_TAG
-from tools import _runtime as rt
+from core import runtime as rt
 import tools.grow.rooms_path as rooms_path
 
 PAGE = "page00000000"

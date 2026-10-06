@@ -18,7 +18,7 @@ import json
 import pytest
 import yaml
 
-from tools import _subjects as S
+from core import names as S
 
 LEGACY = """\
 # A hand-written header that explains the table.

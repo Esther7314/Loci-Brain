@@ -207,7 +207,7 @@ async def api_loci_subjects_action(request: Request) -> Response:
     "tidy all of this up for me" request is accepted: one call changes one name.
 
     The three actions reduce to two operations, because merging and renaming are the same
-    thing — folding one name's entry into another (`_subjects.merge_names`: its key
+    thing — folding one name's entry into another (`core/names.merge_names`: its key
     and aliases become the other's aliases, its links move, its entry goes):
       not_person  this is not a person -> record it on the blocklist so it is never
                   extracted again.
@@ -225,7 +225,7 @@ async def api_loci_subjects_action(request: Request) -> Response:
        click lands.
     """
     from starlette.responses import JSONResponse
-    from tools import _subjects as subj
+    from core import names as subj
     try:
         body = await _write_body(request)
     except PermissionError as e:

@@ -35,7 +35,7 @@ import json
 import pytest
 
 from core import _dream as D
-from tools import _runtime as rt
+from core import runtime as rt
 
 from datetime import datetime, timedelta
 

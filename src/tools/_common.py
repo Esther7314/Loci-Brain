@@ -22,7 +22,7 @@ Key behaviour:
   store
 
 What this file deliberately does not do:
-- Holds no global objects; every dependency comes from _runtime
+- Holds no global objects; every dependency comes from core/runtime
 - Wraps no side effects beyond log formatting; the caller decides whether to await
 
 - read_scope: the request's read scope as the view core's gate takes
@@ -47,7 +47,7 @@ from core import scope as _scope
 from core.visibility import LIVE, state_of
 from utils import is_bucket_id, parse_bool
 
-from . import _runtime as rt
+from core import runtime as rt
 
 # ============================================================
 # Named constants

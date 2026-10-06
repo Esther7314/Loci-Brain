@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 ========================================
-tools/_muse.py — the threshold engine behind muse
+core/_muse.py — the threshold engine behind muse
 ========================================
 
 ------------------------------------------------------------
@@ -135,6 +135,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
 from . import _when as _w
+from . import runtime as rt
 from ._bigevent import BIGEVENT_TAG
 from ._fold import GIST_TAG, is_covered
 from ._rooms import is_event_room, is_mind_room
@@ -450,7 +451,6 @@ def read_vectors(db_path: str, ids: list[str], retries: int = 3) -> dict[str, li
         except sqlite3.Error as e:
             if attempt == max(1, retries) - 1:
                 try:
-                    from tools import _runtime as rt
                     rt.logger.warning(
                         f"[muse] 读向量库失败（{e}）——这一趟的语义那一层等于没有，"
                         f"团会比平时少。**不是没有向量，是读不着。**")
@@ -1012,7 +1012,6 @@ async def load_records() -> tuple[list[tuple[dict, str]], set[str]]:
     `mind_from_ids()` IS night_fall's old "not digested" test — **reused as it stands,
     never reimplemented.**
     """
-    from tools import _runtime as rt
     recs: list[tuple[dict, str]] = []
     for b in await rt.bucket_mgr.list_all(include_archive=False):
         meta = b.get("metadata", {}) or {}
@@ -1025,7 +1024,6 @@ async def load_records() -> tuple[list[tuple[dict, str]], set[str]]:
 
 
 def _db_path() -> str:
-    from tools import _runtime as rt
     p = getattr(rt.embedding_engine, "db_path", "") or ""
     if p:
         return p
@@ -1033,7 +1031,6 @@ def _db_path() -> str:
 
 
 def _drop_rejected(candidates: list, cfg: dict) -> tuple[list, int]:
-    from tools import _runtime as rt
     rejected = load_rejected(str((rt.config or {}).get("buckets_dir") or ""))
     limit = int(cfg["reject_limit"])
     keep, rejected_n = [], 0
@@ -1049,7 +1046,6 @@ async def propose_mind(cfg: dict | None = None, loaded=None
                        ) -> tuple[list[Cluster], int, int, dict]:
     """A full pass of the mind side. Returns (clusters, how many scattered, how many on the
     old default coordinate, stats). **Nothing is written.**"""
-    from tools import _runtime as rt
     c = muse_config(cfg if cfg is not None else rt.config)
     now = _w.now()
     recs, digested = loaded if loaded is not None else await load_records()
@@ -1068,7 +1064,6 @@ async def propose_gist(cfg: dict | None = None, loaded=None
                        ) -> tuple[dict[str, list[Finger]], dict]:
     """A full pass of the event side: each of the three gestures runs once. Returns
     ({gesture name: [gestures]}, stats)."""
-    from tools import _runtime as rt
     c = muse_config(cfg if cfg is not None else rt.config)
     now = _w.now()
     recs, digested = loaded if loaded is not None else await load_records()
@@ -1122,7 +1117,6 @@ _view_cache: dict = {"钥匙": None, "值": None}
 def view_cache_key() -> tuple | None:
     """Whether this screen has to be recomputed. No generation available -> None, meaning
     **do not dare to cache**."""
-    from tools import _runtime as rt
     gen = getattr(rt.bucket_mgr, "_active_cache_generation", None)
     if gen is None:
         return None

@@ -28,7 +28,7 @@ WHAT THIS DOES NOT CHECK
 """
 import pytest
 
-from tools import _runtime as rt
+from core import runtime as rt
 from tools._common import (
     check_content_size,
     check_grow_input_size,

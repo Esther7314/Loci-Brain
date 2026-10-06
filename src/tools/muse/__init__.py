@@ -51,7 +51,7 @@ no second implementation.)
 """
 
 from core import _muse as M
-from .. import _runtime as rt
+from core import runtime as rt
 from .._common import read_scope
 from core import _when as _w
 

@@ -50,7 +50,7 @@ async def build_setup() -> dict:
        to be written in plain language, not as KEY_NAME unset.
     """
     import os as _os
-    from tools import _subjects as subj
+    from core import names as subj
 
     rows: list[dict] = []
 

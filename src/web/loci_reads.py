@@ -180,7 +180,7 @@ async def build_subjects() -> dict:
     number the model sees on waking.
     """
     from tools.recall.core import _visible
-    from tools import _subjects as subj
+    from core import names as subj
     all_buckets = await sh.bucket_mgr.list_all(include_archive=False)
     table = subj.load_alias_table()           # {alias in lowercase: canonical name}
     blocked = subj.load_not_person()          # entries marked "this is not a person" (lowercase)

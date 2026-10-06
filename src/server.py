@@ -4,7 +4,7 @@ server.py — the MCP service entry point and startup assembly
 ========================================
 
 Starts the whole Loci Brain process: load config, construct BucketManager / Dehydrator /
-DecayEngine / EmbeddingEngine / ImportEngine, inject them into tools._runtime and
+DecayEngine / EmbeddingEngine / ImportEngine, inject them into core.runtime and
 web._shared, then register thin @mcp.tool() wrappers. The real implementations live under
 src/tools/<tool>/.
 
@@ -58,13 +58,13 @@ from core.embedding_outbox import EmbeddingOutbox
 from core.import_memory import ImportEngine
 from core.strict_args import harden as _harden_tool
 from core.package_import import MigrateEngine
+from core import runtime as _core_runtime
 from utils import get_version, load_config, setup_logging
 
 # --- The MCP tool implementations were split out into the tools/ subpackage ---
 # This file keeps only MCP registration, routes (HTTP custom_route) and shared helpers.
 # The real tool logic lives under tools/<tool name>/, where each can be read and changed
 # on its own.
-from tools import _runtime as _tools_runtime
 from tools import breath as _t_breath
 from tools import grow as _t_grow
 from tools import recall as _t_recall
@@ -329,7 +329,7 @@ try:
         logger.info(f"记忆目录持久性：{_dp['mode']} — {_dp['note']}")
 except Exception as _dpe:
     logger.warning(f"数据目录持久性自检失败（不影响启动）：{_dpe}")
-# Inject the engines, version and repository root into the web layer (the tools/_runtime
+# Inject the engines, version and repository root into the web layer (the core/runtime
 # pattern).
 # Note: embedding_engine is replaced by hot reload. Whoever replaces it must also write
 # _wsh.embedding_engine, or the web layer keeps handing out the old instance.
@@ -357,8 +357,8 @@ _web.register_all(mcp)
 
 
 # The heartbeat timestamp and _mark_op moved to web/_shared.py; imported back here so it can
-# be injected into tools._runtime.
-from web._shared import _mark_op  # noqa: F401  (injected into tools._runtime below)
+# be injected into core.runtime.
+from web._shared import _mark_op  # noqa: F401  (injected into core.runtime below)
 
 
 # =============================================================
@@ -592,10 +592,11 @@ async def _run_with_notice(coro: Awaitable[str], op: str = "", args: dict | None
 
 
 # =============================================================
-# Wire tools subpackage runtime context
-# Inject every shared object into tools._runtime, so the tools/* submodules can reach them.
+# Wire the shared runtime context
+# Inject every shared object into core.runtime, so the tools/* submodules and the engine
+# pieces under core/ can reach them.
 # =============================================================
-_tools_runtime.init(
+_core_runtime.init(
     config=config,
     bucket_mgr=bucket_mgr,
     dehydrator=dehydrator,

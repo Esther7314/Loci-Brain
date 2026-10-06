@@ -33,7 +33,7 @@ Exports: anchor_set(bucket_id) / anchor_release(bucket_id) /
 
 from typing import Optional
 
-from .. import _runtime as rt
+from core import runtime as rt
 from .._common import check_metadata_size
 
 

@@ -44,7 +44,7 @@ from typing import Optional
 from core.memory_messages import resolved_hint
 from utils import (PROV_FIELD, PROV_MAX_LINES, WAS_QUOTED_FROM, is_telic, parse_bool,
                    read_prov)
-from .. import _runtime as rt
+from core import runtime as rt
 from .._pin import pin_note
 from core._rooms import check_room
 from core._bigevent import SPAN_RE, is_big as _is_big
@@ -357,7 +357,7 @@ def _read_call(c: _Call) -> str | None:
 def _read_bound(c: _Call) -> str | None:
     if c.bound is None:
         return None
-    from .._subjects import normalize_bound
+    from core.names import normalize_bound
     c.bound_names, bound_err = normalize_bound(c.bound)
     if bound_err:
         return bound_err

@@ -121,7 +121,8 @@ else.
 
 Exports: GIVEN · UNAVAILABLE · NOT_ALLOWED · NO_HOST · GONE_WORDS · MISSING_NOW ·
          HOLD_WORDS · GONE_HTTP · TLS_FAILED · TEMPORARY_STATUSES · Settings · settings_from · Line · Answer · host_for · scope_wire ·
-         build_request · parse_answer · fetch
+         build_request · parse_answer · fetch ·
+         deployment_hosts() · source_records_of(meta) · hold_what_hosts_said(answers, store)
 ========================================
 """
 
@@ -130,13 +131,18 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import ssl
 from dataclasses import dataclass, replace
 from typing import Mapping, Optional
 
 import httpx
 
+from utils import WAS_QUOTED_FROM, read_prov
+
 from . import _sources as _src
+from . import runtime as rt
+from . import scope as _scope
 from .scope import IMPORT_SYSTEM, LOCI
 
 logger = logging.getLogger("loci_brain.originals")
@@ -502,3 +508,65 @@ async def fetch(record: dict, *, hosts, request=None, settings: Settings = Setti
                 f" {answer.reason or answer.why}" if (answer.reason or answer.why) else "",
                 len(raw))
     return answer
+
+
+# ============================================================
+# The deployment's side: what a memory asks for, whom it asks, and what an answer holds
+# (shared by recall's view="original" and the dream's quote share)
+# ============================================================
+
+def deployment_hosts():
+    """The deployment's hosts, read per call the way the request layer reads them
+    (web/panel_auth.hosts): `hosts:` in config, the legacy host's key falling back to the
+    hook key."""
+    cfg = rt.config or {}
+    legacy = (str(os.environ.get(_scope.LEGACY_TOKEN_ENV) or "").strip()
+              or str(cfg.get("hook_token") or "").strip())
+    return _scope.load_hosts(cfg, os.environ, legacy_token=legacy)
+
+
+def source_records_of(meta: dict) -> list[dict]:
+    """The sources to ask for: the entry's records, then the sources its wasQuotedFrom
+    lines name by string form; each identity-and-revision once. A record that no longer
+    reads as one (a hand edit), or a quoted target that is not a source string form, is
+    skipped."""
+    out: list[dict] = []
+    seen: set[str] = set()
+    for rec in meta.get(_src.SOURCES_FIELD) or []:
+        try:
+            key = _src.record_string(rec)
+        except (KeyError, TypeError, AttributeError):
+            continue
+        if key not in seen:
+            seen.add(key)
+            out.append(dict(rec))
+    for line in read_prov(meta):
+        if line["rel"] != WAS_QUOTED_FROM:
+            continue
+        try:
+            sid, revision = _src.SourceId.parse(line["target"])
+        except _src.SourceRecordError:
+            continue
+        key = sid.to_string(revision)
+        if key in seen:
+            continue
+        seen.add(key)
+        rec = {"system": sid.system, "instance": sid.instance, "container": sid.container,
+               "id": sid.id, "revision": revision}
+        if sid.through:
+            rec["through"] = sid.through
+        out.append(rec)
+    return out
+
+
+async def hold_what_hosts_said(answers, store) -> None:
+    """Hold every source a host said is withdrawn or deleted (`Answer.holds`) that the
+    registry does not record so: nothing resting on it is used until the ordered change
+    settles it (core/_source_change.hold)."""
+    from . import _source_change as _SC
+    for answer in answers:
+        for identity, said in answer.holds:
+            try:
+                await _SC.hold(store, identity, said, answer.host)
+            except (ValueError, _src.SourceRecordError) as e:
+                rt.logger.warning(f"[originals] could not hold {identity}: {e}")

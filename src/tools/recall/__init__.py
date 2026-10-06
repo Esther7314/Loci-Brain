@@ -39,7 +39,7 @@ Exports: dispatch(when, room, tag, query, slices, view) -> str
 """
 
 from core import _usage
-from .. import _runtime as rt
+from core import runtime as rt
 from .core import recall_core
 
 

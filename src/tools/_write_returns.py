@@ -26,7 +26,7 @@ from core import _case_recall as _C
 from core import _reconsolidation as _R
 from core import _when as _w
 
-from . import _runtime as rt
+from core import runtime as rt
 from ._common import read_scope, sees_whole_library
 
 

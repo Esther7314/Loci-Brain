@@ -7,9 +7,9 @@ everything is launched with `src/` as the root), but pytest runs from the repo r
 `src/` is not on sys.path. So we insert it at the very front here.
 
 ⚠️ Don't work around this by writing `from src.core import ...` instead — that tests a
-different import structure, and the line `from tools import _runtime as rt` inside
-`_bigevent.py` would then take a path the real runtime never takes. Green tests would say
-nothing about whether production can even start.
+different import structure, and the tools' `from core import runtime as rt` would then load
+a second copy of the module that `src.core._bigevent` reads, a path the real runtime never
+takes. Green tests would say nothing about whether production can even start.
 """
 
 import sys

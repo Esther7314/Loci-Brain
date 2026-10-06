@@ -1,6 +1,6 @@
 """
 ========================================
-tools/_rooms.py — the room enum and its validation (second pass: ten rooms -> four)
+core/_rooms.py — the room enum and its validation (four rooms)
 ========================================
 
 `room` is a **new dimension**, living alongside domain/tags and independent of them:

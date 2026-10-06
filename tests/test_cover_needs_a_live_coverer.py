@@ -13,7 +13,7 @@ import pytest
 
 from core import _fold as F
 from core.bucket_manager import BucketManager
-from tools import _runtime as rt
+from core import runtime as rt
 
 BODY = "She fixed the kettle herself this morning and was proud of it."
 

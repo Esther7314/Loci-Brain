@@ -24,10 +24,10 @@ from datetime import date
 from core import _dates
 from core.dehydrator import (BACKFILL_MAX_TOKENS, BackfillAnswer, backfill_request,
                              parse_backfill)
-from .. import _runtime as rt
+from core import runtime as rt
 from core._bigevent import first_line as _F_first_line
-from .. import _subjects as _S
-from .._subjects import normalize_bound, normalize_subjects
+from core import names as _S
+from core.names import normalize_bound, normalize_subjects
 from utils import is_telic
 
 

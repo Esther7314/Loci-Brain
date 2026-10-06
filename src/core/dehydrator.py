@@ -48,6 +48,7 @@ from openai import AsyncOpenAI
 
 from utils import clean_llm_json, count_tokens_approx, positive_float
 
+from . import names as _names
 from .provider_detect import (
     is_gemini_native_host,
     strip_native_resource_prefix,
@@ -155,7 +156,6 @@ def _person_tags() -> frozenset:
        So there is one table to maintain, and a future panel only needs one editor for it.
     """
     from utils import get_ai_name, get_owner_name
-    from tools._subjects import load_alias_table
 
     canon_names: set[str] = set()
     for n in (get_ai_name(), get_owner_name()):
@@ -169,7 +169,7 @@ def _person_tags() -> frozenset:
     try:
         # The alias table maps {lowercased alias: canonical name}; look it up backwards to
         # get every form of address hanging off those two canonical names
-        for alias, canon in (load_alias_table() or {}).items():
+        for alias, canon in (_names.load_alias_table() or {}).items():
             if str(canon).strip() in canon_names:
                 names.add(str(alias).strip())
                 names.add(str(canon).strip())
@@ -399,7 +399,7 @@ _PHRASING_MAX_CHARS = 200
 _SUMMARY_MAX_CHARS = 200
 _BOUND_MAX = 8
 _SUBJECTS_MAX = 16
-_SUBJECT_NAME_MAX = 40       # the names table refuses a longer name (tools/_subjects._check_name)
+_SUBJECT_NAME_MAX = 40       # the names table refuses a longer name (core/names._check_name)
 _KIND_MAX = 8
 _ABSOLUTE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -407,10 +407,9 @@ _ABSOLUTE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 def backfill_kinds() -> tuple[str, ...]:
     """The kinds a subject may carry: the prompt's own, then any other kind the names
     table already uses (the owner's vocabulary)."""
-    from tools._subjects import load_names_table
     kinds = list(BACKFILL_KINDS)
     try:
-        for rec in load_names_table().values():
+        for rec in _names.load_names_table().values():
             if rec.instance_of and rec.instance_of not in kinds:
                 kinds.append(rec.instance_of)
     except Exception:                # an unreadable table offers the prompt's kinds only

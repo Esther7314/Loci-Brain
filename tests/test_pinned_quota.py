@@ -26,7 +26,7 @@ import asyncio
 import pytest
 
 from tools import _common as C
-from tools import _runtime as rt
+from core import runtime as rt
 
 
 class Store:

@@ -30,7 +30,7 @@ from datetime import datetime, timedelta
 import pytest
 
 from core import _when as W
-from tools import _runtime as rt
+from core import runtime as rt
 from tools.recall import core as R
 
 

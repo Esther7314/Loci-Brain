@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-tools/_when.py — one definition of "today", and it is the local-calendar one.
+core/_when.py — one definition of "today", and it is the local-calendar one.
 
 **The problem**: the container has no TZ set, so `datetime.now()` returns UTC, while
 the person reading the memories lives at +08. At 2 a.m. local it is still **6 p.m. the
@@ -25,7 +25,7 @@ becomes wrong.** If that change is made, the write side must start
 emitting the `+08:00` suffix in the same commit — with a suffix present, this side
 can tell.
 
-Exports: `LOCAL_TZ` · `now()` · `today()` · `parse_stamp()` · `parse_date()` · `to_local()` · `tz_status()`
+Exports: `LOCAL_TZ` · `now()` · `today()` · `parse_stamp()` · `ts_of()` · `parse_date()` · `to_local()` · `tz_status()`
 """
 
 import os
@@ -139,6 +139,28 @@ def parse_stamp(value) -> datetime | None:
             return parse_date(m.group(0))
         except ValueError:
             return None
+    return None
+
+
+def ts_of(meta: dict) -> datetime | None:
+    """A memory's time coordinate: **when first, created as fallback**. This is
+    the only definition; there is no second one.
+
+    ⚠️ Nothing orders by `last_active` ("most recently touched, for digesting"):
+    there is no such act as "digesting" here; every event and every thought grows
+    anew. The rule: **every parameter must map onto a sentence that actually
+    surfaces in the mind**, and "order by most recently touched" is not such a
+    sentence.
+
+    Returns **a timezone-aware local time**. Never `datetime.fromisoformat(s[:19])`
+    — that slice cuts off `Z` / `+08:00` along with everything else, forcing a
+    timestamp that stated its timezone into "no idea which timezone", to be
+    compared against a UTC now().
+    """
+    for k in ("when", "created"):
+        ts = parse_stamp(meta.get(k))
+        if ts is not None:
+            return ts
     return None
 
 

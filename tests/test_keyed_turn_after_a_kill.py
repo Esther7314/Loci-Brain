@@ -19,14 +19,14 @@ from pathlib import Path
 import pytest
 
 from tools import _common
-from tools import _runtime as rt
+from core import runtime as rt
 
 SRC = str(Path(__file__).resolve().parent.parent / "src")
 
 HOLDER = textwrap.dedent("""
     import asyncio, sys, types
     sys.path.insert(0, {src!r})
-    from tools import _runtime as rt
+    from core import runtime as rt
     from tools import _common
     rt.bucket_mgr = types.SimpleNamespace(base_dir={base!r})
     rt.config = {{}}

@@ -10,10 +10,10 @@ Exports: check_card(card_of, room, exclude) · card_room_rule(name, room) · liv
 ========================================
 """
 
-from .. import _runtime as rt
+from core import runtime as rt
 from .._common import read_scope
 from core._rooms import is_mind_room
-from .. import _subjects as _S
+from core import names as _S
 
 
 # ------------------------------------------------------------

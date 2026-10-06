@@ -44,7 +44,7 @@ from core import _when as W
 from core import visibility as V
 from core.bucket_manager import BucketManager
 from core.scope import Host
-from tools import _runtime as rt
+from core import runtime as rt
 from tools.grow import rooms_path
 from tools.recall import core as R
 from utils import WAS_DERIVED_FROM, WAS_QUOTED_FROM

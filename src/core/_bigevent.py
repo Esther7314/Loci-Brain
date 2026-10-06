@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-tools/_bigevent.py — the big event: one sentence laid over a stretch of time.
+core/_bigevent.py — the big event: one sentence laid over a stretch of time.
 
 **What it is**: saying "what were we doing back then".
 
@@ -76,7 +76,7 @@ Exports: `BIGEVENT_TAG` · `parse_span()` · `fmt_span()` · `covering()` · `fi
 import re
 from datetime import datetime, timedelta
 
-from tools import _runtime as rt
+from . import runtime as rt
 from . import _when as _w
 
 BIGEVENT_TAG = "__大event__"

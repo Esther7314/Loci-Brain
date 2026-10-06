@@ -99,6 +99,7 @@ def thresholds() -> list[dict]:
     """Each line, its value read from the code that uses it, and what it decides."""
     from . import _reconsolidation, _slicer
     from . import bucket_manager
+    # Upward reads, kept lazy: each line is read where the tool that uses it keeps it.
     from tools import fold
     from tools.grow import _backfill
     from tools.recall import core as recall_core

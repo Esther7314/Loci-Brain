@@ -1,7 +1,11 @@
 """
 ========================================
-tools/_subjects.py — normalising subjects
+core/names.py — the names table: normalising subjects
 ========================================
+
+It lives in core/ because both layers read it: the tools normalise what a write
+brings, and the engine pieces (the summariser's prompt, cue cards, look-back, the
+profile line, the export package) read the same table.
 
 Tags come in three kinds, and subjects are **the new third kind**:
 
@@ -73,8 +77,8 @@ from utils import replace_file
 # (models, timeouts), this one holds **people's names**. The two change at
 # different rates and by different hands, and mixing them means one overwrites
 # the other sooner or later (that is exactly how an earlier pit got dug).
-# This file sits at <_app>/src/tools/_subjects.py and the table at <_app>/config/,
-# so it takes three levels up (tools -> src -> _app), not two.
+# This file sits at <_app>/src/core/names.py and the table at <_app>/config/,
+# so it takes three levels up (core -> src -> _app), not two.
 # ⚠️ Getting that off by one level fails **silently**: the table cannot be read ->
 #    an empty table is returned -> subjects still land on disk, just un-normalised,
 #    and nothing on screen looks wrong. That is why the self-check below prints

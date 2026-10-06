@@ -39,7 +39,7 @@ from typing import Awaitable, Callable
 
 from core import _sources as _src
 from core._slicer import SliceError
-from . import _runtime as rt
+from core import runtime as rt
 from ._common import read_scope
 
 _LIST_MAX = 40          # slices shown by recall(view="slices"); the rest are counted

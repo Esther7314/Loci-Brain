@@ -26,7 +26,7 @@ import functools
 from typing import Optional
 
 from core import _sources as _src
-from .. import _runtime as rt
+from core import runtime as rt
 from .._common import check_grow_items_payload, with_write_key
 from .._slices import with_records, write_from_slice
 from .rooms_path import (grow_event, grow_mind, backfill_sweep,

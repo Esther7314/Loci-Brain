@@ -39,7 +39,7 @@ from core import import_memory as IM
 from core import visibility as V
 from core.bucket_manager import BucketManager
 from core.scope import Host, LOCI_HOST, load_hosts
-from tools import _runtime as rt
+from core import runtime as rt
 from tools.breath import awaken as A
 from tools.grow import dispatch as grow
 from tools.grow import rooms_path

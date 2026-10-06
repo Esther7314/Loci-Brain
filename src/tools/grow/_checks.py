@@ -17,9 +17,9 @@ import re as _re
 from datetime import datetime, timedelta
 
 from core import _holds as _H
-from .. import _runtime as rt
+from core import runtime as rt
 from .._common import resolve_bucket_id
-from .._subjects import normalize_bound
+from core.names import normalize_bound
 from utils import parse_bool
 
 # ------------------------------------------------------------

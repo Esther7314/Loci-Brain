@@ -45,7 +45,7 @@ def test_a_hold_card_names_its_target_only_when_the_scope_may_read_it(tmp_path, 
 
 
 def test_a_receipt_and_the_changes_name_only_what_the_host_may_reconcile(tmp_path, monkeypatch):
-    from tools import _runtime as rt
+    from core import runtime as rt
     store = BucketManager({"buckets_dir": str(tmp_path)})
     monkeypatch.setattr(rt, "bucket_mgr", store)
     line = {**TG, "id": "m_1"}

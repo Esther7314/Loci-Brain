@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 ========================================
-tools/_fold.py — the bones of fold / gist
+core/_fold.py — the bones of fold / gist
 ========================================
 
 **One action, `fold` (fold it up; what is underneath is still there) · one product, a
@@ -113,7 +113,7 @@ import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from tools import _runtime as rt
+from . import runtime as rt
 from utils import is_closed, parse_bool, prov_targets
 from ._bigevent import BIGEVENT_TAG, SPAN_RE
 from .bucket_manager import V2_FIELDS
@@ -360,15 +360,15 @@ async def span_members(t0: datetime | None, t1: datetime | None) -> list[str]:
     the membership immediately.
 
     It uses the same definition as recall's browse path (`visibility.on_timeline` +
-    `_ts_of`): whatever is visible on screen for that stretch of time is exactly what
+    `_when.ts_of`): whatever is visible on screen for that stretch of time is exactly what
     should be inside the period, and the two disagreeing is by definition a bug.
     ⚠️ Periods and gists are not members themselves (`on_timeline` already excludes
     `__大event__`, and `__gist__` is refused here as well — the members of a period are
     memories, not other names).
     """
-    # Lazy imports: recall.core and the gate both import this module (their read sides
-    # need is_covered), and importing both ways at module level goes in circles
-    from tools.recall.core import _ts_of
+    # Lazy import: the gate imports this module (its read side needs is_covered), and
+    # importing both ways at module level goes in circles
+    from . import _when as _w
     from .visibility import on_timeline
 
     if t0 is None:
@@ -383,7 +383,7 @@ async def span_members(t0: datetime | None, t1: datetime | None) -> list[str]:
         meta = b.get("metadata", {}) or {}
         if is_gist(meta) or not on_timeline(meta):
             continue
-        ts = _ts_of(meta)      # `by` was cut; one definition remains (`when` first, `created` as fallback)
+        ts = _w.ts_of(meta)    # the one definition: `when` first, `created` as fallback
         if ts is None or ts < t0:
             continue
         if t1 is not None and ts >= t1:
@@ -610,6 +610,7 @@ async def save_gist(text: str, room: str, v: float, a: float,
 
     # Metadata is filled in afterwards: tags, summary and naming go to the background.
     # keep_va=True — v/a were assigned by hand, and backfill never touches them
+    # Upward call, kept lazy: the backfill is the grow tool's behaviour (tools imports core).
     from tools.grow.rooms_path import _backfill_batch
     kind = "big" if when else ("mind" if room.startswith("MIND") else "event")
     asyncio.create_task(_backfill_batch([(new_id, text, kind)]))

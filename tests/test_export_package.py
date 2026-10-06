@@ -93,7 +93,7 @@ def _vector(db: Path, bid: str, vec):
 
 
 def _point_runtime(monkeypatch, root: Path, store):
-    from tools import _runtime as rt
+    from core import runtime as rt
     monkeypatch.setattr(rt, "bucket_mgr", store)
     monkeypatch.setattr(rt, "config", {"buckets_dir": str(root)})
     monkeypatch.setenv("LOCI_ALIAS_TABLE", str(root / "aliases.yaml"))
@@ -390,7 +390,7 @@ def test_round_trip_into_an_empty_library_is_identical_field_by_field(exported, 
         "m_0010", "m_0011", "m_0012"]
     held_meta = run(store.get(ids["held"]))["metadata"]
     assert V.source_gone(held_meta) and I.gone_records(held_meta)[0]["kind"] == I.SOURCE_HELD
-    from tools import _subjects as S
+    from core import names as S
     assert S.record_of("阿周").name == "小周" and S.kind_of("读书会") == "群"
     assert run(store.get(ids["sunk"]))["metadata"]["decay_stage"] == "sunk"
     assert Path(store._sunk_orig_path(ids["sunk"])).is_file()
@@ -477,7 +477,7 @@ def test_merging_into_a_library_that_has_its_own(exported, monkeypatch):
     assert store.sources.members_of("lento:home/chat:G#m_0010..m_0012") == [
         "m_0010", "m_0011", "m_0012"]
     # Names: the package's come in beside the library's.
-    from tools import _subjects as S
+    from core import names as S
     assert S.record_of("明明").name == "阿明" and S.record_of("周周").name == "小周"
     # An imported conversation batch the library does not have joins it.
     assert ImportStore(dst).meta(exported["lib"]["batch"]) is not None

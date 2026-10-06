@@ -54,6 +54,7 @@ from utils import WAS_REVISION_OF, parse_bool, prov_targets, read_from_ids, read
 from . import _cue
 from . import _holds as _H
 from . import _when as _w
+from . import names as _names
 from . import visibility as _V
 from ._rooms import is_mind_room
 from .profile import _PROFILE_TAG, entry_label, short_id
@@ -161,11 +162,9 @@ class _Views:
     def card_of_name(self, name: str) -> Optional[str]:
         """The newest visible card filed under `name` (a card filed under a spelling that is
         now an alias counts for the name it stands for)."""
-        from tools import _subjects as _S
-
         want = name.lower()
         found = [bid for card, ids in self.cards.items()
-                 if (_S.name_key(card) or card).lower() == want for bid in ids]
+                 if (_names.name_key(card) or card).lower() == want for bid in ids]
         found.sort(key=lambda b: str(self.by_id[b][0].get("created") or ""), reverse=True)
         return found[0] if found else None
 
@@ -173,10 +172,8 @@ class _Views:
 def _name_hits(views: _Views, text: str) -> list[Hit]:
     if not views.cards:
         return []
-    from tools import _subjects as _S
-
     own = _cue.own_names()
-    card_names = [(_S.name_key(c) or c) for c in views.cards]
+    card_names = [(_names.name_key(c) or c) for c in views.cards]
     picked = _cue.pick_names(_cue.Message(text), _cue.table_spellings(tuple(card_names)))
     hits: list[Hit] = []
     for name, spelling in picked.items():

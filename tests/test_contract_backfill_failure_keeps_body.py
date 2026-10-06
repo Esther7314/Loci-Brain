@@ -50,7 +50,7 @@ import json
 
 import pytest
 
-from tools import _runtime as rt
+from core import runtime as rt
 from tools.grow import rooms_path as R
 
 BODY = "She said the panel stays in Chinese and the comments go. That is the whole rule."
@@ -114,7 +114,7 @@ class FakeLogger:
 @pytest.fixture(autouse=True)
 def names_table(tmp_path, monkeypatch):
     """A throwaway names table: the backfill may add names to it."""
-    from tools import _subjects as S
+    from core import names as S
     monkeypatch.setenv("LOCI_ALIAS_TABLE", str(tmp_path / "aliases.yaml"))
     monkeypatch.setattr(S, "_cache", None)
 

@@ -95,6 +95,7 @@ from . import _invalidation as _I
 from . import _ledger
 from . import _sources as _src
 from . import import_memory as _imports
+from . import names as _names
 from . import fields as _fields
 from . import schema as _schema
 from . import visibility as _V
@@ -435,8 +436,7 @@ def _state_sources(base: Path, spec: StateFile) -> list[tuple[str, Path]]:
 
 
 def _alias_path() -> str:
-    from tools import _subjects
-    return _subjects._alias_path()
+    return _names._alias_path()
 
 
 async def build_package(store, *, embedding_db_path: str, export_meta: dict,
@@ -813,41 +813,40 @@ def _merge_names(data: bytes) -> dict:
     it knows keeps the library's entry. An alias another entry already claims is reported,
     not forced."""
     import yaml
-    from tools import _subjects as S
 
     raw = yaml.safe_load(data.decode("utf-8")) or {}
-    _flat, blocked, records = S._parse(raw)
+    _flat, blocked, records = _names._parse(raw)
     added, kept, refused = [], [], []
     for name, rec in records.items():
-        if S.record_of(name) is not None or S.candidates(name):
+        if _names.record_of(name) is not None or _names.candidates(name):
             kept.append(name)
             continue
         try:
             if rec.instance_of:
-                S.set_kind(name, rec.instance_of)
+                _names.set_kind(name, rec.instance_of)
             for alias in rec.aliases:
                 try:
-                    S.add_alias(name, alias)
+                    _names.add_alias(name, alias)
                 except ValueError as exc:
                     refused.append({"name": name, "alias": alias, "why": str(exc)})
             if not rec.instance_of and not rec.aliases:
-                S._edit_table(lambda lines, n=name: S._ensure_key(lines, n))
+                _names._edit_table(lambda lines, n=name: _names._ensure_key(lines, n))
             added.append(name)
         except ValueError as exc:
             refused.append({"name": name, "why": str(exc)})
     for name, rec in records.items():
         if name not in added:
             continue
-        for rel in S.LINK_RELS:
+        for rel in _names.LINK_RELS:
             for target in getattr(rec, rel):
                 try:
-                    S.link_name(name, rel, target)
+                    _names.link_name(name, rel, target)
                 except ValueError as exc:
                     refused.append({"name": name, rel: target, "why": str(exc)})
     for name in sorted(blocked):
-        if S.record_of(name) is None:
+        if _names.record_of(name) is None:
             try:
-                S.mark_not_person(name)
+                _names.mark_not_person(name)
             except ValueError as exc:
                 refused.append({"name": name, "why": str(exc)})
     return {"added": added, "kept_own": kept, "refused": refused}
@@ -1013,13 +1012,12 @@ def restore_library_state(store, members: dict[str, str], *, fresh: bool,
 
 
 def _restore_names(data: bytes, report: dict) -> None:
-    from tools import _subjects as S
-    path = Path(S._alias_path())
-    if not S.load_names_table() and not S.load_not_person():
+    path = Path(_names._alias_path())
+    if not _names.load_names_table() and not _names.load_not_person():
         # No names yet (no file, or one holding only comments): the package's table is
         # put in place as it was.
         path.parent.mkdir(parents=True, exist_ok=True)
-        S._write_table(data.decode("utf-8"))
+        _names._write_table(data.decode("utf-8"))
         report["restored"].append("aliases.yaml")
     else:
         report["merged"]["aliases.yaml"] = _merge_names(data)

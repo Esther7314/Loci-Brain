@@ -19,7 +19,7 @@ import tools.grow as grow_mod
 from core import _usage as U
 from core import scope as SC
 from core.bucket_manager import BucketManager
-from tools import _runtime as rt
+from core import runtime as rt
 from tools.breath import awaken as A
 from tools.grow import dispatch as grow
 from tools.grow import rooms_path

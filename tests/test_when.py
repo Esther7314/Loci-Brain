@@ -201,7 +201,7 @@ def test_something_completely_unreadable_gives_None():
 
 def test_a_date_shaped_string_for_a_day_that_does_not_exist_should_also_give_None():
     # Criterion: the first line of the docstring, "unreadable gives None" — **gives None, does
-    # not raise**. Upstream (`_ts_of` / `_bigevent.parse_span`) is written throughout on the
+    # not raise**. Upstream (`ts_of` / `_bigevent.parse_span`) is written throughout on the
     # assumption that "None = this one has no time", and not one caller wraps this function in
     # a try. So a single bucket like this would flip the entire recall over, rather than
     # quietly falling off the timeline by itself.
@@ -257,7 +257,7 @@ def test_the_same_month_number_in_different_years_may_not_be_merged_into_one_slo
 def test_week_and_month_bucketing_use_the_literal_calendar_passed_in_and_convert_no_timezones_for_the_caller():
     # Criterion: these two functions **do not call to_local**; they only read the literal
     # fields off the datetime. So "convert to local first" is the caller's responsibility
-    # (recall's `_split_calendar` takes what comes out of `_ts_of()`, which is local aware, so
+    # (recall's `_split_calendar` takes what comes out of `ts_of()`, which is local aware, so
     # it is correct today).
     # This assertion nails that implicit contract down: whoever one day passes a UTC time into
     # these two functions will have the last few hours of the month sorted into the previous

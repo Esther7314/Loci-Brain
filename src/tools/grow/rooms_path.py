@@ -85,7 +85,7 @@ import uuid
 from core import _holds as _H
 from core import _reconsolidation as _R
 from core.dehydrator import backfill_kinds
-from .. import _runtime as rt
+from core import runtime as rt
 from .._common import check_content_size, read_scope
 from .._write_returns import noticed
 from core._rooms import check_room, is_mind_room

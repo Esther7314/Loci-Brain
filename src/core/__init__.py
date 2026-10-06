@@ -44,16 +44,20 @@ What lives here:
 - `_invalidation.py`: breath's 依据变了的 — which memories stand on ground that moved
   (an overturned basis, a source revised or withdrawn, a panel correction), card them one
   layer at a time, and the keep-as-is gesture trace writes.
+- `runtime.py`: the locator server.py fills at startup (config, bucket_mgr, logger, ...);
+  the tools and the engine pieces above read it at call time.
+- `names.py`: the names table — normalising subjects, which spellings are one name, what
+  kind each name is. The tools, the summariser, cue cards and the export package read it.
 
-Dependency direction: `core` does not depend on `tools` / `web` / `bridge` — *mostly*.
-`dehydrator.py` uses `normalize_subjects` from `tools/_subjects.py`. That backward
-edge is left alone on purpose: `_subjects.py` is really about
-"how a tool validates its input", and dragging it down here would only stir unrelated
-things together. It is known, not overlooked.
+Dependency direction: `core` does not depend on `web` / `bridge`, and depends on `tools`
+only through three lazy upward calls, each commented where it is made:
+`_fold.save_gist` starts the grow tool's backfill, `_dream.leave_a_trace` grows the trace
+through the grow tool, and `embedding_switch.thresholds` reads each similarity line where
+the tool that uses it keeps it. Nothing in core imports `tools` at module top.
 
 What is exported: each file's own docstring says so, not repeated here. `server.py` is
 the only place that imports these engine classes directly in order to construct them;
-`tools/_runtime.py` and `web/_shared.py` hold the constructed instances, and the rest
+`core/runtime.py` and `web/_shared.py` hold the constructed instances, and the rest
 of the code reaches them through those rather than doing `import core.bucket_manager`
 and friends.
 ========================================

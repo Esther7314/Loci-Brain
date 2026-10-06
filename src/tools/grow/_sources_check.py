@@ -15,7 +15,7 @@ Exports: _normalize_from(from_ids, missing_hint) · check_sources(sources, prov,
 
 import re as _re
 
-from .. import _runtime as rt
+from core import runtime as rt
 from .._common import read_scope, resolve_bucket_ids
 from core import _sources as _src
 from core import scope as _scope

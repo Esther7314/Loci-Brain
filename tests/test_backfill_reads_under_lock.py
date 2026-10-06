@@ -18,8 +18,8 @@ import frontmatter
 import pytest
 
 from core.bucket_manager import BucketManager
-from tools import _runtime as rt
-from tools import _subjects as S
+from core import runtime as rt
+from core import names as S
 from tools.grow import rooms_path as R
 
 BODY = "Promised Wang we would see Dune next Monday at two."
