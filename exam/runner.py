@@ -405,7 +405,7 @@ class Run:
     async def round_trip(self, step: dict) -> None:
         """What GET /api/loci/export and POST /api/loci/import-package run, in this
         process: the library is exported (core/export_package.build_package) and brought
-        back into a new, empty library (core/migrate_engine.MigrateEngine), and the two
+        back into a new, empty library (core/package_import.MigrateEngine), and the two
         are compared field by field (core/export_package.library_snapshot). JSON text
         under `as`: {identical, differing, filtered, missing, not_included, state,
         found_in_package} — the last lists which of the step's `lacks:` phrases appear
@@ -415,7 +415,7 @@ class Run:
         from core import export_package as EP
         from core.bucket_manager import BucketManager
         from core.embedding_engine import EmbeddingEngine
-        from core.migrate_engine import MigrateEngine
+        from core.package_import import MigrateEngine
 
         spec = self.sub(step.get("round_trip") or {}) or {}
         config = load_config()
@@ -972,7 +972,7 @@ def seams() -> tuple[str, ...]:
             "tests/test_cue.py's",
             "a round_trip: step runs what GET /api/loci/export and POST "
             "/api/loci/import-package run (core/export_package.build_package, "
-            "core/migrate_engine.MigrateEngine) in the runner's process, into a new empty "
+            "core/package_import.MigrateEngine) in the runner's process, into a new empty "
             "library; the HTTP layer is tests/test_export_package.py's",
             "an item's names: is written to the library as aliases.yaml before setup",
             "an item's dreams: and dehydration_cache: are written in setup through Loci's own "

@@ -28,7 +28,7 @@ import pytest
 from starlette.requests import Request
 
 from core import embedding_switch as ES
-from core import migration_engine as ME
+from core import reembed as ME
 from core.bucket_manager import BucketManager
 from core.embedding_engine import EmbeddingEngine
 

@@ -57,7 +57,7 @@ from core.embedding_engine import EmbeddingEngine
 from locibrain.storage.embedding_outbox import EmbeddingOutbox
 from core.import_memory import ImportEngine
 from core.strict_args import harden as _harden_tool
-from core.migrate_engine import MigrateEngine
+from core.package_import import MigrateEngine
 from utils import get_version, load_config, setup_logging
 
 # --- The MCP tool implementations were split out into the tools/ subpackage ---

@@ -1,6 +1,6 @@
 """
 ========================================
-migration_engine.py — the embedding migration engine
+reembed.py — recomputing every vector after a change of embedding model
 ========================================
 
 Switching the embedding model (or backend) means recomputing the vector of every bucket
@@ -33,8 +33,7 @@ What it does not do:
   (core/embedding_switch.py, through the publish callback it is given)
 - It does not write configuration to disk
 - It does not import a full backup package exported from another instance — that is
-  migrate_engine.py's job. The two filenames are very nearly the same, so make sure you
-  know which one you are editing before you change anything.
+  package_import.py's job.
 ========================================
 """
 

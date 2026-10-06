@@ -1,6 +1,6 @@
 """
 ========================================
-migrate_engine.py — the engine that imports a full memory package
+package_import.py — the engine that imports a full memory package
 ========================================
 
 Takes the zip that GET /api/loci/export produces (core/export_package.py: buckets/*.md +
@@ -42,11 +42,8 @@ What it does not do:
 - It never calls an LLM (no content parsing, summarising or tagging — this moves files)
 - It does not modify config
 - It does not parse conversation history (that is import_memory.py's job)
-- It does not switch embedding backend. Recomputing the whole store when the backend
-  changes between local and api belongs to migration_engine.py — the two filenames are
-  very nearly the same, so make sure you know which one you are editing: THIS file
-  imports a full backup package exported from another instance, while
-  migration_engine.py regenerates the vectors for every memory in the current store.
+- It does not switch embedding backend. Recomputing the whole store when the embedding
+  model changes belongs to reembed.py.
 
 Exports: the MigrateEngine class (instantiated by server.py and injected into the routes)
 ========================================

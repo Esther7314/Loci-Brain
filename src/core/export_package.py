@@ -5,7 +5,7 @@ core/export_package.py — one file that carries a library away and brings it ba
 ========================================
 
 `GET /api/loci/export` writes it; `POST /api/loci/import-package` reads it back through
-the package importer (core/migrate_engine.py). Its uses are backup, restore and moving to
+the package importer (core/package_import.py). Its uses are backup, restore and moving to
 another machine, so it carries everything that cannot be rebuilt from the Markdown and
 nothing that is a secret.
 
@@ -58,7 +58,7 @@ stand on, keeps the library's: a package is no change authority), the host's lin
 (registrations are joined by design), imported conversation batches (a batch the library
 does not have), and the names table (names it does not know are added) — and the rest,
 which name entries and windows of the other library, are reported as not merged. What the
-importer refused to write (core/migrate_engine.REFUSAL_WORDS) is taken off the state files
+importer refused to write (core/package_import.REFUSAL_WORDS) is taken off the state files
 the way an export takes off what it leaves out, and its originals and attachments stay
 out; a file already in place byte for byte counts as restored, so a second run of an
 interrupted import finishes the first.

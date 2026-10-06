@@ -13,9 +13,9 @@ What lives here:
   the summariser LLM, score BM25, and keep the vectors.
 - `errors.py`: the error types that run through all of the above — everyone has to
   recognise the same error shapes.
-- `import_memory.py` / `migrate_engine.py` / `migration_engine.py`:
+- `import_memory.py` / `package_import.py` / `reembed.py`:
   background engines that sit at the same level as bucket_manager (conversation
-  import, store migration, embedding-backend migration). Each is built
+  import, export-package import, recomputing the vectors after an embedding-model change). Each is built
   exactly once by server.py at startup, which makes it the same kind of thing as the
   five above.
 - `_fold.py` / `_muse.py` / `_dream.py` / `_bigevent.py` / `_when.py` / `_rooms.py`:

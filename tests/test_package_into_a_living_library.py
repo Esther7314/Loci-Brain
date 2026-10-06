@@ -30,7 +30,7 @@ from core import export_package as EP
 from core import schema
 from core import visibility as V
 from core.bucket_manager import BucketManager
-from core.migrate_engine import JOB_FILE, MigrateEngine
+from core.package_import import JOB_FILE, MigrateEngine
 from test_export_package import (HOST, _build_library, _FakeEmbedding, _point_runtime,
                                  _vector, run)
 from utils import WAS_DERIVED_FROM, is_bucket_id
@@ -375,7 +375,7 @@ def test_a_package_past_nine_thousand_members_is_written_and_read():
     that size takes minutes to build here, so the two ends are driven directly)."""
     import io
 
-    from core import migrate_engine as ME
+    from core import package_import as ME
     from locibrain.storage import backup_archive as BA
 
     buffer = io.BytesIO()

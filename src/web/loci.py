@@ -67,7 +67,7 @@ ordered table, and the list here is the one list of what the panel can reach.
                                          is checked and parsed (nothing written; the
                                          collisions come back); then {job_id, decisions,
                                          default} writes its entries and restores the
-                                         library's state (core/migrate_engine.py), or
+                                         library's state (core/package_import.py), or
                                          {job_id, cancel: true} drops the parse
     POST /api/loci/embedding/migration -> {action: "resume"} carries on a recompute that
                                          failed or was interrupted; {action: "skip",

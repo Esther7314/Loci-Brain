@@ -39,7 +39,7 @@ MAX_MANIFEST_BYTES = 8 * MIB
 # bounded, and total extraction cannot fill a 512 MiB instance's filesystem.
 # Members are counted, not sized, here: one per entry, sunk original and attachment, so the
 # cap has to sit well above any library a person keeps (the byte caps below are what bound
-# the disk). The importer's vector-row cap follows it (core/migrate_engine).
+# the disk). The importer's vector-row cap follows it (core/package_import).
 MIGRATE_MAX_MEMBERS = 100_000
 MIGRATE_MAX_TOTAL_UNCOMPRESSED_BYTES = 512 * MIB
 MIGRATE_MAX_BUCKET_BYTES = 10 * MIB

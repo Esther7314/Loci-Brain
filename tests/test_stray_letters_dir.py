@@ -15,7 +15,7 @@ import pytest
 from core import schema
 from core.bucket_manager import BucketManager
 from core.decay_engine import DecayEngine
-from core.migrate_engine import MigrateEngine
+from core.package_import import MigrateEngine
 from tools import _runtime as rt
 from tools.breath import awaken as A
 from tools.grow import rooms_path

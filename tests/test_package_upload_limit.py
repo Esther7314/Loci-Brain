@@ -23,7 +23,7 @@ from bridge import request_limits as RL
 from core import export_package as EP
 from core import schema
 from core.bucket_manager import BucketManager
-from core.migrate_engine import MigrateEngine
+from core.package_import import MigrateEngine
 from test_export_package import _FakeEmbedding, _point_runtime, run
 
 HOST = b"127.0.0.1:8000"

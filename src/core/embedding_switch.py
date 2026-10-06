@@ -56,7 +56,7 @@ import tempfile
 import time
 from typing import Any, Callable, Optional
 
-from . import migration_engine as ME
+from . import reembed as ME
 
 logger = logging.getLogger("loci_brain.embedding_switch")
 

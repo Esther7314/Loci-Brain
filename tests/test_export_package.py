@@ -39,7 +39,7 @@ from core import schema
 from core import visibility as V
 from core.bucket_manager import BucketManager
 from core.import_memory import ImportEngine, ImportStore
-from core.migrate_engine import MigrateEngine
+from core.package_import import MigrateEngine
 from core.scope import Host
 from utils import WAS_DERIVED_FROM, WAS_REVISION_OF
 

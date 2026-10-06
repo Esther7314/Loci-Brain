@@ -11,7 +11,7 @@ list of what the panel can reach):
     POST /api/loci/import-package       multipart `file`: check and parse a package, write
                                         nothing, answer with its collisions;
                                         JSON {job_id, decisions, default}: write it in the
-                                        background (core/migrate_engine.py);
+                                        background (core/package_import.py);
                                         JSON {job_id, cancel: true}: drop the parse
     GET  /api/loci/import-package       where that stands
     GET  /api/loci/embedding/migration  the recompute after a change of embedding model
