@@ -3979,8 +3979,8 @@ class BucketManager:
             ):
                 if field in metadata:
                     metadata[field] = self._sanitize_float_field(metadata[field], default)
-            # YAML is an external input boundary (manual files, migration ZIP,
-            # GitHub restore).  Never let arbitrary scalar strings reach JSON
+            # YAML is an external input boundary (manual files, migration ZIP).
+            # Never let arbitrary scalar strings reach JSON
             # consumers that treat these fields as numbers.
             metadata["importance"] = _clamp_importance(
                 metadata.get("importance", 5), f"load:{Path(file_path).name}"

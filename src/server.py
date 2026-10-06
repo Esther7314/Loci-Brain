@@ -16,8 +16,7 @@ Key behaviour:
 - Every dashboard and HTTP route has been split out into src/web/<domain>.py, each module
   exposing register(mcp). This file only calls web.register_all(mcp) at startup; the
   shared dependencies are in web/_shared.py.
-- Still here: process startup, engine initialization, the background GitHub sync loop,
-  webhook delivery, the MCP Bearer auth middleware, single-connector /mcp assembly (the
+- Still here: process startup, engine initialization, webhook delivery, the MCP Bearer auth middleware, single-connector /mcp assembly (the
   entry point folds mcp_extra's tools back into mcp), and bringing up uvicorn.
 
 What this does NOT do (the boundary):
@@ -276,86 +275,6 @@ decay_engine = DecayEngine(config, bucket_mgr)       # Decay engine
 import_engine = ImportEngine(config, bucket_mgr, dehydrator, embedding_engine)  # Import engine
 migrate_engine = MigrateEngine(config, bucket_mgr, embedding_engine)              # Memory-pack migration engine
 
-# --- GitHub Sync ---
-from core.github_sync import GitHubSync  # type: ignore
-_gh_cfg = config.get("github_sync", {}) or {}
-_gh_token = (os.environ.get("LOCI_GITHUB_TOKEN") or _gh_cfg.get("token") or "").strip()
-github_sync_instance: GitHubSync | None = (
-    GitHubSync(
-        token=_gh_token,
-        repo=_gh_cfg.get("repo", ""),
-        branch=_gh_cfg.get("branch", "main"),
-        path_prefix=_gh_cfg.get("path_prefix", "loci"),
-    )
-    if _gh_token and _gh_cfg.get("repo")
-    else None
-)
-_github_auto_task: "asyncio.Task | None" = None  # the background periodic sync task
-
-
-async def _github_sync_loop(interval_minutes: int) -> None:
-    """The background periodic GitHub sync loop. Actual uploads only happen once
-    is_validated is True."""
-    import asyncio
-    logger.info(f"[github_sync] auto-sync loop started, interval={interval_minutes}min")
-    # Validate once up front to confirm the connection works.
-    if _wsh.github_sync_instance and not _wsh.github_sync_instance.is_validated:
-        try:
-            result = await _wsh.github_sync_instance.validate()
-            if not result.get("ok"):
-                logger.warning(f"[github_sync] auto-sync: validate failed: {result.get('error')} — loop will retry next cycle")
-        except Exception as e:
-            logger.warning(f"[github_sync] auto-sync: validate exception: {e}")
-    while True:
-        await asyncio.sleep(interval_minutes * 60)
-        inst = _wsh.github_sync_instance  # read the current global; a config update may have replaced the instance
-        if inst is None:
-            logger.info("[github_sync] auto-sync: instance gone, stopping loop")
-            return
-        if not inst.is_validated:
-            # Not yet validated, so validate first.
-            try:
-                res = await inst.validate()
-                if not res.get("ok"):
-                    logger.warning(f"[github_sync] auto-sync skipped (not validated): {res.get('error')}")
-                    continue
-            except Exception as e:
-                logger.warning(f"[github_sync] auto-sync validate failed: {e}")
-                continue
-        buckets_dir = config.get("buckets_dir", "")
-        if not buckets_dir:
-            continue
-        try:
-            result = await inst.sync(buckets_dir)
-            if result.get("ok"):
-                logger.info(f"[github_sync] auto-sync ok: {result.get('uploaded', 0)} files")
-            else:
-                logger.warning(f"[github_sync] auto-sync failed: {result.get('error')}")
-        except Exception as e:
-            logger.error(f"[github_sync] auto-sync exception: {e}")
-
-
-def _restart_github_auto_task(interval_minutes: int) -> None:
-    """Cancel the old task and start the sync loop at the new interval.
-    interval_minutes=0 means cancel only."""
-    import asyncio
-    global _github_auto_task
-    if _github_auto_task and not _github_auto_task.done():
-        _github_auto_task.cancel()
-        _github_auto_task = None
-    if interval_minutes > 0 and _wsh.github_sync_instance is not None:
-        try:
-            loop = asyncio.get_event_loop()
-            _github_auto_task = loop.create_task(_github_sync_loop(interval_minutes))
-        except RuntimeError:
-            pass  # no running event loop (e.g. under test); skip
-
-
-# If an auto-sync interval is configured at startup, defer starting it until the event loop
-# is ready, via the lifespan hook.
-_gh_auto_interval: int = int(_gh_cfg.get("auto_interval_minutes") or 0)
-
-
 # --- Create MCP server instance ---
 # host="0.0.0.0" so Docker container's SSE is externally reachable
 # stdio mode ignores host (no network)
@@ -424,8 +343,6 @@ _wsh.init_runtime(
     embedding_outbox=embedding_outbox,
     import_engine=import_engine,
     migrate_engine=migrate_engine,
-    github_sync_instance=github_sync_instance,
-    restart_github_auto_task=_restart_github_auto_task,
 )
 # There are no dashboard cookie sessions to load: /api/* is not authenticated at this
 # layer. Read the header of web/_shared.py before adding anything session-like here.
@@ -1920,8 +1837,6 @@ if __name__ == "__main__":
             stop_ollama_child=_ollama_child.stop_child,
             # No tunnel: load_tunnel_config, start_tunnel and stop_tunnel are
             # Optional[...] = None, so omitting them means "no tunnel".
-            restart_github_auto_task=_restart_github_auto_task,
-            github_auto_interval=_gh_auto_interval,
             boot_marker_path=os.path.join(
                 os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                 ".boot_fails",

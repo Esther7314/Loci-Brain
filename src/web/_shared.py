@@ -195,7 +195,6 @@ embedding_engine = None
 embedding_outbox = None
 import_engine = None
 migrate_engine = None
-github_sync_instance = None
 
 
 def init(cfg: dict) -> None:
@@ -288,7 +287,6 @@ def _mark_op(name: str = "") -> None:
 fire_webhook = None            # async def(event: str, payload: dict) -> None
 write_deletion_notice = None   # def(names: list) -> None
 pop_deletion_notice = None     # def() -> str
-restart_github_auto_task = None # def(interval_minutes: int) -> None; starts/stops the background GitHub sync task
 
 
 # --- Project .env read/write; shared because the config, env-config and host-vault routes

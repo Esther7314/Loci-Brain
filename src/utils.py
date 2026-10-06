@@ -172,7 +172,7 @@ def config_file_path() -> str:
       4. <project_root>/config.yaml — the fallback default.
 
     Why this is its own function: load_config reads it, the dashboard routes (config_api,
-    buckets, github, embedding) write it, and the entrypoint initializes it. If each
+    buckets, embedding) write it, and the entrypoint initializes it. If each
     hardcoded its own path, reads and writes could fork to different files, and any key
     the dashboard saved would be lost on restart. (The config lives in the data directory
     because a single-file Docker bind mount is created as a directory on Windows and
@@ -204,13 +204,12 @@ def config_file_path() -> str:
     return os.path.join(_project_root(), "config.yaml")
 
 
-# Every dashboard endpoint that writes to config.yaml (github, tunnel, config_api,
-# buckets, ...) shares this one lock and this one atomic write. Nobody may bypass it and
+# Every dashboard endpoint that writes to config.yaml (tunnel, config_api, buckets, ...)
+# shares this one lock and this one atomic write. Nobody may bypass it and
 # open(path, "w") over the whole file themselves.
-# Background: the GitHub backup settings once used exactly that unsafe pattern — open(w)
-# over the whole file, log a warning on failure, and still return 200. When the write
-# failed the user saw "saved successfully" and then found the settings blank again after
-# the next restart.
+# Why: an open(w) over the whole file that fails partway leaves a blank or torn config;
+# if the endpoint then logs a warning and still returns 200, the user sees "saved
+# successfully" and finds the settings gone after the next restart.
 
 
 _MOUNTINFO_ESCAPES = {
