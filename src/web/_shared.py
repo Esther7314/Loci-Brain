@@ -263,18 +263,16 @@ def replace_embedding_engine(engine) -> None:
             logger.warning("Failed to refresh embedding outbox engine", exc_info=True)
 
 
-# --- Heartbeat / last-activity timestamp (originally in server.py; moved here so the
-#     heartbeat route and the tools read one source) ---
+# --- Last-activity timestamp ---
 _SERVER_START_TS = time.time()
 _LAST_OP_TS = _SERVER_START_TS
 
 
 def _mark_op(name: str = "") -> None:
-    """Record one tool/endpoint activity timestamp for /api/heartbeat to report.
+    """Stamp `_LAST_OP_TS` with now.
 
-    server.py injects this function as core.runtime.mark_op at startup, so any tool call
-    updates it; /api/heartbeat reads _LAST_OP_TS. One source on both sides, so the two
-    cannot disagree.
+    server.py injects this function as core.runtime.mark_op at startup; breath and trace
+    call it on each use. Nothing reads `_LAST_OP_TS`.
     """
     global _LAST_OP_TS
     _LAST_OP_TS = time.time()
@@ -290,10 +288,9 @@ write_deletion_notice = None   # def(names: list) -> None
 pop_deletion_notice = None     # def() -> str
 
 
-# --- Project .env read/write; shared because the config, env-config and host-vault routes
-#     all use it ---
-# Same behaviour as the original in server.py: .env lives at src/.env. This file is under
-# src/web/, so two levels up is src/.
+# --- Project .env read/write ---
+# The .env lives at src/.env: this file is under src/web/, so two levels up is src/.
+# No route calls `_read_env_var` or `_write_env_var`.
 def _project_env_path() -> str:
     return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
 

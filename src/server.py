@@ -17,7 +17,7 @@ Key behaviour:
   exposing register(mcp). This file only calls web.register_all(mcp) at startup; the
   shared dependencies are in web/_shared.py.
 - Still here: process startup, engine initialization, webhook delivery, the MCP Bearer auth middleware, single-connector /mcp assembly (the
-  entry point folds mcp_extra's tools back into mcp), and bringing up uvicorn.
+  entry point folds mcp_extra's registry into mcp), and bringing up uvicorn.
 
 What this does NOT do (the boundary):
 - No business logic for the individual tools; all of that lives under tools/*.
@@ -276,14 +276,11 @@ migrate_engine = MigrateEngine(config, bucket_mgr, embedding_engine)            
 # host="0.0.0.0" so Docker container's SSE is externally reachable
 # stdio mode ignores host (no network)
 #
-# Merged back into a single /mcp connector, now that the five-tool client limit that forced
-# the split is gone.
-# Historically this was two instances: a primary mcp on /mcp and a secondary mcp_extra on
-# /mcp-extra. Only the primary's single /mcp route is exposed now; mcp_extra survives purely
-# as a grouping container (its seven @mcp_extra.tool() registrations are unchanged), and the
-# entry point folds its tools back into mcp so they are all exposed together.
-# The two instances share one process, one runtime and one bucket_mgr. Every HTTP
-# custom_route (panel and API) hangs off the primary mcp instance.
+# One connector: every tool is registered on `mcp` and served on its single /mcp route, and
+# every HTTP custom_route (panel and API) hangs off it too. `mcp_extra` is a second instance
+# in the same process (one runtime, one bucket_mgr) that registers no tool and serves no
+# route; the entry point folds its registry into mcp (server_app.merge_mcp_tool_registries),
+# so a tool put on it is still served on /mcp.
 mcp = FastMCP(
     "Loci Brain",
     host=_BIND_HOST,
@@ -1749,14 +1746,10 @@ if __name__ == "__main__":
     transport = config.get("transport", "stdio")
     logger.info(f"Loci Brain starting | transport: {transport}")
 
-    # Merged into a single /mcp connector.
-    # The original /mcp + /mcp-extra split existed because the client imposed a five-tool
-    # limit per connector. That limit is gone, so every tool hangs off the primary mcp
-    # instance behind one /mcp route — which also removes the OAuth and connector-validation
-    # awkwardness that a second connector caused on the client side.
-    # mcp_extra survives only as a historical grouping container (its seven
-    # @mcp_extra.tool() registrations are unchanged); its tools are folded back into mcp
-    # here, so stdio, sse and streamable-http all expose the same set.
+    # One /mcp connector, because a second one makes the client authorize and validate two
+    # connectors. mcp_extra's registry is folded into mcp here, so stdio, sse and
+    # streamable-http all expose the same set; mcp_extra registers no tool, so the fold
+    # adds none.
     # This depends on FastMCP._tool_manager, a private structure. If a future version
     # changes it, this degrades to exposing the primary set only.
     from server_app import (
