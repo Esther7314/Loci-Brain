@@ -106,7 +106,7 @@ dehydration:
   #   LM Studio:   http://localhost:1234/v1
   #   vLLM:        http://localhost:8000/v1
   #   Gemini:      https://generativelanguage.googleapis.com/v1beta/openai
-  # api_key: ""    # ⚠️ Use env var LOCI_COMPRESS_API_KEY instead / 请使用环境变量 LOCI_COMPRESS_API_KEY
+  # api_key: ""    # Saved here by the panel; env var LOCI_COMPRESS_API_KEY overrides it / 面板保存在这里；设了环境变量 LOCI_COMPRESS_API_KEY 时以它为准
   max_tokens: 1024
   temperature: 0.1
   timeout_seconds: 120             # LLM request timeout seconds / LLM 请求超时秒数

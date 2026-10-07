@@ -3,6 +3,8 @@ buckets/
 !buckets/.gitkeep
 
 .env
+# A direct install keeps its config.yaml (keys included) in the project root.
+/config.yaml
 __pycache__/
 *.pyc
 *.log

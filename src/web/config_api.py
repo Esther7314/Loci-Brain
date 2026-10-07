@@ -710,7 +710,13 @@ def register(mcp) -> None:
                     for key in ("model", "base_url", "max_tokens", "temperature", "api_format", "timeout_seconds"):
                         if key in body["dehydration"]:
                             sc_dehy[key] = body["dehydration"][key]
-                    # Never persist api_key to yaml (use env var)
+                    # The key typed in the panel is kept in config.yaml so it survives a
+                    # restart: config.yaml is where keys live (left out of backups by
+                    # core/schema and out of export packages by core/export_package). An
+                    # empty key keeps the saved one, as the live update does.
+                    new_key = body["dehydration"].get("api_key")
+                    if isinstance(new_key, str) and new_key:
+                        sc_dehy["api_key"] = new_key
 
                 if "embedding" in body:
                     sc_emb = save_config.setdefault("embedding", {})
