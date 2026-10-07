@@ -6,12 +6,14 @@ tools/grow/_backfill.py — what the background backfill fills, and how it decid
 A grow write stores the body with placeholder metadata (_placeholder_meta) and hands the
 id back at once; the backfill then reads the entry, asks the side model once, and fills
 only the slots still blank. This file is that decision: what the side model is told, the
-answer turned into update() keywords against the entry as it is on disk, the stamped
+answer turned into update() keywords against the entry as it is on disk, whether the
+entry's text may still go to the side model and an answer about it be written back, the stamped
 stand-ins when no answer comes, the "possibly the same thing" tag and its similarity
 line, and the names table's two permitted writes. Running it (_backfill_one,
 _backfill_batch, backfill_sweep) is tools/grow/rooms_path's.
 
-Exports: _placeholder_meta() · _current_meta(bucket_id) · _backfill_context(meta, mind)
+Exports: _placeholder_meta() · _current_meta(bucket_id) · _material_gone(meta)
+         _backfill_context(meta, mind)
          _ask_backfill(bucket_id, text, context, kinds) · _backfill_updates(...)
          _possibly_same(bucket_id, text) · _DUP_COS_THRESHOLD
          _record_kinds(bucket_id, pairs)
@@ -129,6 +131,39 @@ async def _current_meta(bucket_id: str) -> dict | None:
         rt.logger.warning(f"backfill 读不到 {bucket_id}（不在了或读坏了），这轮不补")
         return None
     return dict(cur.get("metadata") or {})
+
+
+def _material_gone(meta: dict) -> str:
+    """Why this entry's text may not go to the side model, nor an answer about it be
+    written back, or "" when it may: it carries an open record that a source behind it was
+    withdrawn, deleted or held, or its body was cleared (core/_source_change.py writes both
+    under the bucket's lease), or the source registry reads a source it rests on as
+    withdrawn, deleted or held. The same states a slicing batch is refused for: their
+    text may not reach the side model.
+
+    Asked before the side model is called, and again in `revise`, under the bucket's lease
+    — the lease the clearing takes to block and to clear the entry — so an answer about
+    text that was cleared while the side model was thinking is never written over what the
+    clearing left."""
+    from core import _sources as _src
+    from core import visibility as _V
+
+    records = [r for r in meta.get("invalidation") or [] if isinstance(r, dict)]
+    if any(r.get("cleared") for r in records):
+        return "正文已清"
+    if _V.source_gone(meta):
+        return "来源已撤回、删除或被扣着"
+    registry = getattr(rt.bucket_mgr, "sources", None)
+    if registry is None:
+        return ""
+    for rec in _src.basis_records(meta):
+        try:
+            state = registry.state_of(_src.record_id(rec))
+        except (KeyError, TypeError, ValueError, _src.SourceRecordError):
+            continue
+        if state in (_src.WITHDRAWN, _src.DELETED, _src.HELD):
+            return f"来源 {_src.record_id(rec).to_string()} 是 {state}"
+    return ""
 
 
 def _backfill_context(meta: dict, mind: bool) -> dict:

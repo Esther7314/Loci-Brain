@@ -93,7 +93,7 @@ from core import _sources as _src
 from utils import prov_targets
 
 from ._backfill import (_ask_backfill, _backfill_context, _backfill_updates, _current_meta,
-                        _placeholder_meta, _possibly_same, _record_kinds)
+                        _material_gone, _placeholder_meta, _possibly_same, _record_kinds)
 from ._cards import card_room_rule, check_card, live_card  # re-exported: see Exports
 from ._checks import (_WANT_DURATION_RE, _WHEN_RE, _check_hold, _check_v2, _hold_receipt,
                       _in_the_future, _retired_fields_msg, _retired_item_fields, check_cue,
@@ -129,9 +129,19 @@ async def _backfill_one(bucket_id: str, text: str, kind: str) -> None:
     mine.
     mind extracts no scene (there are no photographs inside a piece of thinking),
     so its tags come out empty — that is normal and accepted.
+    An entry whose source was withdrawn, deleted or held, or whose body was cleared
+    (_material_gone), is not sent to the side model; when that happens while the side
+    model is thinking, the answer is dropped at the write — checked under the bucket's
+    lease, the one the clearing takes — and nothing of it is written: no slot, no
+    similarity tag, no name in the names table. The slots stay as the clearing left them,
+    and the log says why.
     """
     meta = await _current_meta(bucket_id)
     if meta is None:
+        return
+    gone = _material_gone(meta)
+    if gone:
+        rt.logger.info(f"backfill {bucket_id}: {gone}，不回填")
         return
     mind = kind == "mind" or is_mind_room(meta.get("room"))
     kinds = backfill_kinds()
@@ -144,14 +154,26 @@ async def _backfill_one(bucket_id: str, text: str, kind: str) -> None:
     # The "possibly the same thing" hint is an event's only (_backfill._possibly_same).
     similar = await _possibly_same(bucket_id, text) if kind == "event" else []
 
+    dropped: list[str] = []
+
+    def commit(now: dict) -> dict:
+        why = _material_gone(now)
+        if why:
+            dropped.append(why)
+            return {}
+        return _backfill_updates(now, answer, came_back_empty, text, mind=mind,
+                                 similar=similar)
+
     try:
-        written = await rt.bucket_mgr.update(
-            bucket_id, revise=lambda now: _backfill_updates(
-                now, answer, came_back_empty, text, mind=mind, similar=similar))
+        written = await rt.bucket_mgr.update(bucket_id, revise=commit)
         if not written:
             rt.logger.warning(f"backfill {bucket_id} 没写上（读不到或被拒），下一轮再补")
     except Exception as e:
         rt.logger.warning(f"backfill update 失败 {bucket_id}（正文已落盘）: {e}")
+    if dropped:
+        rt.logger.warning(f"backfill {bucket_id}: 副模型想的时候{dropped[0]}，"
+                          "这次的回填作废，一个字没写")
+        return
     if answer is not None and answer.subjects:
         _record_kinds(bucket_id, answer.subjects)
 
@@ -191,6 +213,9 @@ async def backfill_sweep(before: str = "") -> int:
     (source_tool=hold/import...) need repairing too, and limiting it to grow/regrow
     would leave them unrepaired forever. "room has a value but summary is missing"
     is a complete criterion on its own; where the bucket came from is irrelevant.
+    The one exception is an entry whose text may not go to the side model
+    (_material_gone): a body cleared by a source change keeps its room and has no
+    summary, and that is how the clearing left it, not unfinished work.
 
     `before` (a stored `created` stamp, the moment the sweep was started): only entries
     written before it are taken. The sweep starts on the first grow after a restart, in
@@ -209,7 +234,10 @@ async def backfill_sweep(before: str = "") -> int:
             continue
         if before and str(meta.get("created") or "") >= before:
             continue
-        kind = "mind" if is_mind_room(meta.get("room")) else "event"
+        # A cleared or blocked entry has room and no summary too; it is not unfinished.
+        if _material_gone(meta):
+            continue
+        kind ="mind" if is_mind_room(meta.get("room")) else "event"
         pending.append((str(b.get("id")), str(b.get("content") or ""), kind))
     if pending:
         rt.logger.info(f"backfill_sweep: 补 {len(pending)} 个上次没回填完的桶")

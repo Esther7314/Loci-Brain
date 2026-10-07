@@ -462,6 +462,30 @@ def test_the_intake_route_answers_400_and_502(store, monkeypatch):
     assert store.slices.pending_count() == 0
 
 
+def test_a_line_withdrawn_while_slicing_answers_400_naming_it(store, monkeypatch):
+    from core import _source_change as SC
+    from core.scope import Host
+
+    async def withdrawing(system, user):
+        # The host's change lands while the side model is slicing.
+        status, out = await SC.handle(store, {"change_id": "c-1", "host_seq": 1,
+                                              "source": "lento:home/private:U#m_0006",
+                                              "change": "withdrawn"},
+                                      Host("life", scope_mode="open"))
+        assert status == 200 and out["state"] == "withdrawn", out
+        return json.dumps({"slices": THREE})
+    call = _routes(monkeypatch, store, withdrawing)
+    status, out = call("POST", body())
+    assert status == 400, out
+    assert out["note"] == "source_changed_while_slicing"
+    assert out["lines"] == {"m_0006": "withdrawn"}
+    assert "nothing was stored" in out["error"]
+    assert store.slices.pending_count() == 0
+    # Sent again as it is, the batch is refused before the side model.
+    status, out = call("POST", body())
+    assert status == 400 and "m_0006 is withdrawn" in out["error"] and "note" not in out
+
+
 def test_both_routes_want_the_hook_key_when_the_panel_is_locked(store, monkeypatch):
     call = _routes(monkeypatch, store, stub(THREE), locked=True)
     assert call("POST", body())[0] == 401

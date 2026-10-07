@@ -47,7 +47,13 @@ async def api_v2_slices_take(request: Request) -> Response:
     or one holding a line the registry reads as withdrawn, deleted or held; 403 past the
     host's max_grant or for lines it is neither authority nor registrar for; 502 when
     the side model fails — then nothing is stored, and the host may send the same batch
-    again."""
+    again.
+
+    A line that becomes withdrawn, deleted or held while the side model is slicing (a
+    source change applied meanwhile) drops the whole batch: 400 with
+    {"error": "…", "note": "source_changed_while_slicing", "lines": {line id: state}}
+    — no slice, gist or line order is stored, and the same batch sent again is refused
+    as above. The host sends the batch again without those lines."""
     from starlette.responses import JSONResponse
     from core import _slicer as _sl
     from core import _sources as _src
@@ -79,6 +85,9 @@ async def api_v2_slices_take(request: Request) -> Response:
                                    hosts=_pa.hosts())
     except _sl.BatchForbidden as e:
         return JSONResponse({"error": str(e)}, status_code=403)
+    except _sl.BatchStale as e:
+        return JSONResponse({"error": str(e), "note": "source_changed_while_slicing",
+                             "lines": e.lines}, status_code=400)
     except _sl.BatchError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     except _sl.SlicerError as e:

@@ -202,6 +202,7 @@ cue_candidates_of() (the weaver's thread candidates, handed out with the dream)
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import os
@@ -1279,7 +1280,10 @@ async def weave(force: bool = False, cfg: dict | None = None,
     `degrade_on_wake()`.
 
     Returns `None` when below the line (`force=True` skips the pressure line; for the
-    bridge and for dry runs).
+    bridge and for dry runs). Also `None` when a source change reached an ingredient while
+    the weaver was writing (`_commit`): the dream is dropped whole — nothing is saved,
+    no `last_dreamt` is noted, it does not count toward `per_day` — and the log and the
+    state's `最近一次作废` ({于, 料}: the ids and source strings, never text) say why.
 
     The consequence of weaving: **note when it was last dreamt about and nothing else**
     (`last_dreamt`), so this entry is picked less often for a while. **Not one character
@@ -1340,7 +1344,15 @@ async def weave(force: bool = False, cfg: dict | None = None,
         "线索候选": list(dream.get("线索") or []),
         "压力": round(float(ingredients["压力"]), 3),
     }
-    save_record(rec)
+    tainted = await _commit(rec)
+    if tainted:
+        # Woven through and through: there is no cutting one thread out of it.
+        rt.logger.warning("[dream] 这一织作废：织的时候 %d 样料的来源变了（撤回、删除、扣住或恢复待复核：%s），"
+                          "梦没存，last_dreamt 也没记", len(tainted), "、".join(tainted))
+        st = load_state()
+        st["最近一次作废"] = {"于": now.isoformat(timespec="seconds"), "料": tainted}
+        save_state(st)
+        return None
 
     # Note when it was last dreamt about — **purely so the same dream does not recur** —
     # without touching weight.
@@ -1424,6 +1436,41 @@ def _gone_sources(rec: dict) -> list[str]:
         if registry.state_of(sid) in (_src.WITHDRAWN, _src.DELETED):
             out.append(str(label))
     return out
+
+
+async def _tainted(rec: dict) -> list[str]:
+    """What this dream was woven from that a source change has reached since it was drawn:
+    a source behind its quote share the registry holds as withdrawn or deleted
+    (`_gone_sources`), and every ingredient carrying an open record that a source behind it
+    was withdrawn, deleted or held, or that waits for review after a restore — the records
+    the quote share refuses a memory for when it is drawn (`_quoted`)."""
+    out = _gone_sources(rec)
+    for bid in dict.fromkeys(ingredient_ids(rec)):
+        b = await rt.bucket_mgr.get_including_archive(bid)
+        meta = (b or {}).get("metadata") or {}
+        if _V.source_gone(meta) or _V.source_restored(meta):
+            out.append(bid)
+    return out
+
+
+async def _commit(rec: dict) -> list[str]:
+    """Save a woven dream unless a source change reached what it was woven from while the
+    weaver was writing (`_tainted`). Returns what tainted it; [] = saved.
+
+    The check and the save happen while holding the lease of every ingredient
+    (BucketManager._bucket_turn, taken in id order): a source change blocks each memory
+    under that lease, and blocks before it clears the dream records
+    (core/_source_change.py, `dream_records`). So either the block came first and is seen
+    here, or the dream is on disk before that clearing looks for it."""
+    turn = getattr(rt.bucket_mgr, "_bucket_turn", None)
+    async with contextlib.AsyncExitStack() as held:
+        if callable(turn):
+            for bid in sorted(set(ingredient_ids(rec))):
+                await held.enter_async_context(turn(bid))
+        tainted = await _tainted(rec)
+        if not tainted:
+            save_record(rec)
+    return tainted
 
 
 async def withheld_ingredients(rec: dict, holds: "_H.HoldIndex | None" = None,

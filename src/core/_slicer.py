@@ -52,6 +52,9 @@ held in the source registry (its text may not reach the side model), and when th
 handing it over is neither the change authority nor the registrar (`registers:`) for every
 line of it (what a run holds decides what a change to it reaches;
 core/_source_change.registration_refusal).
+The registry is read again when the slices are written, under the pending store's lease:
+a line that became withdrawn, deleted or held while the side model was slicing drops the
+whole batch (BatchStale), so no gist of it is written after its clearing has run.
 Past that, nothing here knows which host it is or where the lines came from. An imported
 conversation (core/import_memory.py) goes through the same slicing and the same pending
 store, with its own prompt: each of its slices also carries a `draft`, the side model's
@@ -61,7 +64,7 @@ conversation's title). Withdrawing that import batch removes its slices from the
 whole (`purge`): drafts are not kept as history.
 
 Exports: SLICER_PROMPT_VERSION · SLICER_PROMPT · GIST_MAX · DRAFT_MAX · Slice ·
-         SlicerError · BatchError · BatchForbidden · SliceError · slice_lines ·
+         SlicerError · BatchError · BatchForbidden · BatchStale · SliceError · slice_lines ·
          parse_slices · side_model ·
          read_batch · batch_id_of · fingerprint_of · slice_fingerprint · FINGERPRINT_BY ·
          guess_covering · take_batch · PendingSlices (record_batch · get · record_for ·
@@ -138,6 +141,19 @@ class BatchError(ValueError):
 class BatchForbidden(BatchError):
     """The batch registers lines this host may not register (HTTP 403;
     core/_source_change.registration_refusal)."""
+
+
+class BatchStale(BatchError):
+    """A line of the batch was withdrawn, deleted or held while the side model was slicing
+    it (HTTP 400, as for a batch that held such a line from the start). The slices are
+    dropped and nothing is stored: no batch line, no line order. `lines` maps each such
+    line id to its state now."""
+
+    def __init__(self, lines: dict):
+        self.lines = dict(lines)
+        named = ", ".join(f"{i} ({s})" for i, s in self.lines.items())
+        super().__init__(f"lines changed in the source registry while the batch was being "
+                         f"sliced: {named}; the slices were dropped and nothing was stored")
 
 
 class SliceError(ValueError):
@@ -455,6 +471,19 @@ async def guess_covering(store, gists: list[str], day: str, *,
 # Intake
 # ============================================================
 
+def _unusable_lines(registry, source: dict, ids: list[str]) -> dict:
+    """{line id: state} for the lines of `source` ({system, instance, container}) the
+    registry reads as withdrawn, deleted or held, in batch order: their text may not be
+    sliced."""
+    base = _src.SourceId(source["system"], source["instance"], source["container"], "\0")
+    out: dict = {}
+    for line_id in ids:
+        state = registry.state_of(base.piece(line_id))
+        if state in (_src.WITHDRAWN, _src.DELETED, _src.HELD):
+            out[line_id] = state
+    return out
+
+
 async def take_batch(store, body, *, model: ModelCall,
                      max_lines: int = DEFAULT_MAX_LINES_PER_BATCH,
                      threshold: float = DEFAULT_GUESS_THRESHOLD,
@@ -468,8 +497,15 @@ async def take_batch(store, body, *, model: ModelCall,
     Raises BatchError (malformed, or a line the registry reads as withdrawn, deleted or
     held: its text may not go to the side model; nothing is called), BatchForbidden (the
     batch registers lines whose declared change authority is another host than `host`,
-    under `hosts`, the deployment's table; nothing is called) or SlicerError (the side
-    model failed; nothing is written). The raw text goes no further than the side model."""
+    under `hosts`, the deployment's table; nothing is called), SlicerError (the side
+    model failed; nothing is written) or BatchStale (a line became withdrawn, deleted or
+    held while the side model was slicing; the slices are dropped and nothing is written).
+    The raw text goes no further than the side model.
+
+    The registry is read again when the slices are written, under the pending store's
+    lease — the lease a source change takes to blank and drop the slices over its lines
+    (PendingSlices.withdraw_lines) — so slices of a line withdrawn during the slicing
+    are either written before that clearing reaches them or never written at all."""
     from ._source_change import registration_refusal     # lazy: it imports this module
 
     batch = read_batch(body, max_lines=max_lines)
@@ -485,13 +521,11 @@ async def take_batch(store, body, *, model: ModelCall,
         why = registry.order_conflict(batch["source"], ids, batch["revision"], revisions)
         if why:
             raise BatchError(f"the lines contradict what is registered: {why}")
-        base = _src.SourceId(batch["source"]["system"], batch["source"]["instance"],
-                             batch["source"]["container"], "\0")
-        for line_id in ids:
-            state = registry.state_of(base.piece(line_id))
-            if state in (_src.WITHDRAWN, _src.DELETED, _src.HELD):
-                raise BatchError(f"line {line_id} is {state} in the source registry: its "
-                                 "text may not be sliced; nothing was stored")
+        unusable = _unusable_lines(registry, batch["source"], ids)
+        if unusable:
+            line_id, state = next(iter(unusable.items()))
+            raise BatchError(f"line {line_id} is {state} in the source registry: its "
+                             "text may not be sliced; nothing was stored")
     slices = await slice_lines(batch["lines"], model=model)
     guesses = await guess_covering(store, [s.gist for s in slices], batch["day"],
                                    threshold=threshold)
@@ -501,7 +535,9 @@ async def take_batch(store, body, *, model: ModelCall,
         lines=[(ln["id"], ln["fingerprint"]) for ln in batch["lines"]],
         slices=[{"first": s.first, "last": s.last, "gist": s.gist, "guesses": g}
                 for s, g in zip(slices, guesses)],
-        model=str(getattr(model, "model_name", "") or ""))
+        model=str(getattr(model, "model_name", "") or ""),
+        recheck=(None if registry is None
+                 else lambda: _unusable_lines(registry, batch["source"], ids)))
     # The host's order of these lines outlives the batch: it is how a run cut from them
     # is known to hold the lines between its ends (core/_sources.SourceRegistry.lines_of),
     # and with the batch's revision as watermark, which revision of each line was read.
@@ -778,13 +814,21 @@ class PendingSlices:
                            revision: Optional[str],
                            lines: list[tuple[str, str]], slices: list[dict],
                            model: str = "",
-                           origin: Optional[dict] = None) -> tuple[dict, int]:
+                           origin: Optional[dict] = None,
+                           recheck: Optional[Callable[[], dict]] = None
+                           ) -> tuple[dict, int]:
         """Append a batch and its slices (each gets its slice_id here). The same batch_id
         again replaces the slices of the earlier one still pending; those already
         handled stay handled. `origin` is an imported conversation's {batch, same_self,
-        title}, kept on the batch line as `import`. Returns (the batch line, how many were
-        replaced)."""
+        title}, kept on the batch line as `import`. `recheck`, called under the store's
+        lease before anything is appended, returns {line id: state} for lines that may no
+        longer be used; when it returns any, nothing is appended and BatchStale is
+        raised. Returns (the batch line, how many were replaced)."""
         async with self._turn():
+            if recheck is not None:
+                stale = recheck()
+                if stale:
+                    raise BatchStale(stale)
             self._fresh()
             with self._guard:
                 prev = self._batches.get(batch_id)
