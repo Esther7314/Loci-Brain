@@ -21,18 +21,15 @@ logger = sh.logger
 
 
 def _slices_config() -> tuple[int, float]:
-    """`slices:` in config -> (max lines per batch, guess threshold)."""
+    """(max lines per batch from `slices:`, the guess line from core/thresholds)."""
     from core import _slicer as _sl
+    from core import thresholds as _T
     cfg = (sh.config or {}).get("slices") or {}
     try:
         max_lines = int(cfg.get("max_lines_per_batch") or _sl.DEFAULT_MAX_LINES_PER_BATCH)
     except (TypeError, ValueError):
         max_lines = _sl.DEFAULT_MAX_LINES_PER_BATCH
-    try:
-        threshold = float(cfg.get("guess_threshold", _sl.DEFAULT_GUESS_THRESHOLD))
-    except (TypeError, ValueError):
-        threshold = _sl.DEFAULT_GUESS_THRESHOLD
-    return max(1, max_lines), threshold
+    return max(1, max_lines), _T.value(_T.SLICE_GUESS, sh.config or {})
 
 
 # ---------------------------------------------------------

@@ -66,7 +66,7 @@ interrupted import finishes the first.
 Adding a kind of library state to the package is one row in `STATE_FILES`.
 
 Exports: PACKAGE_FORMAT · STATE_FILES · StateFile · build_package · restore_library_state ·
-         library_snapshot · withdrawn
+         library_snapshot · withdrawn · partition
 ========================================
 """
 
@@ -302,6 +302,9 @@ _LEFT_BEHIND: tuple[tuple[str, str], ...] = (
                            "is in export_meta.json"),
     ("_state/breath_last.json", "the panel's copy of the last breath each host was handed "
                                 "here; the receiving library keeps its own"),
+    ("_state/thresholds_model.json", "the embedding model this installation's similarity "
+                                     "lines were last looked at with; the lines themselves "
+                                     "are config"),
     ("embeddings.db.backup", "the vectors before a model switch"),
     ("embeddings.db.migrating", "a model switch's unfinished vectors"),
     ("embeddings.db*", "the vector database's side files"),
@@ -346,6 +349,36 @@ def withdrawn(meta: dict, registry) -> bool:
         if registry.read_state(rec) in (_src.WITHDRAWN, _src.DELETED):
             return True
     return False
+
+
+def partition(entries: list[dict], registry) -> tuple[list[dict], list[str], list[str]]:
+    """(the entries that travel, the ids of the soft-deleted, the ids of the withdrawn).
+    Withdrawn is `withdrawn` and everything derived from such an entry, every generation:
+    the change writes `source_gone` on it, but a source the registry holds as withdrawn
+    without that record (a change recorded before its clearing reached the entries) is
+    found here by the same walk to the roots the read gate takes. Every export draws its
+    line here (this package, core/export_originals.py)."""
+    kept: list[dict] = []
+    deleted: list[str] = []
+    gone: list[str] = []
+    for b in entries:
+        meta = b.get("metadata") or {}
+        bid = str(b.get("id") or meta.get("id") or "")
+        if _V.state_of(meta) == _V.DELETED:
+            deleted.append(bid)
+        elif withdrawn(meta, registry):
+            gone.append(bid)
+        else:
+            kept.append(b)
+    moved = True
+    while moved:
+        gone_set = set(gone)
+        stays = [b for b in kept if not set(read_from_ids(b.get("metadata") or {})) & gone_set]
+        moved = len(stays) != len(kept)
+        gone += [str(b.get("id") or (b.get("metadata") or {}).get("id") or "")
+                 for b in kept if b not in stays]
+        kept = stays
+    return kept, deleted, gone
 
 
 def _linked_ids(meta: dict) -> list[tuple[str, str]]:
@@ -456,30 +489,7 @@ async def build_package(store, *, embedding_db_path: str, export_meta: dict,
 def _plan(store, entries: list[dict], alias_path: str) -> dict:
     base = Path(store.base_dir).resolve()
     registry = getattr(store, "sources", None)
-    kept: list[dict] = []
-    deleted: list[str] = []
-    gone: list[str] = []
-    for b in entries:
-        meta = b.get("metadata") or {}
-        bid = str(b.get("id") or meta.get("id") or "")
-        if _V.state_of(meta) == _V.DELETED:
-            deleted.append(bid)
-        elif withdrawn(meta, registry):
-            gone.append(bid)
-        else:
-            kept.append(b)
-    # What is derived from a withdrawn entry does not travel either, every generation: the
-    # change writes `source_gone` on it, but a source the registry holds as withdrawn without
-    # that record (a change recorded before its clearing reached the entries) is found here
-    # by the same walk to the roots the read gate takes.
-    moved = True
-    while moved:
-        gone_set = set(gone)
-        stays = [b for b in kept if not set(read_from_ids(b.get("metadata") or {})) & gone_set]
-        moved = len(stays) != len(kept)
-        gone += [str(b.get("id") or (b.get("metadata") or {}).get("id") or "")
-                 for b in kept if b not in stays]
-        kept = stays
+    kept, deleted, gone = partition(entries, registry)
     kept_ids = {str(b.get("id")) for b in kept}
     left_out = set(deleted) | set(gone)
 

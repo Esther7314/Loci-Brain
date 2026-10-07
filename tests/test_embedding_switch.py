@@ -179,9 +179,9 @@ def test_switching_asks_first_and_says_what_it_costs(world):
             3, "old-embed", "new-embed", 4)
         assert p["estimated_seconds"] is not None and p["probe_error"] == ""
         values = {t["where"]: t["value"] for t in p["thresholds"]}
-        assert values["core/_reconsolidation.SIMILARITY_LINE"] == 0.80
-        assert values["core/bucket_manager._VECTOR_RECALL_THRESHOLD"] == 0.65
-        assert values["tools/recall/core.RELEVANCE_FLOOR"] == 35.0
+        assert values["thresholds.reconsolidation"] == 0.80
+        assert values["thresholds.recall_meaning"] == 0.65
+        assert values["thresholds.recall_floor"] == 35.0
         assert "3 条向量全部作废" in p["say"] and "0.8" in p["say"] and "35" in p["say"]
         # Nothing moved.
         assert world["sh"].config["embedding"]["model"] == "old-embed"

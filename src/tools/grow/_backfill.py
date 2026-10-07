@@ -15,7 +15,7 @@ _backfill_batch, backfill_sweep) is tools/grow/rooms_path's.
 Exports: _placeholder_meta() · _current_meta(bucket_id) · _material_gone(meta)
          _backfill_context(meta, mind)
          _ask_backfill(bucket_id, text, context, kinds) · _backfill_updates(...)
-         _possibly_same(bucket_id, text) · _DUP_COS_THRESHOLD
+         _possibly_same(bucket_id, text)
          _record_kinds(bucket_id, pairs)
 ========================================
 """
@@ -27,6 +27,7 @@ from core import _dates
 from core.dehydrator import (BACKFILL_MAX_TOKENS, BackfillAnswer, backfill_request,
                              parse_backfill)
 from core import runtime as rt
+from core import thresholds as _T
 from core._bigevent import first_line as _F_first_line
 from core import names as _S
 from core.names import normalize_bound, normalize_subjects
@@ -218,16 +219,10 @@ async def _ask_backfill(bucket_id: str, text: str, context: dict,
     return None, True
 
 
-# The similarity line for "possibly the same thing". It is **the same number** as
-# the elbow on the dashboard's similarity page (a full pairwise cosine scan of the
-# library puts the elbow at 80). The panel's thresholds page reads it from here by this
-# path (core/embedding_switch.thresholds).
-_DUP_COS_THRESHOLD = 0.80
-
-
 async def _possibly_same(bucket_id: str, text: str) -> list[str]:
     """The 「疑似同件:xx」 tag for a new event whose body sits at or above the line from an
     entry already in the library, or [] (no vectors, nothing close, or the lookup failed).
+    The line is `backfill_duplicate` in core/thresholds, read at the call.
 
     Nothing is merged and nothing is blocked: similarity is checked once in the
     background, and the tag is for human eyes to settle later. The threshold errs high
@@ -241,13 +236,14 @@ async def _possibly_same(bucket_id: str, text: str) -> list[str]:
     try:
         ee = getattr(rt.bucket_mgr, "embedding_engine", None)
         if ee and getattr(ee, "enabled", False):
+            line = _T.value(_T.BACKFILL_DUPLICATE)
             sims = await ee.search_similar(text, top_k=3)
             _top = next(((sid, s) for sid, s in sims if str(sid) != bucket_id), None)
             if _top:
                 rt.logger.info(f"[近似] {bucket_id} top={str(_top[0])[:6]} cos={float(_top[1]):.2f}")
             for sid, s in sims:
                 sid = str(sid)
-                if sid and sid != bucket_id and float(s) >= _DUP_COS_THRESHOLD:
+                if sid and sid != bucket_id and float(s) >= line:
                     similar.append(f"疑似同件:{sid[:6]}")
                     break
     except Exception:

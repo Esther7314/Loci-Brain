@@ -36,6 +36,14 @@ ordered table, and the list here is the one list of what the panel can reach.
                                          schema note and a manifest with what was filtered
                                          out and what could not travel; never a secret
                                          (core/export_package.py)
+    GET  /api/loci/export/originals   -> 「导出原话」: a zip of imported conversations (one
+                                         Markdown each) and sunk originals (one Markdown per
+                                         local day written); nothing of a withdrawn or
+                                         deleted source (core/export_originals.py)
+    GET  /api/loci/version            -> the version that runs; `?check=1` adds the latest
+                                         GitHub release against it (tag, day, notes, page).
+                                         Read only: no update is installed from here
+                                         (core/releases.py, web/loci_version.py)
     GET  /api/loci/import-package     -> where bringing a package back stands: parsed with
                                          its collisions, applying, done (with what of the
                                          library's state was restored or merged), error
@@ -200,7 +208,8 @@ core/health.py, core/profile.py):
                           embedding/missing, embedding/backfill (core/activity.py,
                           core/grow_view.py, core/muse_view.py, core/vector_view.py)
     web/host_api.py       /api/v2/* (a host's credential, not the panel's)
-    web/library_api.py    export, import-package, embedding/migration
+    web/library_api.py    export, export/originals, import-package, embedding/migration
+    web/loci_version.py   version
     web/_guards.py        the same-origin write check and the hook-scope refusals
 
 Rules: do not use Optional[simple type] for parameters; run all three smoke suites after
@@ -284,10 +293,13 @@ def register(mcp) -> None:
     # ---------------------------------------------------------
     from . import library_api as _lib
     mcp.custom_route("/api/loci/export", methods=["GET"])(_lib.export)
+    mcp.custom_route("/api/loci/export/originals", methods=["GET"])(_lib.export_originals)
     mcp.custom_route("/api/loci/import-package", methods=["POST"])(_lib.import_package)
     mcp.custom_route("/api/loci/import-package", methods=["GET"])(_lib.import_status)
     mcp.custom_route("/api/loci/embedding/migration", methods=["GET"])(_lib.reembed_status)
     mcp.custom_route("/api/loci/embedding/migration", methods=["POST"])(_lib.reembed_action)
+    from . import loci_version as _version
+    mcp.custom_route("/api/loci/version", methods=["GET"])(_version.api_loci_version)
 
     # ---------------------------------------------------------
     # The detail window, the name card and the names page (web/loci_detail.py,

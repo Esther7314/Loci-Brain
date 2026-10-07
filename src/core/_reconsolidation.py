@@ -18,8 +18,9 @@ Two ways to run into an old view
            the card names, by the strong reminder's rules (core/_cue.pick_names): a name
            shared by two entries fires for neither, Latin names whole-word, CJK names on
            word edges. The AI's and the owner's own names are not matched.
-  meaning  the new body's vector is at least SIMILARITY_LINE from an old MIND entry's
-           (events and thoughts alike are compared, only against MIND). The vector call
+  meaning  the new body's vector is at least the reconsolidation line from an old MIND
+           entry's (core/thresholds, read at the call; events and thoughts alike are
+           compared, only against MIND). The vector call
            is bounded by MEANING_BUDGET_SECONDS; no vectors, a failed call or a call that
            runs out of time gives no meaning hits and says nothing — the write itself never
            waits on it beyond that and never fails because of it.
@@ -35,7 +36,7 @@ What is not mentioned
     hung on, one out of scope
   · a pinned rule or the name page: breath puts those in front of the model already
 
-Exports: LIMIT · SIMILARITY_LINE · MEANING_BUDGET_SECONDS · NAME · MEANING · ROAD · Hit ·
+Exports: LIMIT · MEANING_BUDGET_SECONDS · NAME · MEANING · ROAD · Hit ·
          lineage() · look_back() · render() · record_shown()
 ========================================
 """
@@ -55,6 +56,7 @@ from . import _cue
 from . import _holds as _H
 from . import _when as _w
 from . import names as _names
+from . import thresholds as _T
 from . import visibility as _V
 from ._rooms import is_mind_room
 from .profile import _PROFILE_TAG, entry_label, short_id
@@ -62,9 +64,6 @@ from .profile import _PROFILE_TAG, entry_label, short_id
 logger = logging.getLogger("loci_brain.reconsolidation")
 
 LIMIT = 2
-# The same line as the panel's similarity page elbow and the old "possibly the same
-# thing" hint: a pairwise scan of the library puts the elbow at 0.80.
-SIMILARITY_LINE = 0.80
 # How long the write's return may wait for the vector of the new body. Ollama answers a
 # loaded model in well under this; a cold model or a dead backend costs the meaning hits of
 # this one write, not the write.
@@ -208,8 +207,9 @@ async def _meaning_hits(store, views: _Views, text: str) -> list[Hit]:
         logger.warning("look-back: meaning hits skipped (%s: %s) — the vector backend did "
                        "not answer within %.1fs", type(e).__name__, e, MEANING_BUDGET_SECONDS)
         return []
+    line = _T.value(_T.RECONSOLIDATION)
     return [Hit(str(bid), MEANING, f"{float(s):.2f}", float(s))
-            for bid, s in pairs if float(s) >= SIMILARITY_LINE and str(bid) in views.by_id]
+            for bid, s in pairs if float(s) >= line and str(bid) in views.by_id]
 
 
 async def look_back(store, buckets: list, writes: list[tuple[str, str]], *, scope=None,

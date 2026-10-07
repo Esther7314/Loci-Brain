@@ -8,7 +8,8 @@ trap: hitting save on a stale, unrefreshed page writes the old values straight b
 the new ones.
 
 - /api/config (GET/POST): read runtime config and hot-update it (including hot-swapping
-  the embedding backend). `config.yaml` is the single source of truth.
+  the embedding backend, and the similarity lines in `thresholds:`, core/thresholds.py).
+  `config.yaml` is the single source of truth.
 - /api/test/dehydration, /api/test/embedding: connectivity self-tests for compression and
   vectorization.
 - /api/models: list the models available from the target provider.
@@ -69,6 +70,22 @@ _SURFACING_INTS = (
 )
 
 
+def _live_model() -> str:
+    return str(getattr(sh.embedding_engine, "model", "") or "")
+
+
+def _buckets_dir() -> str:
+    return str(sh.config.get("buckets_dir") or "")
+
+
+def _remember_tuning_model() -> None:
+    """Before the embedding model changes: record the outgoing model as the one the
+    similarity lines were tuned on (when none is recorded yet), so the setting page can
+    say they may need retuning once the new model is live (core/thresholds.retune)."""
+    from core import thresholds as _T
+    _T.remember_model(_buckets_dir(), _live_model())
+
+
 def _rebuild_embedding_runtime():
     """Rebuild and publish one embedding engine to every runtime holder."""
     try:
@@ -89,6 +106,7 @@ def publish_embedding(target: dict, persist: bool) -> None:
     recompute ran."""
     import asyncio
 
+    _remember_tuning_model()
     emb = sh.config.setdefault("embedding", {})
     emb.update(dict(target))
     _rebuild_embedding_runtime()
@@ -218,6 +236,7 @@ def register(mcp) -> None:
         api_key = dehy.get("api_key", "")
         masked_key = f"{api_key[:4]}...{api_key[-4:]}" if len(api_key) > 8 else ("***" if api_key else "")
         from core.profile import breath_settings
+        from core import thresholds as _T
         awake = breath_settings(sh.config)   # the values breath runs on, defaults filled
         return JSONResponse({
             "dehydration": {
@@ -251,6 +270,11 @@ def register(mcp) -> None:
                 "awake_cue_days": awake.cue_days,
             },
             "merge_threshold": sh.config.get("merge_threshold", 75),
+            # The similarity lines as they run now, each with its default and range, and
+            # whether the embedding model changed since they were last looked at (a note
+            # for the person; nothing is reset).
+            "thresholds": {"lines": _T.rows(sh.config),
+                           "retune": _T.retune(_buckets_dir(), _live_model())},
             # The panel lock: the switch itself, plus **whether it is actually locked**
             # (with no password set, the switch can be on and still lock nothing).
             "panel_auth": _parse_bool(sh.config.get("panel_auth", True), default=True),
@@ -344,6 +368,16 @@ def register(mcp) -> None:
                 return JSONResponse(
                     {"error": "surfacing must be an object"}, status_code=400
                 )
+            # The similarity lines: every value checked before anything is applied; one
+            # bad value refuses the whole request and says which and why.
+            threshold_changes: dict = {}
+            retune_dismissed = False
+            if "thresholds" in body:
+                from core import thresholds as _T
+                threshold_changes, retune_dismissed, problems = _T.validate(
+                    body.get("thresholds"))
+                if problems:
+                    return JSONResponse({"error": "；".join(problems)}, status_code=400)
             deployment_payload = body.get("deployment")
             if "deployment" in body and not isinstance(deployment_payload, dict):
                 return JSONResponse(
@@ -519,6 +553,7 @@ def register(mcp) -> None:
             # the same instance to web routes, BucketManager, ImportEngine and
             # the MCP tools runtime so reads and writes cannot split models.
             if rebuild_embedding:
+                _remember_tuning_model()
                 try:
                     _rebuild_embedding_runtime()
                 except Exception as e:
@@ -589,6 +624,26 @@ def register(mcp) -> None:
                         continue
                     surfacing_ints[key] = sf[key] = max(lo, min(hi, val))
                     updated.append(f"surfacing.{key}")
+
+        # --- The similarity lines (core/thresholds): applied to the running config, so
+        # the next search, write or fold reads them; None takes a line back to its
+        # default. Saving a line or dismissing the note settles the retune note on the
+        # live model. ---
+        if threshold_changes or retune_dismissed:
+            from core import thresholds as _T
+            section = sh.config.get(_T.SECTION)
+            if not isinstance(section, dict):
+                section = {}
+                sh.config[_T.SECTION] = section
+            for key, val in threshold_changes.items():
+                if val is None:
+                    section.pop(key, None)
+                else:
+                    section[key] = val
+                updated.append(f"thresholds.{key}")
+            if retune_dismissed:
+                updated.append(f"thresholds.{_T.DISMISS}")
+            _T.settle(_buckets_dir(), _live_model())
 
         persisted_after: dict | None = None
 
@@ -668,6 +723,19 @@ def register(mcp) -> None:
                                 sc_samp["temperature"] = float(src_samp["temperature"])
                             except (TypeError, ValueError):
                                 pass
+
+                if threshold_changes:
+                    sc_th = save_config.get("thresholds")
+                    if not isinstance(sc_th, dict):
+                        sc_th = {}
+                        save_config["thresholds"] = sc_th
+                    for key, val in threshold_changes.items():
+                        if val is None:
+                            sc_th.pop(key, None)
+                        else:
+                            sc_th[key] = val
+                    if not sc_th:
+                        save_config.pop("thresholds", None)
 
                 if deployment_public_url is not None:
                     sc_deployment = save_config.get("deployment")

@@ -20,6 +20,7 @@ from core._slicer import _short_id    # the handle a read tool prints for an id
 from core import _usage              # the usage log: what a lookup handed back
 from core import visibility as _V     # the one gate: what may be put in front of the model
 from core import runtime as rt
+from core import thresholds as _T
 from .._common import read_scope, resolve_bucket_id
 from core import _when as _w          # "today" as the user lives it (local timezone) — never call datetime.now() directly
 from core._rooms import (ALL_ROOMS, check_gate, is_mind_room, normalize_room,
@@ -133,16 +134,20 @@ _SEARCH_TOPK = 30
 #   Better too few than too many: what falls below the line is reported in one
 #   final line (how many, the highest score, the earliest entry) — visible, and
 #   drillable.
-# ⚠️ This is the **combined score** (0-100), not a cosine; the underlying
-# _VECTOR_RECALL_THRESHOLD=0.65 is the **cosine line for the 意思 mark**, a
-# different thing. Entries with a literal hit are floored at max(score, line) and
-# are never blocked by this.
-# The LOCI_RELEVANCE_FLOOR environment variable overrides it (the slider on the
-# dashboard's memory page goes through a URL parameter).
-try:
-    RELEVANCE_FLOOR = float(__import__("os").environ.get("LOCI_RELEVANCE_FLOOR", "") or 35.0)
-except (TypeError, ValueError):
-    RELEVANCE_FLOOR = 35.0
+# ⚠️ This is the **combined score** (0-100), not a cosine; `recall_meaning` (0.65)
+# is the **cosine line for the 意思 mark**, a different thing. Entries with a literal
+# hit are floored at max(score, line) and are never blocked by this.
+# The line is `recall_floor` in core/thresholds, read at every call: the setting page
+# edits it live; the LOCI_RELEVANCE_FLOOR environment variable is its default when
+# config does not set it; the slider on the panel's recall page passes a floor for one
+# request only.
+
+
+def relevance_floor() -> float:
+    """The relevance floor as it runs now (core/thresholds `recall_floor`)."""
+    return _T.value(_T.RECALL_FLOOR)
+
+
 # System tag prefixes: never allowed onto any tag line a human reads (「疑似同件:xxx」
 # included)
 _SYS_TAG_PREFIXES = ("__", "aspect:", "疑似同件:", "相似认知:")
@@ -613,7 +618,7 @@ def _score_tag(e: dict) -> str:
     grounds the system had dredged an entry up.
 
     ⚠️ This step deliberately does nothing but make it visible; it adds no
-    threshold. The underlying _VECTOR_RECALL_THRESHOLD=0.65 may be loose for
+    threshold. The underlying `recall_meaning` line (0.65) may be loose for
     Chinese (two unrelated Chinese passages hitting a cosine of 0.7 is common),
     but how loose has to be judged against the real distribution — any threshold
     chosen before seeing that distribution is a guess. Live with it for a few days
@@ -1447,7 +1452,7 @@ def _render_search(entries, gates, floor: float = None, ledger: dict | None = No
     there are, the highest score, and what the earliest one says — which
     incidentally answers "when did this start".
     """
-    floor = RELEVANCE_FLOOR if floor is None else float(floor)
+    floor = relevance_floor() if floor is None else float(floor)
     hit = [e for e in entries if _eff_score(e, floor) >= floor]
     below = [e for e in entries if _eff_score(e, floor) < floor]
     top_below = max(((e.get("score") or 0.0) for e in below), default=0.0)
@@ -1516,7 +1521,7 @@ def _render_scene_clusters(entries, gates, floor: float = None, ledger: dict | N
     Clusters are ordered by their earliest entry ("how it got here" is told from
     the beginning); the representative inside a cluster is the highest-scoring one.
     """
-    floor = RELEVANCE_FLOOR if floor is None else float(floor)
+    floor = relevance_floor() if floor is None else float(floor)
     hit = [e for e in entries if _eff_score(e, floor) >= floor]
     below = [e for e in entries if _eff_score(e, floor) < floor]
     top_below = max(((e.get("score") or 0.0) for e in below), default=0.0)
@@ -1678,10 +1683,10 @@ async def recall_data(when: str, room: str, tag: str, query: str,
     st = _cell_stats(entries)
     # The relevance floor only means anything while searching (no query gate, no
     # score).
-    # It is meant to be dragged around on the dashboard, so the floor is **passed
-    # in with each request** — never hard-coded and never stored. Any threshold
-    # chosen before seeing the real distribution is a guess.
-    fl = RELEVANCE_FLOOR if floor is None else float(floor)
+    # It is dragged around on the panel's recall page, so a floor passed with the
+    # request holds for that request only; without one the configured line runs
+    # (core/thresholds `recall_floor`, which the setting page edits).
+    fl = relevance_floor() if floor is None else float(floor)
     payload = []
     today = _w.now().date()
     for e in reversed(entries):  # newest first, the same direction as the text skin
@@ -1707,7 +1712,7 @@ async def recall_data(when: str, room: str, tag: str, query: str,
         "entries": payload,
         "gates": {"when": when, "room": room, "tag": tag, "query": query, "view": view},
         "floor": fl,
-        "floor_default": RELEVANCE_FLOOR,
+        "floor_default": relevance_floor(),
         # How many top-k cut: the panel has to see it too (the same number as the
         # text skin's final line)
         "topk": ledger.get("topk"),

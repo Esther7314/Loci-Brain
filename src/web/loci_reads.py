@@ -228,8 +228,8 @@ async def api_loci_recall(request: Request) -> Response:
         slices = 0
     # The relevance floor is dragged on the page, following the similarity page's
     # existing pattern: the person draws the line, and this side only lays out the
-    # distribution. Unset, it falls back to RELEVANCE_FLOOR (currently 35, the same
-    # number as the slider's default).
+    # distribution. Unset, the configured line runs (core/thresholds `recall_floor`,
+    # 35 by default, the same number as the slider's default).
     floor = None
     try:
         if (q.get("floor") or "").strip():

@@ -224,6 +224,21 @@ surfacing:
     sample_k: 2                   # 抽出几个
     temperature: 0.7              # >1 更平均、<1 更偏向高分；0.7 是个温和的默认
 
+# --- Similarity lines / 多像才算像 ---
+# Five cosine lines and recall's relevance floor (core/thresholds.py). Unset, the defaults
+# below run; the panel's setting page edits them and they apply at once, no restart. They
+# were tuned on one embedding model: after a model change the setting page says they may
+# need retuning (nothing is reset by itself).
+# 五条余弦线和 recall 的相关线。不写就用下面的缺省；面板设置页改了当场生效。换了向量模型，
+# 设置页会提醒可能要重调，不会自己改回缺省。
+# thresholds:
+#   reconsolidation: 0.80         # write look-back: which old view the new body runs into / 回望撞意思
+#   fold_merge: 0.80              # two gists say the same thing, ask to merge / 两条概括要不要问合并
+#   backfill_duplicate: 0.80      # the backfill's 「疑似同件」 sticker / 回填「可能是同一件事」
+#   recall_meaning: 0.65          # recall's 意思 mark / recall 里「意思」那个标记
+#   slice_guess: 0.65             # a slice's guess at what was written that day (else slices.guess_threshold) / 切片的猜测
+#   recall_floor: 35              # combined score 0-100 below which recall does not list (else LOCI_RELEVANCE_FLOOR) / recall 相关线
+
 # --- Limits / 边界限制（iter 1.6 §5）---
 # Single-bucket size cap and pinned bucket quota. Exceeding either is
 # rejected at hold/grow/trace boundaries with a Chinese hint string.

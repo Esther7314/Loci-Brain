@@ -15,7 +15,7 @@ with vectors present) goes like this:
             with `preview()`: how many vectors are now invalid and will be recomputed, an
             estimated time (one real call to the new model, timed, times the count, plus
             the pacing between batches), and the similarity lines that were tuned on the
-            old model and may need retuning — read from the code that uses them.
+            old model and may need retuning — as they run now (core/thresholds).
   2. start  the same request with `embedding.reembed: "confirm"` starts the recompute
             (`start`, core/reembed.py): the new model's vectors are written to a
             staging database beside the live one; the live one is not touched.
@@ -95,30 +95,13 @@ def _norm(name: str) -> str:
 # The similarity lines tuned on the current model
 # ============================================================
 
-def thresholds() -> list[dict]:
-    """Each line, its value read from the code that uses it, and what it decides."""
-    from . import _reconsolidation, _slicer
-    from . import bucket_manager
-    # Upward reads, kept lazy: each line is read where the tool that uses it keeps it.
-    from tools import fold
-    from tools.grow import _backfill
-    from tools.recall import core as recall_core
-    rows = [
-        (_reconsolidation.SIMILARITY_LINE, "余弦", "core/_reconsolidation.SIMILARITY_LINE",
-         "回望：新写的东西跟哪条旧看法算「撞意思」"),
-        (fold._MERGE_COS_THRESHOLD, "余弦", "tools/fold._MERGE_COS_THRESHOLD",
-         "两条概括说的是不是一回事、要不要问合并"),
-        (_backfill._DUP_COS_THRESHOLD, "余弦", "tools/grow/_backfill._DUP_COS_THRESHOLD",
-         "回填时「可能是同一件事」的提示"),
-        (bucket_manager._VECTOR_RECALL_THRESHOLD, "余弦",
-         "core/bucket_manager._VECTOR_RECALL_THRESHOLD", "recall 里「意思」那个标记"),
-        (_slicer.DEFAULT_GUESS_THRESHOLD, "余弦", "core/_slicer.DEFAULT_GUESS_THRESHOLD",
-         "切片「白天像是已经记过哪条」的猜测"),
-        (recall_core.RELEVANCE_FLOOR, "综合分（0–100）", "tools/recall/core.RELEVANCE_FLOOR",
-         "recall 的相关线：低于它的不摆出来（语义占 2.5 份）"),
-    ]
-    return [{"value": v, "scale": scale, "where": where, "decides": what}
-            for v, scale, where, what in rows]
+def thresholds(config=None) -> list[dict]:
+    """Each line as it runs now, where it is set, and what it decides (core/thresholds;
+    `config` defaults to the running one)."""
+    from . import thresholds as _T
+    return [{"key": r["key"], "value": r["value"], "scale": r["scale"],
+             "where": f"{_T.SECTION}.{r['key']}", "decides": r["decides"]}
+            for r in _T.rows(config)]
 
 
 
@@ -244,7 +227,7 @@ async def preview(config: dict, target: dict, db_path: str, live_model: str) -> 
         "seconds_per_vector": round(per_vector, 3) if not probe_error else None,
         "estimated_seconds": seconds,
         "probe_error": probe_error,
-        "thresholds": thresholds(),
+        "thresholds": thresholds(config),
         "while_running": "重算期间旧模型照常用：搜索拿旧向量比旧向量，新写的也先用旧模型算；"
                          "新向量写在暂存库里，全部算完才一次换上——不会新旧混着比。",
         "say": _say(have["count"], have["model"] or live_model, model, seconds,
@@ -261,7 +244,7 @@ def _say(count: int, old: str, new: str, seconds: Optional[int], probe_error: st
     elif seconds is not None:
         lines.append(f"估计要 {_duration(seconds)}（按刚才试的一次算；"
                      "模型热了以后通常更快）。")
-    lines.append("这几条线是按旧模型调的，换了以后可能要重调："
+    lines.append("这几条线是按旧模型调的，换了以后可能要重调（设置页的阈值里改，不会自动改回缺省）："
                  + "；".join(f"{t['value']:g}（{t['decides']}）" for t in thresholds()))
     lines.append("算完之前旧模型照常用，不会新旧混着比；中途失败旧库原样不动，可以接着算。")
     return "\n".join(lines)

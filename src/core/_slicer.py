@@ -110,8 +110,8 @@ SLICER_PROMPT = """你在帮一个记忆系统把一段聊天原文切成几片�
 GIST_MAX = 80                  # characters; a longer gist is cut, not refused
 DRAFT_MAX = 300                # characters of an import slice's candidate entry; cut likewise
 GUESS_TOP = 3                  # guesses kept per slice
-# The guess line: the same cosine recall uses for a purely semantic candidate
-# (bucket_manager._VECTOR_RECALL_THRESHOLD). Config: slices.guess_threshold.
+# The guess line when a caller passes none. The running value is `slice_guess` in
+# core/thresholds (config `thresholds.slice_guess`, else `slices.guess_threshold`).
 DEFAULT_GUESS_THRESHOLD = 0.65
 # A batch over this many lines is refused (send it in parts). Config:
 # slices.max_lines_per_batch. A Lento day is a few hundred lines.

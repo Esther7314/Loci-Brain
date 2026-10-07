@@ -3,11 +3,14 @@
 web/library_api.py — export, bringing a package back, and the embedding recompute
 ========================================
 
-The handlers behind five panel routes, registered in web/loci.py (whose header is the one
+The handlers behind six panel routes, registered in web/loci.py (whose header is the one
 list of what the panel can reach):
 
     GET  /api/loci/export               the export package as a download
                                         (core/export_package.py)
+    GET  /api/loci/export/originals     「导出原话」 as a download: imported conversations,
+                                        one file each, and sunk originals, one file per
+                                        day (core/export_originals.py)
     POST /api/loci/import-package       multipart `file`: check and parse a package, write
                                         nothing, answer with its collisions;
                                         JSON {job_id, decisions, default}: write it in the
@@ -21,9 +24,11 @@ list of what the panel can reach):
                                         for the new model to compute after the swap
 
 All of them sit behind the panel gate; the two POSTs also take only same-origin requests
-(web/loci._origin_reject), like every panel write.
+(web/loci._origin_reject), like every panel write, and so do the two exports
+(server_app.OriginCSRFGuardMiddleware._GUARDED_READS): each hands out the library's words.
 
-Exports: export · import_package · import_status · reembed_status · reembed_action
+Exports: export · export_originals · import_package · import_status · reembed_status ·
+         reembed_action
 ========================================
 """
 
@@ -90,6 +95,24 @@ async def export(request: Request) -> Response:
     }
     return FileResponse(path, media_type="application/zip",
                         filename=f"loci-export-{stamp}.zip", headers=headers,
+                        background=BackgroundTask(_unlink, path))
+
+
+async def export_originals(request: Request) -> Response:
+    from core import export_originals as eo
+
+    try:
+        path, counts = await eo.build(sh.bucket_mgr)
+    except Exception as e:                           # noqa: BLE001 - said, not swallowed
+        logger.error("[export-originals] failed: %s", e, exc_info=True)
+        return JSONResponse({"error": f"导出原话失败：{type(e).__name__}: {e}"},
+                            status_code=500)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    headers = {"X-Loci-Conversations": str(counts["conversations"]),
+               "X-Loci-Sunk": str(counts["sunk"]),
+               "X-Loci-Withheld": str(counts["lines_withheld"] + counts["sunk_left_out"])}
+    return FileResponse(path, media_type="application/zip",
+                        filename=f"loci-originals-{stamp}.zip", headers=headers,
                         background=BackgroundTask(_unlink, path))
 
 

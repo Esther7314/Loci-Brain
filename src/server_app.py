@@ -427,16 +427,17 @@ class OriginCSRFGuardMiddleware:
     state there, no matter what the CORS preflight allowed. ``/mcp``,
     ``/oauth/*`` and ``/.well-known/*`` are exempt — they authenticate via
     bearer tokens / proof-of-possession (PKCE), not ambient cookies, so a
-    mismatched Origin there isn't a CSRF risk. One read is guarded the same
-    way: ``GET /api/loci/export`` (``_GUARDED_READS``).
+    mismatched Origin there isn't a CSRF risk. Two reads are guarded the same
+    way: ``GET /api/loci/export`` and ``GET /api/loci/export/originals``
+    (``_GUARDED_READS``).
     """
 
     _SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
     _EXEMPT_PREFIXES = ("/oauth/", "/.well-known/")
-    # Reads guarded like writes: the export hands out the whole library in one response,
-    # and CORS is `*`, so on an unlocked panel any web page could fetch and read it. The
-    # panel's own fetch is same-origin; a script on the machine sends no Origin at all.
-    _GUARDED_READS = frozenset({"/api/loci/export"})
+    # Reads guarded like writes: each export hands out the library's words in one
+    # response, and CORS is `*`, so on an unlocked panel any web page could fetch and read
+    # it. The panel's own fetch is same-origin; a script on the machine sends no Origin.
+    _GUARDED_READS = frozenset({"/api/loci/export", "/api/loci/export/originals"})
 
     def __init__(
         self,

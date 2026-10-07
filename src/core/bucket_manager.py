@@ -268,12 +268,11 @@ _atomic_write_text = atomic_write_text  # Backward-compatible private alias.
 # search scoring
 # ------------------------------------------------------------
 # rule.md §①: no bare magic numbers. search() (core/_bucket_search.py) reads these at
-# call time; the panel (core/embedding_switch.thresholds) shows the vector line by this
-# module's path. After changing any of these, run tests/regression to verify the
-# scoring behaviour.
+# call time. The cosine at which a hit counts as matching in meaning (`vector_match`,
+# recall's 意思 mark) is a setting: `recall_meaning` in core/thresholds. After changing any
+# of these, run tests/regression to verify the scoring behaviour.
 # ============================================================
 _VECTOR_TOPK = 50          # embedding prefetch top_k (a source for the semantic score only; it never narrows the candidate set)
-_VECTOR_RECALL_THRESHOLD = 0.65  # the cosine at which a hit counts as matching in meaning (`vector_match`, recall's 意思 mark)
 _RESOLVED_RANK_PENALTY = 0.3   # a resolved bucket is demoted in ordering only
 # What the three forgetting stages look like inside search: faded takes a discount, sunk
 # takes a harsher one.

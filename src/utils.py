@@ -908,23 +908,18 @@ def extract_wikilinks(text: str) -> list[str]:
 
 
 def get_version() -> str:
-    """Read project version from `<repo_root>/VERSION`.
+    """The version that runs: src/VERSION, else the repository root's VERSION.
 
-    There are two VERSION files: src/VERSION and the one at the repository root.
-    src/VERSION is read first. When neither can be read, this returns "0.0.0+unknown", which
-    is at least diagnosable.
+    This is the one reader: the startup log, `server.__version__` and the setting page
+    (`GET /api/loci/version`, which compares it with the latest GitHub release) all go
+    through it. When neither file can be read, this returns "0.0.0+unknown", which is at
+    least diagnosable.
 
-    WARNING: why src wins, and why this must not be flipped back to root-first.
-      The hot update path only overwrites src/ and frontend/ when it unpacks, so src/VERSION
-      is guaranteed to be refreshed — while many users' root VERSION is a leftover from
-      whenever they first installed (nothing reads it, so nothing updates it). Root-first
-      means that the moment a user updates, the stale root VERSION is what gets read, and
-      the displayed version goes *backwards*. That happened for real: someone updated from
-      one release and the UI showed a version two minor releases older.
-      Consistency is maintained by the updater force-writing the zip's root VERSION into
-      both locations; this function's job is only to read the freshest, most reliable one,
-      which is src/VERSION.
-      When cutting a release, bump both VERSION files (root and src/).
+    Why src/ is read first: src/VERSION travels with the code that runs. Code copied over
+    an older install replaces src/ and brings its VERSION along, while a root VERSION can
+    be left from the first install; read root-first, the panel would announce an older
+    version than the one running. When cutting a release, bump both files —
+    tests/test_version_is_consistent.py fails while they differ.
 
     Notes:
       * `with open(...) as f:` is a context manager: the file closes on leaving the block,
@@ -933,7 +928,7 @@ def get_version() -> str:
         exception. Safer than a bare `except:`, and broader than `except FileNotFoundError`.
     """
     candidates = [
-        # First: the copy next to src/. Hot updates always refresh it, so it is freshest.
+        # First: the copy next to src/, which travels with the code that runs.
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "VERSION"),
         # Fallback: the repository-root VERSION (in Docker the Dockerfile COPYs it to
         # /app/VERSION).

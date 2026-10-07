@@ -205,8 +205,9 @@ class SearchMixin:
             _FADED_SEARCH_DISCOUNT,
             _RESOLVED_RANK_PENALTY,
             _SUNK_SEARCH_DISCOUNT,
-            _VECTOR_RECALL_THRESHOLD,
         )
+        from . import thresholds as _T
+        meaning_line = _T.value(_T.RECALL_MEANING)
 
         # --- Layer 2: two-dimension scoring (semantic 2.5 + bm25 1.5); a literal hit only
         #     sets a flag ---
@@ -264,7 +265,7 @@ class SearchMixin:
                     # hold at once.
                     bucket["literal_hit"] = literal_hit
                     bucket["bm25_hit"] = bm25_score > 0
-                    bucket["vector_match"] = semantic_score >= _VECTOR_RECALL_THRESHOLD
+                    bucket["vector_match"] = semantic_score >= meaning_line
                     scored.append(bucket)
             except Exception as e:
                 logger.warning(

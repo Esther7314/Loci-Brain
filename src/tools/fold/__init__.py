@@ -44,6 +44,7 @@ from core import runtime as rt
 from core import _fold as F
 from core import _sources as _src
 from core import _holds as _H
+from core import thresholds as _T
 from core import visibility as _V
 from core._bigevent import BIGEVENT_TAG
 from .._common import check_content_size, read_scope, resolve_bucket_ids, with_write_key
@@ -249,9 +250,8 @@ async def _fold(text: str = "", room: str = "", v=-1, a=-1,
     return head + "\n" + "\n".join(x for x in tail if x) + notes
 
 
-# The line above which two gists are taken to say the same thing: the same 0.80 the
-# backfill uses for "possibly the same thing" and for a thought surfacing again.
-_MERGE_COS_THRESHOLD = 0.80
+# The line above which two gists are taken to say the same thing is `fold_merge` in
+# core/thresholds, read when the question is asked.
 # At most this many gists are named in one question; more is a list nobody reads.
 _MERGE_MAX_SHOWN = 2
 
@@ -291,9 +291,10 @@ async def _merge_question(new_id: str, text: str, room: str, folded: list[str]) 
             bodies[bid] = str(b.get("content") or "")
         if not bodies:
             return ""
+        line = _T.value(_T.FOLD_MERGE)
         sims = await ee.search_similar(text, top_k=len(bodies), among=list(bodies))
         close = sorted(((str(sid), float(s)) for sid, s in sims
-                        if str(sid) in bodies and float(s) >= _MERGE_COS_THRESHOLD),
+                        if str(sid) in bodies and float(s) >= line),
                        key=lambda x: -x[1])[:_MERGE_MAX_SHOWN]
         if not close:
             return ""
