@@ -167,9 +167,7 @@ _BIND_HOST = (os.environ.get("LOCI_BIND_HOST") or "0.0.0.0").strip() or "0.0.0.0
 # LOCI_HOOK_URL: after breath/dream is called, POST the event as JSON to this URL.
 # LOCI_HOOK_SKIP: set to true/1/yes to skip the push. See ENV_VARS.md.
 # _fire_webhook reads os.environ on every call rather than caching a module constant, so a
-# change made through the dashboard's /api/env-config (which writes os.environ) takes effect
-# immediately with no write-back to a module global — which is also what let that route move
-# cleanly into web/config_api.py.
+# change to the environment takes effect on the next call with no module global to update.
 
 
 # ============================================================
@@ -183,8 +181,7 @@ _BIND_HOST = (os.environ.get("LOCI_BIND_HOST") or "0.0.0.0").strip() or "0.0.0.0
 # --- Webhook / HTTP client timeout ---
 _WEBHOOK_TIMEOUT_SECONDS = 5.0
 
-# --- The dashboard auth, session, password, and log/error pagination constants have moved
-# --- to web/_shared.py and web/system.py ---
+# --- The panel's password and login rate-limit constants live in web/_shared.py ---
 
 
 async def _fire_webhook(event: str, payload: dict) -> None:
@@ -300,13 +297,10 @@ mcp_extra = FastMCP(
 
 
 # =============================================================
-# Dashboard auth has been split out: the password and rate-limit helpers live in
+# Panel auth: the password and rate-limit helpers live in
 # web/_shared.py, and the /auth/* routes in web/panel_auth.py. This block imports the web
-# package and injects the config into it.
-# (Historically it also imported the auth helper names back into this module, so that
-# @mcp.custom_route handlers still living in server.py could keep calling them. No such
-# handler remains here — every HTTP route has moved into web/ — so only the config injection
-# is still doing anything.)
+# package and injects the config into it. No HTTP route handler lives in this file; every
+# one is under web/.
 # =============================================================
 import web as _web
 import web._shared as _wsh
@@ -352,12 +346,12 @@ _web.register_all(mcp)
 
 
 # =============================================================
-# The root dashboard, static assets, favicon and /health have moved to web/dashboard.py
+# The panel page and its assets (/loci, /loci/vendor/*) are served by web/loci.py.
 # =============================================================
 
 
-# The heartbeat timestamp and _mark_op moved to web/_shared.py; imported back here so it can
-# be injected into core.runtime.
+# The activity timestamp and _mark_op live in web/_shared.py; _mark_op is imported here so
+# it can be injected into core.runtime.
 from web._shared import _mark_op  # noqa: F401  (injected into core.runtime below)
 
 
@@ -573,16 +567,6 @@ async def _run_with_notice(coro: Awaitable[str], op: str = "", args: dict | None
     notice = _pop_deletion_notice()
     body = (notice + result) if notice else result
     return body + extras if extras else body
-
-
-# =============================================================
-# /api/heartbeat, /api/logs and /api/errors/* have moved to web/system.py
-# =============================================================
-
-
-# =============================================================
-# /api/embedding/* has moved to web/embedding.py
-# =============================================================
 
 
 # =============================================================
@@ -1739,31 +1723,12 @@ except (AttributeError, RuntimeError, TypeError, ValueError) as _strict_all_exc:
 
 
 # =============================================================
-# Dashboard API endpoints (for lightweight Web UI)
-# =============================================================
-# =============================================================
-# /api/buckets, /api/bucket/*, /api/settings/*, /api/anchors and /api/self
-# have moved to web/buckets.py
-# =============================================================
-
-
-# =============================================================
-# /dashboard, /api/env-vars, /api/config, /api/test/*, /api/models and /api/env-config
-# have moved to web/config_api.py
-# =============================================================
-
-
-
-
-# =============================================================
-# /api/host-vault, /api/import/*, /api/bucket/{id}/edit, /api/export and /api/migrate/*
-# have moved to web/import_api.py
-# =============================================================
-
-
-# =============================================================
-# /api/version, /api/update-info, /api/do-update, /api/author, /api/onboarding/status and
-# /api/status have moved to web/meta.py
+# The panel's HTTP routes are all under web/, registered by web.register_all (above):
+#   web/config_api.py  /api/config, /api/test/dehydration, /api/test/embedding, /api/models
+#   web/import_api.py  /api/import/*
+#   web/panel_auth.py  /auth/*
+#   web/loci.py        the page (/loci, /loci/vendor/*), /api/loci/*, /api/v2/*, /api/logs,
+#                      /api/dream/current, /api/muse/pending — its header lists every one
 # =============================================================
 
 
