@@ -9,16 +9,18 @@
                      留了 / 没留 at its right. The others are folded to 「state · 展开」.
                      A dream whose sources were withdrawn shows the API's words for that
                      and no text. Read only.
-   #/dream/settings  (board dream-settings) 提醒 · 提示词 · 规矩. None of the three has a
-                     road from the panel yet (no prompt route, and /api/config takes no
-                     dream section), so each block says 还没接上 under its title.
+   #/dream/settings  (board dream-settings) 提醒 · 提示词 · 规矩. 规矩 is GET/POST
+                     /api/config `dream` (what to weave on, how a dream fades; its
+                     `defaults` for 恢复默认; the server's words on a refusal). 提醒 has no
+                     setting behind it (nothing reads a dream-delivery switch) and 提示词
+                     no prompt route yet: those two say 还没接上 under their titles.
 
    The archive is three nights at most and is not paged on the page: one read with the
    largest page the API gives.
    ========================================================== */
 
 import * as api from "../api.js";
-import { h, fill, subbar, group, sub, row, tip, note, clickable } from "../ui.js";
+import { h, fill, subbar, group, sub, row, tip, note, clickable, btn, num, customBox, errorLine } from "../ui.js";
 import { href } from "../router.js";
 
 const TIP_PAGE = "夜里把压在心头、还没想明白的事织成一个梦，一夜最多一个。已经想明白的不进梦。";
@@ -86,12 +88,72 @@ function notWired(label, tipText, title) {
       note(NOT_WIRED)));
 }
 
-function renderSettings(view) {
+// 规矩, as the board has it: [key, words, small words, unit] per box; a row with two boxes
+// is minutes and turns, whichever comes first.
+const WEAVE = [
+  ["pressure_line", "多重的事才织", "压在心头最重的那一件过了这条线，才织一个梦。调高 = 只在特别重的日子做梦", null],
+  ["dull_line", "太轻的不算", "分量低于这个的，一点都不算进去", null],
+  ["per_day", "一夜最多", null, "个"],
+  ["dream_cooldown_days", "梦见过的，隔多久少梦见", null, "天"],
+];
+const FADE = [
+  ["fragment_minutes", "fragment_turns", "先散成碎片", "你回来说话以后，过这么久或这么多轮（谁先到算谁）"],
+  ["oneline_minutes", "oneline_turns", "再只剩一句", "然后整个删掉，只留一条痕迹"],
+];
+const FADE_NOTE = "他提起这个梦一次，散的时间往后推一点，每次推得比上次少，所以留不到永远。想留住只有一条路：他当场把它写成记忆。";
+
+function unit(text) {
+  return h("span", { class: "why", text });
+}
+
+/** 规矩: the numbers core/_dream runs on, saved through /api/config `dream`. */
+function rulesGroup(dream) {
+  const holder = h("div");
+  const draw = (rules) => {
+    const boxes = {};
+    const box = (key, label) => (boxes[key] = num({ value: String(rules[key] ?? ""), "aria-label": label }));
+    const err = h("div");
+    const save = async (values, buttons) => {
+      for (const b of buttons) b.disabled = true;
+      fill(err);
+      try {
+        await api.post("/api/config", { persist: true, dream: values });
+        draw((await api.get("/api/config")).dream);
+      } catch (e) {
+        for (const b of buttons) b.disabled = false;
+        fill(err, errorLine(e));
+      }
+    };
+    const reset = btn("恢复默认");
+    const keep = btn("保存", { dark: true });
+    reset.addEventListener("click", () => save(rules.defaults, [reset, keep]));
+    keep.addEventListener("click", () => save(Object.fromEntries(
+      Object.entries(boxes).map(([k, b]) => [k, b.value.trim()]).filter(([, v]) => v !== "")), [reset, keep]));
+    fill(holder,
+      customBox([
+        h("h3", { class: "st", style: { fontSize: "16px", margin: "12px 0 2px" }, text: "什么时候织" }),
+        WEAVE.map(([key, text, why, u]) => row({ text, why, layout: "set",
+          right: h("span", { class: "acts" }, box(key, text), u ? unit(u) : null) })),
+        h("h3", { class: "st", style: { fontSize: "16px", margin: "18px 0 2px" }, text: "怎么散" }),
+        FADE.map(([minutes, turns, text, why]) => row({ text, why, layout: "set wide stack",
+          right: h("span", { class: "acts", style: { flexWrap: "nowrap" } },
+            box(minutes, `${text}分钟`), unit("分钟"), box(turns, `${text}轮数`), unit("轮")) })),
+        h("p", { class: "why", style: { margin: "10px 0 0", lineHeight: "1.6" }, text: FADE_NOTE }),
+      ], { open: true }),
+      h("div", { class: "acts setacts" }, reset, keep),
+      err);
+  };
+  draw(dream);
+  return group("规矩", { tip: TIP_RULES }, holder);
+}
+
+async function renderSettings(view) {
   view.append(subbar({ tabs: backTo("dream") }));
-  view.append(h("main", { class: "sections" },
+  const body = h("main", { class: "sections" },
     notWired("提醒", TIP_REMIND),
-    notWired("提示词", null, "编织一个梦境的提示词"),
-    notWired("规矩", TIP_RULES)));
+    notWired("提示词", null, "编织一个梦境的提示词"));
+  view.append(body);
+  body.append(rulesGroup((await api.get("/api/config")).dream));
 }
 
 export default {

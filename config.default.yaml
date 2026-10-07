@@ -110,6 +110,8 @@ dehydration:
   max_tokens: 1024
   temperature: 0.1
   timeout_seconds: 120             # LLM request timeout seconds / LLM 请求超时秒数
+  # runs_on: "local"  # The local Ollama instead of the provider above (no key; the settings above stay for switching back) / 用本地 Ollama 跑（不要 key；上面几行留着，切回云端还用）
+  # thinking: true    # Let a model that thinks first do so (Gemini, Anthropic); off by default / 让会先想再答的模型想（Gemini、Anthropic）；默认关
   # The side model that slices a day's raw lines handed over by the host (POST /api/v2/slices,
   # core/_slicer.py): same endpoint and key as above, another model name if you want one.
   # Empty = the model above.
@@ -159,7 +161,7 @@ embedding:
   model: "bge-m3"                 # 本地 ollama 模型名
   base_url: "http://ollama:11434/v1"
   timeout_seconds: 120             # Embedding request timeout seconds / 向量化请求超时秒数
-  # api_key: ""                   # Use LOCI_EMBED_API_KEY / 使用 LOCI_EMBED_API_KEY
+  # api_key: ""                   # Saved here by the panel; env var LOCI_EMBED_API_KEY overrides it / 面板保存在这里；设了环境变量 LOCI_EMBED_API_KEY 时以它为准
   #
   # 备选：云端向量（Gemini 等 OpenAI 兼容端点）。
   # 什么时候用：这台机器跑不动本地模型（没显存 / 内存太小），或者要跟别处已有的

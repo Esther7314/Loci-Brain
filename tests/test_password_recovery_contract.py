@@ -8,11 +8,10 @@ WHAT THIS FREEZES AND WHY IT IS FROZEN NOW
     a wrong answer accepted, a stale rotation that clobbers a newer password, a
     lockout that never engages — none of these raise.
 
-    _save_security_qa / _verify_security_answer currently have no caller (the
-    recovery flow's front door was cut in the strip-down), but the decision on
-    2026-08-25 is that forgotten-password recovery is coming back. This file
-    freezes their behavior contract *before* that rewiring, so the repair has a
-    definition of "working" to build against instead of re-deriving one.
+    _save_security_qa is called by POST /api/loci/auth/security-question (the
+    setting page's 设置安全问题) and the answer is checked by /auth/recover (the
+    forgot-password page); tests/test_panel_security_question.py drives those
+    routes. This file freezes the helpers' own contract underneath them.
 
     All state lives under tmp_path via a synthetic sh.config; secrets are fakes;
     no environment leaks past monkeypatch. Rate-limit tests stay inside the

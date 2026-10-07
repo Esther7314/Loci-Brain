@@ -1722,7 +1722,8 @@ except (AttributeError, RuntimeError, TypeError, ValueError) as _strict_all_exc:
 
 # =============================================================
 # The panel's HTTP routes are all under web/, registered by web.register_all (above):
-#   web/config_api.py  /api/config, /api/test/dehydration, /api/test/embedding, /api/models
+#   web/config_api.py  /api/config, /api/test/dehydration, /api/test/embedding, /api/models,
+#                      /api/loci/ollama
 #   web/import_api.py  /api/import/*
 #   web/panel_auth.py  /auth/*
 #   web/loci.py        the page (/loci, /loci/panel/*, /loci/vendor/*), /api/loci/*, /api/v2/*, /api/logs,

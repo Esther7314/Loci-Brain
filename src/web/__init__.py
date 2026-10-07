@@ -8,7 +8,7 @@ keeping the local Ollama child process up) lives in ``bridge/`` instead.
 
 **The route modules**:
 - ``config_api``: engine settings (``/api/config`` GET+POST, ``/api/test/dehydration``,
-  ``/api/test/embedding``, ``/api/models``).
+  ``/api/test/embedding``, ``/api/models``, ``/api/loci/ollama``).
 - ``import_api``: the import routes (preflight / upload / status / batches / pause /
   withdraw): an export stored as a source, drafted, withdrawn whole.
 - ``loci``: the current panel itself — the four rooms, the breath/recall preview, the

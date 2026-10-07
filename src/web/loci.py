@@ -64,7 +64,7 @@ of what the panel can reach.
                                          (`?cursor=…&limit=`) and never sees those numbers
                                          (hook key; core/_ledger.py)
 
-🔴 THE WRITE SURFACE — fifteen POST routes here and five in the page blocks below
+🔴 THE WRITE SURFACE — sixteen POST routes here and five in the page blocks below
 (entry/fix, names/action, trace, muse/nudge, embedding/backfill), and every one of them writes
 something.
 
@@ -80,6 +80,9 @@ something.
     POST /api/loci/subjects/action    -> edits the alias table in the data volume (the
                                          same handler as names/action)
     POST /api/loci/auth/set-password  -> sets the password guarding remote MCP access
+    POST /api/loci/auth/security-question -> sets or changes the security question the
+                                         forgot-password page asks (a logged-in session
+                                         only; web/loci_password.py)
     POST /api/loci/dream/wake         -> the demotion signal: drop a live "whole" dream
                                          layer down to the fragment layer (idempotent)
     POST /api/loci/import-package     -> bring an export package back: a multipart `file`
@@ -226,7 +229,7 @@ core/health.py, core/profile.py):
                           builders behind them
     web/loci_similar.py   similar, similar/action
     web/loci_verdicts.py  want/resolve, want/asked, event/correct, subjects/action
-    web/loci_password.py  auth/state, auth/set-password
+    web/loci_password.py  auth/state, auth/set-password, auth/security-question
     web/loci_health.py    health, setup, logs, pulse, and build_health / build_setup
     web/loci_dream.py     muse/pending, poke, dream/wake, dream/current, and
                           build_muse_pending / build_poke
@@ -297,6 +300,8 @@ def register(mcp) -> None:
     mcp.custom_route("/api/loci/auth/state", methods=["GET"])(loci_password.api_loci_auth_state)
     mcp.custom_route("/api/loci/auth/set-password", methods=["POST"])(
         loci_password.api_loci_set_password)
+    mcp.custom_route("/api/loci/auth/security-question", methods=["POST"])(
+        loci_password.api_loci_security_question)
     mcp.custom_route("/api/loci/profile", methods=["GET"])(loci_reads.api_loci_profile)
     mcp.custom_route("/api/loci/recollect", methods=["GET"])(loci_reads.api_loci_recollect)
     mcp.custom_route("/api/v2/slices", methods=["POST"])(host_api.api_v2_slices_take)

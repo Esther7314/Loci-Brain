@@ -27,7 +27,9 @@ What it deliberately does not do:
   decide what to do
 
 Exports: the Dehydrator class (dehydrate / merge / digest), the default prompt strings,
-         BackfillAnswer · backfill_request · parse_backfill · backfill_kinds
+         BackfillAnswer · backfill_request · parse_backfill · backfill_kinds,
+         RUNS_ON · runs_local · endpoint · thinking_on (where the side model runs and
+         what it is called with: the local Ollama or the configured provider)
 ========================================
 """
 
@@ -614,6 +616,57 @@ def parse_backfill(raw: str, content: str, kinds=None) -> Optional["BackfillAnsw
     return ans if ans.says_anything() else None
 
 
+# Where the side model runs (`dehydration.runs_on`): a provider in the cloud (the default),
+# or the local Ollama.
+RUNS_ON = ("cloud", "local")
+
+# What a local Ollama is sent as the key: it checks none, the OpenAI client insists on a
+# non-empty one, and a cloud key kept for switching back must never reach a local or
+# user-supplied address (the same rule as the embedding's local mode).
+_LOCAL_KEY = "ollama"
+
+# Anthropic's extended thinking: the smallest budget it takes, and the answer room kept
+# on top of the budget (the thinking counts inside max_tokens there).
+_ANTHROPIC_MIN_THINKING = 1024
+_ANTHROPIC_ANSWER_ROOM = 1024
+
+
+def runs_local(dehy_cfg: dict) -> bool:
+    return str((dehy_cfg or {}).get("runs_on") or "").strip().lower() == "local"
+
+
+def endpoint(dehy_cfg: dict, config: dict | None = None) -> tuple[str, str, str]:
+    """(api_format, base_url, api_key) the side model is called with.
+
+    Local: Ollama's OpenAI-compatible endpoint (core/ollama_local) and a placeholder key;
+    the saved cloud format, address and key stay in config for switching back.
+    Cloud: the configured three. A Google AI Studio key of the newer form (`AQ.*`) is not
+    accepted by Gemini's OpenAI-compatible endpoint, so on Google's host it goes to the
+    native generateContent API without anyone setting api_format by hand."""
+    dehy_cfg = dehy_cfg or {}
+    if runs_local(dehy_cfg):
+        from . import ollama_local
+        return "openai_compat", ollama_local.openai_base(config), _LOCAL_KEY
+    api_format = dehy_cfg.get("api_format", "openai_compat")
+    base_url = dehy_cfg.get("base_url", _DEFAULT_BASE_URL)
+    api_key = str(dehy_cfg.get("api_key", "") or "")
+    if (
+        api_format == "openai_compat"
+        and api_key.startswith("AQ.")
+        and is_gemini_native_host(base_url)
+    ):
+        api_format = "gemini"
+        logger.info("AQ.* key + generativelanguage.googleapis.com detected — auto-switching to native Gemini API")
+    return api_format, base_url, api_key
+
+
+def thinking_on(dehy_cfg: dict) -> bool:
+    """`dehydration.thinking`: let a model that thinks before answering do so. Off by
+    default: tagging and merging are mechanical and need no thinking."""
+    raw = (dehy_cfg or {}).get("thinking", False)
+    return str(raw).strip().lower() in ("1", "true", "yes", "on")
+
+
 class Dehydrator:
     """
     Data dehydrator, merger and diary splitter.
@@ -628,26 +681,21 @@ class Dehydrator:
     def __init__(self, config: dict):
         # --- Read dehydration API config ---
         dehy_cfg = config.get("dehydration", {})
-        self.api_key = dehy_cfg.get("api_key", "")
         self.model = dehy_cfg.get("model", _DEFAULT_MODEL)
-        self.base_url = dehy_cfg.get("base_url", _DEFAULT_BASE_URL)
         self.max_tokens = dehy_cfg.get("max_tokens", _DEFAULT_MAX_TOKENS)
         self.temperature = dehy_cfg.get("temperature", _DEFAULT_TEMPERATURE)
         self.timeout_seconds = positive_float(dehy_cfg.get("timeout_seconds"), _API_TIMEOUT_SECONDS)
-        # api_format: "openai_compat" (default) | "gemini" | "anthropic"
-        self.api_format = dehy_cfg.get("api_format", "openai_compat")
-        # Auto-detect new Google AI Studio key format (AQ.*): these keys are not accepted
-        # by the OpenAI-compat endpoint (/v1beta/openai/) and must use the native
-        # generateContent API. Switch automatically so users don't need to set api_format manually.
-        if (
-            self.api_format == "openai_compat"
-            and self.api_key.startswith("AQ.")
-            and is_gemini_native_host(self.base_url)
-        ):
-            self.api_format = "gemini"
-            logger.info("AQ.* key + generativelanguage.googleapis.com detected — auto-switching to native Gemini API")
-        # thinking_budget: only applies to Gemini's "thinking" models. Default 0 = thinking
-        # off.
+        # api_format: "openai_compat" (default) | "gemini" | "anthropic"; where it runs and
+        # what it is called with come from one function, which the panel's hot update uses
+        # too (web/config_api).
+        self.runs_on = "local" if runs_local(dehy_cfg) else "cloud"
+        self.api_format, self.base_url, self.api_key = endpoint(dehy_cfg, config)
+        # thinking: on, a model that thinks first may (Gemini: no budget cap is sent;
+        # Anthropic: extended thinking). The OpenAI-compatible format has no knob that
+        # every provider reads, so nothing is sent there either way.
+        self.thinking = thinking_on(dehy_cfg)
+        # thinking_budget: only applies to Gemini's "thinking" models, while thinking is
+        # off. Default 0 = thinking off.
         # The point: models of that family spend output tokens on "thinking" first, and
         # when max_tokens is small the thinking eats the entire budget, so what comes back
         # is empty text. That is the root cause of dehydration/extraction intermittently
@@ -887,8 +935,9 @@ class Dehydrator:
                 "temperature": temperature if temperature is not None else self.temperature,
             },
         }
-        # Disable or cap the thinking budget (see the thinking_budget note in __init__).
-        if self.thinking_budget is not None:
+        # Thinking off: cap the budget (see the thinking_budget note in __init__). On: no
+        # cap is sent, and the model thinks as it does by default.
+        if not getattr(self, "thinking", False) and self.thinking_budget is not None:
             payload["generationConfig"]["thinkingConfig"] = {"thinkingBudget": self.thinking_budget}
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
             r = await client.post(
@@ -931,15 +980,22 @@ class Dehydrator:
             "messages": [{"role": "user", "content": user}],
             "temperature": temperature if temperature is not None else self.temperature,
         }
+        if getattr(self, "thinking", False):
+            # Extended thinking: the thinking counts inside max_tokens, the budget has a
+            # floor, and a temperature other than the default is refused with it.
+            budget = max(_ANTHROPIC_MIN_THINKING, int(payload["max_tokens"]) // 2)
+            payload["max_tokens"] = max(int(payload["max_tokens"]), budget + _ANTHROPIC_ANSWER_ROOM)
+            payload["thinking"] = {"type": "enabled", "budget_tokens": budget}
+            payload.pop("temperature")
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
             r = await client.post(url, headers=headers, json=payload)
             r.raise_for_status()
         data = r.json()
-        content = data.get("content", [])
-        if not content:
-            return ""
-        first = content[0]
-        return first.get("text", "") if isinstance(first, dict) else ""
+        # The answer is the text block; with thinking on, a thinking block comes first.
+        for block in data.get("content", []) or []:
+            if isinstance(block, dict) and block.get("type", "text") == "text":
+                return block.get("text", "") or ""
+        return ""
 
     @staticmethod
     def _strip_md_fence(raw: str) -> str:

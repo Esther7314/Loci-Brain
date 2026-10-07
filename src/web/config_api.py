@@ -1,6 +1,6 @@
 """
 ========================================
-web/config_api.py — engine config / API-key tests / model listing (four routes)
+web/config_api.py — engine config / API-key tests / model listing / local Ollama (five routes)
 ========================================
 
 **Exactly one doorway governs the settings.** Two doorways onto the same fields are a
@@ -8,16 +8,21 @@ trap: hitting save on a stale, unrefreshed page writes the old values straight b
 the new ones.
 
 - /api/config (GET/POST): read runtime config and hot-update it (including hot-swapping
-  the embedding backend, the similarity lines in `thresholds:`, core/thresholds.py, and
-  muse's reminder in `muse:`, core/_muse.muse_config).
+  the embedding backend, the similarity lines in `thresholds:`, core/thresholds.py,
+  muse's reminder in `muse:`, core/_muse.muse_config, and the dream's rules in `dream:`,
+  core/_dream.dream_config). The two keys (`dehydration.api_key`, `embedding.api_key`)
+  are written to config.yaml when persisted and only ever come back masked; an
+  environment variable still overrides either at startup (utils.load_config).
   `config.yaml` is the single source of truth.
 - /api/test/dehydration, /api/test/embedding: connectivity self-tests for compression and
   vectorization.
 - /api/models: list the models available from the target provider.
+- /api/loci/ollama (GET): whether a local Ollama answers and which models it holds
+  (core/ollama_local.detect: a short timeout, nothing pulled).
 
 There is no environment-variable editor, no token rotation and no transport switch; the
 notes beside the routes say why.
-These four are not authenticated at this layer, like the rest of the panel routes (the
+These five are not authenticated at this layer, like the rest of the panel routes (the
 gate is web/panel_auth.py). The four POSTs read their body through `_guards._write_body`
 like every panel write: same origin and `application/json`, else 403 / 400, before
 anything is changed or any provider is called.
@@ -60,7 +65,8 @@ _MAX_ENV_VALUE_CHARS = 8192
 # The `surfacing` numbers POST /api/config accepts: (key, lowest, highest).
 # The three `awake_*` are breath's awake reasons (core/profile.breath_settings): written in
 # the last N days · a date N days ahead · a strong-reminder card delivered in the last N
-# days; 0 turns that reason off.
+# days; 0 turns that reason off. `hold_review_days` is how long a hold set aside with no
+# date waits before breath asks about it (core/_holds.review_days; 0 = never asks).
 _SURFACING_INTS = (
     ("breath_max_results", 1, 50),
     ("breath_max_tokens", 500, 20000),
@@ -68,6 +74,7 @@ _SURFACING_INTS = (
     ("awake_recent_days", 0, 365),
     ("awake_date_days", 0, 365),
     ("awake_cue_days", 0, 365),
+    ("hold_review_days", 0, 365),
 )
 
 # muse's reminder (muse-settings 「提醒」): the numbers POST /api/config accepts in `muse`,
@@ -107,6 +114,72 @@ def _muse_changes(payload) -> dict:
     return out
 
 
+# The dream's rules (dream-settings 「规矩」): the `dream:` numbers POST /api/config
+# accepts, (key, lowest, highest). Each is read as the type of its default in
+# core/_dream.DREAM_DEFAULTS (a line is a float, a count of minutes or turns an int), the
+# way core/_dream.dream_config reads config.yaml. per_day 0 = no dreams.
+_DREAM_NUMBERS = (
+    ("pressure_line", 0.0, 1.0),
+    ("dull_line", 0.0, 1.0),
+    ("per_day", 0, 5),
+    ("dream_cooldown_days", 1, 365),
+    ("fragment_minutes", 1, 1440),
+    ("fragment_turns", 1, 500),
+    ("oneline_minutes", 1, 2880),
+    ("oneline_turns", 1, 1000),
+    ("recall_delay_minutes", 0, 1440),
+)
+# A dream fades to its fragment first, then to its one line (core/_dream.layer_of tests
+# the one-line limits first), so a one-line limit must not come before its fragment one.
+_DREAM_ORDER = (("fragment_minutes", "oneline_minutes"), ("fragment_turns", "oneline_turns"))
+
+
+def _dream_view(config: Mapping) -> dict:
+    """The rules as they run now, and their defaults for 恢复默认."""
+    from core import _dream as D
+    keys = [k for k, _lo, _hi in _DREAM_NUMBERS]
+    live = D.dream_config(dict(config))
+    out = {k: live[k] for k in keys}
+    out["defaults"] = {k: D.DREAM_DEFAULTS[k] for k in keys}
+    return out
+
+
+def _dream_changes(payload, config: Mapping) -> tuple[dict, str]:
+    """(the `dream` values a request sets, why the request is refused or ""). Numbers are
+    clamped into range and one that is not a number is skipped, as for `muse`; the fading
+    order is checked against the rules as they would run with the change."""
+    from core import _dream as D
+    out: dict = {}
+    if not isinstance(payload, dict):
+        return out, ""
+    for key, lo, hi in _DREAM_NUMBERS:
+        if key not in payload or isinstance(payload[key], bool):
+            continue
+        kind = type(D.DREAM_DEFAULTS[key])
+        try:
+            val = kind(float(payload[key])) if kind is int else kind(payload[key])
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if val != val:          # NaN
+            continue
+        out[key] = max(kind(lo), min(kind(hi), val))
+    after = {**D.dream_config(dict(config)), **out}
+    for first, then in _DREAM_ORDER:
+        if after[then] < after[first]:
+            return {}, ("梦先散成碎片、再只剩一句：「再只剩一句」的分钟和轮数"
+                        "不能比「先散成碎片」的小")
+    return out, ""
+
+
+def _mask_key(key: str) -> str:
+    """A key as the panel may see it: its first and last four characters, *** for a short
+    one, "" when there is none. Never the key."""
+    key = str(key or "")
+    if len(key) > 8:
+        return f"{key[:4]}...{key[-4:]}"
+    return "***" if key else ""
+
+
 def _live_model() -> str:
     return str(getattr(sh.embedding_engine, "model", "") or "")
 
@@ -135,12 +208,15 @@ def _rebuild_embedding_runtime():
     return engine
 
 
-def publish_embedding(target: dict, persist: bool) -> None:
+def publish_embedding(target: dict, persist: bool, new_key: str = "") -> None:
     """Make a recomputed model the running one (core/embedding_switch.py calls this once
     every vector is redone and the new vectors are live): the embedding settings in
-    memory, one rebuilt engine published to every holder, config.yaml when asked (never
-    the key), and the vector outbox asked to queue what was written or edited while the
-    recompute ran."""
+    memory, one rebuilt engine published to every holder, config.yaml when asked, and the
+    vector outbox asked to queue what was written or edited while the recompute ran.
+
+    The key goes into config.yaml only as `new_key`, the one the request typed: a target
+    built over the running settings may carry a key that came from the environment, and
+    that one never goes into the file."""
     import asyncio
 
     _remember_tuning_model()
@@ -157,6 +233,8 @@ def publish_embedding(target: dict, persist: bool) -> None:
                         "timeout_seconds", "dim"):
                 if key in target:
                     sc_emb[key] = target[key]
+            if new_key:
+                sc_emb["api_key"] = new_key
         atomic_update_config_yaml(_mutate)
     outbox = getattr(sh, "embedding_outbox", None)
     reconcile = getattr(outbox, "reconcile", None)
@@ -252,7 +330,7 @@ def register(mcp) -> None:
             else runtime_public_url,
         }
 
-    # Four routes. The panel keeps one doorway and `config.yaml` is the single source of
+    # Five routes. The panel keeps one doorway and `config.yaml` is the single source of
     # truth; `/api/*` is not authenticated at this layer, and every POST here goes through
     # `_write_body` (the same-origin check).
 
@@ -270,20 +348,24 @@ def register(mcp) -> None:
             )
         dehy = sh.config.get("dehydration", {})
         emb = sh.config.get("embedding", {})
-        api_key = dehy.get("api_key", "")
-        masked_key = f"{api_key[:4]}...{api_key[-4:]}" if len(api_key) > 8 else ("***" if api_key else "")
         from core.profile import breath_settings
         from core import thresholds as _T
+        from core import _holds
+        from core import dehydrator as _dehy
         awake = breath_settings(sh.config)   # the values breath runs on, defaults filled
         return JSONResponse({
             "dehydration": {
                 "model": dehy.get("model", ""),
                 "base_url": dehy.get("base_url", ""),
-                "api_key_masked": masked_key,
+                "api_key_masked": _mask_key(dehy.get("api_key", "")),
                 "max_tokens": dehy.get("max_tokens", 1024),
                 "temperature": dehy.get("temperature", 0.1),
                 "api_format": dehy.get("api_format", "openai_compat"),
                 "timeout_seconds": dehy.get("timeout_seconds", 60),
+                # 在哪儿跑: "cloud" or "local" (the local Ollama, core/dehydrator.endpoint);
+                # the cloud fields above stay saved for switching back.
+                "runs_on": "local" if _dehy.runs_local(dehy) else "cloud",
+                "thinking": _dehy.thinking_on(dehy),
             },
             "embedding": {
                 "enabled": _parse_bool(emb.get("enabled", False), default=False),
@@ -291,6 +373,7 @@ def register(mcp) -> None:
                 # The panel fills its field from this and sends it back on save, so an
                 # omitted value would overwrite the configured one with an empty string.
                 "base_url": emb.get("base_url", ""),
+                "api_key_masked": _mask_key(emb.get("api_key", "")),
                 "api_format": emb.get("api_format", "openai_compat"),
                 "timeout_seconds": emb.get("timeout_seconds", 30),
                 "backend": "api",
@@ -305,9 +388,11 @@ def register(mcp) -> None:
                 "awake_recent_days": awake.recent_days,
                 "awake_date_days": awake.date_days,
                 "awake_cue_days": awake.cue_days,
+                "hold_review_days": _holds.review_days(sh.config),
             },
             "merge_threshold": sh.config.get("merge_threshold", 75),
             "muse": _muse_view(sh.config),
+            "dream": _dream_view(sh.config),
             # The similarity lines as they run now, each with its default and range, and
             # whether the embedding model changed since they were last looked at (a note
             # for the person; nothing is reset).
@@ -409,6 +494,28 @@ def register(mcp) -> None:
             if "muse" in body and not isinstance(body.get("muse"), dict):
                 return JSONResponse({"error": "muse must be an object"}, status_code=400)
             muse_changes = _muse_changes(body.get("muse"))
+            if "dream" in body and not isinstance(body.get("dream"), dict):
+                return JSONResponse({"error": "dream must be an object"}, status_code=400)
+            dream_changes, dream_problem = _dream_changes(body.get("dream"), sh.config)
+            if dream_problem:
+                return JSONResponse({"error": dream_problem}, status_code=400)
+            # The side model's 在哪儿跑 and Thinking, and the two keys: checked before
+            # anything is applied.
+            dehy_payload = body.get("dehydration")
+            if isinstance(dehy_payload, dict):
+                from core import dehydrator as _dehy
+                if "runs_on" in dehy_payload and (
+                        str(dehy_payload["runs_on"]).strip().lower() not in _dehy.RUNS_ON):
+                    return JSONResponse(
+                        {"error": "dehydration.runs_on must be 'cloud' or 'local'"},
+                        status_code=400)
+            for section in ("dehydration", "embedding"):
+                payload = body.get(section)
+                if isinstance(payload, dict) and "api_key" in payload and (
+                        not isinstance(payload["api_key"], str)
+                        or len(payload["api_key"]) > _MAX_PROVIDER_KEY_CHARS):
+                    return JSONResponse(
+                        {"error": f"{section}.api_key must be a string"}, status_code=400)
             # The similarity lines: every value checked before anything is applied; one
             # bad value refuses the whole request and says which and why.
             threshold_changes: dict = {}
@@ -509,7 +616,9 @@ def register(mcp) -> None:
                         {"error": "换向量模型要先确认：旧向量全部作废、要重算",
                          "needs_confirmation": True, "reembed": preview},
                         status_code=409)
-                reembed_target = (target_emb, db_path)
+                # A key typed with the new model belongs to the new model: it goes live and
+                # into config.yaml with it, when the recompute publishes it.
+                reembed_target = (target_emb, db_path, str(embedding_payload.get("api_key") or ""))
                 body = {k: v for k, v in body.items() if k != "embedding"}
 
         startup_setting_requested = (
@@ -539,15 +648,32 @@ def register(mcp) -> None:
             if "api_key" in d and d["api_key"]:
                 dehy["api_key"] = d["api_key"]
                 updated.append("dehydration.api_key")
-            # Hot-reload dehydrator — sync ALL attributes so dashboard changes take effect immediately
+            if "runs_on" in d:
+                dehy["runs_on"] = str(d["runs_on"]).strip().lower()
+                updated.append("dehydration.runs_on")
+            if "thinking" in d:
+                dehy["thinking"] = _parse_bool(d["thinking"])
+                updated.append("dehydration.thinking")
+            # Hot-reload dehydrator — sync ALL attributes so dashboard changes take effect
+            # immediately. Where it runs and what it is called with come from the function
+            # the dehydrator's own constructor uses (core/dehydrator.endpoint).
+            from core import dehydrator as _dehy
             sh.dehydrator.model = dehy.get("model", sh.dehydrator.model)
-            sh.dehydrator.base_url = dehy.get("base_url", sh.dehydrator.base_url)
             sh.dehydrator.max_tokens = int(dehy.get("max_tokens") or sh.dehydrator.max_tokens)
             sh.dehydrator.temperature = float(dehy.get("temperature") or sh.dehydrator.temperature)
             sh.dehydrator.timeout_seconds = _positive_float(dehy.get("timeout_seconds"), sh.dehydrator.timeout_seconds)
-            sh.dehydrator.api_format = dehy.get("api_format", getattr(sh.dehydrator, "api_format", "openai_compat"))
-            if "api_key" in d and d["api_key"]:
-                sh.dehydrator.api_key = dehy["api_key"]
+            # What config does not say falls back to what the dehydrator runs with now —
+            # unless it runs locally, whose address and placeholder key are not cloud ones.
+            running = {} if getattr(sh.dehydrator, "runs_on", "cloud") == "local" else {
+                "api_format": getattr(sh.dehydrator, "api_format", "openai_compat"),
+                "base_url": sh.dehydrator.base_url, "api_key": sh.dehydrator.api_key}
+            settings = {**running, **dehy}
+            settings["api_key"] = dehy.get("api_key") or running.get("api_key", "")
+            live_fmt, live_base, live_key = _dehy.endpoint(settings, sh.config)
+            sh.dehydrator.api_format, sh.dehydrator.base_url, sh.dehydrator.api_key = (
+                live_fmt, live_base, live_key)
+            sh.dehydrator.runs_on = "local" if _dehy.runs_local(dehy) else "cloud"
+            sh.dehydrator.thinking = _dehy.thinking_on(dehy)
             sh.dehydrator.api_available = bool(sh.dehydrator.api_key)
             # Rebuild OpenAI-compat client whenever key or url changes
             if sh.dehydrator.api_available and sh.dehydrator.api_format == "openai_compat":
@@ -588,6 +714,11 @@ def register(mcp) -> None:
             if embedding_backend is not None:
                 emb["backend"] = embedding_backend
                 updated.append("embedding.backend")
+                rebuild_embedding = True
+            # An empty key keeps the saved one, as for the side model.
+            if e.get("api_key"):
+                emb["api_key"] = e["api_key"]
+                updated.append("embedding.api_key")
                 rebuild_embedding = True
 
             # One request may change several fields. Rebuild once, then publish
@@ -677,6 +808,17 @@ def register(mcp) -> None:
                 section[key] = val
                 updated.append(f"muse.{key}")
 
+        # --- The dream's rules: applied to the running config, which core/_dream reads on
+        # every pass (core/_dream.dream_config) ---
+        if dream_changes:
+            section = sh.config.get("dream")
+            if not isinstance(section, dict):
+                section = {}
+                sh.config["dream"] = section
+            for key, val in dream_changes.items():
+                section[key] = val
+                updated.append(f"dream.{key}")
+
         # --- The similarity lines (core/thresholds): applied to the running config, so
         # the next search, write or fold reads them; None takes a line back to its
         # default. Saving a line or dismissing the note settles the retune note on the
@@ -717,6 +859,10 @@ def register(mcp) -> None:
                     new_key = body["dehydration"].get("api_key")
                     if isinstance(new_key, str) and new_key:
                         sc_dehy["api_key"] = new_key
+                    if "runs_on" in body["dehydration"]:
+                        sc_dehy["runs_on"] = str(body["dehydration"]["runs_on"]).strip().lower()
+                    if "thinking" in body["dehydration"]:
+                        sc_dehy["thinking"] = _parse_bool(body["dehydration"]["thinking"])
 
                 if "embedding" in body:
                     sc_emb = save_config.setdefault("embedding", {})
@@ -730,6 +876,11 @@ def register(mcp) -> None:
                         sc_emb["enabled"] = embedding_enabled
                     if embedding_backend is not None:
                         sc_emb["backend"] = embedding_backend
+                    # Kept in config.yaml like the side model's key (out of backups and
+                    # export packages); an empty key keeps the saved one.
+                    new_embed_key = body["embedding"].get("api_key")
+                    if isinstance(new_embed_key, str) and new_embed_key:
+                        sc_emb["api_key"] = new_embed_key
 
                 if "panel_auth" in body:
                     save_config["panel_auth"] = _parse_bool(body["panel_auth"])
@@ -789,6 +940,13 @@ def register(mcp) -> None:
                         save_config["muse"] = sc_muse
                     sc_muse.update(muse_changes)
 
+                if dream_changes:
+                    sc_dream = save_config.get("dream")
+                    if not isinstance(sc_dream, dict):
+                        sc_dream = {}
+                        save_config["dream"] = sc_dream
+                    sc_dream.update(dream_changes)
+
                 if threshold_changes:
                     sc_th = save_config.get("thresholds")
                     if not isinstance(sc_th, dict):
@@ -827,12 +985,15 @@ def register(mcp) -> None:
         reembed_status = None
         if reembed_target is not None:
             from core import embedding_switch as _es
-            target_emb, db_path = reembed_target
+            target_emb, db_path, new_embed_key = reembed_target
+
+            def _publish(target: dict, persist: bool) -> None:
+                publish_embedding(target, persist, new_key=new_embed_key)
             try:
                 reembed_status = await _es.start(
                     config=sh.config, store=sh.bucket_mgr, db_path=db_path,
                     target=target_emb, persist=persist_requested,
-                    publish=publish_embedding)
+                    publish=_publish)
             except _es.SwitchBusy as e:
                 return JSONResponse({"error": str(e), "updated": updated}, status_code=409)
             except Exception as e:
@@ -889,11 +1050,15 @@ def register(mcp) -> None:
         refused = await _test_refusal(request)
         if refused is not None:
             return refused
-        # Use current runtime config (api_key may have been updated in-memory)
+        # Use current runtime config (api_key may have been updated in-memory); a local
+        # side model is asked at the local Ollama with its placeholder key
+        # (core/dehydrator.endpoint).
+        from core import dehydrator as _dehy
         dehyd = sh.config.get("dehydration", {})
         model = dehyd.get("model", "")
-        base_url = dehyd.get("base_url", "")
-        api_key = dehyd.get("api_key", "")
+        _fmt, base_url, api_key = _dehy.endpoint(dehyd, sh.config)
+        if not _dehy.runs_local(dehyd):
+            base_url = dehyd.get("base_url", "")
         if not api_key:
             return JSONResponse({"ok": False, "error": "未设置 API Key"}, status_code=400)
         try:
@@ -1030,6 +1195,20 @@ def register(mcp) -> None:
             return JSONResponse({"ok": True, "models": [m for m in models if m]})
         except Exception as e:
             return JSONResponse({"ok": False, "error": str(e)[:300]})
+
+    # =============================================================
+    # /api/loci/ollama — is a local Ollama there, and what does it hold
+    # The setting page's two local modes read it: the embedding's three steps (步骤 1
+    # 找到了 · the Model list "列的是这台电脑上已经装了的") and the side model's model list.
+    # Asked by the server, not the browser: Loci may run in Docker, and the panel's
+    # browser need not be on the machine Ollama runs on. Read only; nothing is pulled.
+    # =============================================================
+    @mcp.custom_route("/api/loci/ollama", methods=["GET"])
+    async def api_loci_ollama(request: Request) -> Response:
+        from starlette.responses import JSONResponse
+        from core import ollama_local
+        found = await ollama_local.detect(ollama_local.root(sh.config))
+        return JSONResponse(found, headers={"Cache-Control": "no-store"})
 
     # No environment-config route: a second doorway onto the compress/embed fields is the
     # twin-doorway trap (hitting save on a stale, unrefreshed page writes the old values

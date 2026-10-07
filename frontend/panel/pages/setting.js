@@ -8,24 +8,28 @@
      称呼      GET /api/config ai_name / owner_name · POST /api/config {ai_name, owner_name,
                persist}
      账号      GET /api/loci/auth/state · 改密码 POST /api/loci/auth/set-password {password,
-               current_password}. No account names and no route that sets the security
-               question: 账号's 改 and the question's boxes are off
-     模型      副模型: GET/POST /api/config `dehydration` · 测试 POST /api/test/dehydration ·
-               拉取列表 POST /api/models. 向量模型: `embedding` the same way, 测试
-               POST /api/test/embedding; a change of model answers 409 with the cost, which
-               is put to the person and sent again with reembed "confirm"; the recompute's
+               current_password} · 设置安全问题 POST /api/loci/auth/security-question
+               {question, answer} (a logged-in session; the answer never comes back, so
+               its box starts empty). No account names: 账号's 改 is off
+     模型      副模型: GET/POST /api/config `dehydration` (its key masked, sent only when
+               typed) · 测试 POST /api/test/dehydration · 拉取列表 POST /api/models. 在哪儿跑
+               本地 is `runs_on: "local"`: the local Ollama, no Base URL or Key to fill, the
+               model picked from what GET /api/loci/ollama finds. Thinking is `thinking`,
+               shown for the formats that have a thinking knob (Gemini, Anthropic).
+               向量模型: `embedding` the same way (its key too), 测试 POST
+               /api/test/embedding; a change of model answers 409 with the cost, which is
+               put to the person and sent again with reembed "confirm"; the recompute's
                progress from GET /api/loci/embedding/migration. 在哪儿跑 本地 is the
-               embedding's api_format "ollama" (the three local steps; finding Ollama and
-               pulling a model have no route, so those are off). The side model has no local
-               mode, no Thinking and the embedding has no key in /api/config: off
+               embedding's api_format "ollama": the three local steps, step 1 and the Model
+               list from GET /api/loci/ollama; pulling a model has no route, so 下载 is off
      向量      GET /api/loci/embedding/missing (paged) · 现在补 POST /api/loci/embedding/backfill
      导入      聊天记录: POST /api/import/preflight, then POST /api/import/upload; 导入过的
                GET /api/import/batches, 暂停 POST /api/import/pause, 继续 upload with
                resume, 撤回这一批 POST /api/import/withdraw. 记忆包: POST
                /api/loci/import-package (the file, then the decisions), GET for progress
      导出      GET /api/loci/export · GET /api/loci/export/originals, saved as files
-     阈值      GET/POST /api/config `surfacing.awake_*` and `thresholds` (with its retune
-               words); 条子默认挂几天 is not in /api/config: off
+     阈值      GET/POST /api/config `surfacing.awake_*`, `surfacing.hold_review_days`
+               (条子默认挂几天) and `thresholds` (with its retune words)
      体检      GET /api/loci/health · 日志 GET /api/logs (newest shown first)
      版本      GET /api/loci/version, 检查更新 with ?check=1; 一键更新 has no route: off
 
@@ -266,8 +270,21 @@ async function accountBlock() {
     });
   });
 
-  const question = off(inp({ "aria-label": "安全问题", value: st.question || "" }));
-  const answer = off(inp({ "aria-label": "答案" }));
+  // The question as it is set; the answer is kept only as a hash, so its box starts empty.
+  const question = inp({ "aria-label": "安全问题", value: st.question || "", maxlength: "200" });
+  const answer = inp({ "aria-label": "答案", maxlength: "200", autocomplete: "off" });
+  const qaSaid = sayer();
+  const qaSave = btn("保存", { dark: true });
+  qaSave.addEventListener("click", () => busy(qaSave, async () => {
+    qaSaid.clear();
+    try {
+      const r = await api.post("/api/loci/auth/security-question",
+        { question: question.value.trim(), answer: answer.value.trim() });
+      question.value = r.question || question.value.trim();
+      answer.value = "";
+      qaSaid.ok(r.message);
+    } catch (e) { qaSaid.err(e); }
+  }));
   return h("div", null,
     setRow({ text: "账号", wide: true, right: acts(h("span", { class: "r", text: "user" }), off(btn("改"))) }),
     setRow({ text: "密码", why: "第一次进来用的是默认密码，记得改；改完这里只显示 ********", wide: true, stack: true,
@@ -277,7 +294,8 @@ async function accountBlock() {
       right: acts(h("span", { class: "r", style: { fontSize: "13px" }, text: "在登录页" })) }),
     setRow({ text: "设置安全问题", why: "忘记密码的时候用", wide: true }),
     h("div", { class: "pair qa", style: { padding: "0 0 8px" } },
-      h("label", null, "问：", question), h("label", null, "答：", answer), off(btn("保存", { dark: true }))));
+      h("label", null, "问：", question), h("label", null, "答：", answer), qaSave),
+    qaSaid.el);
 }
 
 // ---------------------------------------------------------------- 模型
@@ -303,16 +321,37 @@ function testSave(onTest, onSave, { disabled = false } = {}) {
   return h("div", { class: "acts end", style: { marginTop: "18px" } }, test, save);
 }
 
-function auxModel(cfg) {
+/** What GET /api/loci/ollama finds, asked once per page and again on request: both local
+ *  modes read it. A failed ask reads as "not found". */
+function ollamaFinder() {
+  let p = null;
+  return (again = false) => {
+    if (!p || again) {
+      p = api.get("/api/loci/ollama").catch((e) => ({ running: false, base_url: "", models: [], error: e.message }));
+    }
+    return p;
+  };
+}
+
+function ollamaWords(o) {
+  return o.running ? `本地 · 找到了，装了 ${(o.models || []).length} 个模型` : "本地 · 没找到 Ollama";
+}
+
+/** The formats whose API has a thinking knob the side model turns (core/dehydrator). */
+const THINKING_FORMATS = ["gemini", "anthropic"];
+
+function auxModel(cfg, findOllama) {
   const d = cfg.dehydration || {};
-  const status = h("span", { class: "why", text: d.api_key_masked ? "" : "还没配" });
+  let runs = d.runs_on === "local" ? "local" : "cloud";
+  const status = h("span", { class: "why" });
   const s = sayer();
   const fmt = seg([["openai_compat", "OpenAI 兼容"], ["gemini", "Gemini"], ["anthropic", "Anthropic"]],
-    d.api_format || "openai_compat", { label: "API format" });
+    d.api_format || "openai_compat", { label: "API format", onChange: () => layout() });
   const base = inp({ placeholder: "例：https://api.deepseek.com", "aria-label": "Base URL", value: d.base_url || "" });
   const key = inp({ type: "password", placeholder: d.api_key_masked ? "********" : "粘贴 API Key", "aria-label": "API Key", autocomplete: "off" });
   const model = modelPicker(d.model, "Model");
   const pull = h("button", { class: "lnk", type: "button", style: { fontSize: "14px" } }, "从 Base URL 拉取列表");
+  const installed = h("span", { class: "why", text: "列的是这台电脑上已经装了的" });
   pull.addEventListener("click", () => busy(pull, async () => {
     s.clear();
     try {
@@ -320,18 +359,51 @@ function auxModel(cfg) {
       if (r.ok) model.setList(r.models); else s.err(new Error(r.error));
     } catch (e) { s.err(e); }
   }));
+  const localBase = h("span", { style: { fontSize: "15px", color: "var(--small)" } });
   const maxTok = num({ value: d.max_tokens ?? "", "aria-label": "Max output tokens" });
   const temp = num({ value: d.temperature ?? "", "aria-label": "Temperature" });
   const timeout = num({ value: d.timeout_seconds ?? "", "aria-label": "超时" });
+  const thinking = sw({ checked: !!d.thinking, label: "Thinking" });
 
+  const runsSeg = seg([["cloud", "云端"], ["local", "本地"]], runs, { label: "在哪儿跑",
+    onChange: (v) => { runs = v; layout(); if (v === "local") findLocal(); } });
+  const thinkRow = setRow({ text: "Thinking", why: "只有会先想再答的模型有这一项，干杂活一般关着", right: acts(thinking) });
   const custom = customBox([
-    setRow({ text: "在哪儿跑", why: RUNS_WHY, wide: true, stack: true,
-      right: acts(seg([["cloud", "云端"], ["local", "本地"]], "cloud", { label: "在哪儿跑", disabled: true }).el) }),
+    setRow({ text: "在哪儿跑", why: RUNS_WHY, wide: true, stack: true, right: acts(runsSeg.el) }),
     setRow({ text: "Max output tokens", why: "一次最多输出多少；开着 thinking 的话，想的那部分也算在里面，要给大一点", right: acts(maxTok) }),
     setRow({ text: "Temperature", why: "越低越稳，整理记忆用低的", right: acts(temp) }),
-    setRow({ text: "Thinking", why: "只有会先想再答的模型有这一项，干杂活一般关着", right: acts(off(sw({ checked: false, label: "Thinking" }))) }),
+    thinkRow,
     setRow({ text: "等多久算超时", right: acts(timeout, h("span", { class: "why", text: "秒" })) }),
-  ]);
+  ], { open: runs === "local" });
+
+  const fmtRow = formRow("API format", h("span", null, fmt.el,
+    h("span", { class: "why hint", text: "DeepSeek、Kimi、通义、硅基流动这些都选「OpenAI 兼容」" }),
+    h("span", { class: "why hint", style: { marginTop: "2px" }, text: "想在自己电脑上跑？在下面「自定义设置」里切到本地" })));
+  const baseRow = formRow("Base URL", base);
+  const localBaseRow = formRow("Base URL", h("span", null, localBase, " ", h("span", { class: "why", text: "（自动填的）" })));
+  const keyRow = formRow("Key", key);
+
+  let found = null;
+  /** Local: what Ollama holds fills the Model list, and the status says whether it was found. */
+  async function findLocal(again = false) {
+    found = await findOllama(again);
+    localBase.textContent = found.base_url || "";
+    model.setList(found.models || []);
+    layout();
+  }
+
+  /** Cloud shows the provider's fields; local hides the format and the key, and gives the
+   *  address it found. Thinking shows only where it does something. */
+  function layout() {
+    const local = runs === "local";
+    for (const el of [...fmtRow, ...baseRow, ...keyRow]) el.hidden = local;
+    for (const el of localBaseRow) el.hidden = !local;
+    pull.hidden = local;
+    installed.hidden = !local;
+    thinkRow.hidden = local || !THINKING_FORMATS.includes(fmt.value);
+    if (local) fill(status, found ? ollamaWords(found) : "");
+    else fill(status, d.api_key_masked ? "" : "还没配");
+  }
 
   async function test() {
     s.clear();
@@ -343,27 +415,32 @@ function auxModel(cfg) {
   }
   async function save() {
     s.clear();
-    const dehy = { api_format: fmt.value, base_url: base.value.trim(), model: model.value };
+    const dehy = { runs_on: runs, model: model.value };
+    if (runs === "cloud") {
+      dehy.api_format = fmt.value;
+      dehy.base_url = base.value.trim();
+      if (key.value.trim()) dehy.api_key = key.value.trim();
+    }
+    if (!thinkRow.hidden) dehy.thinking = thinking.getAttribute("aria-checked") === "true";
     const mt = numberIn(maxTok), t = numberIn(temp), to = numberIn(timeout);
     if (mt !== undefined) dehy.max_tokens = Math.round(mt);
     if (t !== undefined) dehy.temperature = t;
     if (to !== undefined) dehy.timeout_seconds = to;
-    if (key.value.trim()) dehy.api_key = key.value.trim();
     try {
       const r = await api.post("/api/config", { dehydration: dehy, persist: true });
-      if (dehy.api_key) { key.value = ""; key.placeholder = "********"; fill(status); }
+      if (dehy.api_key) { key.value = ""; key.placeholder = "********"; d.api_key_masked = "********"; }
+      layout();
       s.ok(r.message);
     } catch (e) { s.err(e); }
   }
 
+  layout();
+  if (runs === "local") findLocal();
   return h("div", null,
     modelHead("副模型", TIP.aux, status),
     h("div", { class: "form" },
-      formRow("API format", h("span", null, fmt.el,
-        h("span", { class: "why hint", text: "DeepSeek、Kimi、通义、硅基流动这些都选「OpenAI 兼容」" }))),
-      formRow("Base URL", base),
-      formRow("Key", key),
-      formRow("Model", h("span", { class: "pick" }, model.el, pull))),
+      fmtRow, baseRow, localBaseRow, keyRow,
+      formRow("Model", h("span", { class: "pick" }, model.el, pull, installed))),
     h("div", { style: { marginTop: "18px" } }, custom),
     testSave(test, save),
     s.el);
@@ -385,33 +462,37 @@ function migrationLine() {
   return { el, reload: () => load().then((again) => { if (again) poll(el, load); }) };
 }
 
-function embModel(cfg) {
+function embModel(cfg, findOllama) {
   const e = cfg.embedding || {};
   const wasLocal = LOCAL_FORMATS.includes(String(e.api_format || "").toLowerCase());
   const holder = h("div");
   const migration = migrationLine();
   let customOpen = false;
 
-  /** Save the embedding settings; a change of model first puts its cost to the person. */
+  /** Save the embedding settings; a change of model first puts its cost to the person.
+   *  True once the server took them. */
   async function saveEmbedding(body, s) {
     s.clear();
     try {
       const r = await api.post("/api/config", { embedding: body, persist: true });
       s.ok(r.message);
       migration.reload();
+      return true;
     } catch (x) {
       if (x.status === 409 && x.body && x.body.needs_confirmation && x.body.reembed) {
         const rp = x.body.reembed;
         const ask = [rp.say, rp.while_running].filter(Boolean).join("\n\n");
-        if (!window.confirm(ask)) return;
+        if (!window.confirm(ask)) return false;
         try {
           const r = await api.post("/api/config", { embedding: { ...body, reembed: "confirm" }, persist: true });
           s.ok(r.message);
           migration.reload();
+          return true;
         } catch (y) { s.err(y); }
-        return;
+        return false;
       }
       s.err(x);
+      return false;
     }
   }
 
@@ -444,13 +525,13 @@ function embModel(cfg) {
       wasLocal || e.api_format === "gemini" ? (e.api_format === "gemini" ? "gemini" : "openai_compat") : "openai_compat",
       { label: "API format" });
     const base = inp({ placeholder: "例：https://api.siliconflow.cn/v1", "aria-label": "Base URL", value: wasLocal ? "" : (e.base_url || "") });
-    const key = off(inp({ type: "password", placeholder: "粘贴 API Key", "aria-label": "API Key" }));
+    const key = inp({ type: "password", placeholder: e.api_key_masked ? "********" : "粘贴 API Key", "aria-label": "API Key", autocomplete: "off" });
     const model = modelPicker(wasLocal ? "" : e.model, "Model");
     const pull = h("button", { class: "lnk", type: "button", style: { fontSize: "14px" } }, "从 Base URL 拉取列表");
     pull.addEventListener("click", () => busy(pull, async () => {
       s.clear();
       try {
-        const r = await api.post("/api/models", { api_key: "__use_current_embed__", base_url: base.value.trim(),
+        const r = await api.post("/api/models", { api_key: key.value.trim() || "__use_current_embed__", base_url: base.value.trim(),
           api_format: fmt.value === "gemini" ? "gemini_embed" : fmt.value });
         if (r.ok) model.setList(r.models); else s.err(new Error(r.error));
       } catch (x) { s.err(x); }
@@ -460,7 +541,10 @@ function embModel(cfg) {
       const body = { enabled: !!model.value, api_format: fmt.value, base_url: base.value.trim(), model: model.value };
       const to = numberIn(timeout);
       if (to !== undefined) body.timeout_seconds = to;
-      return saveEmbedding(body, s);
+      if (key.value.trim()) body.api_key = key.value.trim();
+      return saveEmbedding(body, s).then((ok) => {
+        if (ok && body.api_key) { key.value = ""; key.placeholder = "********"; e.api_key_masked = "********"; }
+      });
     };
     return [
       modelHead("向量模型", TIP.emb, status),
@@ -481,13 +565,12 @@ function embModel(cfg) {
   function local() {
     const status = h("span", { class: "why", text: "本地" });
     const s = sayer();
-    const current = wasLocal && e.model ? e.model : "bge-m3";
-    const model = off(h("select", { class: "btn set", "aria-label": "Model" }, h("option", { value: current, text: current })));
+    const model = modelPicker(wasLocal && e.model ? e.model : "bge-m3", "Model");
     const timeout = num({ value: e.timeout_seconds ?? "", "aria-label": "超时" });
     const stepTest = btn("测试");
     stepTest.addEventListener("click", () => busy(stepTest, () => test(status)));
     const save = () => {
-      const body = { enabled: true, api_format: "ollama", base_url: "", model: current };
+      const body = { enabled: true, api_format: "ollama", base_url: "", model: model.value };
       const to = numberIn(timeout);
       if (to !== undefined) body.timeout_seconds = to;
       return saveEmbedding(body, s);
@@ -496,17 +579,32 @@ function embModel(cfg) {
       h("span", { class: "no", text: no }),
       h("div", null, h("div", { class: "c", text: title }), h("div", { class: "why", style: { marginTop: "4px" }, text: why }), extra || null),
       right);
+    // Step 1 and the Model list read what GET /api/loci/ollama finds: found, the step is
+    // ticked and says so, and the list holds what this machine has installed.
+    const foundWords = h("span", { class: "why", text: "找到了", hidden: true });
+    const first = step("1", "装 Ollama", "它是在你电脑上跑模型的小程序。装好打开就行，之后它自己在后台待着。",
+      acts(foundWords, h("a", { class: "btn set", href: OLLAMA_DOWNLOAD, target: "_blank", rel: "noopener noreferrer", text: "去下载 Ollama" })));
+    const firstNo = first.querySelector(".no");
+    const baseText = h("span", null, "http://localhost:11434");
+    findOllama().then((o) => {
+      fill(status, ollamaWords(o));
+      if (o.base_url) baseText.textContent = o.base_url;
+      foundWords.hidden = !o.running;
+      firstNo.classList.toggle("ok", !!o.running);
+      firstNo.textContent = o.running ? "✓" : "1";
+      if (o.running) firstNo.setAttribute("aria-label", "做完了"); else firstNo.removeAttribute("aria-label");
+      model.setList(o.models || []);
+    });
     return [
       modelHead("向量模型", TIP.emb, status),
       h("div", { class: "steps" },
-        step("1", "装 Ollama", "它是在你电脑上跑模型的小程序。装好打开就行，之后它自己在后台待着。",
-          acts(h("a", { class: "btn set", href: OLLAMA_DOWNLOAD, target: "_blank", rel: "noopener noreferrer", text: "去下载 Ollama" }))),
+        first,
         step("2", "下一个向量模型", "推荐 bge-m3：中文好，大约 1.2 GB。不用开命令行，点「下载」就行。",
           acts(off(h("button", { class: "lnk", type: "button", style: { fontSize: "14px" } }, "换一个")), off(btn("下载 bge-m3", { dark: true })))),
         step("3", "测一下", "下完会自动选上，点「测试」看通不通。", acts(stepTest))),
       h("div", { class: "form" },
-        formRow("Base URL", h("span", { style: { fontSize: "15px", color: "var(--small)" } }, "http://localhost:11434 ", h("span", { class: "why", text: "（自动填的）" }))),
-        formRow("Model", h("span", { class: "pick" }, model))),
+        formRow("Base URL", h("span", { style: { fontSize: "15px", color: "var(--small)" } }, baseText, " ", h("span", { class: "why", text: "（自动填的）" }))),
+        formRow("Model", h("span", { class: "pick" }, model.el, h("span", { class: "why", text: "列的是这台电脑上已经装了的" })))),
       custom("local", "测试的时候自己认出来，不用填", timeout),
       small("配好以后再换模型，全部记忆要重新算一遍向量；换之前会先告诉你要算多久。", { marginTop: "14px", lineHeight: "" }),
       testSave(() => test(status), save),
@@ -523,7 +621,8 @@ function embModel(cfg) {
 
 async function modelsBlock(cfgP) {
   const cfg = await cfgP;
-  return [auxModel(cfg), embModel(cfg)];
+  const findOllama = ollamaFinder();
+  return [auxModel(cfg, findOllama), embModel(cfg, findOllama)];
 }
 
 // ---------------------------------------------------------------- 向量
@@ -811,6 +910,8 @@ const AWAKE = [
   ["awake_date_days", "快到的日子", "有日期的事（生日、约好的），在时间内算醒着。", 30],
   ["awake_cue_days", "被提起过的", "名字被提起、记忆被递到他眼前以后，这几天内都算醒着。", 7],
 ];
+// 其他的 · 条子默认挂几天: `surfacing.hold_review_days` (core/_holds), its default 7.
+const HOLD_DAYS = ["hold_review_days", "条子默认挂几天", "他留的条子不写期限的话，挂这么久", 7];
 const OUTER_LINES = [
   ["recall_meaning", "搜索里的「意思相近」", "搜的时候，多像才标「意思相近」。调低搜出来的多，调高更准"],
 ];
@@ -849,14 +950,14 @@ function thresholdsBlock(cfgP) {
 
     const reset = btn("恢复默认");
     reset.addEventListener("click", () => {
-      for (const [k, , , d] of AWAKE) boxes[k].value = String(d);
+      for (const [k, , , d] of [...AWAKE, HOLD_DAYS]) boxes[k].value = String(d);
       for (const [k] of [...OUTER_LINES, ...INNER_LINES]) if (lines[k] && boxes[k]) boxes[k].value = String(lines[k].default);
     });
     const save = btn("保存", { dark: true });
     save.addEventListener("click", () => busy(save, async () => {
       s.clear();
       const surfacing = {};
-      for (const [k] of AWAKE) {
+      for (const [k] of [...AWAKE, HOLD_DAYS]) {
         const v = numberIn(boxes[k]);
         if (v !== undefined) surfacing[k] = Math.round(v);
       }
@@ -884,8 +985,7 @@ function thresholdsBlock(cfgP) {
       h("h3", { class: "st", style: { fontSize: "16px", marginTop: "4px" }, text: "怎么样算醒着？" }),
       AWAKE.map(dayRow),
       h("h3", { class: "st", style: { fontSize: "16px", marginTop: "18px" }, text: "其他的" }),
-      setRow({ text: "条子默认挂几天", why: "他留的条子不写期限的话，挂这么久", wide: true,
-        right: acts(off(num({ value: "7", "aria-label": "条子默认挂几天" })), h("span", { class: "why", text: "天" })) }),
+      dayRow(HOLD_DAYS),
       OUTER_LINES.map(lineRow),
       h("div", { style: { marginTop: "16px" } }, custom),
       h("div", { class: "acts end", style: { marginTop: "16px" } }, reset, save),

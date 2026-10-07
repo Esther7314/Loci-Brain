@@ -5,8 +5,12 @@ web/loci_password.py — this panel's own password
 
     GET  /api/loci/auth/state         -> where the password currently lives, and whether one needs setting
     POST /api/loci/auth/set-password  -> sets the password guarding remote MCP access
+    POST /api/loci/auth/security-question -> sets or changes the question the forgot-password
+                                         page asks, and its answer
 
-Both paths are on the panel gate's allowlist (web/panel_auth.py).
+The first two are on the panel gate's allowlist (web/panel_auth.py). The third is not: it
+sits behind the gate like every panel write (a host's credential is refused there), and
+asks for a logged-in session besides.
 ========================================
 """
 
@@ -144,3 +148,56 @@ async def api_loci_set_password(request: Request) -> Response:
                  "或者你设环境变量的地方）删掉 LOCI_DASHBOARD_PASSWORD、重启，"
                  "新密码才真正接管（环境变量还在的时候它优先）。"),
     })
+
+
+# The longest question and answer kept: a sentence each, not a document.
+_QA_MAX_CHARS = 200
+
+
+async def api_loci_security_question(request: Request) -> Response:
+    """Set or change the security question (setting page, 账号 · 设置安全问题). Body
+    `{question, answer}`; the answer is kept only as a hash (`_save_security_qa`, the
+    same hashing as the password, compared lower-cased and trimmed by /auth/recover).
+
+    **A logged-in session, always** — not merely "the gate let it through". The answer
+    resets the password, and the password is also the door to the remote MCP OAuth
+    authorization page (bridge/oauth.py), which stands whether or not the panel is locked.
+    A panel left unlocked (`panel_auth: false`) still has no business handing that door to
+    whoever reaches the port; a session proves the password, and a 401 sends the page to
+    the login, which works with the switch off too.
+
+    Refused before that: no password yet (the question resets a password, so there must
+    be one), and a password held by the environment variable (a reset writes the file,
+    which the variable outranks, so the question would reset nothing)."""
+    from starlette.responses import JSONResponse
+    from . import panel_auth
+    try:
+        body = await _write_body(request)   # same-origin check plus Content-Type
+    except PermissionError as e:
+        return JSONResponse({"error": str(e)}, status_code=403)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    if os.environ.get("LOCI_DASHBOARD_PASSWORD", ""):
+        return JSONResponse({"error": ("密码现在由环境变量 LOCI_DASHBOARD_PASSWORD 管着，"
+                                       "安全问题重设不了它：先在上面「改密码」把密码存进文件，"
+                                       "再删掉那个环境变量、重启")}, status_code=409)
+    if sh._is_setup_needed():
+        return JSONResponse({"error": "还没有密码：先设一把密码，再设安全问题"},
+                            status_code=409)
+    if not panel_auth.has_session(request):
+        return JSONResponse({"error": "请先登录"}, status_code=401)
+    question = body.get("question", "")
+    answer = body.get("answer", "")
+    if not isinstance(question, str) or not isinstance(answer, str):
+        return JSONResponse({"error": "问题和答案得是字符串"}, status_code=400)
+    question, answer = question.strip(), answer.strip()
+    if not question or not answer:
+        return JSONResponse({"error": "问题和答案都要填"}, status_code=400)
+    if len(question) > _QA_MAX_CHARS or len(answer) > _QA_MAX_CHARS:
+        return JSONResponse({"error": f"问题和答案各 {_QA_MAX_CHARS} 字以内"}, status_code=400)
+    try:
+        sh._save_security_qa(question, answer)
+    except Exception as e:                  # noqa: BLE001
+        logger.warning(f"[loci] 存安全问题失败: {e}")
+        return JSONResponse({"error": f"写不进去：{e}"}, status_code=500)
+    return JSONResponse({"ok": True, "question": question, "message": "安全问题存好了"})
