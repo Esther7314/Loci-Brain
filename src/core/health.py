@@ -64,28 +64,33 @@ class _Checks:
     500**; swallowed with `except: pass`, a check quietly disappears and the summary still
     reads healthy. Each check runs independently; one that blows up records a red row in
     place and the rest carry on.
+
+    Every row carries a `key`: the row's id, the same from one run to the next whatever
+    its status (a check's ok row and its warn row share one key; a check that blew up
+    keeps its own key on the red row). The label is the words; the key is what a panel
+    matches rows by.
     """
 
     def __init__(self) -> None:
         self.rows: list[dict] = []
 
-    def add(self, label, status, message, action=""):
-        self.rows.append({"label": label, "status": status,
+    def add(self, key, label, status, message, action=""):
+        self.rows.append({"key": key, "label": label, "status": status,
                           "message": message, "action": action})
 
-    async def guard(self, label, fn, g: _Ground, action=""):
+    async def guard(self, key, label, fn, g: _Ground, action=""):
         try:
             res = fn(self, g)
             if inspect.isawaitable(res):
                 await res
         except Exception as e:
-            self.add(label, "error", f"这一项自己出错了：{type(e).__name__}: {e}", action)
+            self.add(key, label, "error", f"这一项自己出错了：{type(e).__name__}: {e}", action)
 
-    async def need_buckets(self, label, fn, g: _Ground, action=""):
+    async def need_buckets(self, key, label, fn, g: _Ground, action=""):
         if not g.buckets_ok:
-            self.add(label, "error", "读不到记忆库，这一项没法查", "先解决上面「记忆库读取」那条")
+            self.add(key, label, "error", "读不到记忆库，这一项没法查", "先解决上面「记忆库读取」那条")
             return
-        await self.guard(label, fn, g, action)
+        await self.guard(key, label, fn, g, action)
 
 
 def _parse_ok(v) -> bool:
@@ -105,16 +110,16 @@ def check_total(c: _Checks, g: _Ground) -> None:
     # "Alive" goes through the timeline gate, the same ruler used by recall, the subjects
     # screen and the small print on the settings page — one thing with two numbers means
     # whoever sees both will assume one of them is wrong.
-    c.add("记忆总量", "ok",
+    c.add("total", "记忆总量", "ok",
           f"{len(g.visible)} 条活着的"
           + (f"（盘上一共 {g.n_with_archive} 条，含归档和旧版）"
              if g.n_with_archive >= 0 else ""))
     if homeless:
-        c.add("没房间的记忆", "warn",
+        c.add("rooms", "没房间的记忆", "warn",
               f"{len(homeless)} 条没有 room，recall 的房间门筛不到它们",
               "跑 scripts/backfill_rooms.py --buckets <库目录> 先看，再加 --apply 补房间")
     else:
-        c.add("房间", "ok", "每条都有房间")
+        c.add("rooms", "房间", "ok", "每条都有房间")
 
 
 # ---- Can it be found? (vector coverage) ----
@@ -127,13 +132,13 @@ def check_vectors(c: _Checks, g: _Ground) -> None:
         have_vec = len(live_ids & ids)
         miss = len(live_ids) - have_vec
         if miss > max(3, len(live_ids) * 0.02):
-            c.add("语义搜索覆盖", "warn",
+            c.add("vector_coverage", "语义搜索覆盖", "warn",
                   f"{miss} 条没有向量，query 门搜不到它们（只能靠关键词撞）",
                   "看「日志」里 embedding 回填有没有报错；ollama 断了会积压")
         else:
-            c.add("语义搜索覆盖", "ok", f"{have_vec}/{len(live_ids)} 条有向量")
+            c.add("vector_coverage", "语义搜索覆盖", "ok", f"{have_vec}/{len(live_ids)} 条有向量")
     except Exception as e:
-        c.add("语义搜索覆盖", "error", f"读不到向量库：{e}", "检查 embeddings.db")
+        c.add("vector_coverage", "语义搜索覆盖", "error", f"读不到向量库：{e}", "检查 embeddings.db")
 
 
 # ---- The two external dependencies (the only two places the system reaches the network) ----
@@ -144,9 +149,9 @@ def check_summariser(c: _Checks, g: _Ground) -> None:
     if not isinstance(dehy, dict):
         raise TypeError("config.yaml 里的 dehydration 不是一个配置块")
     if str(dehy.get("api_key") or "").strip() or os.environ.get("LOCI_API_KEY", ""):
-        c.add("摘要/标签", "ok", f"配着 {dehy.get('model') or '?'}")
+        c.add("dehydration", "摘要/标签", "ok", f"配着 {dehy.get('model') or '?'}")
     else:
-        c.add("摘要/标签", "warn",
+        c.add("dehydration", "摘要/标签", "warn",
               "没配 key —— 存进去的东西不会自动生成摘要和标签",
               "在 config.yaml 里配 dehydration.api_key")
 
@@ -156,9 +161,9 @@ def check_embedding(c: _Checks, g: _Ground) -> None:
     if not isinstance(emb, dict):
         raise TypeError("config.yaml 里的 embedding 不是一个配置块")
     if _parse_ok(emb.get("enabled")):
-        c.add("向量", "ok", f"开着，模型 {emb.get('model') or '?'}")
+        c.add("embedding", "向量", "ok", f"开着，模型 {emb.get('model') or '?'}")
     else:
-        c.add("向量", "warn",
+        c.add("embedding", "向量", "warn",
               "关着 —— query 门只能靠关键词，搜不到「意思相近」的",
               "在 config.yaml 里开 embedding.enabled")
 
@@ -173,11 +178,11 @@ def check_reembed(c: _Checks, g: _Ground) -> None:
     st = _es.status(bd)
     target = (st.get("target") or {}).get("model") or st.get("target_model") or "?"
     if st["phase"] == "running":
-        c.add("换向量模型", "warn",
+        c.add("reembed", "换向量模型", "warn",
               f"正在用 {target} 重算：{st.get('done', 0)}/{st.get('total', 0)}"
               f"（失败 {st.get('failed_count', 0)}）；算完之前旧模型照常用")
     elif st["phase"] in ("failed", "interrupted"):
-        c.add("换向量模型", "error",
+        c.add("reembed", "换向量模型", "error",
               f"换到 {target} 的重算没完成：{st.get('message') or st.get('error') or '中途停了'}"
               "；旧模型和旧向量照用",
               "在「设置 → 引擎」接着算，或者放弃这一次" if st.get("resumable") else "")
@@ -188,9 +193,9 @@ def check_literal(c: _Checks, g: _Ground) -> None:
     deps = dependency_status()
     missing = [name for name, ok in deps.items() if not ok]
     if not missing:
-        c.add("字面搜索", "ok", "rank_bm25 和 jieba 都在")
+        c.add("literal_search", "字面搜索", "ok", "rank_bm25 和 jieba 都在")
     else:
-        c.add("字面搜索", "error",
+        c.add("literal_search", "字面搜索", "error",
               f"缺 {' / '.join(missing)} —— 字面搜索退成了整句子串匹配，"
               "换个说法、中文拆词都搜不到",
               "pip install " + " ".join(
@@ -201,20 +206,20 @@ def check_literal(c: _Checks, g: _Ground) -> None:
 def check_tz(c: _Checks, g: _Ground) -> None:
     st = _w.tz_status()
     if st["problem"]:
-        c.add("时区", "error",
+        c.add("tz", "时区", "error",
               f"{st['problem']} —— 「今天」「昨天」「这周」按这个时区切",
               "在启动环境里设 LOCI_TZ，例如 Asia/Shanghai，然后重启")
     else:
-        c.add("时区", "ok", f"LOCI_TZ={st['name']}")
+        c.add("tz", "时区", "ok", f"LOCI_TZ={st['name']}")
 
 
 # ---- Could anything lost be recovered ----
 def check_persist(c: _Checks, g: _Ground) -> None:
     pers = g.persistence(g.bd)
     if pers.get("persistent"):
-        c.add("数据持久性", "ok", pers.get("note") or "记忆目录在持久位置")
+        c.add("persistence", "数据持久性", "ok", pers.get("note") or "记忆目录在持久位置")
     else:
-        c.add("数据持久性", "error", "记忆目录没挂到持久卷 —— 容器重建会丢！",
+        c.add("persistence", "数据持久性", "error", "记忆目录没挂到持久卷 —— 容器重建会丢！",
               "在 docker-compose 里挂到命名卷或宿主机目录")
 
 
@@ -222,7 +227,7 @@ def check_disk(c: _Checks, g: _Ground) -> None:
     # No `except: pass` here (guard() records the failure) — the disk check must not go
     # quiet at exactly the moment it most needs to speak.
     free_gb = shutil.disk_usage(g.bd).free / (1024**3)
-    c.add("磁盘", "ok" if free_gb > 2 else "warn", f"还剩 {free_gb:.1f} GB",
+    c.add("disk", "磁盘", "ok" if free_gb > 2 else "warn", f"还剩 {free_gb:.1f} GB",
           "" if free_gb > 2 else "腾点地方，写不进去就存不了记忆")
 
 
@@ -230,15 +235,15 @@ def check_schema(c: _Checks, g: _Ground) -> None:
     from . import schema as _schema
     st = _schema.status(g.bd)
     if st["error"]:
-        c.add("库的版本", "error", f"读不出库的版本：{st['error']}",
+        c.add("schema", "库的版本", "error", f"读不出库的版本：{st['error']}",
               "看 buckets/_state/schema.json")
     elif st["behind"]:
-        c.add("库的版本", "error",
+        c.add("schema", "库的版本", "error",
               f"库是第 {st['version']} 版，代码要第 {st['current']} 版",
               "停掉服务，先跑 python scripts/migrate.py 看要改什么，"
               "再加 --apply（会先备份整个库）")
     else:
-        c.add("库的版本", "ok", f"第 {st['version']} 版")
+        c.add("schema", "库的版本", "ok", f"第 {st['version']} 版")
 
 
 # ---- Is it still growing lately ----
@@ -256,11 +261,11 @@ def check_fresh(c: _Checks, g: _Ground) -> None:
         if ts is not None and (g.now - ts).days < 7:
             fresh += 1
     if fresh:
-        c.add("最近七天", "ok", f"存了 {fresh} 条")
+        c.add("recent_writes", "最近七天", "ok", f"存了 {fresh} 条")
     elif not g.visible:
-        c.add("最近七天", "note", "还没存过东西 —— 存第一条之后这儿就有数了")
+        c.add("recent_writes", "最近七天", "note", "还没存过东西 —— 存第一条之后这儿就有数了")
     else:
-        c.add("最近七天", "warn",
+        c.add("recent_writes", "最近七天", "warn",
               "一条都没存 —— 要么最近没聊，要么写入坏了",
               "去「日志」看看 grow 有没有报错")
 
@@ -281,12 +286,12 @@ def check_unbound_wants(c: _Checks, g: _Ground) -> None:
            and due_day(m, today) is None and not _waits_on_cue(m)]
     ids = [i for i in ids if i]
     if ids:
-        c.add("没人认领的想要", "error",
+        c.add("unbound_wants", "没人认领的想要", "error",
               f"{len(ids)} 条还开着的想要没有 bound（谁该做），也没有日子或条件，"
               f"「惦记的事」里永远看不到它们：{'、'.join(ids)}",
               "给每条补上 bound：面板上改，或 trace(bucket_id=…, bound=[\"谁\"])")
     else:
-        c.add("没人认领的想要", "ok", "开着的想要都有人认领，或有日子、有条件")
+        c.add("unbound_wants", "没人认领的想要", "ok", "开着的想要都有人认领，或有日子、有条件")
 
 
 # ---- Quoted lines that name no source ----
@@ -303,13 +308,13 @@ def check_bare_quotes(c: _Checks, g: _Ground) -> None:
     if ids:
         shown = "、".join(ids[:_BARE_QUOTES_NAMED]) + (
             f" 等 {len(ids)} 条" if len(ids) > _BARE_QUOTES_NAMED else "")
-        c.add("引原话追不到来源", "warn",
+        c.add("bare_quotes", "引原话追不到来源", "warn",
               f"{len(ids)} 条记忆有引原话的线只写了编号，没写系统和容器——"
               f"原话取不回，来源撤回也够不着它们：{shown}",
               "知道是哪段对话的，用 trace(bucket_id=…, sources_append=[{system, instance, "
               "container, id}]) 补上那条记录，编号对上的线会接过去")
     else:
-        c.add("引原话追不到来源", "ok", "引原话的线都写全了来源")
+        c.add("bare_quotes", "引原话追不到来源", "ok", "引原话的线都写全了来源")
 
 
 # ---- Are the things that should be there still there ----
@@ -320,27 +325,27 @@ def check_profile(c: _Checks, g: _Ground) -> None:
     tagged = [m for m in g.metas if _PROFILE_TAG in _tags_of(m)]
     profile = [m for m in tagged if not _F.is_covered(m)]
     if len(profile) == 1:
-        c.add("门口那张纸", "ok", "名字页在，且只有一张")
+        c.add("profile_page", "门口那张纸", "ok", "名字页在，且只有一张")
     elif not profile and tagged:
         gone = tagged[0]
-        c.add("门口那张纸", "error",
+        c.add("profile_page", "门口那张纸", "error",
               f"名字页 {gone.get('id')} 被 {'、'.join(_F.covers_of(gone))} 换掉了，"
               "新版没带 tag —— 睁眼时档案那格是空的",
               f"给新版补上 tag {_PROFILE_TAG}（trace 的 tags 是整份替换，原来的一起写上）")
     elif not profile:
-        c.add("门口那张纸", "note" if not g.visible else "warn",
+        c.add("profile_page", "门口那张纸", "note" if not g.visible else "warn",
               "还没有名字页 —— 睁眼时档案那格是空的"
               if not g.visible else "没有名字页 —— 睁眼时档案那格是空的",
               f"存一条带 tag {_PROFILE_TAG} 的记忆")
     else:
-        c.add("门口那张纸", "error", f"有 {len(profile)} 张名字页，只该有一张", "合并掉多的")
+        c.add("profile_page", "门口那张纸", "error", f"有 {len(profile)} 张名字页，只该有一张", "合并掉多的")
 
 
 def check_pinned(c: _Checks, g: _Ground) -> None:
     pinned = [m for m in g.visible if m.get("pinned")]
     # Nothing pinned means "nothing pinned yet", not "broken": principles grow one at a
     # time.
-    c.add("钉着的准则", "ok" if pinned else "note",
+    c.add("pinned", "钉着的准则", "ok" if pinned else "note",
           f"{len(pinned)} 条" if pinned else "一条都没钉 —— 睁眼时准则那格是空的")
 
 
@@ -349,7 +354,7 @@ def check_periods(c: _Checks, g: _Ground) -> None:
     # one if you have one. Having none is not a fault, and reporting it as a warning tells
     # a fresh install "you are missing something".
     big = [m for m in g.metas if _BIGEVENT_TAG in _tags_of(m)]
-    c.add("时期", "ok" if big else "note",
+    c.add("periods", "时期", "ok" if big else "note",
           f"{len(big)} 个" if big else "还没给哪段日子起过名（不强制，有就用）")
 
 
@@ -380,13 +385,13 @@ async def check_orphans(c: _Checks, g: _Ground) -> None:
             else:
                 gone += 1
     if gone:
-        c.add("断掉的 from 链", "warn",
+        c.add("from_links", "断掉的 from 链", "warn",
               f"{gone} 条记忆的来源哪儿都找不到了",
               "这才是真断了：多半那条源被物理删过。星空里它们少一根线")
     elif not sunk:
-        c.add("from 链", "ok", "每条 from 都指得到")
+        c.add("from_links", "from 链", "ok", "每条 from 都指得到")
     if sunk:
-        c.add("来源沉进归档区", "note",
+        c.add("from_archived", "来源沉进归档区", "note",
               f"{sunk} 条记忆的来源已经归档 —— 没断，拿 id 直查捞得回",
               "" if gone else "")
 
@@ -398,7 +403,7 @@ def check_dreams(c: _Checks, g: _Ground) -> None:
     # `except OSError: pass`, or a missing directory would make the whole check vanish.
     from . import _dream as _D
     n = len(_D.load_dreams())
-    c.add("盘上的梦", "ok",
+    c.add("dreams", "盘上的梦", "ok",
           f"{n} 个还在（时间到了自己会没）" if n else "空的（攒不到线就一夜无梦，正常）")
 
 
@@ -413,7 +418,7 @@ async def _read_buckets(c: _Checks, g: _Ground) -> None:
         g.n_with_archive = len(await g.bucket_mgr.list_all(include_archive=True))
     except Exception as e:
         g.buckets_ok = False
-        c.add("记忆库读取", "error", f"读不出记忆桶：{type(e).__name__}: {e}",
+        c.add("buckets_read", "记忆库读取", "error", f"读不出记忆桶：{type(e).__name__}: {e}",
               "看容器日志 + buckets 目录挂载对不对")
 
 
@@ -428,12 +433,13 @@ def _sort_visible(c: _Checks, g: _Ground) -> None:
         except Exception:
             bad_meta += 1
     if bad_meta:
-        c.add("元数据形状", "error", f"{bad_meta} 条记忆的元数据读不动（字段类型不对）",
+        c.add("meta_shape", "元数据形状", "error", f"{bad_meta} 条记忆的元数据读不动（字段类型不对）",
               "在「日志」里搜这几条的 id，多半是早期写入留下的")
 
 
 async def health(bucket_mgr, config, persistence: Callable[[str], dict]) -> dict:
-    """**Our own health check**: {ok, summary: {status: count}, checks: [rows]}.
+    """**Our own health check**: {ok, summary: {status: count}, checks: [rows]}, each row
+    {key, label, status, message, action}.
 
     `config` is the configuration as handed in (possibly not a dict: a check reads around
     it); `persistence(buckets_dir)` says whether the data directory is on persistent
@@ -447,24 +453,24 @@ async def health(bucket_mgr, config, persistence: Callable[[str], dict]) -> dict
     await _read_buckets(c, g)
     _sort_visible(c, g)
 
-    await c.need_buckets("记忆总量", check_total, g)
+    await c.need_buckets("total", "记忆总量", check_total, g)
     check_vectors(c, g)
-    await c.guard("摘要/标签", check_summariser, g, "检查 config.yaml 的 dehydration 段")
-    await c.guard("向量", check_embedding, g, "检查 config.yaml 的 embedding 段")
-    await c.guard("换向量模型", check_reembed, g)
-    await c.guard("字面搜索", check_literal, g)
-    await c.guard("时区", check_tz, g)
-    await c.guard("数据持久性", check_persist, g)
-    await c.guard("磁盘", check_disk, g, f"确认 buckets_dir 存在：{g.bd or '(没配)'}")
-    await c.guard("库的版本", check_schema, g)
-    await c.need_buckets("最近七天", check_fresh, g)
-    await c.need_buckets("没人认领的想要", check_unbound_wants, g)
-    await c.need_buckets("引原话追不到来源", check_bare_quotes, g)
-    await c.need_buckets("门口那张纸", check_profile, g)
-    await c.need_buckets("钉着的准则", check_pinned, g)
-    await c.need_buckets("时期", check_periods, g)
-    await c.need_buckets("from 链", check_orphans, g)
-    await c.guard("盘上的梦", check_dreams, g, "确认 buckets/night_fall/dreams 目录在")
+    await c.guard("dehydration", "摘要/标签", check_summariser, g, "检查 config.yaml 的 dehydration 段")
+    await c.guard("embedding", "向量", check_embedding, g, "检查 config.yaml 的 embedding 段")
+    await c.guard("reembed", "换向量模型", check_reembed, g)
+    await c.guard("literal_search", "字面搜索", check_literal, g)
+    await c.guard("tz", "时区", check_tz, g)
+    await c.guard("persistence", "数据持久性", check_persist, g)
+    await c.guard("disk", "磁盘", check_disk, g, f"确认 buckets_dir 存在：{g.bd or '(没配)'}")
+    await c.guard("schema", "库的版本", check_schema, g)
+    await c.need_buckets("recent_writes", "最近七天", check_fresh, g)
+    await c.need_buckets("unbound_wants", "没人认领的想要", check_unbound_wants, g)
+    await c.need_buckets("bare_quotes", "引原话追不到来源", check_bare_quotes, g)
+    await c.need_buckets("profile_page", "门口那张纸", check_profile, g)
+    await c.need_buckets("pinned", "钉着的准则", check_pinned, g)
+    await c.need_buckets("periods", "时期", check_periods, g)
+    await c.need_buckets("from_links", "from 链", check_orphans, g)
+    await c.guard("dreams", "盘上的梦", check_dreams, g, "确认 buckets/night_fall/dreams 目录在")
 
     # Besides ok/warn/error the health check **has a fourth state, `note`** — "you have not
     #    started yet", "this one is optional": neutral statements, not problems.
