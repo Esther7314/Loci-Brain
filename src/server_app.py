@@ -94,20 +94,6 @@ class HTTPRuntimeSettings:
         )
 
 
-def merge_mcp_tool_registries(primary: Any, extra: Any) -> int:
-    """Merge FastMCP's compatibility registry into the public registry.
-
-    FastMCP does not currently expose a public registry merge API. Keeping this
-    compatibility access in one function makes the private dependency easy to
-    test and replace when the SDK adds one.
-    """
-
-    primary_tools = primary._tool_manager._tools
-    extra_tools = extra._tool_manager._tools
-    primary_tools.update(extra_tools)
-    return len(extra_tools)
-
-
 def _first_forwarded_value(value: str) -> str:
     return value.split(",", 1)[0].strip()
 

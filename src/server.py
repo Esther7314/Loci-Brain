@@ -16,8 +16,8 @@ Key behaviour:
 - Every dashboard and HTTP route has been split out into src/web/<domain>.py, each module
   exposing register(mcp). This file only calls web.register_all(mcp) at startup; the
   shared dependencies are in web/_shared.py.
-- Still here: process startup, engine initialization, webhook delivery, the MCP Bearer auth middleware, single-connector /mcp assembly (the
-  entry point folds mcp_extra's registry into mcp), and bringing up uvicorn.
+- Still here: process startup, engine initialization, webhook delivery, the MCP Bearer auth middleware, single-connector /mcp assembly, and
+  bringing up uvicorn.
 
 What this does NOT do (the boundary):
 - No business logic for the individual tools; all of that lives under tools/*.
@@ -29,7 +29,7 @@ What this does NOT do (the boundary):
   those).
 - No direct reads or writes of bucket files (bucket_manager owns those).
 
-Public surface: the two instances mcp and mcp_extra, plus the @mcp*.tool() functions.
+Public surface: the instance mcp, plus the @mcp.tool() functions.
 HTTP routes are in src/web/*.
 ========================================
 """
@@ -277,17 +277,9 @@ migrate_engine = MigrateEngine(config, bucket_mgr, embedding_engine)            
 # stdio mode ignores host (no network)
 #
 # One connector: every tool is registered on `mcp` and served on its single /mcp route, and
-# every HTTP custom_route (panel and API) hangs off it too. `mcp_extra` is a second instance
-# in the same process (one runtime, one bucket_mgr) that registers no tool and serves no
-# route; the entry point folds its registry into mcp (server_app.merge_mcp_tool_registries),
-# so a tool put on it is still served on /mcp.
+# every HTTP custom_route (panel and API) hangs off it too.
 mcp = FastMCP(
     "Loci Brain",
-    host=_BIND_HOST,
-    port=LOCI_PORT,
-)
-mcp_extra = FastMCP(
-    "Loci Brain Extra",
     host=_BIND_HOST,
     port=LOCI_PORT,
 )
@@ -1695,16 +1687,15 @@ except (AttributeError, RuntimeError, TypeError, ValueError) as _trace_schema_ex
 #    The rule: **a list kept by human memory will be missed eventually.**
 try:
     for _tool_name in ("breath", "grow", "recall", "regrow", "fold", "muse", "trace"):
-        for _surface in (mcp, mcp_extra):
-            _t = _surface._tool_manager.get_tool(_tool_name)
-            if _t is None:
-                continue
-            # ⚠️ Go through harden(), never an inline flip: flipping without the re-publish
-            #    step leaves a tool rejecting unknown arguments while still advertising
-            #    that it accepts them. harden() is the only thing that keeps the two halves
-            #    from drifting apart.
-            if _harden_tool(_t):
-                logger.info("strict-argument adapter installed for %s", _tool_name)
+        _t = mcp._tool_manager.get_tool(_tool_name)
+        if _t is None:
+            continue
+        # ⚠️ Go through harden(), never an inline flip: flipping without the re-publish
+        #    step leaves a tool rejecting unknown arguments while still advertising
+        #    that it accepts them. harden() is the only thing that keeps the two halves
+        #    from drifting apart.
+        if _harden_tool(_t):
+            logger.info("strict-argument adapter installed for %s", _tool_name)
 except (AttributeError, RuntimeError, TypeError, ValueError) as _strict_all_exc:
     logger.warning("strict-argument sweep unavailable: %s", _strict_all_exc)
 
@@ -1746,29 +1737,11 @@ if __name__ == "__main__":
     transport = config.get("transport", "stdio")
     logger.info(f"Loci Brain starting | transport: {transport}")
 
-    # One /mcp connector, because a second one makes the client authorize and validate two
-    # connectors. mcp_extra's registry is folded into mcp here, so stdio, sse and
-    # streamable-http all expose the same set; mcp_extra registers no tool, so the fold
-    # adds none.
-    # This depends on FastMCP._tool_manager, a private structure. If a future version
-    # changes it, this degrades to exposing the primary set only.
     from server_app import (
         HTTPRuntimeSettings,
         RuntimeLifecycle,
         build_http_app,
-        merge_mcp_tool_registries,
     )
-
-    try:
-        _extra_count = merge_mcp_tool_registries(mcp, mcp_extra)
-        logger.info(
-            f"单连接器 /mcp：已把 {_extra_count} 个副集工具回灌进主实例，共 "
-            f"{len(mcp._tool_manager._tools)} 个工具对外暴露"
-        )
-    except AttributeError as _merge_exc:
-        logger.warning(
-            f"FastMCP 内部结构变化，工具回灌失败，仅暴露主集工具：{_merge_exc}"
-        )
 
     if transport in ("sse", "streamable-http"):
         import uvicorn
