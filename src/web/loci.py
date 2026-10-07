@@ -124,6 +124,28 @@ assembled and worded in core/detail.py and core/census.py. Both POSTs write:
     POST /api/loci/names/action       -> not_person / merge / rename / set_kind on one name
                                          (aliases.yaml)
 
+The breath, surface, trace and regrow/fold pages (web/loci_mind.py; panel only). Lists
+page by offset / limit / as_of. 🔴 POST /api/loci/trace writes.
+
+    GET  /api/loci/breath/last        -> the last breath actually handed out, per host
+                                         (`?host=`, else the most recent): its structure
+                                         with titles read now, and the scope line it was
+                                         handed out under (core/breath_snapshot.py)
+    GET  /api/loci/awake              -> the awake pool computed now, every reason each
+                                         entry is awake in words (`?reason=` keeps one);
+                                         core/profile.awake_pool
+    GET  /api/loci/hanging            -> open promises, live holds and open cue conditions,
+                                         `?part=surface` (awake) or `deep` (asleep), each
+                                         row with its buttons; core/profile.hanging
+    POST /api/loci/trace              -> a trace button ({id, action}: done / drop on a
+                                         promise, withdraw on a hold or a cue), checked
+                                         against the hanging list first, written through
+                                         trace_core with closed_by="user"
+    GET  /api/loci/changes/recent     -> new versions, merges, periods, pins, and what was
+                                         done about a moved basis, newest first, from the
+                                         ledger with seq as each row's id
+                                         (core/changes_feed.py)
+
 Where each group lives (a new route goes into its group's module and gets its line in
 `register`, which adds the routes in this order). A read that computes something over the
 store is a core function plus a thin builder here: the builder reads the library, config
@@ -245,4 +267,14 @@ def register(mcp) -> None:
     mcp.custom_route("/api/loci/names/pending", methods=["GET"])(_names.api_loci_names_pending)
     mcp.custom_route("/api/loci/names/action", methods=["POST"])(_names.api_loci_names_action)
     mcp.custom_route("/api/loci/names/{name}", methods=["GET"])(_names.api_loci_name_card)
+
+    # ---------------------------------------------------------
+    # The breath, surface, trace and regrow/fold pages (web/loci_mind.py).
+    # ---------------------------------------------------------
+    from . import loci_mind as _mind
+    mcp.custom_route("/api/loci/breath/last", methods=["GET"])(_mind.api_loci_breath_last)
+    mcp.custom_route("/api/loci/awake", methods=["GET"])(_mind.api_loci_awake)
+    mcp.custom_route("/api/loci/hanging", methods=["GET"])(_mind.api_loci_hanging)
+    mcp.custom_route("/api/loci/trace", methods=["POST"])(_mind.api_loci_trace)
+    mcp.custom_route("/api/loci/changes/recent", methods=["GET"])(_mind.api_loci_changes_recent)
 

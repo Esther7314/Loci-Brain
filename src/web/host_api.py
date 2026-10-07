@@ -120,12 +120,12 @@ async def api_v2_breath(request: Request) -> Response:
 
     `?peek=1` is the read-only form, for a host reading the screen for itself rather
     than handing it to a model (a bridge polling what is on its mind): the same text or
-    object, but no ask-once question is stamped as asked and nothing is recorded as
-    shown in the usage log, so the model still gets those questions the next time its
-    window opens. The breath tool itself always stamps: the model calling it is the
-    model being asked."""
+    object, but no ask-once question is stamped as asked, nothing is recorded as shown
+    in the usage log and it does not become the host's last breath on the panel, so the
+    model still gets those questions the next time its window opens. The breath tool
+    itself always stamps: the model calling it is the model being asked."""
     from starlette.responses import JSONResponse, PlainTextResponse
-    from tools.breath.awaken import build_breath, record_shown, render_breath, stamp_asked
+    from tools.breath.awaken import build_breath, handed_out, render_breath, stamp_asked
     fmt = str(request.query_params.get("format") or "text").strip().lower()
     if fmt not in ("text", "json"):
         return JSONResponse({"error": "format is text or json"}, status_code=400)
@@ -141,7 +141,7 @@ async def api_v2_breath(request: Request) -> Response:
         text = render_breath(b)
         if not peek:
             await stamp_asked(b)
-            record_shown(b, None if fmt == "json" else text)
+            handed_out(b, None if fmt == "json" else text)
     except Exception as e:
         logger.warning(f"[loci] breath failed: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)

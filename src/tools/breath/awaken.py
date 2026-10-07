@@ -30,13 +30,16 @@ into the text the model reads, and `GET /api/v2/breath` hands the same object ou
 the contract sources (core/profile.py, core/_invalidation.py, the gate in
 core/visibility.py); this file only assembles and words them.
 
-Handing breath out has two writes: a question asked once is stamped (`stamp_asked`), and
+Handing breath out has three writes: a question asked once is stamped (`stamp_asked`);
 what each block put in front of the model goes into the usage log as `shown`, block by
 block (`record_shown`; core/_usage.py) — ids only, and only those the handed-out text
-actually shows.
+actually shows; and the object's structure, without its text, is kept as the calling
+host's last breath for the panel (`keep_last`; core/breath_snapshot.py). `handed_out` does
+the last two.
 
 Exports: build_breath() -> dict · render_breath(breath) -> str · stamp_asked(breath) ·
-         block_ids(breath) · record_shown(breath, text) · surface_awaken() -> str
+         block_ids(breath) · record_shown(breath, text) · keep_last(breath) ·
+         handed_out(breath, text) · surface_awaken() -> str
 ========================================
 """
 
@@ -50,8 +53,10 @@ from core import _invalidation as _I
 from core import _usage
 from core import visibility as _V      # the gate's `recent` road for 近三天
 from core import _when as _w         # "today" as the user lives it (local timezone)
+from core import breath_snapshot as _snap
+from core import scope as _scope
 from core.profile import (_PROFILE_TAG, breath_settings, door_note, involuntary,
-                          owed_names, prospective, short_id)
+                          owed_names, prospective, reason_words, short_id)
 from ..recall.core import recall_text_and_data
 
 # How many principle lines fit on the note by the door.
@@ -135,6 +140,8 @@ async def build_breath() -> dict:
     cues = getattr(mgr, "cues", None)
     plan = prospective(all_buckets, now, settings=settings, scope=scope,
                        delivered_at=cues.delivered_at if cues is not None else None)
+    for it in plan["items"]:
+        it["reason"] = {**it["reason"], "words": reason_words(it["reason"])}
     imports = await _slices.imports_seen()
     plan["slices_pending"] = await _slices.pending_seen() - imports
     plan["imports_pending"] = imports
@@ -170,14 +177,13 @@ def _owed(item: dict) -> str:
     return f"（{names}欠着）" if names else ""
 
 
-# The wording of each loudness. Which loudness a date has is the contract source's
-# (core/profile._reminder_loudness: nearer is louder; overdue is louder still).
-_LOUD = {"overdue": "‼️ 过了 {ago} 天", "now": "⏰ 就是今天", "soon": "⏰ 马上（还有 {days} 天）",
-         "near": "⏰ 快到了（还有 {days} 天）", "far": "⏰ 记着（还有 {days} 天）"}
+# The mark in front of a dated line. The words after it are the contract source's
+# (core/profile.reason_words), the same words the panel shows.
+_LOUD_MARK = {"overdue": "‼️", "now": "⏰", "soon": "⏰", "near": "⏰", "far": "⏰"}
 
 
 def _dated_head(reason: dict) -> str:
-    return _LOUD[reason["loud"]].format(days=reason["days"], ago=-reason["days"])
+    return f"{_LOUD_MARK[reason['loud']]} {reason_words(reason)}"
 
 
 def _prospective_lines(p: dict) -> list[str]:
@@ -200,12 +206,9 @@ def _prospective_lines(p: dict) -> list[str]:
             if r.get("backfilled"):
                 notes += f"（日子是补的：{r['date']}，不对就 trace 改 when）"
             out.append(f"{_dated_head(r)}：{it['text'][:30]}{_owed(it)}{notes} ({it['short']})")
-        elif r["ask"] == "still_counts":
-            out.append(f"🫀 挂了 {r['held']} 天——还算数吗？{it['text'][:30]}{_owed(it)} ({it['short']})")
         else:
-            undated_set_time = True
-            out.append(f"🫀 答应了，没定时间——要不要定个时间或条件？{it['text'][:30]}{_owed(it)}"
-                       f" ({it['short']})")
+            undated_set_time = undated_set_time or r["ask"] != "still_counts"
+            out.append(f"🫀 {reason_words(r)}{it['text'][:30]}{_owed(it)} ({it['short']})")
     if p["more"]:
         out.append(f"…还有 {p['more']} 条排不下（recall 翻得到）")
     if p["items"]:
@@ -440,9 +443,33 @@ def record_shown(b: dict, text: str | None = None) -> None:
         usage.record(_usage.SHOWN, shown, f"breath.{block}")
 
 
+def keep_last(b: dict) -> None:
+    """Keep this breath as the calling host's last one handed out, for the panel's breath
+    page (core/breath_snapshot.py): its structure and the request's scope line, never its
+    text. A copy that fails only logs."""
+    req = _scope.current_request()
+    host = req.host.name if (req is not None and req.host is not None) else ""
+    line = req.first_line() if req is not None else _scope.OPEN_LINE
+    base_dir = str(getattr(rt.bucket_mgr, "base_dir", "") or (rt.config or {}).get("buckets_dir")
+                   or "")
+    if not base_dir:
+        return
+    try:
+        _snap.save(base_dir, b, host=host, scope_line=line, at=_w.now())
+    except Exception as e:  # noqa: BLE001 — breath must not fail on the panel's copy
+        rt.logger.warning(f"breath: could not keep the last breath for the panel: {e}")
+
+
+def handed_out(b: dict, text: str | None = None) -> None:
+    """What handing one breath out records: the usage log's `shown` lines (`record_shown`)
+    and the panel's copy of the last one (`keep_last`)."""
+    record_shown(b, text)
+    keep_last(b)
+
+
 async def surface_awaken() -> str:
     b = await build_breath()
     text = render_breath(b)
     await stamp_asked(b)
-    record_shown(b, text)
+    handed_out(b, text)
     return text

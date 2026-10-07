@@ -300,6 +300,8 @@ _LEFT_BEHIND: tuple[tuple[str, str], ...] = (
                                    "import"),
     ("_state/schema.json", "the receiving library stamps its own version; the package's "
                            "is in export_meta.json"),
+    ("_state/breath_last.json", "the panel's copy of the last breath each host was handed "
+                                "here; the receiving library keeps its own"),
     ("embeddings.db.backup", "the vectors before a model switch"),
     ("embeddings.db.migrating", "a model switch's unfinished vectors"),
     ("embeddings.db*", "the vector database's side files"),

@@ -31,6 +31,10 @@ with no new persisted field (the one tag convention below excepted):
    below `edited_by_user`. Awake is computed on every read and never stored; 惦记的事 is
    chosen from what is awake, 忽然想起 mostly from what sleeps. `door_note`'s reminders
    and weighing-on-me lists stay for the profile page until it is redrawn.
+⑥ **The panel's surface and trace pages** (`awake_pool`, `hanging`): the awake pool with
+   every reason it is awake, and what still hangs open with the buttons that close it.
+   The words both skins show are made here once: `reason_words` (why a 惦记的事 line is
+   there now — breath's text and the panel say the same words) and `AWAKE_WORDS`.
 
 Which entries each block may show is the gate's (`core/visibility.py`): every block asks
 `visible_for()` with its own road — `prospective` for 惦记的事, `review` for its one held
@@ -45,7 +49,10 @@ Exports: door_note(all_buckets, now) / event_pool(all_buckets, now=None) /
          due_day(meta, today) / awake_reasons(meta, now, …) / is_accessible(meta, now, …) /
          is_open_promise(meta) / written_days_ago(meta, today) / due_now(meta, now) /
          prospective(all_buckets, now, …) / involuntary(all_buckets, now, …) /
-         label_of(e) / entry_label(meta, content) / short_id(bucket_id) / owed_names(bound)
+         label_of(e) / entry_label(meta, content) / short_id(bucket_id) / owed_names(bound) /
+         reason_words(reason) / AWAKE_WORDS / awake_words(key, meta, today) /
+         awake_pool(all_buckets, now, …) / hanging(all_buckets, now, …) / DONE · DROP ·
+         WITHDRAW
 ========================================
 """
 
@@ -554,6 +561,21 @@ RECENT = "recent"       # written within `recent_days`
 CUED = "cued"           # a strong-reminder card delivered within `cue_days`
 HOLD = "hold"           # a hold that holds today
 
+# The words each reason is said with on the panel. A date that has passed says how long
+# ago instead (`awake_words`).
+AWAKE_WORDS = {PROMISED: "答应了没做", DATED: "日子快到了", RECENT: "近三天写的",
+               CUED: "刚被线索碰上", HOLD: "自己是条子"}
+
+
+def awake_words(key: str, meta: dict, today: date) -> str:
+    """The words for one awake reason of this entry: `AWAKE_WORDS`, except a date already
+    past, which says 「过了 N 天」."""
+    if key == DATED:
+        due = due_day(meta, today)
+        if due is not None and due < today:
+            return f"过了 {(today - due).days} 天"
+    return AWAKE_WORDS.get(key, key)
+
 
 def is_open_promise(meta: dict) -> bool:
     """Promised and not closed: something wanted that someone is bound by (`bound`), not
@@ -645,6 +667,25 @@ def due_now(meta: dict, now: datetime) -> bool:
 # reminder card); a want nobody owes and nothing dates (asleep); anything a live hold is
 # on, and anything whose clock time today has not come yet (the `prospective` road),
 # except the one question a `defer`'s review day asks.
+
+# The words for each loudness of a dated reason. Which loudness a date has is
+# `_reminder_loudness` (nearer is louder; overdue is louder still).
+_LOUD_WORDS = {"overdue": "过了 {ago} 天", "now": "就是今天", "soon": "马上（还有 {days} 天）",
+               "near": "快到了（还有 {days} 天）", "far": "记着（还有 {days} 天）"}
+
+
+def reason_words(reason: dict) -> str:
+    """Why a 惦记的事 line is there now, in words: 「快到了（还有 4 天）」 for a date,
+    「挂了 40 天——还算数吗？」 / 「答应了，没定时间——要不要定个时间或条件？」 for an undated
+    promise. breath's text puts its mark in front of these words; the panel shows them
+    as they are."""
+    if reason.get("kind") == "dated":
+        days = int(reason.get("days") or 0)
+        return _LOUD_WORDS[reason["loud"]].format(days=days, ago=-days)
+    if reason.get("ask") == "still_counts":
+        return f"挂了 {reason.get('held', 0)} 天——还算数吗？"
+    return "答应了，没定时间——要不要定个时间或条件？"
+
 
 def _waits_on_cue(meta: dict) -> bool:
     cue = meta.get("cue")
@@ -863,3 +904,150 @@ def involuntary(all_buckets: list, now: datetime, *, settings: BreathSettings | 
     n = max(0, s.involuntary_lines - len(picks))
     picks.extend(line(e, None) for e in rng.sample(rest, min(n, len(rest))))
     return picks
+
+
+# ------------------------------------------------------------
+# The panel's surface page: the awake pool, every reason on each entry
+# ------------------------------------------------------------
+
+def _stamp(meta: dict) -> str | None:
+    """The entry's `created` as a local ISO time, None when unreadable."""
+    created = _w.parse_stamp(meta.get("created"))
+    return created.isoformat(timespec="seconds") if created else None
+
+
+def awake_pool(all_buckets: list, now: datetime, *, settings: BreathSettings | None = None,
+               delivered_at=None, scope=None, reason: str = "") -> list[dict]:
+    """Everything awake at `now`, each with every reason it is awake in words:
+    [{id, short, text, date, at, reasons: [{key, text}]}]. `date` is the day it is due,
+    else the local day it was written; `at` is when it was written (local). `reason`
+    keeps only entries awake for that one key.
+
+    Which entries count is the `list` road's (live, current, timeline kinds, the read
+    scope); awake is `awake_reasons`. Order: entries awake for a date first, the nearest
+    date first (past or ahead), then the rest newest written first."""
+    s = settings or BreathSettings()
+    today = now.date()
+    dated: list[tuple] = []
+    rest: list[tuple] = []
+    for b in all_buckets:
+        meta = b.get("metadata", {}) or {}
+        bid = str(meta.get("id") or b.get("id") or "")
+        if not bid or not _V.timeline_kind(meta) or not _V.visible_for(meta, scope, road=_V.LIST):
+            continue
+        keys = awake_reasons(meta, now, settings=s, delivered_at=delivered_at)
+        if not keys or (reason and reason not in keys):
+            continue
+        due = due_day(meta, today)
+        written = _local_day(meta.get("created"))
+        shown = due or written
+        row = {"id": bid, "short": short_id(bid),
+               "text": entry_label(meta, str(b.get("content") or "")),
+               "date": shown.isoformat() if shown else None, "at": _stamp(meta),
+               "reasons": [{"key": k, "text": awake_words(k, meta, today)} for k in keys]}
+        if DATED in keys and due is not None:
+            dated.append((abs((due - today).days), due, row))
+        else:
+            rest.append((row["at"] or "", row))
+    dated.sort(key=lambda t: (t[0], t[1]))
+    rest.sort(key=lambda t: t[0], reverse=True)
+    return [row for *_k, row in dated] + [row for _at, row in rest]
+
+
+# ------------------------------------------------------------
+# The panel's trace page: what still hangs open, and the buttons that close it
+# ------------------------------------------------------------
+# Three kinds, each one something that can be finished or taken back: a promise not yet
+# closed (`is_open_promise`), a live hold (`_holds.hold_is_live`), and an entry waiting on a
+# cue's condition that is not closed. A want nobody owes, a yearly day, something merely
+# new are not here. Each row says why it still hangs, and which buttons it takes:
+#   done      a promise: finished           (trace status="resolved", closed_by="user")
+#   drop      a promise: not doing it       (trace status="abandoned", closed_by="user")
+#   withdraw  a hold: lift it — closing the hold brings the agreement back
+#             (status="resolved", closed_by="user"); a cue: take the condition off (cue="")
+# The route recomputes the row before a button acts, so only an id on this list, with an
+# action its row offers, closes anything.
+
+DONE = "done"
+DROP = "drop"
+WITHDRAW = "withdraw"
+
+_HOLD_WORDS = {"defer": "先别催", "avoid": "别碰"}
+
+
+def _md(d: date) -> str:
+    return d.strftime("%m-%d")
+
+
+def _promise_words(meta: dict, today: date) -> str:
+    due = due_day(meta, today)
+    if due is None:
+        held = written_days_ago(meta, today) or 0
+        return f"答应了，没定时间（挂了 {held} 天）"
+    days = (due - today).days
+    if days > 0:
+        return f"还有 {days} 天"
+    return "就是今天" if days == 0 else f"过了 {-days} 天"
+
+
+def _hold_words(meta: dict) -> str:
+    end = _H.hold_end(meta)
+    if end is not None:
+        return f"条子到 {_md(end)}"
+    review = _w.parse_date_or_none(str(meta.get("review_after") or ""))
+    if review is not None:
+        return f"条子，{_md(review.date())} 问一次还放不放"
+    return "条子，没写到哪天"
+
+
+def _cue_condition(meta: dict) -> str:
+    cue = meta.get("cue")
+    return str(cue.get("condition") or "").strip() if isinstance(cue, dict) else ""
+
+
+def hanging(all_buckets: list, now: datetime, *, settings: BreathSettings | None = None,
+            delivered_at=None, scope=None) -> dict:
+    """{"surface": rows awake, "deep": rows asleep}; each half newest written first.
+
+    row: {id, short, text, kind: "promise" | "hold" | "cue", why_words, actions: [...],
+          at, on? (a hold: the id it is hung on), hold? / hold_words? (a hold's level),
+          condition? (a cue)}
+    An entry is one row: a hold is a hold whatever else it carries; a promise waiting on a
+    cue is a promise whose row also offers `withdraw` (the cue comes off, the promise
+    stays). Which entries count is the `list` road's (live, current, the read scope)."""
+    s = settings or BreathSettings()
+    today = now.date()
+    out: dict[str, list[tuple]] = {"surface": [], "deep": []}
+    for b in all_buckets:
+        meta = b.get("metadata", {}) or {}
+        bid = str(meta.get("id") or b.get("id") or "")
+        if not bid or not _V.timeline_kind(meta) or not _V.visible_for(meta, scope, road=_V.LIST):
+            continue
+        condition = "" if is_closed(meta) else _cue_condition(meta)
+        row = {"id": bid, "short": short_id(bid),
+               "text": entry_label(meta, str(b.get("content") or "")), "at": _stamp(meta)}
+        if _H.is_hold(meta):
+            if not _H.hold_is_live(meta, now):
+                continue
+            level = str(meta.get("hold") or "")
+            row.update(kind="hold", on=str(meta.get("exception_of") or "").strip(),
+                       hold=level, hold_words=_HOLD_WORDS.get(level, level),
+                       why_words=_hold_words(meta), actions=[WITHDRAW])
+        elif is_open_promise(meta):
+            words = _promise_words(meta, today)
+            actions = [DONE, DROP]
+            if condition:
+                words += f"；在等「{condition}」"
+                actions.append(WITHDRAW)
+                row["condition"] = condition
+            row.update(kind="promise", why_words=words, actions=actions)
+        elif condition:
+            row.update(kind="cue", condition=condition, why_words=f"在等「{condition}」",
+                       actions=[WITHDRAW])
+        else:
+            continue
+        half = ("surface" if is_accessible(meta, now, settings=s, delivered_at=delivered_at)
+                else "deep")
+        out[half].append((row["at"] or "", row))
+    return {half: [row for _at, row in sorted(rows, key=lambda t: t[0], reverse=True)]
+            for half, rows in out.items()}
