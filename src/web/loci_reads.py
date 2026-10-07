@@ -20,6 +20,7 @@ from core import _when as _w      # "today" in the user's local timezone — nev
 from core import census as _census
 from core import starfield as _starfield
 from core.profile import _PROFILE_TAG
+from .loci_detail import library_view as _library_view
 from utils import read_from_ids
 
 logger = sh.logger
@@ -54,7 +55,7 @@ async def build_graph() -> dict:
     return _starfield.build(all_buckets, _w.now())
 
 
-def _collect_events(all_buckets: list) -> list[dict]:
+def _collect_events(all_buckets: list, view=None) -> list[dict]:
     """The pool behind the "something comes back to you" section of the waking screen.
     **The rule is not here** — it is in the contract source.
 
@@ -70,7 +71,7 @@ def _collect_events(all_buckets: list) -> list[dict]:
     from core._rooms import normalize_room
     from core.profile import event_pool
     pool: list[dict] = []
-    for e in event_pool(all_buckets):
+    for e in event_pool(all_buckets, scope=view):
         meta, content, bid = e["meta"], e["content"], e["id"]
         room = normalize_room(meta.get("room"))
         pool.append({
@@ -101,7 +102,7 @@ async def build_recollect(n: int = 2) -> dict:
     """The "give me another" button hits this endpoint on its own, rather than re-fetching
     the whole profile page."""
     all_buckets = await sh.bucket_mgr.list_all(include_archive=False)
-    pool = _collect_events(all_buckets)
+    pool = _collect_events(all_buckets, await _library_view())
     return {"recollect": _pick_recollect(pool, n), "pool": len(pool)}
 
 
@@ -124,7 +125,8 @@ async def build_profile() -> dict:
     from core.profile import door_note, edited_by_user
     all_buckets = await sh.bucket_mgr.list_all(include_archive=False)
     now = _w.now()          # local timezone
-    door = door_note(all_buckets, now)
+    view = await _library_view()
+    door = door_note(all_buckets, now, scope=view)
     heavy_q_id = door["heavy_question_id"]      # ask only about the longest-standing one
 
     def _label(x) -> str:
@@ -160,7 +162,7 @@ async def build_profile() -> dict:
     edited = [{"id": e["id"], "short": _short_id(e["id"]),
                "label": _label(e), "content": e["content"].strip(),
                "corrects": (read_from_ids(e["meta"]) or [""])[0]}
-              for e in edited_by_user(all_buckets)]
+              for e in edited_by_user(all_buckets, scope=view)]
     rules = []
     for r in door["rules"]:
         room = normalize_room(r["meta"].get("room"))
@@ -184,7 +186,7 @@ async def build_profile() -> dict:
 
     # "Something comes back to you", the fifth of the six parts — reusing the same list_all
     # result rather than hitting the store a second time.
-    _ev_pool = _collect_events(all_buckets)
+    _ev_pool = _collect_events(all_buckets, view)
 
     return {
         "mid": mid,

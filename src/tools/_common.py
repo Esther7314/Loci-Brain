@@ -25,8 +25,9 @@ What this file deliberately does not do:
 - Holds no global objects; every dependency comes from core/runtime
 - Wraps no side effects beyond log formatting; the caller decides whether to await
 
-- read_scope: the request's read scope as the view core's gate takes
-  (core/scope.ScopeView), loaded once per request; sees_whole_library: whether the
+- read_scope: the view core's gate takes (core/scope.ScopeView) — the request's read
+  scope, or the whole library read against the source registry — loaded once per
+  request; sees_whole_library: whether the
   call reads with no ceiling at all (what owner-only answers ask)
 
 Exports: limits_cfg / max_bucket_bytes / max_pinned / check_content_size /
@@ -220,24 +221,18 @@ _VIEW: contextvars.ContextVar = contextvars.ContextVar("loci_scope_view", defaul
 
 
 async def read_scope(fresh: bool = False):
-    """This call's `ScopeView`, or None when nothing is filtered (an open host that sent
-    no scope, no request at all). `fresh` reads the library and the registry again instead
-    of the view this call already made (a check after waiting on something outside)."""
+    """This call's `ScopeView` (core/scope.view_of): its read scope, or — an open host
+    that sent no scope, no request at all — the whole library, which narrows nothing but
+    still reads the source registry. `fresh` reads the library and the registry again
+    instead of the view this call already made (a check after waiting on something
+    outside). A call outside any request builds its view each time."""
     req = _scope.current_request()
-    if req is None or req.whole_library:
-        return None
     cached = _VIEW.get()
-    if cached is not None and cached[0] is req and not fresh:
+    if req is not None and cached is not None and cached[0] is req and not fresh:
         return cached[1]
-    metas: dict = {}
-    if not req.refused:
-        for b in await rt.bucket_mgr.list_all(include_archive=True):
-            meta = b.get("metadata") or {}
-            bid = str(meta.get("id") or b.get("id") or "")
-            if bid:
-                metas[bid] = meta
-    view = _scope.ScopeView(req, metas, getattr(rt.bucket_mgr, "sources", None))
-    _VIEW.set((req, view))
+    view = await _scope.view_of(rt.bucket_mgr, req)
+    if req is not None:
+        _VIEW.set((req, view))
     return view
 
 
@@ -277,8 +272,8 @@ async def resolve_bucket_id(bucket_id) -> tuple[str, str]:
     """
     q = str(bucket_id or "").strip()
     view = await read_scope()
-    if view is not None and q and (_FULL_ID_RE.fullmatch(q) or is_bucket_id(q)
-                                   or q in view.metas):
+    if _scope.narrows(view) and q and (_FULL_ID_RE.fullmatch(q) or is_bucket_id(q)
+                                       or q in view.metas):
         return (q, "") if view.permits_id(q) else (q, not_found(q))
     if not _SHORT_ID_RE.fullmatch(q):
         return q, ""

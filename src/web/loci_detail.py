@@ -44,16 +44,26 @@ logger = sh.logger
 # ---------------------------------------------------------
 
 async def read_scope_of(request: Request):
-    """(refusal response or None, the request's ScopeView or None, its scope line). A
-    panel request reads the whole library."""
+    """(refusal response or None, the request's ScopeView, its scope line). A panel
+    request reads the whole library, through a view that still reads the source registry
+    (core/scope.view_of)."""
     refused = _scope_refusal(request)
     if refused is not None:
         return refused, None, ""
+    from core import scope as _scope
     req = _request_of(request)
     if req is None or req.whole_library:
-        return None, None, OPEN_LINE
+        return None, await _scope.view_of(sh.bucket_mgr, req), OPEN_LINE
     from tools._common import read_scope
     return None, await read_scope(), req.first_line()
+
+
+async def library_view():
+    """The whole library as a panel page reads it: nothing narrowed, the source registry
+    still read (core/scope.view_of), so a page never shows what stands on a source the
+    registry already says is withdrawn."""
+    from core import scope as _scope
+    return await _scope.view_of(sh.bucket_mgr, None)
 
 
 def _gone(bucket_id: str) -> JSONResponse:
@@ -107,7 +117,10 @@ async def api_loci_bucket(request: Request) -> Response:
             return JSONResponse({"error": "missing id"}, status_code=400)
         if b is None:
             return _gone(bucket_id)
-        return JSONResponse(_D.entry_view(b, await _lineage_of(b, view), scope_line=line))
+        lin = await _lineage_of(b, view)
+        if _D.clearing_due(b.get("metadata") or {}, view):
+            b = sh.bucket_mgr.as_cleared(b)
+        return JSONResponse(_D.entry_view(b, lin, scope_line=line))
     except Exception as e:
         logger.warning(f"[loci] bucket 失败: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)

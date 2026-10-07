@@ -93,6 +93,15 @@ class ClearingMixin:
                  "source": gone.get("of", "")})
             return {"texts": [t for t in texts if t.strip()], "cleared": True}
 
+    def as_cleared(self, bucket: dict) -> dict:
+        """A bucket as `clear_body` leaves it — the body `CLEARED_BODY`, the metadata only
+        `_CLEARED_KEEPS`, no file path (its name is text too) — without writing anything:
+        how a read shows a memory whose clearing is due but has not reached it yet."""
+        meta = bucket.get("metadata") or {}
+        kept = {k: meta[k] for k in self._CLEARED_KEEPS if k in meta}
+        out = {k: v for k, v in bucket.items() if k not in ("path", "metadata", "content")}
+        return {**out, "metadata": kept, "content": self.CLEARED_BODY}
+
     async def add_invalidation_record(self, bucket_id: str, record: dict) -> bool:
         """Append one invalidation record unless one with the same kind and change is
         already there, archive or not (a terminal memory still has to say a source behind

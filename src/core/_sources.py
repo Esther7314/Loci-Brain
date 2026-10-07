@@ -967,6 +967,9 @@ class SourceRegistry:
         self._held: dict[str, dict] = {}
         # (system, instance, container) -> the keys of runs a change was recorded for
         self._runs: dict[tuple, set] = {}
+        # `blocking_containers`, and the file sizes it was read at
+        self._blocking: frozenset = frozenset()
+        self._blocking_at: Optional[tuple] = None
 
     # ---------- the index ----------
 
@@ -1420,6 +1423,38 @@ class SourceRegistry:
         """The state the read gate judges a memory's source record by (`state_of`: a run
         by every line inside it)."""
         return self.state_of(record_id(record) if isinstance(record, dict) else record)
+
+    def stamp(self) -> tuple:
+        """The sizes of the files the read gate's answers come from (changes, holds, the
+        registered line orders): anything kept from reading against the registry is stale
+        once this changes. The files are only ever appended to."""
+        return (_size(self.changes_path), _size(self.held_path), _size(self.orders_path))
+
+    def blocking_containers(self) -> frozenset:
+        """The containers, as (system, instance, container), holding a source recorded
+        withdrawn or deleted or named by a hold. `state_of` judges a source only by keys
+        of its own container, so a source outside these reads as neither withdrawn,
+        deleted nor held, and the read gate need not ask about it (core/scope.ScopeView.
+        source_blocked). A hold already settled still counts here: the set only narrows
+        what is asked."""
+        self._fresh()
+        self._fresh_held()
+        with self._guard:
+            at = (self._changes_size, self._held_size)
+            if at == self._blocking_at:
+                return self._blocking
+            keys = [k for k, e in self._by_source.items() if e["state"] in (WITHDRAWN, DELETED)]
+            keys += list(self._held)
+            out = set()
+            for key in keys:
+                try:
+                    sid = SourceId.parse(key)[0]
+                except SourceRecordError:
+                    continue
+                out.add((sid.system, sid.instance, sid.container))
+            self._blocking = frozenset(out)
+            self._blocking_at = at
+            return self._blocking
 
     def use_of(self, record: dict):
         """The `use` in force for a source record as a whole: the host's latest

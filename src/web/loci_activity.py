@@ -28,6 +28,7 @@ from starlette.responses import JSONResponse, Response
 
 from . import _shared as sh
 from ._guards import _request_of, _write_body
+from .loci_detail import library_view as _library_view
 from core import _when as _w
 from core import activity as _act
 from core import paging as _pg
@@ -75,7 +76,8 @@ async def api_loci_turns(request: Request) -> Response:
         out = _act.turns(sh.bucket_mgr.cues, _usage_rows(),
                          await sh.bucket_mgr.list_all(include_archive=True),
                          host=host, window=window, now=now, offset=offset, limit=limit,
-                         as_of=as_of, panel=_request_of(request) is None)
+                         as_of=as_of, scope=await _library_view(),
+                         panel=_request_of(request) is None)
     except Exception as e:                       # noqa: BLE001
         return _failed("turns", e)
     if out is None:
@@ -91,7 +93,7 @@ async def api_loci_recall_timeline(request: Request) -> Response:
         out = _act.timeline(sh.bucket_mgr.cues.events(), _usage_rows(),
                             await sh.bucket_mgr.list_all(include_archive=True),
                             now=now, offset=offset, limit=limit, as_of=as_of,
-                            panel=_request_of(request) is None)
+                            scope=await _library_view(), panel=_request_of(request) is None)
     except Exception as e:                       # noqa: BLE001
         return _failed("recall/timeline", e)
     return JSONResponse({**out, "scope": _scope_line(request)})
@@ -110,7 +112,8 @@ async def api_loci_usage(request: Request) -> Response:
                                              microsecond=0) - timedelta(days=days)
         out = _act.usage_counts(_usage_rows(),
                                 await sh.bucket_mgr.list_all(include_archive=True),
-                                since=since, offset=offset, limit=limit, as_of=as_of)
+                                since=since, offset=offset, limit=limit, as_of=as_of,
+                                scope=await _library_view())
     except Exception as e:                       # noqa: BLE001
         return _failed("usage", e)
     return JSONResponse({**out, "scope": _scope_line(request)})

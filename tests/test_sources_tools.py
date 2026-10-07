@@ -432,9 +432,13 @@ def test_recall_by_id_marks_a_withdrawn_or_revised_source(store, tmp_path):
     assert SRC + "@1" in shown and "⚠️" not in shown.split("来源:", 1)[1]
     run(store.sources.apply_change({"change_id": "r1", "source": SRC, "kind": "revised",
                                     "host_seq": 1, "revision": "2"}))
-    _withdraw(store, seq=2)
     block = run(R.recall_core(when="", room="", tag="", query=bid)).split("来源:", 1)[1]
-    assert "⚠️撤回" in block and "@2" in block
+    assert "已改到 @2" in block
+    # Withdrawn in the registry: the read gate keeps the memory off from that moment,
+    # before any record is written on it — the body is not shown, its sources neither.
+    _withdraw(store, seq=2)
+    shown = run(R.recall_core(when="", room="", tag="", query=bid))
+    assert "依据的来源被撤回或删除了" in shown and "来源:" not in shown
 
 
 # ───────────────────────── write keys ─────────────────────────

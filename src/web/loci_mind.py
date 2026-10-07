@@ -105,7 +105,8 @@ async def build_awake(reason: str = "") -> list[dict]:
     all_buckets = await sh.bucket_mgr.list_all(include_archive=False)
     return _profile.awake_pool(all_buckets, _w.now(),
                                settings=_profile.breath_settings(sh.config),
-                               delivered_at=_delivered_at(), reason=reason)
+                               delivered_at=_delivered_at(), reason=reason,
+                               scope=await _scope.view_of(sh.bucket_mgr, None))
 
 
 async def api_loci_awake(request: Request) -> Response:
@@ -131,7 +132,8 @@ async def build_hanging() -> dict:
     all_buckets = await sh.bucket_mgr.list_all(include_archive=False)
     return _profile.hanging(all_buckets, _w.now(),
                             settings=_profile.breath_settings(sh.config),
-                            delivered_at=_delivered_at())
+                            delivered_at=_delivered_at(),
+                            scope=await _scope.view_of(sh.bucket_mgr, None))
 
 
 async def api_loci_hanging(request: Request) -> Response:
@@ -224,7 +226,8 @@ async def api_loci_trace(request: Request) -> Response:
 async def build_changes(as_of: datetime) -> list[dict]:
     events = list(sh.bucket_mgr.ledger_mirror.iter_events())
     all_buckets = await sh.bucket_mgr.list_all(include_archive=True)
-    return _changes.recent(events, all_buckets, as_of=as_of)
+    return _changes.recent(events, all_buckets, as_of=as_of,
+                           scope=await _scope.view_of(sh.bucket_mgr, None))
 
 
 async def api_loci_changes_recent(request: Request) -> Response:

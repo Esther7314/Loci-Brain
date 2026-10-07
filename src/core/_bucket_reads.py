@@ -68,6 +68,17 @@ class ReadsMixin:
         file_path = self._find_bucket_file(bucket_id)
         return self._load_bucket(file_path, strict=True) if file_path else None
 
+    def meta_of(self, bucket_id: str) -> Optional[dict]:
+        """One bucket's metadata by id, archive included, read synchronously: the read
+        gate's walk to what an entry stands on (core/scope.ScopeView.source_blocked) runs
+        inside synchronous code. None when there is no such bucket or it does not parse."""
+        if not bucket_id or not isinstance(bucket_id, str):
+            return None
+        file_path = self._find_bucket_file(bucket_id)
+        data = self._load_bucket(file_path) if file_path else None
+        meta = (data or {}).get("metadata")
+        return meta if isinstance(meta, dict) else None
+
     def find_exact_content(
         self,
         content: str,

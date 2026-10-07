@@ -464,7 +464,9 @@ def test_a_quoted_source_held_withdrawn_is_not_asked(library, host):
                            prov=[{"rel": "wasQuotedFrom",
                                   "target": "lento:home/private:U#m_0009"}]))
     out = original(bid)
-    assert out.splitlines()[0].startswith("原话不许看了") and host.requests == []
+    # The registry says the quoted source is withdrawn: the read gate keeps the memory off
+    # before any record is written on it, and the host is never asked.
+    assert "依据的来源被撤回或删除了" in out and host.requests == []
 
 
 def test_the_request_carries_this_turns_read_scope(library, host):

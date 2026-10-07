@@ -57,9 +57,12 @@ Every road but `read` shows live entries only.
 A source withdrawn or deleted closes every road but `invalidation` — `read` included —
 to what stood on it: the entries naming the source carry an open `source_gone`
 invalidation record from the moment the change is applied, and so does everything derived
-from them (core/_source_change.py). Under a read scope the registry says the same thing
-again (core/scope.py reads each source's state on every request); without one this record
-is how the gate knows. `invalidation` lists such an entry by id and status only, never its
+from them (core/_source_change.py). The request's view says the same thing from the
+registry, on every read and the whole library's too (core/scope.ScopeView: under a read
+scope such an entry is out of scope; without one it is `source_gone` all the same), so
+the stretch between the registry recording the change and the records being written shows
+nothing; only a call with no view at all (`scope` None) has the record alone to go by.
+`invalidation` lists such an entry by id and status only, never its
 text (core/_invalidation.py). A source a host said was withdrawn or deleted while serving
 its original is held the same way (an open `source_held` record) until the host's ordered
 change settles it. When a withdrawn or deleted source is restored, what was derived from
@@ -136,8 +139,9 @@ Read scope
 ------------------------------------------------------------
 `scope` is the request's read scope as a `core.scope.ScopeView` — the host's grant, the
 turn's venue and audience, the source registry, and the library for walking to an
-entry's roots — or None: the whole library (an open host that sent no scope, a background
-job, a direct call). What may be read under a scope is `ScopeView.permits` (the three
+entry's roots; a view of the whole library (`whole_library`: an open host that sent no
+scope, no request at all) narrows nothing and is there for the registry — or None: the
+whole library, read by the records alone. What may be read under a scope is `ScopeView.permits` (the three
 conditions, every root of a derived entry, nothing for a memory without sources); this
 gate asks it first, on every road and both kinds, and an entry it refuses is `OUT_OF_SCOPE`
 — on the `read` road too, where it is not shown with a mark but not shown at all: a lookup
@@ -313,6 +317,14 @@ def source_gone(meta) -> bool:
                and not str(r.get("confirmed_at") or "").strip() for r in raw)
 
 
+def _registry_says_gone(scope, meta: dict) -> bool:
+    """Does the request's view read in the source registry, now, that a source behind the
+    entry is withdrawn, deleted or held (core/scope.ScopeView.source_blocked)? Only a view
+    can say: without one, the `source_gone` record is all the gate has."""
+    blocked = getattr(scope, "source_blocked", None)
+    return callable(blocked) and bool(blocked(meta))
+
+
 def source_restored(meta) -> bool:
     """Does the entry carry an open `source_restored` record (core/_invalidation.
     SOURCE_RESTORED)? Written on what was derived from the entries resting on a withdrawn or
@@ -380,7 +392,7 @@ def visible_for(meta, scope=None, *, road: str,
     if scope is not None and not scope.permits(m):
         return Verdict(shown=False, state=state, reasons=(OUT_OF_SCOPE,))
     reasons: list[str] = []
-    if road != INVALIDATION and source_gone(m):
+    if road != INVALIDATION and (source_gone(m) or _registry_says_gone(scope, m)):
         reasons.append(SOURCE_GONE)
     if road not in (INVALIDATION, READ) and source_restored(m):
         reasons.append(SOURCE_RESTORED)

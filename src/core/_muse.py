@@ -139,6 +139,7 @@ from . import runtime as rt
 from ._bigevent import BIGEVENT_TAG
 from ._fold import GIST_TAG, is_covered
 from ._rooms import is_event_room, is_mind_room
+from . import scope as _scope
 from . import visibility as _V    # the one gate: what may be put in front of the model
 
 # ============================================================
@@ -1123,7 +1124,10 @@ def view_cache_key() -> tuple | None:
     # config goes into the key too: change a threshold in the muse section from the panel
     # and the very next screen should be computed against the new line
     c = muse_config(rt.config)
-    return (int(gen), tuple(sorted((k, str(v)) for k, v in c.items())))
+    # the source registry too: a source withdrawn takes what stands on it out of the view
+    stamp = getattr(getattr(rt.bucket_mgr, "sources", None), "stamp", None)
+    return (int(gen), tuple(sorted((k, str(v)) for k, v in c.items())),
+            stamp() if callable(stamp) else None)
 
 
 def clear_view_cache() -> None:
@@ -1143,16 +1147,22 @@ async def both_sides(force: bool = False, scope=None) -> tuple[list, int, int, d
 
     Under a read scope (`scope`, a core.scope.ScopeView) both sides work only on what the
     gate's `muse` road lets the request see — the clusters, the gestures and every count
-    among them — and nothing is cached: the cache holds the whole library's view.
+    among them — and nothing is cached: the cache holds the whole library's view. The
+    whole library's view leaves out what the source registry says stands on a withdrawn,
+    deleted or held source (core/scope.ScopeView.source_blocked), whichever caller asks.
     """
-    key = view_cache_key() if scope is None else None
+    narrowed = _scope.narrows(scope)
+    key = None if narrowed else view_cache_key()
     if not force and key is not None and _view_cache["钥匙"] == key:
         return _view_cache["值"]
     loaded = await load_records()
-    if scope is not None:
-        recs, digested = loaded
+    recs, digested = loaded
+    if narrowed:
         loaded = ([(m, t) for m, t in recs if _V.visible_for(m, scope, road=_V.MUSE)],
                   digested)
+    else:
+        view = scope if scope is not None else await _scope.view_of(rt.bucket_mgr, None)
+        loaded = ([(m, t) for m, t in recs if not view.source_blocked(m)], digested)
     clusters, scattered, default_coords, s1 = await propose_mind(loaded=loaded)
     fingers, s2 = await propose_gist(loaded=loaded)
     out = (clusters, scattered, default_coords, fingers, {"mind": s1, "event": s2})

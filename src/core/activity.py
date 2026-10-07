@@ -49,6 +49,7 @@ from typing import Iterable, Optional
 from . import _cue
 from . import _holds as _H
 from . import _usage
+from . import scope as _scope
 from . import _when as _w
 from . import visibility as _V
 from .paging import page, past, stamp
@@ -189,7 +190,7 @@ def _card_line(lib: dict, c: dict, scope) -> Optional[dict]:
     key = c["card"]
     if c.get("id"):
         ref = entry_ref(lib, c["id"], scope)
-        if scope is not None and ref["state"] == "missing":
+        if _scope.narrows(scope) and ref["state"] == "missing":
             return None
     else:
         name = key[len("name:"):].rpartition("@")[0] if key.startswith("name:") else ""
@@ -237,7 +238,8 @@ def _turn_lines(usage_rows: Iterable[dict], host: str, turns: set) -> dict[str, 
 def _road_line(row: dict, lib: dict, scope, panel: bool) -> dict:
     out = {"id": _usage.row_id(row), "road": str(row.get("road") or ""),
            "ids": [str(i) for i in row.get("ids") or []
-                   if scope is None or entry_ref(lib, i, scope)["state"] != "missing"]}
+                   if not _scope.narrows(scope)
+                   or entry_ref(lib, i, scope)["state"] != "missing"]}
     if panel and row.get("kind") == _usage.FOUND and "query" in row:
         out["query"] = str(row.get("query") or "")
     return out
@@ -367,7 +369,7 @@ def usage_counts(usage_rows: Iterable[dict], buckets: Iterable[dict], *, since: 
     rows = []
     for bid, c in counts.items():
         ref = entry_ref(lib, bid, scope)
-        if scope is not None and ref["state"] == "missing":
+        if _scope.narrows(scope) and ref["state"] == "missing":
             continue
         rows.append({"id": bid, "short": ref["short"], "text": ref["text"],
                      "state_words": ref["state_words"], "shown": c[_usage.SHOWN],

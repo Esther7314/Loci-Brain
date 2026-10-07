@@ -110,12 +110,18 @@ standing on such an entry, or on an id the library does not have.
 
 The view never says how many entries it withheld: a count is itself a leak.
 
+The whole library is read through a view too (`view_of`; `whole_library`): it narrows
+nothing, but it still reads the registry, so an entry with a source behind it (the same
+walk) that the registry records withdrawn, deleted or held is kept off as the gate's
+`source_gone` from the moment the change is recorded (`ScopeView.source_blocked`), before
+the change has written its records on what stood on the source.
+
 Exports: SCOPE_HEADER · TURN_HEADER · HOST_HEADER · SCOPE_ENV · HOST_TOKEN_ENV · OPEN ·
          RESTRICTED · LEGACY · LOCI · LOCI_HOST · IMPORT_SYSTEM · ScopeError · Host ·
          Hosts (authority_for · provider_for · registrar_for · claimants · collisions ·
          ceilinged · unsafe) ·
          load_hosts · Scope ·
-         parse_scope · parse_turn · RequestScope · ScopeView · unsupported_line ·
+         parse_scope · parse_turn · RequestScope · ScopeView · view_of · narrows · unsupported_line ·
          current_request · request_scope
 ========================================
 """
@@ -619,23 +625,47 @@ class RequestScope:
                 f"许读 {len(s.grant)} 处〕")
 
 
+def _meta_of(row):
+    """A store bucket ({"metadata": …}) or a bare meta -> the meta."""
+    if isinstance(row, dict) and isinstance(row.get("metadata"), dict):
+        return row["metadata"]
+    return row
+
+
 class ScopeView:
-    """A judged scope over one library: `permits(meta)` for the gate.
+    """One request's reading of one library, for the gate: `permits(meta)` (may this
+    request read it at all) and `source_blocked(meta)` (does the registry say now that a
+    source behind it is withdrawn, deleted or held).
 
-    `metas` maps every id in the library (archive included) to its metadata, for the walk
-    to the roots; `registry` is the source registry (states and use changes). Decisions are
-    kept per id for the life of the view (one request)."""
+    `request` None is no request at all (a direct call, a background job), which reads the
+    whole library as an open request without a scope does (`whole_library`). `metas` maps
+    ids to metadata for the walk to the roots: every id in the library, archive included,
+    under a scope; with `partial` (the whole library, `view_of`) only what was loaded, and
+    the walk reads an id missing there from the registry's library by id. `registry` is
+    the source registry (states and use changes). Decisions are kept per id for the life
+    of the view (one request)."""
 
-    def __init__(self, request: RequestScope, metas: Mapping[str, dict], registry=None):
+    def __init__(self, request: Optional[RequestScope], metas: Mapping[str, dict],
+                 registry=None, *, partial: bool = False):
         self.request = request
         self.metas = metas
         self.registry = registry
+        self.partial = partial
         self._memo: dict[str, Optional[bool]] = {}
         self._records: dict[str, bool] = {}
+        self._blocking: Optional[frozenset] = None
+        self._blocked: dict[str, bool] = {}
+        self._record_blocked: dict[str, bool] = {}
+        self._read: dict[str, Optional[dict]] = {}
+
+    @property
+    def whole_library(self) -> bool:
+        """Nothing is narrowed: no request, or an open one that sent no scope."""
+        return self.request is None or self.request.whole_library
 
     @property
     def first_line(self) -> str:
-        return self.request.first_line()
+        return OPEN_LINE if self.request is None else self.request.first_line()
 
     def _record_ok(self, rec) -> bool:
         if not isinstance(rec, dict):
@@ -715,18 +745,21 @@ class ScopeView:
     def permits(self, meta) -> bool:
         """May this request read this entry at all (before any road's own rules)?"""
         req = self.request
+        if req is None:
+            return True
         if req.refused:
             return False
         if req.scope is None:
             return req.mode == OPEN
-        m = meta.get("metadata") if isinstance(meta, dict) and isinstance(
-            meta.get("metadata"), dict) else meta
+        m = _meta_of(meta)
         if not isinstance(m, dict):
             return False
         bid = str(m.get("id") or "")
         return self._walk(bid, m, frozenset()) is True
 
     def permits_id(self, bid: str) -> bool:
+        if self.whole_library:
+            return True
         meta = self.metas.get(str(bid or ""))
         return meta is not None and self.permits(meta)
 
@@ -734,11 +767,86 @@ class ScopeView:
         """A short handle (an id's first characters, as tags and lines print them) names
         something this request may read."""
         h = str(handle or "")
+        if self.whole_library:
+            return bool(h)
         return bool(h) and any(bid.startswith(h) and self.permits_id(bid) for bid in self.metas)
+
+    # ---------- what the registry says now ----------
+
+    def source_blocked(self, meta, *, roots: bool = True) -> bool:
+        """Does the registry say, now, that a source standing behind this entry is
+        withdrawn, deleted or held: one of its own `sources`, one its quoted lines name,
+        or (`roots`) one behind anything it is derived from (the walk `permits` takes)?
+        Asked on every read, the whole library's included: a host's change is recorded in
+        the registry before the memories resting on the source carry their `source_gone`
+        records (core/_source_change.py), and a read in between must not count the
+        source. Nothing is asked of a registry with no such source (`blocking_containers`)."""
+        reg = self.registry
+        if reg is None:
+            return False
+        if self._blocking is None:
+            containers = getattr(reg, "blocking_containers", None)
+            self._blocking = containers() if callable(containers) else frozenset()
+        if not self._blocking:
+            return False
+        m = _meta_of(meta)
+        if not isinstance(m, dict):
+            return False
+        if not roots:
+            return any(self._record_gone(rec) for rec in _src.basis_records(m))
+        return self._blocked_walk(str(m.get("id") or ""), m, frozenset())
+
+    def _blocked_walk(self, bid: str, meta: dict, path: frozenset) -> bool:
+        if bid and bid in self._blocked:
+            return self._blocked[bid]
+        hit = any(self._record_gone(rec) for rec in _src.basis_records(meta))
+        if not hit:
+            for p in read_from_ids(meta):
+                if not p or p == bid or p in path:
+                    continue
+                pm = self._meta_for(p)
+                if pm is not None and self._blocked_walk(p, pm, path | {bid}):
+                    hit = True
+                    break
+        if bid:
+            self._blocked[bid] = hit
+        return hit
+
+    def _record_gone(self, rec) -> bool:
+        try:
+            sid = _src.record_id(rec)
+        except (KeyError, TypeError, AttributeError):
+            return False
+        if (sid.system, sid.instance, sid.container) not in self._blocking:
+            return False
+        key = sid.to_string()
+        if key not in self._record_blocked:
+            try:
+                state = self.registry.state_of(sid)
+            except (_src.SourceRecordError, ValueError):
+                state = _src.ACTIVE
+            self._record_blocked[key] = state in (_src.WITHDRAWN, _src.DELETED, _src.HELD)
+        return self._record_blocked[key]
+
+    def _meta_for(self, bid: str) -> Optional[dict]:
+        """An entry's metadata for the walk: from `metas`, else (a partial view) read from
+        the registry's library by id."""
+        meta = self.metas.get(bid)
+        if meta is not None or not self.partial:
+            return meta
+        if bid not in self._read:
+            read = getattr(getattr(self.registry, "store", None), "meta_of", None)
+            try:
+                self._read[bid] = read(bid) if callable(read) else None
+            except Exception:                    # noqa: BLE001 - an unreadable file stands on nothing known
+                self._read[bid] = None
+        return self._read[bid]
 
     def covers_container(self, source: Mapping) -> bool:
         """Does the grant cover a whole container of the host's material (a batch of raw
         lines waiting to be sliced)? Only a place naming no single piece does."""
+        if self.request is None:
+            return True
         if self.request.refused:
             return False
         if self.request.scope is None:
@@ -749,6 +857,38 @@ class ScopeView:
         except (KeyError, TypeError):
             return False
         return any(p.id is None and p.covers(sid) for p in self.request.scope.grant)
+
+
+def narrows(view) -> bool:
+    """Does this view keep anything out of the request's reach (a read scope, or a
+    refusal)? None and a whole-library view narrow nothing."""
+    return view is not None and not getattr(view, "whole_library", False)
+
+
+def _metas(buckets) -> dict:
+    out: dict = {}
+    for b in buckets:
+        meta = b.get("metadata") or {}
+        bid = str(meta.get("id") or b.get("id") or "")
+        if bid:
+            out[bid] = meta
+    return out
+
+
+async def view_of(store, req: Optional[RequestScope]) -> ScopeView:
+    """The view one request reads `store`'s library through. Under a scope the walk to
+    the roots needs the whole library, archive included, loaded once (nothing for a
+    refused request). The whole library loads the live listing only, and only when the
+    registry holds a withdrawn, deleted or held source at all: the walk reads anything
+    else it needs by id (`ScopeView.source_blocked`)."""
+    registry = getattr(store, "sources", None)
+    if req is None or req.whole_library:
+        containers = getattr(registry, "blocking_containers", None)
+        blocking = containers() if callable(containers) else frozenset()
+        metas = _metas(await store.list_all(include_archive=False)) if blocking else {}
+        return ScopeView(req, metas, registry, partial=True)
+    metas = {} if req.refused else _metas(await store.list_all(include_archive=True))
+    return ScopeView(req, metas, registry)
 
 
 # ============================================================

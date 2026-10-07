@@ -38,6 +38,7 @@ import inspect
 from typing import Awaitable, Callable
 
 from core import _sources as _src
+from core import scope as _scope
 from core._slicer import SliceError
 from core import runtime as rt
 from ._common import read_scope
@@ -67,7 +68,7 @@ async def visible_batches() -> list[dict]:
     store = _store()
     batches = store.open_batches() if store is not None else []
     view = await read_scope()
-    if view is None:
+    if not _scope.narrows(view):
         return batches
     out = []
     for b in batches:
@@ -86,7 +87,7 @@ async def pending_seen() -> int:
     store = _store()
     if store is None:
         return 0
-    if await read_scope() is None:
+    if not _scope.narrows(await read_scope()):
         return store.pending_count()
     return sum(len(b["slices"]) for b in await visible_batches())
 
@@ -103,7 +104,7 @@ async def _out_of_reach(store, sid: str) -> str:
     """A slice the request's read scope does not reach is answered like one that does not
     exist ("" when it is in reach, or unknown and left to the store's own refusal)."""
     view = await read_scope()
-    if view is None or store.get(sid) is None:
+    if not _scope.narrows(view) or store.get(sid) is None:
         return ""
     if view.covers_container(store.record_for(sid)):
         return ""

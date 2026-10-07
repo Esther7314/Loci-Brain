@@ -619,7 +619,7 @@ class _Library:
                 out.append(Card(NAME, self.key(card), card, text, spelling, (0, name)))
                 continue
             where = self._where(rec)
-            if self.scope is not None and not related:
+            if _scope.narrows(self.scope) and not related:
                 continue            # nothing this request may read says anything about it
             if not where and not related:
                 continue
@@ -753,16 +753,9 @@ def _refused(req) -> Optional[tuple[int, dict]]:
 
 
 async def scope_view(store, req):
-    """The request's read scope over this library, or None when nothing is filtered."""
-    if req is None or req.whole_library:
-        return None
-    metas: dict = {}
-    for b in await store.list_all(include_archive=True):
-        meta = b.get("metadata") or {}
-        bid = str(meta.get("id") or b.get("id") or "")
-        if bid:
-            metas[bid] = meta
-    return _scope.ScopeView(req, metas, getattr(store, "sources", None))
+    """The view the request reads this library through (core/scope.view_of): its read
+    scope, or the whole library still read against the source registry."""
+    return await _scope.view_of(store, req)
 
 
 async def handle_cue(store, body, req, *, now: Optional[datetime] = None) -> tuple[int, dict]:

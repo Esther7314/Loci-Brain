@@ -35,13 +35,15 @@ same thing.
                          a host's lines carry neither, since the fourth joint's answer has
                          no such fields.
   entry_view(...)        the window's body: the entry verbatim, its metadata, and the
-                         fields above.
+                         fields above. An entry whose text a source change clears
+                         (`clearing_due`) is shown as the clearing leaves it, from the
+                         moment the registry records the change.
 
 Every timestamp leaves as local ISO 8601 with its offset (core/_when); a day alone as
 YYYY-MM-DD.
 
 Exports: TAG_WORDS · HOLD_WORDS · FIX_KINDS · human_tags · date_of · local_stamp ·
-         state_words · edit_actions · lineage · related_counts · source_layer_of ·
+         state_words · clearing_due · edit_actions · lineage · related_counts · source_layer_of ·
          source_view · fetch_original · entry_view
 ========================================
 """
@@ -165,6 +167,18 @@ def state_words(meta: dict) -> str:
     if _V.source_restored(meta):
         return "来源恢复了·待复核"
     return ""
+
+
+def clearing_due(meta: dict, scope=None) -> bool:
+    """Does this entry rest on a withdrawn or deleted source itself (not only through what
+    it is derived from), so its text is cleared or about to be? A `source_gone` record
+    saying its body is cleared, written before the body is; or, before even that record,
+    the registry through the request's view (core/scope.ScopeView.source_blocked). The
+    window then shows it as its clearing leaves it (BucketManager.as_cleared)."""
+    if any(r.get("cleared") for r in _I.gone_records(meta)):
+        return True
+    blocked = getattr(scope, "source_blocked", None)
+    return callable(blocked) and bool(blocked(meta, roots=False))
 
 
 def edit_actions(meta: dict) -> list[str]:
