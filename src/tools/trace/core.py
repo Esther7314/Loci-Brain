@@ -1106,8 +1106,6 @@ async def trace_core(
     refusal = _read_call(call)
     if refusal:
         return refusal
-    if rt.mark_op:
-        rt.mark_op("trace")
 
     if not call.bucket_id or not call.bucket_id.strip():
         return "请提供有效的 bucket_id。"

@@ -10,8 +10,8 @@ branches**: one act, one screen, always the same screen.
   something that just came to mind)
 
 Key behaviour:
-- dispatch() does exactly three things: record an op, make sure the forgetting
-  engine is running, render the waking screen
+- dispatch() does exactly two things: make sure the forgetting engine is
+  running, render the waking screen
 - No bucket fetching or LLM calls happen here
 
 What this file deliberately does not do:
@@ -34,7 +34,5 @@ from .awaken import surface_awaken
 
 
 async def dispatch() -> str:
-    if rt.mark_op:
-        rt.mark_op("breath")
     await rt.decay_engine.ensure_started()
     return await surface_awaken()

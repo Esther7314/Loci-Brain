@@ -24,7 +24,7 @@ What this file deliberately does not do:
 - No thread-safety guards: the write happens once, during server.py startup
 
 Exports: init() / config / bucket_mgr / dehydrator / decay_engine /
-         embedding_engine / import_engine / logger / fire_webhook / mark_op
+         embedding_engine / import_engine / logger / fire_webhook
 ========================================
 """
 
@@ -42,7 +42,6 @@ logger: Any = None
 
 # --- Shared helper callbacks (also injected by server.py, to avoid a back-import) ---
 fire_webhook: Optional[Callable[[str, dict], Awaitable[None]]] = None
-mark_op: Optional[Callable[..., None]] = None
 
 
 def init(**kwargs: Any) -> None:

@@ -339,11 +339,6 @@ _web.register_all(mcp)
 # =============================================================
 
 
-# The activity timestamp and _mark_op live in web/_shared.py; _mark_op is imported here so
-# it can be injected into core.runtime.
-from web._shared import _mark_op  # noqa: F401  (injected into core.runtime below)
-
-
 # =============================================================
 # Retired hard-delete notice compatibility hooks.
 # web/_shared.py keeps both injection slots so that older extensions do not fail on import.
@@ -579,7 +574,6 @@ _core_runtime.init(
     import_engine=import_engine,
     logger=logger,
     fire_webhook=_fire_webhook,
-    mark_op=_mark_op,
 )
 
 

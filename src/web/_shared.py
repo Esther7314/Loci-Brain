@@ -263,21 +263,6 @@ def replace_embedding_engine(engine) -> None:
             logger.warning("Failed to refresh embedding outbox engine", exc_info=True)
 
 
-# --- Last-activity timestamp ---
-_SERVER_START_TS = time.time()
-_LAST_OP_TS = _SERVER_START_TS
-
-
-def _mark_op(name: str = "") -> None:
-    """Stamp `_LAST_OP_TS` with now.
-
-    server.py injects this function as core.runtime.mark_op at startup; breath and trace
-    call it on each use. Nothing reads `_LAST_OP_TS`.
-    """
-    global _LAST_OP_TS
-    _LAST_OP_TS = time.time()
-
-
 # --- Injection slots for server.py-level helpers: they stay defined in server.py and only
 #     a reference is held here ---
 # These functions read and write server.py globals such as the webhook state, so moving
