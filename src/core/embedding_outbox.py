@@ -189,6 +189,23 @@ class EmbeddingOutbox:
         with self._lock:
             return set(self._items)
 
+    def items_view(self) -> list[dict[str, Any]]:
+        """One row per pending item, for the panel's list of what has no vector:
+        {id, attempts, last_error, next_attempt_at (epoch seconds, 0 = due now),
+        queued_at, last_attempt_at}. Ids and retry state only, never content."""
+        with self._lock:
+            return [
+                {
+                    "id": bucket_id,
+                    "attempts": int(item.get("attempts") or 0),
+                    "last_error": str(item.get("last_error") or ""),
+                    "next_attempt_at": float(item.get("next_attempt_at") or 0.0),
+                    "queued_at": str(item.get("queued_at") or ""),
+                    "last_attempt_at": str(item.get("last_attempt_at") or ""),
+                }
+                for bucket_id, item in self._items.items()
+            ]
+
     def status(self) -> dict[str, Any]:
         with self._lock:
             items = [dict(item) for item in self._items.values()]

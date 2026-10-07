@@ -41,8 +41,12 @@ failed write only logs.
 A lookup's candidates reach the tool that hands its text out through `offering()` /
 `offer()`: the lookup offers what it collected, the tool keeps what its text shows.
 
+The panel names a line by `row_id` (`u_` + sha1 of at, kind, road and ids), computed on
+read, so the file format carries no id; `turn_of` reads the host's turn back out of a
+line's `key` (core/activity.py joins a turn's lines to its cards by it).
+
 Exports: SHOWN · FOUND · SOURCE · FETCHED · KINDS · DEFAULT_RETAIN_DAYS · UsageLog ·
-         ids_in · offering · offer
+         ids_in · offering · offer · row_id · turn_of
 ========================================
 """
 
@@ -81,6 +85,29 @@ def ids_in(candidates: Iterable[str], text: str, short: int = 6) -> list[str]:
         if b and (b in text or b[:short] in text):
             out.append(b)
     return list(dict.fromkeys(out))
+
+
+def row_id(row: dict) -> str:
+    """A line's id on the panel: `u_` + the first 10 hex of sha1 over its at, kind, road
+    and ids. Two lines alike in all four are one line twice over, and share it."""
+    import hashlib
+    ids = ",".join(str(i) for i in row.get("ids") or [])
+    raw = "|".join([str(row.get("at") or ""), str(row.get("kind") or ""),
+                    str(row.get("road") or ""), ids])
+    return "u_" + hashlib.sha1(raw.encode("utf-8")).hexdigest()[:10]
+
+
+def turn_of(row: dict) -> tuple[str, str]:
+    """(host, turn) of a line written under a write key `<host>:<turn>#<ordinal>`
+    (`<turn>#<ordinal>` when no host sent it); ("", "") for a line without one, or one
+    whose key was cut to its hash."""
+    key = str(row.get("key") or "")
+    host = str(row.get("host") or "")
+    rest = key[len(host) + 1:] if host and key.startswith(host + ":") else key
+    turn, sep, ordinal = rest.rpartition("#")
+    if not sep or not turn or not ordinal.isdigit():
+        return "", ""
+    return host, turn
 
 
 _OFFERED: contextvars.ContextVar = contextvars.ContextVar("loci_usage_offered", default=None)

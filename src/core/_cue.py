@@ -82,8 +82,8 @@ window), and those can be handed again.
 The usage log records every card offered as `shown`, road `cue.<kind>` (what Loci gave;
 what was loaded is the host's to say).
 
-Exports: CARD_LIMIT · CARD_KINDS · Card · CueRequestError · fingerprint · cue ·
-         handle_cue · handle_delivered · handle_dropped · scope_view
+Exports: CARD_LIMIT · CARD_KINDS · CARD_KIND_WORDS · HOLD_WORDS · Card · CueRequestError ·
+         fingerprint · cue · handle_cue · handle_delivered · handle_dropped · scope_view
 ========================================
 """
 
@@ -120,6 +120,9 @@ LIST_MAX = 256              # cards or turns in one acknowledgement
 DUE, MEMORY, HOLD, REVIEW, NAME, NAME_BARE = "due", "memory", "hold", "review", "name", "name_bare"
 CARD_KINDS = (DUE, MEMORY, HOLD, REVIEW, NAME, NAME_BARE)
 _RANK = {DUE: 0, MEMORY: 1, HOLD: 1, REVIEW: 2, NAME: 3, NAME_BARE: 4}
+# What each kind is called where a person reads the cards (the panel; core/activity.py).
+CARD_KIND_WORDS = {DUE: "提醒", MEMORY: "相关记忆", HOLD: "条子", REVIEW: "依据变了",
+                   NAME: "相关名字", NAME_BARE: "相关名字"}
 
 PANEL_HOST = "panel"         # who a logged-in browser is, in the ledger
 
@@ -131,7 +134,7 @@ _HYPOTHETICAL = ("如果", "要是", "假如", "假设", "万一", "的话", "�
 _DAY_PART = re.compile(
     r"(今天|明天|今|明)?(早上|早晨|清早|上午|中午|下午|傍晚|晚上|夜里|夜晚|今晚|明晚|今早|明早)"
     r"([零〇一二两三四五六七八九十\d]{1,3}(?:点|时)(?:半|一刻|三刻)?)?")
-_HOLD_WORD = {"defer": "先别催", "avoid": "别碰"}
+HOLD_WORDS = {"defer": "先别催", "avoid": "别碰"}
 _MIN_CJK_KEY, _MIN_CJK_ALIAS, _MIN_CJK_PHRASING, _MIN_CJK_CONDITION = 2, 3, 2, 3
 _MIN_LATIN = 3
 
@@ -507,7 +510,7 @@ class _Library:
                 # is an existence, and out of scope nothing exists.
                 on = (f"挂在 {short_id(target)} 上；" if target and (
                     self.scope is None or self.scope.permits_id(target)) else "")
-                text = (f"【条子】{self.label(bid)}（{_HOLD_WORD.get(meta.get('hold'), '')}，"
+                text = (f"【条子】{self.label(bid)}（{HOLD_WORDS.get(meta.get('hold'), '')}，"
                         f"{on}等的事：{cond}）{quote}"
                         f"——等的事真到了再 trace(bucket_id=\"{short_id(bid)}\", status=\"resolved\") "
                         f"撤条子，没到就不用管 ({short_id(bid)})")

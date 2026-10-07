@@ -46,6 +46,9 @@ library's cross-process file lease. Past `COMPACT_LINES` lines the file is rewri
 the state it describes (offers older than `OFFER_KEEP_DAYS` dropped, deliveries kept for
 `SEEN_KEEP_DAYS` as the awake record); a reader notices the rewrite by its new `gen`.
 
+`events()` hands the rows themselves to the panel, which replays what became of every
+card a turn was handed (core/activity.py).
+
 Exports: CueLedger · WindowState · LEDGER_DIR · LEDGER_FILE
 ========================================
 """
@@ -236,6 +239,33 @@ class CueLedger:
     def is_delivered(self, host: str, window: str, card: str) -> bool:
         win = self.window(host, window)
         return bool(win and card in win.delivered)
+
+    def events(self, host: Optional[str] = None,
+               window: Optional[str] = None) -> list[dict]:
+        """The window events in file order — open, offer, deliver, drop, clear — each row
+        as written with `at` read as a local datetime; only (host, window)'s when they are
+        named. The state above keeps each window's latest answer; these are what
+        happened to every card, for the panel (core/activity.py). After a compaction an
+        offer older than OFFER_KEEP_DAYS is gone, and the deliveries still in the input
+        come back as one deliver row whose cards carry their own `at` and `turn`."""
+        from ._sources import json_line
+        out: list[dict] = []
+        try:
+            f = self.path.open("rb")
+        except OSError:
+            return out
+        with f:
+            for raw in f:
+                row = json_line(raw)
+                if not isinstance(row, dict) or row.get("op") in (None, "gen", "seen"):
+                    continue
+                h, w = str(row.get("host") or ""), str(row.get("window") or "")
+                if not w or (host is not None and h != host) or (
+                        window is not None and w != window):
+                    continue
+                out.append({**row, "host": h, "window": w,
+                            "at": _w.parse_stamp(row.get("at")) or _w.now()})
+        return out
 
     def delivered_at(self, bucket_id: str) -> Optional[datetime]:
         """When a card for this entry last reached a model, in any window of any host —

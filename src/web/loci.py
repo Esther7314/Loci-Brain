@@ -50,8 +50,9 @@ ordered table, and the list here is the one list of what the panel can reach.
                                          (`?cursor=…&limit=`) and never sees those numbers
                                          (hook key; core/_ledger.py)
 
-🔴 THE WRITE SURFACE — fifteen POST routes here and two in the detail-window block below,
-and every one of them writes something.
+🔴 THE WRITE SURFACE — fifteen POST routes here and four in the page blocks below
+(entry/fix, names/action, trace, embedding/backfill), and every one of them writes
+something.
 
     POST /api/loci/similar/action     -> a human verdict on a suspected duplicate: keep
                                          both, or sink one (trace delete=True — a soft
@@ -146,6 +147,33 @@ page by offset / limit / as_of. 🔴 POST /api/loci/trace writes.
                                          ledger with seq as each row's id
                                          (core/changes_feed.py)
 
+What Loci handed out and took in — turns, recall's timeline, usage, grow, muse, vectors
+(web/loci_activity.py; core/activity.py, core/grow_view.py, core/muse_view.py,
+core/vector_view.py). Panel only; one of them writes.
+
+    GET  /api/loci/turns/{window}     -> one window of a host (`?host=`), turn by turn, newest
+                                         first: the cards each turn was handed and what became
+                                         of them, what breath showed and recall found in it
+                                         (with the query typed), the holds live on them
+    GET  /api/loci/recall/timeline    -> the last three natural days: 「我搜 X」 from the usage
+                                         log and 「你说 X」 card deliveries from the card
+                                         ledger, mixed, newest first
+    GET  /api/loci/usage              -> per memory since a day: how often shown, found, stood
+                                         on; shown often and never stood on first
+    GET  /api/loci/grow/today         -> the memories written since today began (`?since=`, a
+                                         host's daily report; else local midnight)
+    GET  /api/loci/grow/slices        -> every batch of slices, handled and replaced ones
+                                         included, each slice with its state and the guesses
+                                         at or above the guess line
+    GET  /api/loci/muse               -> `?part=clusters` the thoughts that look like one
+                                         thing / `?part=days` the stretches without a name,
+                                         each with its evidence and member ids
+    GET  /api/loci/embedding/missing  -> the memories with no vector and why (queued, keeps
+                                         failing, not queued), from the embedding outbox
+    POST /api/loci/embedding/backfill -> 「现在补」: queue what has no vector and make every
+                                         waiting item due now (EmbeddingOutbox.reconcile +
+                                         retry_now; writes the outbox file, not the ledger)
+
 Where each group lives (a new route goes into its group's module and gets its line in
 `register`, which adds the routes in this order). A read that computes something over the
 store is a core function plus a thin builder here: the builder reads the library, config
@@ -162,6 +190,14 @@ core/health.py, core/profile.py):
     web/loci_health.py    health, setup, logs, pulse, and build_health / build_setup
     web/loci_dream.py     muse/pending, poke, dream/wake, dream/current, and
                           build_muse_pending / build_poke
+    web/loci_detail.py    bucket, lineage, source, entry/fix (core/detail.py)
+    web/loci_names.py     names, names/pending, names/{name}, names/action
+                          (core/census.py)
+    web/loci_mind.py      breath/last, awake, hanging, trace, changes/recent
+                          (core/breath_snapshot.py, core/profile.py, core/changes_feed.py)
+    web/loci_activity.py  turns, recall/timeline, usage, grow/today, grow/slices, muse,
+                          embedding/missing, embedding/backfill (core/activity.py,
+                          core/grow_view.py, core/muse_view.py, core/vector_view.py)
     web/host_api.py       /api/v2/* (a host's credential, not the panel's)
     web/library_api.py    export, import-package, embedding/migration
     web/_guards.py        the same-origin write check and the hook-scope refusals
@@ -277,4 +313,21 @@ def register(mcp) -> None:
     mcp.custom_route("/api/loci/hanging", methods=["GET"])(_mind.api_loci_hanging)
     mcp.custom_route("/api/loci/trace", methods=["POST"])(_mind.api_loci_trace)
     mcp.custom_route("/api/loci/changes/recent", methods=["GET"])(_mind.api_loci_changes_recent)
+
+    # ---------------------------------------------------------
+    # What Loci handed out and took in: turns, recall's timeline, usage, grow, muse, and
+    # the missing vectors. The handlers are web/loci_activity.py's.
+    # ---------------------------------------------------------
+    from . import loci_activity as _act
+    mcp.custom_route("/api/loci/turns/{window}", methods=["GET"])(_act.api_loci_turns)
+    mcp.custom_route("/api/loci/recall/timeline", methods=["GET"])(
+        _act.api_loci_recall_timeline)
+    mcp.custom_route("/api/loci/usage", methods=["GET"])(_act.api_loci_usage)
+    mcp.custom_route("/api/loci/grow/today", methods=["GET"])(_act.api_loci_grow_today)
+    mcp.custom_route("/api/loci/grow/slices", methods=["GET"])(_act.api_loci_grow_slices)
+    mcp.custom_route("/api/loci/muse", methods=["GET"])(_act.api_loci_muse)
+    mcp.custom_route("/api/loci/embedding/missing", methods=["GET"])(
+        _act.api_loci_embedding_missing)
+    mcp.custom_route("/api/loci/embedding/backfill", methods=["POST"])(
+        _act.api_loci_embedding_backfill)
 

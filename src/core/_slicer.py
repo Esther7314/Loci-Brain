@@ -65,7 +65,7 @@ Exports: SLICER_PROMPT_VERSION · SLICER_PROMPT · GIST_MAX · DRAFT_MAX · Slic
          parse_slices · side_model ·
          read_batch · batch_id_of · fingerprint_of · slice_fingerprint · FINGERPRINT_BY ·
          guess_covering · take_batch · PendingSlices (record_batch · get · record_for ·
-         run_length · close · recut · withdraw_lines · purge · open_batches ·
+         run_length · close · recut · withdraw_lines · purge · open_batches · batches ·
          pending_count · rebuild_index)
 ========================================
 """
@@ -690,6 +690,49 @@ class PendingSlices:
                 if b["import"]:
                     one["import"] = dict(b["import"])
                 out.append(one)
+            return out
+
+    def batches(self, include_closed: bool = True) -> list[dict]:
+        """Every batch, newest first, with its slices in line order: [{batch_id, source,
+        day, revision, recorded_at, import, slices: [{slice_id, span, gist, draft?,
+        guesses, edited, state, closed}]}]. With `include_closed` a batch's handled
+        slices and those a resend replaced come too (a replaced slice's span reads
+        against the lines of the batch that replaced it, `count` None when they are not
+        there); without it, as `open_batches`."""
+        self._fresh()
+        with self._guard:
+            by_batch: dict[str, list[dict]] = {}
+            for st in self._slices.values():
+                if include_closed or st["state"] == OPEN:
+                    by_batch.setdefault(st["batch_id"], []).append(st)
+            out = []
+            for b in sorted(self._batches.values(), key=lambda b: -b["seq"]):
+                states = by_batch.get(b["batch_id"])
+                if not states:
+                    continue
+                order = b["order"]
+                rows = []
+                for st in states:
+                    a, z = order.get(st["first"]), order.get(st["last"])
+                    count = z - a + 1 if a is not None and z is not None else None
+                    row = {"slice_id": st["slice_id"],
+                           "span": {"first": st["first"], "last": st["last"],
+                                    "count": count},
+                           "gist": st["gist"],
+                           "guesses": [{**g, "short": _short_id(str(g.get("id") or ""))}
+                                       for g in st["guesses"]],
+                           "edited": st["edited"], "state": st["state"],
+                           "closed": dict(st["closed"]) if st["closed"] else None}
+                    if st["draft"]:
+                        row["draft"] = st["draft"]
+                    rows.append((st["state"] == REPLACED, a if a is not None else -1,
+                                 st["seq"], row))
+                rows.sort(key=lambda r: r[:3])
+                out.append({"batch_id": b["batch_id"], "source": dict(b["source"]),
+                            "day": b["day"], "revision": b["revision"],
+                            "recorded_at": b["recorded_at"],
+                            "import": dict(b["import"]) if b["import"] else None,
+                            "slices": [r[3] for r in rows]})
             return out
 
     def refusal(self, slice_id: str) -> Optional[SliceError]:
