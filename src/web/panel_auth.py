@@ -42,6 +42,7 @@ are refused on every door (`lock_problem`), the log says so, and the setup scree
 red (web/loci.build_setup, `hosts_lock`).
 
 Public surface: register(mcp) · has_session(request) · gate_needed() · PUBLIC_PATHS ·
+                KEEPALIVE_PATH ·
                 hosts() · hook_caller(request) · hook_ok(request) · request_scope_of() ·
                 panel_refusal(request) · lock_problem(hosts) · mcp_auth_on()
 ========================================
@@ -77,6 +78,11 @@ PUBLIC_PATHS = frozenset([
     "/api/loci/auth/set-password",   # first-run password setup (it does its own loopback check)
     "/loci",                         # the page itself must open, or the gate has nowhere to appear
 ])
+
+# The route the server's own keepalive pings over loopback (server.py, RuntimeLifecycle):
+# public, so it answers 200 whether or not the panel is locked, and cheap — one lenient
+# read of the auth file, nothing logged.
+KEEPALIVE_PATH = "/auth/recovery-question"
 
 # **The four bridge-facing routes** are not in the exemption list above.
 #

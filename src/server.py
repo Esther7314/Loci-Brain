@@ -1780,6 +1780,7 @@ if __name__ == "__main__":
     if transport in ("sse", "streamable-http"):
         import uvicorn
         from bridge import ollama_child as _ollama_child
+        from web.panel_auth import KEEPALIVE_PATH
 
         _http_settings = HTTPRuntimeSettings.from_config(config)
         _runtime_lifecycle = RuntimeLifecycle(
@@ -1792,8 +1793,9 @@ if __name__ == "__main__":
                 os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                 ".boot_fails",
             ),
-            # Explicit IPv4 avoids localhost resolving to ::1 in Proot/Termux.
-            keepalive_url=f"http://127.0.0.1:{LOCI_PORT}/health",
+            # Explicit IPv4 avoids localhost resolving to ::1 in Proot/Termux. The path is
+            # a public route: a gated one would answer 401 once the panel is locked.
+            keepalive_url=f"http://127.0.0.1:{LOCI_PORT}{KEEPALIVE_PATH}",
         )
         _mcp_token_validator = (
             _is_valid_static_mcp_token

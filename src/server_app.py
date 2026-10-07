@@ -644,6 +644,9 @@ class RuntimeLifecycle:
     keepalive_initial_delay: float = DEFAULT_KEEPALIVE_INITIAL_DELAY_SECONDS
     keepalive_interval: float = DEFAULT_KEEPALIVE_INTERVAL_SECONDS
     health_probe_timeout: float = DEFAULT_HEALTH_PROBE_TIMEOUT_SECONDS
+    # Builds the keepalive's HTTP client (an async context manager with `get`); a test
+    # hands in a fake one.
+    keepalive_client: Callable[[], Any] = httpx.AsyncClient
     _keepalive_task: asyncio.Task | None = field(default=None, init=False, repr=False)
     _started: bool = field(default=False, init=False, repr=False)
 
@@ -666,15 +669,24 @@ class RuntimeLifecycle:
             self.logger.warning("reset .boot_fails failed: %s", exc)
 
     async def _keepalive_loop(self) -> None:
+        """GET `keepalive_url` every `keepalive_interval` seconds. Only a 2xx answer is a
+        ping that worked: any other status, or no answer, is logged as a failed one."""
         await asyncio.sleep(max(0.0, self.keepalive_initial_delay))
-        async with httpx.AsyncClient() as client:
+        async with self.keepalive_client() as client:
             while True:
                 try:
-                    await client.get(
+                    response = await client.get(
                         self.keepalive_url,
                         timeout=self.health_probe_timeout,
                     )
-                    self.logger.debug("Keepalive ping OK")
+                    if 200 <= response.status_code < 300:
+                        self.logger.debug("Keepalive ping OK")
+                    else:
+                        self.logger.warning(
+                            "Keepalive ping failed: HTTP %s from %s",
+                            response.status_code,
+                            self.keepalive_url,
+                        )
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
