@@ -95,7 +95,12 @@ covers anything, so an entry circled into one keeps its own mark untouched.
 Weaving reads the whole library (no read scope): it runs only on a breath that reads the
 whole library, and a dream is handed out only to a request that reads the whole library
 (web/_guards.py, `_scope_withholds`). A host asked for an original is told the same: no
-scope, the whole library.
+scope, the whole library. The whole library is still read against the source registry
+(core/scope.view_of, `ScopeView.source_blocked`): from the moment a host's withdrawal,
+deletion or hold is recorded, nothing standing on that source, nor anything derived from
+such an entry, is an ingredient or lends a word — not only once the change's records
+reach the memories (`gather_ingredients`). What the weaver was handed is read against the
+registry again when the dream is saved (`_commit`).
 
 Why "a few words" and not "a place": a list of rooms from the Home system was rejected —
 that space is not actually lived in yet, so pushing it in would be an external injection.
@@ -223,6 +228,7 @@ from . import _dream_archive as _archive   # the panel's copy; written here, nev
 from . import _holds as _H
 from . import _muse as M
 from . import _sources as _src
+from . import scope as _scope
 from . import visibility as _V    # the one gate: what may be put in front of the model
 from ._rooms import is_event_room
 from . import runtime as rt
@@ -766,6 +772,8 @@ async def _quoted(pool: list[Ingredient], c: dict) -> tuple[list[Ingredient], li
         fresh_meta = (fresh or {}).get("metadata") or {}
         if not fresh or _V.source_gone(fresh_meta) or _V.source_restored(fresh_meta):
             continue
+        if await _registry_blocked([(fresh_meta, "")]):
+            continue
         given = [ln.text for a in answers if a.outcome == _O.GIVEN
                  for ln in a.lines if ln.text]
         if given:
@@ -774,7 +782,8 @@ async def _quoted(pool: list[Ingredient], c: dict) -> tuple[list[Ingredient], li
     return [], []
 
 
-def few_words(recs, c: dict, now=None) -> tuple[list[str], list[str]]:
+def few_words(recs, c: dict, now=None,
+              skip: set[str] | None = None) -> tuple[list[str], list[str]]:
     """Drawn at random from the `tags` of every bucket — **with no requirement that they
     be places.** Returns (the words, the ids of the memories carrying them).
 
@@ -786,13 +795,16 @@ def few_words(recs, c: dict, now=None) -> tuple[list[str], list[str]]:
 
     Being words out of a body, they pass the dream's own gate (road DREAM) like every
     other ingredient: a memory whose source was withdrawn, one kept out of sight on purpose
-    or one an avoid-hold covers lends no word. The ids are recorded on the dream, so a
-    later withdrawal of one of them can find it.
+    or one an avoid-hold covers lends no word, and neither does an id in `skip` (what the
+    registry says stands on a withdrawn, deleted or held source, `gather_ingredients`).
+    The ids are recorded on the dream, so a later withdrawal of one of them can find it.
     """
     now = now or _w.now()
     holds = _H.hold_index(recs)
+    skip = skip or set()
     seen = [(meta, [str(t) for t in (meta.get("tags") or [])]) for meta, _t in recs
-            if _V.visible_for(meta, road=_V.DREAM, now=now, holds=holds)]
+            if str(meta.get("id") or "").strip() not in skip
+            and _V.visible_for(meta, road=_V.DREAM, now=now, holds=holds)]
     freq = Counter()
     for _meta, tags in seen:
         freq.update(tags)
@@ -862,14 +874,30 @@ def pressure(pool: list[Ingredient], c: dict) -> tuple[float, float, list[tuple[
     return heaviest, sum(d for _i, d in over_line), over_line
 
 
+async def _registry_blocked(recs) -> set[str]:
+    """The ids among `recs` the source registry says, now, stand on a withdrawn, deleted
+    or held source, themselves or through what they are derived from
+    (core/scope.ScopeView.source_blocked, the whole library's view)."""
+    view = await _scope.view_of(rt.bucket_mgr, None)
+    return {str(meta.get("id") or "").strip() for meta, _t in recs
+            if view.source_blocked(meta)}
+
+
 async def gather_ingredients(c: dict | None = None) -> dict:
     """Load one set of ingredients: the pools, the drawn streams, the cold share, and the
     pressure. **No LLM call, nothing is written, and no host is asked** — the quote share
-    keeps its candidates (`原话池`) until `weave` knows a dream will be woven."""
+    keeps its candidates (`原话池`) until `weave` knows a dream will be woven.
+
+    Every entry is read against the source registry first (`_registry_blocked`): one it
+    says stands on a withdrawn, deleted or held source, or is derived from such an entry,
+    is in no pool and lends no word, from the moment the change is recorded. It is still
+    counted where holds and dream-born marks are worked out: leaving an avoid-hold out
+    would let what it covers back in."""
     c = c or _c()
     now = _w.now()
     recs, digested = await M.load_records()
-    born = dream_born_ids(recs)
+    blocked = await _registry_blocked(recs)
+    born = dream_born_ids(recs) | blocked
     pressing = want_pool(recs, now, born=born)
     unclear = unclear_pool(recs, digested, c, now, born=born)
     pressure_value, piled_up, over_line = pressure(pressing + unclear, c)
@@ -882,7 +910,7 @@ async def gather_ingredients(c: dict | None = None) -> dict:
         x.text = _cold_text(x)
     taken |= {x.id for x in picked_cold}
     quotes = [x for x in quote_pool(recs, now, born=born) if x.id not in taken]
-    words, word_sources = few_words(recs, c, now=now)
+    words, word_sources = few_words(recs, c, now=now, skip=blocked)
     return {
         "压在心头": picked_pressing,
         "想不明白": picked_unclear,
@@ -1459,18 +1487,33 @@ def _gone_sources(rec: dict) -> list[str]:
     return out
 
 
+def _used_ids(rec: dict) -> list[str]:
+    """Every memory whose words went to the weaver: the ingredients of every stream, and
+    the memories the few words were drawn from (`几个词的来处`)."""
+    words = [str(i) for i in (rec.get("素材") or {}).get("几个词的来处") or []]
+    return [i for i in dict.fromkeys(ingredient_ids(rec) + words) if i]
+
+
 async def _tainted(rec: dict) -> list[str]:
     """What this dream was woven from that a source change has reached since it was drawn:
     a source behind its quote share the registry holds as withdrawn or deleted
-    (`_gone_sources`), and every ingredient carrying an open record that a source behind it
-    was withdrawn, deleted or held, or that waits for review after a restore — the records
-    the quote share refuses a memory for when it is drawn (`_quoted`)."""
+    (`_gone_sources`), and every memory it used (`_used_ids`) carrying an open record that
+    a source behind it was withdrawn, deleted or held, or that waits for review after a
+    restore — the records the quote share refuses a memory for when it is drawn
+    (`_quoted`) — or that the registry says, now, stands on a withdrawn, deleted or held
+    source, itself or through what it is derived from (`_registry_blocked`): a change
+    recorded while the weaver was writing, whose records have not reached the memory yet."""
     out = _gone_sources(rec)
-    for bid in dict.fromkeys(ingredient_ids(rec)):
+    current: list[tuple[dict, str]] = []
+    for bid in _used_ids(rec):
         b = await rt.bucket_mgr.get_including_archive(bid)
         meta = (b or {}).get("metadata") or {}
         if _V.source_gone(meta) or _V.source_restored(meta):
             out.append(bid)
+        elif meta:
+            current.append(({**meta, "id": meta.get("id") or bid}, ""))
+    blocked = await _registry_blocked(current)
+    out += [str(m.get("id")) for m, _t in current if str(m.get("id")) in blocked]
     return out
 
 
@@ -1478,15 +1521,16 @@ async def _commit(rec: dict) -> list[str]:
     """Save a woven dream unless a source change reached what it was woven from while the
     weaver was writing (`_tainted`). Returns what tainted it; [] = saved.
 
-    The check and the save happen while holding the lease of every ingredient
-    (BucketManager._bucket_turn, taken in id order): a source change blocks each memory
-    under that lease, and blocks before it clears the dream records
-    (core/_source_change.py, `dream_records`). So either the block came first and is seen
-    here, or the dream is on disk before that clearing looks for it."""
+    The check and the save happen while holding the lease of every memory it used
+    (BucketManager._bucket_turn, taken in id order): a source change is recorded in the
+    registry before it blocks each memory under that lease, and blocks before it clears
+    the dream records (core/_source_change.py, `dream_records`). So either the change
+    came first and is seen here — in the registry, or in the records too — or the dream
+    is on disk before that clearing looks for it."""
     turn = getattr(rt.bucket_mgr, "_bucket_turn", None)
     async with contextlib.AsyncExitStack() as held:
         if callable(turn):
-            for bid in sorted(set(ingredient_ids(rec))):
+            for bid in sorted(set(_used_ids(rec))):
                 await held.enter_async_context(turn(bid))
         tainted = await _tainted(rec)
         if not tainted:

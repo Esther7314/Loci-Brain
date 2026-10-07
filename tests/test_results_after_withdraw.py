@@ -9,7 +9,8 @@ on an asyncio.Event; the host withdraws the source and the clearing runs to the 
 Event is released. The phrase the material carried must then be nowhere under the library
 (read back byte by byte), and the log, the exception or the dream state says why the result
 was dropped. Each has a control where nothing changes during the wait and the result is
-written as before.
+written as before. Backfill is raced against a body revise too: the answer is about the
+old body, so nothing of it lands on the new one, and the backfill says it was dropped.
 
 Real store on a temp dir; every model and the host are stand-ins.
 """
@@ -176,10 +177,34 @@ def test_a_backfill_with_nothing_changed_meanwhile_is_written(store, monkeypatch
     e = _entry(store)
     gate = Gate()
     monkeypatch.setattr(rt, "dehydrator", BackfillModel(gate))
-    run(race(R._backfill_one(e, BODY, "event"), gate))
+    outcome = run(race(R._backfill_one(e, BODY, "event"), gate))
+    assert outcome == "backfilled"
     meta = _meta(store, e)
     assert meta["name"] == ANSWER["name"] and meta["summary"] == ANSWER["summary"]
     assert PHRASE in meta["tags"] and "小周" in meta["subjects"]
+
+
+NEW_BODY = "小周说周六改去山上看日出。"
+
+
+def test_a_backfill_answer_about_a_body_revised_meanwhile_is_dropped(store, tmp_path,
+                                                                      monkeypatch):
+    e = _entry(store)
+    gate = Gate()
+    monkeypatch.setattr(rt, "dehydrator", BackfillModel(gate))
+
+    async def revise_body():
+        assert await store.update(e, content=NEW_BODY)
+    outcome = run(race(R._backfill_one(e, BODY, "event"), gate, revise_body))
+    # Criterion: the new body stands with its blanks; nothing about the old one is on it.
+    meta = _meta(store, e)
+    assert not {"summary", "subjects", "backfilled"} & set(meta), meta
+    assert not meta.get("tags") and PHRASE not in str(meta.get("name") or "")
+    assert run(store.get(e))["content"] == NEW_BODY
+    assert "小周" not in (tmp_path / "aliases.yaml").read_text(encoding="utf-8")
+    # And the caller is told so, not handed a quiet success.
+    assert outcome == "body_changed"
+    assert any("作废" in ln and e in ln for ln in store.test_log.lines), store.test_log.lines
 
 
 # ───────────────────────── slicing ─────────────────────────

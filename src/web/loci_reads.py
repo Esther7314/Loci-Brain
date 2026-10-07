@@ -54,7 +54,11 @@ def _scope_line(request: Request) -> str:
 
 async def build_rooms(view=None) -> dict:
     """The directory both doors open onto (core/census.rooms), counted over what `view`
-    (the request's read scope) may read; the whole library when None."""
+    (the request's read scope) may read; when None, the whole library as a panel page
+    reads it (`library_view`: nothing standing on a source the registry says is
+    withdrawn, deleted or held is counted)."""
+    if view is None:
+        view = await _library_view()
     return _census.rooms(await sh.bucket_mgr.list_all(include_archive=False), view)
 
 
@@ -63,10 +67,13 @@ async def build_subjects() -> dict:
     return _census.subjects(await sh.bucket_mgr.list_all(include_archive=False))
 
 
-async def build_graph() -> dict:
-    """Starfield (core/starfield.build): the live store, in the local `now`."""
+async def build_graph(view=None) -> dict:
+    """Starfield (core/starfield.build): the live store, in the local `now`, read through
+    `view`; when None, the whole library as a panel page reads it (`library_view`)."""
+    if view is None:
+        view = await _library_view()
     all_buckets = await sh.bucket_mgr.list_all(include_archive=False)
-    return _starfield.build(all_buckets, _w.now())
+    return _starfield.build(all_buckets, _w.now(), scope=view)
 
 
 def _collect_events(all_buckets: list, view=None) -> list[dict]:

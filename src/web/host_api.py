@@ -51,11 +51,17 @@ async def api_v2_slices_take(request: Request) -> Response:
     the side model fails — then nothing is stored, and the host may send the same batch
     again.
 
-    A line that becomes withdrawn, deleted or held while the side model is slicing (a
-    source change applied meanwhile) drops the whole batch: 400 with
-    {"error": "…", "note": "source_changed_while_slicing", "lines": {line id: state}}
-    — no slice, gist or line order is stored, and the same batch sent again is refused
-    as above. The host sends the batch again without those lines."""
+    A batch delivering a line at another version than the newest the host announced for
+    it (a `revised` change: its `revision`, else the batch's, against the announced one)
+    is a 400 too, and nothing is stored.
+
+    A line that becomes withdrawn, deleted or held, or is announced revised, while the
+    side model is slicing (a source change applied meanwhile) drops the whole batch: 400
+    with {"error": "…", "note": "source_changed_while_slicing", "lines": {line id: state}}
+    — state "withdrawn", "deleted", "held" or "revised" — and no slice, gist or line
+    order is stored; the same batch sent again is refused as above. The host sends the
+    batch again without the withdrawn, deleted or held lines, and slices a revised line
+    from its new version."""
     from starlette.responses import JSONResponse
     from core import _slicer as _sl
     from core import _sources as _src

@@ -33,6 +33,8 @@ from typing import Iterable
 from . import _slicer as _sl
 from . import _when as _w
 from . import detail as _detail
+from . import runtime as rt
+from . import scope as _scope
 from . import visibility as _V
 from .activity import entry_ref, index
 from .paging import page, past, stamp
@@ -83,9 +85,15 @@ def _tags_human(meta: dict) -> list[dict]:
 def written_since(buckets: Iterable[dict], since: datetime, *, now: datetime, offset: int,
                   limit: int, as_of: datetime, scope=None) -> dict:
     """The memories on the timeline written at or after `since` (by `created`), newest
-    first: {id, short, at, text, tags_human}."""
+    first: {id, short, at, text, tags_human}, under the request's read scope `scope`.
+    None is the whole library, still read against the source registry
+    (core/scope.whole_library_view): nothing standing on a source it says is withdrawn,
+    deleted or held is listed, before the change's records reach the memories too."""
+    buckets = list(buckets or [])
+    if scope is None:
+        scope = _scope.whole_library_view(getattr(rt.bucket_mgr, "sources", None), buckets)
     rows: list[tuple[datetime, dict]] = []
-    for b in buckets or []:
+    for b in buckets:
         meta = b.get("metadata") or {}
         if not _V.on_timeline(meta, scope):
             continue

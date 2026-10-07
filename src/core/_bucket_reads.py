@@ -79,6 +79,17 @@ class ReadsMixin:
         meta = (data or {}).get("metadata")
         return meta if isinstance(meta, dict) else None
 
+    def body_of(self, bucket_id: str) -> Optional[str]:
+        """One bucket's body by id, archive included, read synchronously: for a check
+        made inside a `revise` function, under the bucket's lease (tools/grow/rooms_path.
+        _backfill_one compares the body its answer is about with the body now). None when
+        there is no such bucket or it does not parse."""
+        if not bucket_id or not isinstance(bucket_id, str):
+            return None
+        file_path = self._find_bucket_file(bucket_id)
+        data = self._load_bucket(file_path) if file_path else None
+        return None if data is None else str(data.get("content") or "")
+
     def find_exact_content(
         self,
         content: str,

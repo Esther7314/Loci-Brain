@@ -486,6 +486,62 @@ def test_a_line_withdrawn_while_slicing_answers_400_naming_it(store, monkeypatch
     assert status == 400 and "m_0006 is withdrawn" in out["error"] and "note" not in out
 
 
+def _revise(store, line_id: str, revision: str, host_seq: int = 1, change_id: str = "c-r"):
+    from core import _source_change as SC
+    from core.scope import Host
+
+    async def go():
+        status, out = await SC.handle(store, {"change_id": change_id, "host_seq": host_seq,
+                                              "source": f"lento:home/private:U#{line_id}",
+                                              "change": "revised", "revision": revision},
+                                      Host("life", scope_mode="open"))
+        assert status == 200, out
+    return go()
+
+
+def test_a_line_revised_while_slicing_answers_400_and_nothing_is_kept(store, monkeypatch):
+    async def revising(system, user):
+        # The host announces r2 of one line while the side model slices r1.
+        await _revise(store, "m_0006", "r2")
+        return json.dumps({"slices": THREE})
+    call = _routes(monkeypatch, store, revising)
+    status, out = call("POST", body(revision="r1"))
+    assert status == 400, out
+    assert out["note"] == "source_changed_while_slicing"
+    assert out["lines"] == {"m_0006": "revised"}
+    assert "nothing was stored" in out["error"]
+    assert store.slices.pending_count() == 0 and store.slices.batches() == []
+    assert not store.sources.orders_path.exists(), "no line order is kept"
+    # Sent again as it is, r1 is refused before the side model.
+    status, out = call("POST", body(revision="r1"))
+    assert status == 400 and "m_0006 is revised" in out["error"] and "note" not in out
+    assert store.slices.pending_count() == 0
+
+
+def test_the_new_version_of_a_revised_line_is_sliced(store, monkeypatch):
+    run(_revise(store, "m_0006", "r2"))
+    calls: list = []
+    model = stub(THREE, calls=calls)
+    # The line's own revision says which version it is, whatever the batch's watermark.
+    b = body(revision="r1")
+    b["lines"][5]["revision"] = "r2"
+    out = take(store, model, b=b)
+    assert len(out["slices"]) == 3 and store.slices.pending_count() == 3
+    # And a batch delivering the old version is refused without calling the model.
+    old = body(day="2026-01-01", revision="r1")
+    with pytest.raises(SL.BatchError, match="m_0006 is revised"):
+        take(store, model, b=old)
+    assert len(calls) == 1
+
+
+def test_a_revision_of_a_line_outside_the_batch_does_not_drop_it(store, monkeypatch):
+    async def revising_elsewhere(system, user):
+        await _revise(store, "m_0099", "r2")
+        return json.dumps({"slices": THREE})
+    out = take(store, revising_elsewhere, b=body(revision="r1"))
+    assert len(out["slices"]) == 3 and store.slices.pending_count() == 3
+
+
 def test_both_routes_want_the_hook_key_when_the_panel_is_locked(store, monkeypatch):
     call = _routes(monkeypatch, store, stub(THREE), locked=True)
     assert call("POST", body())[0] == 401

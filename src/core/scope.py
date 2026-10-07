@@ -121,7 +121,8 @@ Exports: SCOPE_HEADER · TURN_HEADER · HOST_HEADER · SCOPE_ENV · HOST_TOKEN_E
          Hosts (authority_for · provider_for · registrar_for · claimants · collisions ·
          ceilinged · unsafe) ·
          load_hosts · Scope ·
-         parse_scope · parse_turn · RequestScope · ScopeView · view_of · narrows · unsupported_line ·
+         parse_scope · parse_turn · RequestScope · ScopeView · view_of · whole_library_view ·
+         narrows · unsupported_line ·
          current_request · request_scope
 ========================================
 """
@@ -875,6 +876,20 @@ def _metas(buckets) -> dict:
     return out
 
 
+def _blocking(registry) -> frozenset:
+    containers = getattr(registry, "blocking_containers", None)
+    return containers() if callable(containers) else frozenset()
+
+
+def whole_library_view(registry, buckets=()) -> ScopeView:
+    """The whole library's view (no request), built from a listing already in hand: it
+    narrows nothing and reads the registry (`ScopeView.source_blocked`). For synchronous
+    callers that were handed the buckets; `buckets` only saves reads by id on the walk,
+    and is not looked at when the registry holds no withdrawn, deleted or held source."""
+    metas = _metas(buckets) if _blocking(registry) else {}
+    return ScopeView(None, metas, registry, partial=True)
+
+
 async def view_of(store, req: Optional[RequestScope]) -> ScopeView:
     """The view one request reads `store`'s library through. Under a scope the walk to
     the roots needs the whole library, archive included, loaded once (nothing for a
@@ -883,9 +898,8 @@ async def view_of(store, req: Optional[RequestScope]) -> ScopeView:
     else it needs by id (`ScopeView.source_blocked`)."""
     registry = getattr(store, "sources", None)
     if req is None or req.whole_library:
-        containers = getattr(registry, "blocking_containers", None)
-        blocking = containers() if callable(containers) else frozenset()
-        metas = _metas(await store.list_all(include_archive=False)) if blocking else {}
+        metas = (_metas(await store.list_all(include_archive=False))
+                 if _blocking(registry) else {})
         return ScopeView(req, metas, registry, partial=True)
     metas = {} if req.refused else _metas(await store.list_all(include_archive=True))
     return ScopeView(req, metas, registry)

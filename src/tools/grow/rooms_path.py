@@ -92,8 +92,10 @@ from core._rooms import check_room, is_mind_room
 from core import _sources as _src
 from utils import prov_targets
 
-from ._backfill import (_ask_backfill, _backfill_context, _backfill_updates, _current_meta,
-                        _material_gone, _placeholder_meta, _possibly_same, _record_kinds)
+from ._backfill import (BACKFILLED, BODY_CHANGED, MATERIAL_GONE, NOT_WRITTEN, UNREADABLE,
+                        _ask_backfill, _backfill_context, _backfill_updates, _body_moved,
+                        _current_entry, _material_gone, _placeholder_meta, _possibly_same,
+                        _record_kinds)
 from ._cards import card_room_rule, check_card, live_card  # re-exported: see Exports
 from ._checks import (_WANT_DURATION_RE, _WHEN_RE, _check_hold, _check_v2, _hold_receipt,
                       _in_the_future, _retired_fields_msg, _retired_item_fields, check_cue,
@@ -119,7 +121,7 @@ _LONG_HINT = 600
 # replaces it for all of them.
 
 
-async def _backfill_one(bucket_id: str, text: str, kind: str) -> None:
+async def _backfill_one(bucket_id: str, text: str, kind: str) -> str:
     """Fill in one bucket's blanks in the background, from one side-model call: name,
     summary, tags, aliases, domain, subjects, and the slots read off the sentence.
 
@@ -135,14 +137,24 @@ async def _backfill_one(bucket_id: str, text: str, kind: str) -> None:
     lease, the one the clearing takes — and nothing of it is written: no slot, no
     similarity tag, no name in the names table. The slots stay as the clearing left them,
     and the log says why.
+    The body on disk is read when the backfill starts, with the entry, and read again at
+    the write, under the bucket's lease — the lease every write of a body takes
+    (_body_moved): a body revised while the side model was thinking means the answer is
+    about the old body, so nothing of it is written — same as above — and the log says
+    so. The new body keeps its blanks; the startup sweep (backfill_sweep) fills them from
+    it.
+
+    Returns what it came to (_backfill.py: BACKFILLED, UNREADABLE, MATERIAL_GONE,
+    BODY_CHANGED, NOT_WRITTEN).
     """
-    meta = await _current_meta(bucket_id)
-    if meta is None:
-        return
+    entry = await _current_entry(bucket_id)
+    if entry is None:
+        return UNREADABLE
+    meta, body = entry
     gone = _material_gone(meta)
     if gone:
         rt.logger.info(f"backfill {bucket_id}: {gone}，不回填")
-        return
+        return MATERIAL_GONE
     mind = kind == "mind" or is_mind_room(meta.get("room"))
     kinds = backfill_kinds()
     answer, came_back_empty = await _ask_backfill(
@@ -154,16 +166,20 @@ async def _backfill_one(bucket_id: str, text: str, kind: str) -> None:
     # The "possibly the same thing" hint is an event's only (_backfill._possibly_same).
     similar = await _possibly_same(bucket_id, text) if kind == "event" else []
 
-    dropped: list[str] = []
+    dropped: list[tuple[str, str]] = []
 
     def commit(now: dict) -> dict:
         why = _material_gone(now)
         if why:
-            dropped.append(why)
+            dropped.append((MATERIAL_GONE, why))
+            return {}
+        if _body_moved(bucket_id, body):
+            dropped.append((BODY_CHANGED, "正文改了"))
             return {}
         return _backfill_updates(now, answer, came_back_empty, text, mind=mind,
                                  similar=similar)
 
+    written = False
     try:
         written = await rt.bucket_mgr.update(bucket_id, revise=commit)
         if not written:
@@ -171,11 +187,13 @@ async def _backfill_one(bucket_id: str, text: str, kind: str) -> None:
     except Exception as e:
         rt.logger.warning(f"backfill update 失败 {bucket_id}（正文已落盘）: {e}")
     if dropped:
-        rt.logger.warning(f"backfill {bucket_id}: 副模型想的时候{dropped[0]}，"
+        outcome, why = dropped[0]
+        rt.logger.warning(f"backfill {bucket_id}: 副模型想的时候{why}，"
                           "这次的回填作废，一个字没写")
-        return
+        return outcome
     if answer is not None and answer.subjects:
         _record_kinds(bucket_id, answer.subjects)
+    return BACKFILLED if written else NOT_WRITTEN
 
 
 async def _backfill_batch(pairs: list[tuple[str, str, str]]) -> None:

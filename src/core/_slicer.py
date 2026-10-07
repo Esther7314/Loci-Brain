@@ -54,9 +54,16 @@ held in the source registry (its text may not reach the side model), and when th
 handing it over is neither the change authority nor the registrar (`registers:`) for every
 line of it (what a run holds decides what a change to it reaches;
 core/_source_change.registration_refusal).
+A batch is refused the same way when it delivers a line at another version than the
+newest the host announced for it (a `revised` change): the line's own `revision`, else the
+batch's watermark, against the announced revision; the line's hash against an announced
+fingerprint Loci computes (`fingerprint_by: loci`). A line carrying neither, under an
+announcement naming neither, cannot be told apart and is taken.
 The registry is read again when the slices are written, under the pending store's lease:
-a line that became withdrawn, deleted or held while the side model was slicing drops the
-whole batch (BatchStale), so no gist of it is written after its clearing has run.
+a line that became withdrawn, deleted or held, or was announced revised, while the side
+model was slicing drops the whole batch (BatchStale), so no gist of it is written after its
+clearing has run, and no gist cut from a version the host has replaced is kept. Nothing of
+such a batch is kept for later: the host slices the new version.
 Past that and the host's name kept on the batch line, nothing here knows which host it
 is or where the lines came from. An imported
 conversation (core/import_memory.py) goes through the same slicing and the same pending
@@ -67,7 +74,8 @@ conversation's title). Withdrawing that import batch removes its slices from the
 whole (`purge`): drafts are not kept as history.
 
 Exports: SLICER_PROMPT_VERSION · SLICER_PROMPT · GIST_MAX · DRAFT_MAX · Slice ·
-         SlicerError · BatchError · BatchForbidden · BatchStale · SliceError · slice_lines ·
+         SlicerError · BatchError · BatchForbidden · BatchStale · REVISED · SliceError ·
+         slice_lines ·
          parse_slices · side_model ·
          read_batch · batch_id_of · fingerprint_of · slice_fingerprint · FINGERPRINT_BY ·
          guess_covering · take_batch · PendingSlices (record_batch · get · record_for ·
@@ -146,11 +154,16 @@ class BatchForbidden(BatchError):
     core/_source_change.registration_refusal)."""
 
 
+# A line's state in BatchStale.lines: the host announced a new revision of it while the
+# side model was slicing the old one.
+REVISED = "revised"
+
+
 class BatchStale(BatchError):
-    """A line of the batch was withdrawn, deleted or held while the side model was slicing
-    it (HTTP 400, as for a batch that held such a line from the start). The slices are
-    dropped and nothing is stored: no batch line, no line order. `lines` maps each such
-    line id to its state now."""
+    """A line of the batch was withdrawn, deleted or held, or announced revised, while the
+    side model was slicing it (HTTP 400, as for a batch that held such a line from the
+    start). The slices are dropped and nothing is stored: no batch line, no line order.
+    `lines` maps each such line id to its state now (REVISED for a new revision)."""
 
     def __init__(self, lines: dict):
         self.lines = dict(lines)
@@ -503,6 +516,39 @@ def _unusable_lines(registry, source: dict, ids: list[str]) -> dict:
     return out
 
 
+def _revision_marks(registry, source: dict, ids: list[str]) -> dict:
+    """{line id: the registry line (`seq`) of the newest revision the host announced for
+    it, 0 for none}: a mark that moves when a `revised` change for the line is applied."""
+    base = _src.SourceId(source["system"], source["instance"], source["container"], "\0")
+    return {line_id: max((int(r.get("seq") or 0)
+                          for r in registry.revisions_of(base.piece(line_id))), default=0)
+            for line_id in ids}
+
+
+def _behind_lines(registry, batch: dict) -> dict:
+    """{line id: why} for the lines this batch delivers at another version than the newest
+    the host announced for them: the line's `revision` (else the batch's watermark)
+    against the announced revision, and the line's hash against an announced fingerprint
+    computed as Loci computes it (FINGERPRINT_BY). What neither side names is not
+    compared."""
+    base = _src.SourceId(batch["source"]["system"], batch["source"]["instance"],
+                         batch["source"]["container"], "\0")
+    out: dict = {}
+    for ln in batch["lines"]:
+        revisions = registry.revisions_of(base.piece(ln["id"]))
+        if not revisions:
+            continue
+        latest = revisions[-1]
+        delivered = ln.get("revision") or batch["revision"]
+        if latest.get("revision") and delivered and str(latest["revision"]) != str(delivered):
+            out[ln["id"]] = (f"the host announced revision {latest['revision']}, "
+                             f"the batch delivers {delivered}")
+        elif (latest.get("fingerprint") and latest.get("fingerprint_by") == FINGERPRINT_BY
+              and str(latest["fingerprint"]) != ln["fingerprint"]):
+            out[ln["id"]] = "the host announced another text for it"
+    return out
+
+
 async def take_batch(store, body, *, model: ModelCall,
                      max_lines: int = DEFAULT_MAX_LINES_PER_BATCH,
                      threshold: float = DEFAULT_GUESS_THRESHOLD,
@@ -513,18 +559,22 @@ async def take_batch(store, body, *, model: ModelCall,
         {batch_id, day, source, slices: [{slice_id, span: {first, last, count}, gist,
          guesses: [{id, short, score}]}], unsliced, replaced}
 
-    Raises BatchError (malformed, or a line the registry reads as withdrawn, deleted or
-    held: its text may not go to the side model; nothing is called), BatchForbidden (the
-    batch registers lines whose declared change authority is another host than `host`,
-    under `hosts`, the deployment's table; nothing is called), SlicerError (the side
-    model failed; nothing is written) or BatchStale (a line became withdrawn, deleted or
-    held while the side model was slicing; the slices are dropped and nothing is written).
-    The raw text goes no further than the side model.
+    Raises BatchError (malformed, a line the registry reads as withdrawn, deleted or
+    held: its text may not go to the side model, or a line delivered at another version
+    than the newest the host announced (`_behind_lines`); nothing is called),
+    BatchForbidden (the batch registers lines whose declared change authority is another
+    host than `host`, under `hosts`, the deployment's table; nothing is called),
+    SlicerError (the side model failed; nothing is written) or BatchStale (a line became
+    withdrawn, deleted or held, or a new revision of it was announced, while the side
+    model was slicing; the slices are dropped and nothing is written). The raw text goes
+    no further than the side model.
 
     The registry is read again when the slices are written, under the pending store's
     lease — the lease a source change takes to blank and drop the slices over its lines
     (PendingSlices.withdraw_lines) — so slices of a line withdrawn during the slicing
-    are either written before that clearing reaches them or never written at all."""
+    are either written before that clearing reaches them or never written at all. A
+    revision announced during the slicing is seen there too (`_revision_marks` moved),
+    and the gists cut from the old version are dropped with the whole batch."""
     from ._source_change import registration_refusal     # lazy: it imports this module
 
     batch = read_batch(body, max_lines=max_lines)
@@ -545,6 +595,19 @@ async def take_batch(store, body, *, model: ModelCall,
             line_id, state = next(iter(unusable.items()))
             raise BatchError(f"line {line_id} is {state} in the source registry: its "
                              "text may not be sliced; nothing was stored")
+        behind = _behind_lines(registry, batch)
+        if behind:
+            line_id, why = next(iter(behind.items()))
+            raise BatchError(f"line {line_id} is {REVISED} in the source registry ({why}): "
+                             "slice the newest version; nothing was stored")
+        marks = _revision_marks(registry, batch["source"], ids)
+
+    def recheck() -> dict:
+        stale = _unusable_lines(registry, batch["source"], ids)
+        moved = _revision_marks(registry, batch["source"], ids)
+        return {line_id: stale.get(line_id, REVISED) for line_id in ids
+                if line_id in stale or moved[line_id] != marks[line_id]}
+
     slices = await slice_lines(batch["lines"], model=model)
     guesses = await guess_covering(store, [s.gist for s in slices], batch["day"],
                                    threshold=threshold)
@@ -556,8 +619,7 @@ async def take_batch(store, body, *, model: ModelCall,
                 for s, g in zip(slices, guesses)],
         model=str(getattr(model, "model_name", "") or ""),
         host=getattr(host, "name", None), report_at=batch["report_at"],
-        recheck=(None if registry is None
-                 else lambda: _unusable_lines(registry, batch["source"], ids)))
+        recheck=None if registry is None else recheck)
     # The host's order of these lines outlives the batch: it is how a run cut from them
     # is known to hold the lines between its ends (core/_sources.SourceRegistry.lines_of),
     # and with the batch's revision as watermark, which revision of each line was read.

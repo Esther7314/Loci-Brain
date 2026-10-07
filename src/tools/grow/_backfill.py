@@ -7,12 +7,21 @@ A grow write stores the body with placeholder metadata (_placeholder_meta) and h
 id back at once; the backfill then reads the entry, asks the side model once, and fills
 only the slots still blank. This file is that decision: what the side model is told, the
 answer turned into update() keywords against the entry as it is on disk, whether the
-entry's text may still go to the side model and an answer about it be written back, the stamped
+entry's text may still go to the side model and an answer about it be written back, whether
+the body is still the one the answer is about, the stamped
 stand-ins when no answer comes, the "possibly the same thing" tag and its similarity
 line, and the names table's two permitted writes. Running it (_backfill_one,
 _backfill_batch, backfill_sweep) is tools/grow/rooms_path's.
 
-Exports: _placeholder_meta() · _current_meta(bucket_id) · _material_gone(meta)
+What one backfill came to (`_backfill_one` returns it): BACKFILLED (the answer, or the
+stamped stand-ins, written), UNREADABLE (the entry could not be read; nothing asked),
+MATERIAL_GONE (`_material_gone`, before asking or at the write; nothing written),
+BODY_CHANGED (the body was revised while the side model was thinking; the answer is about
+the old body and nothing of it is written), NOT_WRITTEN (the store refused the write).
+
+Exports: BACKFILLED · UNREADABLE · MATERIAL_GONE · BODY_CHANGED · NOT_WRITTEN
+         _placeholder_meta() · _current_entry(bucket_id) · _material_gone(meta)
+         _body_moved(bucket_id, body)
          _backfill_context(meta, mind)
          _ask_backfill(bucket_id, text, context, kinds) · _backfill_updates(...)
          _possibly_same(bucket_id, text)
@@ -32,6 +41,13 @@ from core._bigevent import first_line as _F_first_line
 from core import names as _S
 from core.names import normalize_bound, normalize_subjects
 from utils import is_telic
+
+
+BACKFILLED = "backfilled"
+UNREADABLE = "unreadable"
+MATERIAL_GONE = "material_gone"
+BODY_CHANGED = "body_changed"
+NOT_WRITTEN = "not_written"
 
 
 def _placeholder_meta() -> dict:
@@ -119,8 +135,9 @@ def _summary_is_blank(meta: dict) -> bool:
             or meta.get("summary_source") == _SOURCE_FALLBACK)
 
 
-async def _current_meta(bucket_id: str) -> dict | None:
-    """The entry's frontmatter as it is now, for what the side model is told; None when
+async def _current_entry(bucket_id: str) -> tuple[dict, str] | None:
+    """The entry as it is now: (its frontmatter, its body), for what the side model is
+    told and what its answer is checked against at the write (`_body_moved`); None when
     it cannot be read. An unreadable entry is not a blank one: reading it as blank would
     let the answer overwrite everything on it, so that round is skipped."""
     try:
@@ -131,7 +148,21 @@ async def _current_meta(bucket_id: str) -> dict | None:
     if not cur:
         rt.logger.warning(f"backfill 读不到 {bucket_id}（不在了或读坏了），这轮不补")
         return None
-    return dict(cur.get("metadata") or {})
+    return dict(cur.get("metadata") or {}), str(cur.get("content") or "")
+
+
+def _body_moved(bucket_id: str, body: str) -> bool:
+    """Is the entry's body now another than `body`, the one read when the side model was
+    asked (`_current_entry`)? Asked in `revise`, under the bucket's lease — the lease
+    every write of a body takes (BucketManager.update, replace_text_fields,
+    update_content_fragment) — so a body revised while the side model was thinking is
+    seen before anything about the old one is written. A store that cannot read a body synchronously (`body_of`) is taken
+    as unchanged; one that finds no entry leaves it to the write to fail."""
+    read = getattr(rt.bucket_mgr, "body_of", None)
+    if not callable(read):
+        return False
+    now = read(bucket_id)
+    return now is not None and now != body
 
 
 def _material_gone(meta: dict) -> str:

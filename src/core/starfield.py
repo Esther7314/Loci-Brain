@@ -15,7 +15,13 @@ chain are all unaffected; this one screen simply does not draw them. The test is
 `_F.is_covered()`, the same contract source awaken and recall use; a second copy of it
 drifts (a room rename made in one copy and not the other).
 
-Exports: build(all_buckets, now) · node_ts(meta) · bigevent_members(content, entries,
+**Nothing standing on a withdrawn, deleted or held source is drawn**: a star goes through
+the gate's `list` road (`on_timeline`) and a big event lights no constellation when the
+gate reads it as `source_gone`, both under the view `build` is handed — the whole
+library's (web/loci_reads.build_graph), which reads the source registry, so nothing is
+drawn from the moment a change is recorded, before its records reach the memories.
+
+Exports: build(all_buckets, now, scope) · node_ts(meta) · bigevent_members(content, entries,
          since, until) · split_ids(raw)
 ========================================
 """
@@ -29,7 +35,7 @@ from . import _when as _w
 from ._rooms import is_mind_room, normalize_room, room_cn
 from ._slicer import _short_id
 from .profile import _BIGEVENT_TAG, label_of
-from .visibility import on_timeline
+from .visibility import LIST, SOURCE_GONE, on_timeline, visible_for
 from utils import read_from_ids
 
 _WIKI_RE = re.compile(r"\[\[([^\[\]|]{1,40})\]\]")
@@ -119,9 +125,10 @@ def bigevent_members(content: str, entries: list,
     return out, " · ".join(bits)
 
 
-def build(all_buckets: list, now: datetime) -> dict:
+def build(all_buckets: list, now: datetime, scope=None) -> dict:
     """Starfield: nodes + real edges + weak edges + constellations + meteors, from one
-    listing of the live store (`list_all(include_archive=False)`) and the local `now`."""
+    listing of the live store (`list_all(include_archive=False)`) and the local `now`,
+    read through `scope` (a core.scope.ScopeView; None reads the records alone)."""
     fresh_line = now - timedelta(hours=24)
 
     nodes: list[dict] = []
@@ -140,10 +147,11 @@ def build(all_buckets: list, now: datetime) -> dict:
             # current version. The evolution is in the version chain, still visible when a
             # single bucket is opened. The test goes through _F.is_covered() — the same gate
             # ordinary nodes use below, so there are not two copies of it.
-            if not _F.is_covered(meta):
+            if not _F.is_covered(meta) and SOURCE_GONE not in visible_for(
+                    meta, scope, road=LIST).reasons:
                 big_events.append((bid, meta, content))
             continue
-        if not bid or not on_timeline(meta):
+        if not bid or not on_timeline(meta, scope):
             continue
         # Superseded versions (folded under a gist, or replaced by regrow) do not go into
         # the sky. This affects the starfield only; search, direct id lookup and the version
