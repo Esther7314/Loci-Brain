@@ -512,3 +512,42 @@ def test_who_owes_it_reads_as_the_ai_reads_it(names, monkeypatch):
     assert P.owed_names(["小慢慢", "AI", "小林"]) == "我、小林", "an alias of mine, said once"
     assert P.owed_names(["小林"]) == "小林" and P.owed_names([]) == ""
     assert A._owed({"bound": ["小林", "沈慢"]}) == "（小林、我欠着）"
+
+
+# ── one key, one text (偏生's 10-07 review, item 4) ─────────────────────────
+
+PLAN = bucket("q", "周末计划去海边。", summary="海边计划")
+WISH = bucket("r", "想吹海风。", room="MIND/VIEWS", direction_of_fit="telic",
+              cue={"condition": "吹海风", "phrasings": ["海风"]},
+              prov=[{"rel": "wasDerivedFrom", "target": PLAN["id"]}])
+
+
+def _renamed(row: dict, **meta) -> dict:
+    out = json.loads(json.dumps(row))
+    out["metadata"].update(meta)
+    return out
+
+
+def test_a_card_whose_words_changed_is_a_new_version(tmp_path, clock, names):
+    store = Store(tmp_path, [PLAN, WISH])
+    first = ask(store, "好想吹海风", window="w1", turn="t1")["cards"]
+    assert ids({"cards": first}) == [WISH["id"]] and "来路：海边计划" in first[0]["text"]
+    assert ask(store, "好想吹海风", window="w1", turn="t1")["cards"] == first, "unchanged"
+    store.cues.deliver("life", "w1", turn="t1")
+    assert ask(store, "好想吹海风", window="w1", turn="t2")["cards"] == [], "delivered"
+
+    # The entry it was derived from is renamed: WISH itself did not change, its card did.
+    store.rows = [_renamed(PLAN, summary="去海边的约定"), WISH]
+    elsewhere = ask(store, "好想吹海风", window="w2", turn="t1")["cards"]
+    assert "来路：去海边的约定" in elsewhere[0]["text"]
+    assert elsewhere[0]["card"] != first[0]["card"], "another text, another key"
+    again = ask(store, "好想吹海风", window="w1", turn="t3")["cards"]
+    assert [c["card"] for c in again] == [elsewhere[0]["card"]], "the window has the old words"
+    # The first turn asked again: its card would say other words now, so it is dropped
+    # rather than handed under its old key.
+    assert ask(store, "好想吹海风", window="w1", turn="t1")["cards"] == []
+
+    # The label the card gives the entry itself counts the same way.
+    store.rows = [_renamed(PLAN, summary="去海边的约定"), _renamed(WISH, summary="海风")]
+    own = ask(store, "好想吹海风", window="w2", turn="t2")["cards"]
+    assert own[0]["card"] != elsewhere[0]["card"] and own[0]["text"].startswith("【相关记忆】海风")

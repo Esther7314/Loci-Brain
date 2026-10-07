@@ -68,14 +68,17 @@ answer was placed. Nothing else counts a card as delivered.
 A turn is answered once. The same `turn` asked again (a host retrying) gets that answer's
 cards back, in its order, and nothing new — never a fresh pick merged in. Each card is
 produced again for the retry, under the retry's own scope and against the entry as it is
-then, so one whose entry was since withdrawn, revised (a new version is a new key) or put
-out of scope is dropped; the retry's answer becomes the turn's answer (what `turn`
-delivers). The first answer holds at most CARD_LIMIT cards, so no retry holds more. A
-delivered card is not handed to that window again while
-the entry stays at the same version — `fingerprint()`: the body, when, status, bound, cue,
-recurrence, direction, a hold's own level and target, the holds ever hung on it (opened or
-closed), its open invalidation records, and what the source registry says of its sources.
-Rescheduled, a hold lifted, a source revised: a new version, carded again. The host strikes
+then, so one whose entry was since withdrawn, revised (a new version is a new key), put
+out of scope, or whose words changed is dropped; the retry's answer becomes the turn's
+answer (what `turn` delivers). The first answer holds at most CARD_LIMIT cards, so no retry
+holds more. A delivered card is not handed to that window again while it stays at the
+same version — `fingerprint()`: the entry's body, when, status, bound, cue, recurrence,
+direction, a hold's own level and target, the holds ever hung on it (opened or closed),
+its open invalidation records, and what the source registry says of its sources; and the
+card's own words less the owner's words it quotes and how long ago the entry was written
+— the label it gives the entry, the entry it was derived from, a name's count. One key is
+one text. Rescheduled, a hold lifted, a source revised, the entry it was derived from
+renamed: a new version, carded again. The host strikes
 cards that left the input (`POST /api/v2/cue/dropped`, by card, by turn, or the whole
 window), and those can be handed again.
 
@@ -303,13 +306,19 @@ def _cue_hit(msg: _Message, cue: dict) -> Optional[tuple[str, tuple[int, int]]]:
 
 # ── versions ─────────────────────────────────────────────────────────────────
 
-def fingerprint(meta: dict, content: str, *, holds=(), registry=None) -> str:
-    """An entry's version for the card ledger: 12 hex of a hash over what a card says or
-    rests on. The backfill's name and summary are left out (they are rewritten in the
-    background and would re-card an unchanged entry); so is anything a read touches."""
+def fingerprint(meta: dict, content: str, *, holds=(), registry=None, shown: str = "") -> str:
+    """A card's version for the card ledger: 12 hex of a hash over what the entry is and
+    what the card says. The entry's fields go in as they are, but not its name and summary
+    (the backfill writes them in the background), nor anything a read touches. `shown` is
+    the card's own text less the owner's words it quotes and how long ago the entry was
+    written: everything the card says, including what it says of other entries (the
+    label of the one it was derived from) and the label it gives this one — so a card
+    whose words would change is a new version, and a key never stands for two texts. How
+    long ago is said as of the moment the card is handed, not of the entry."""
     found = _I.source_findings(meta, registry)
     tags = [str(t) for t in meta.get("tags") or []]
     data = {
+        "shown": str(shown or ""),
         "body": str(content or "").strip(),
         "when": str(meta.get("when") or ""),
         "status": str(meta.get("status") or ""),
@@ -423,7 +432,7 @@ class _Library:
                 self.subjects.setdefault(str(s).strip(), []).append(bid)
         self.facts = _norm(" ".join(facts))
         self.holds = _H.hold_index(buckets)
-        self._fp: dict[str, str] = {}
+        self._fp: dict[tuple[str, str], str] = {}
         self._review: Optional[list] = None
 
     # versions and the gate
@@ -437,12 +446,13 @@ class _Library:
             bid = self.prior.get(bid, "")
         return out
 
-    def key(self, bid: str) -> str:
-        if bid not in self._fp:
+    def key(self, bid: str, shown: str) -> str:
+        """`<id>@<version>` of a card for `bid` that says `shown` (`fingerprint`)."""
+        if (bid, shown) not in self._fp:
             meta, content = self.by_id[bid]
-            self._fp[bid] = fingerprint(meta, content, holds=self.lineage(bid),
-                                        registry=self.registry)
-        return f"{bid}@{self._fp[bid]}"
+            self._fp[(bid, shown)] = fingerprint(meta, content, holds=self.lineage(bid),
+                                                 registry=self.registry, shown=shown)
+        return f"{bid}@{self._fp[(bid, shown)]}"
 
     def shown(self, bid: str, road: str = _V.CUE) -> bool:
         meta, _content = self.by_id[bid]
@@ -483,7 +493,7 @@ class _Library:
             text = (f"【提醒】{self.label(bid)}（{when}{owed}）"
                     f"——做完了 trace(bucket_id=\"{short_id(bid)}\", status=\"resolved\")，"
                     f"卡本身什么都不改 ({short_id(bid)})")
-            out.append(Card(DUE, self.key(bid), bid, text, "due", (moment.isoformat(),)))
+            out.append(Card(DUE, self.key(bid, text), bid, text, "due", (moment.isoformat(),)))
         out.sort(key=lambda c: c.sort)
         return out
 
@@ -510,10 +520,13 @@ class _Library:
                 # is an existence, and out of scope nothing exists.
                 on = (f"挂在 {short_id(target)} 上；" if target and (
                     self.scope is None or self.scope.permits_id(target)) else "")
-                text = (f"【条子】{self.label(bid)}（{HOLD_WORDS.get(meta.get('hold'), '')}，"
-                        f"{on}等的事：{cond}）{quote}"
-                        f"——等的事真到了再 trace(bucket_id=\"{short_id(bid)}\", status=\"resolved\") "
-                        f"撤条子，没到就不用管 ({short_id(bid)})")
+
+                def said(q: str) -> str:
+                    return (f"【条子】{self.label(bid)}（{HOLD_WORDS.get(meta.get('hold'), '')}，"
+                            f"{on}等的事：{cond}）{q}"
+                            f"——等的事真到了再 trace(bucket_id=\"{short_id(bid)}\", status=\"resolved\") "
+                            f"撤条子，没到就不用管 ({short_id(bid)})")
+                text, shown = said(quote), said("")
                 kind = HOLD
             else:
                 parts = []
@@ -525,15 +538,17 @@ class _Library:
                 if when:
                     parts.append(when)
                 age = _age(meta, self.now)
-                if age:
-                    parts.append(age)
-                parts.extend(self._flags(meta))
+                tail = self._flags(meta)
                 origin = self._origin(meta)
                 if origin:
-                    parts.append(f"来路：{origin}")
-                text = f"【相关记忆】{self.label(bid)}（{'；'.join(parts)}）{quote} ({short_id(bid)})"
+                    tail.append(f"来路：{origin}")
+
+                def said(q: str, with_age: bool) -> str:
+                    bits = parts + ([age] if age and with_age else []) + tail
+                    return f"【相关记忆】{self.label(bid)}（{'；'.join(bits)}）{q} ({short_id(bid)})"
+                text, shown = said(quote, True), said("", False)
                 kind = MEMORY
-            out.append(Card(kind, self.key(bid), bid, text, matched,
+            out.append(Card(kind, self.key(bid, shown), bid, text, matched,
                             (-len(matched), not is_open_promise(meta),
                              str(meta.get("created") or ""))))
         # The longest match first, an open promise before the rest, then the newest.
@@ -559,41 +574,44 @@ class _Library:
 
     # review
 
-    def review_items(self) -> list[tuple[str, dict]]:
-        """依据变了的 as breath lists it, each with its card key (computed once a call)."""
+    def review_items(self) -> list[tuple[str, dict, str]]:
+        """依据变了的 as breath lists it, each as (card key, item, card text) (computed once
+        a call)."""
         if self._review is None:
-            items = _I.block(self.buckets, self.registry, scope=self.scope)
-            self._review = [(self.key(it["id"]), it) for it in items
-                            if it["id"] in self.by_id and it["id"] not in self.core_ids]
+            items = [it for it in _I.block(self.buckets, self.registry, scope=self.scope)
+                     if it["id"] in self.by_id and it["id"] not in self.core_ids]
+            self._review = []
+            for it in items:
+                text = self._review_text(it)
+                self._review.append((self.key(it["id"], text), it, text))
         return self._review
 
     def review_cards(self, baseline: set) -> list[Card]:
-        out = []
-        for key, it in self.review_items():
-            if key in baseline:
-                continue
-            why: list[str] = []
-            if it["edited"]:
-                why.append("人在面板上改过")
-            for r in it["overturned"]:
-                why.append(f"它站着的 {short_id(r['of'])} 被 {short_id(r['by'])} 推翻了")
-            for r in it["revised"]:
-                why.append(f"来源 {r['source']} 出了新版本")
-            for r in it["restored"]:
-                why.append(f"来源 {r['source']} 撤回或删除过、现在恢复了，这条从那上面派生、"
-                           "等你看过")
-            if it["failed"]:
-                failed = "、".join(f"{r['source']} {_I.state_word(r['state'])}" for r in it["failed"])
-                why.append(f"依据 {failed}，正文不给了")
-                act = ("只凭还剩的来源重写（regrow），或者收起来 trace(delete=True)"
-                       if it["remaining"] else "一条来源都不剩，只能收起来 trace(delete=True)")
-            else:
-                act = (f'重写 regrow／收起来 trace(delete=True)／'
-                       f'照留 trace(bucket_id="{it["short"]}", invalidation="confirmed")')
-            head = it["text"][:40] if it["text"] is not None else "（正文不给）"
-            text = f"【依据变了】{head}：{'；'.join(why)}——{act} ({it['short']})"
-            out.append(Card(REVIEW, key, it["id"], text, "review"))
-        return out
+        return [Card(REVIEW, key, it["id"], text, "review")
+                for key, it, text in self.review_items() if key not in baseline]
+
+    @staticmethod
+    def _review_text(it: dict) -> str:
+        why: list[str] = []
+        if it["edited"]:
+            why.append("人在面板上改过")
+        for r in it["overturned"]:
+            why.append(f"它站着的 {short_id(r['of'])} 被 {short_id(r['by'])} 推翻了")
+        for r in it["revised"]:
+            why.append(f"来源 {r['source']} 出了新版本")
+        for r in it["restored"]:
+            why.append(f"来源 {r['source']} 撤回或删除过、现在恢复了，这条从那上面派生、"
+                       "等你看过")
+        if it["failed"]:
+            failed = "、".join(f"{r['source']} {_I.state_word(r['state'])}" for r in it["failed"])
+            why.append(f"依据 {failed}，正文不给了")
+            act = ("只凭还剩的来源重写（regrow），或者收起来 trace(delete=True)"
+                   if it["remaining"] else "一条来源都不剩，只能收起来 trace(delete=True)")
+        else:
+            act = (f'重写 regrow／收起来 trace(delete=True)／'
+                   f'照留 trace(bucket_id="{it["short"]}", invalidation="confirmed")')
+        head = it["text"][:40] if it["text"] is not None else "（正文不给）"
+        return f"【依据变了】{head}：{'；'.join(why)}——{act} ({it['short']})"
 
     # names
 
@@ -616,17 +634,17 @@ class _Library:
             card = self._card_entry(name)
             if card is not None:
                 text = f"【相关名字】{name}：{self.label(card)}{count} ({short_id(card)})"
-                out.append(Card(NAME, self.key(card), card, text, spelling, (0, name)))
+                out.append(Card(NAME, self.key(card, text), card, text, spelling, (0, name)))
                 continue
             where = self._where(rec)
             if _scope.narrows(self.scope) and not related:
                 continue            # nothing this request may read says anything about it
             if not where and not related:
                 continue
+            text = f"【相关名字】{name}：{where or '名字表里有，还没有卡'}{count}"
             fp = hashlib.sha256(json.dumps(
                 [name, list(rec.aliases), rec.instance_of, list(rec.present_in),
-                 list(rec.member_of)], ensure_ascii=False).encode("utf-8")).hexdigest()[:12]
-            text = f"【相关名字】{name}：{where or '名字表里有，还没有卡'}{count}"
+                 list(rec.member_of), text], ensure_ascii=False).encode("utf-8")).hexdigest()[:12]
             out.append(Card(NAME_BARE, f"name:{name}@{fp}", "", text, spelling, (1, name)))
         out.sort(key=lambda c: c.sort)
         return out
@@ -661,7 +679,7 @@ async def cue(store, *, text: str, window: str, turn: str, host: str, scope=None
     lib = _Library(buckets, getattr(store, "sources", None), scope, now)
     ledger = store.cues
     win, _new = ledger.open_window(host, window,
-                                   lambda: [k for k, _it in lib.review_items()])
+                                   lambda: [k for k, _it, _text in lib.review_items()])
     msg = _Message(text)
     candidates = (lib.due_cards(win.opened) + lib.cue_cards(msg)
                   + lib.review_cards(win.baseline) + lib.name_cards(msg))
