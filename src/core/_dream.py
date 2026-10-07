@@ -155,6 +155,10 @@ Three rules, none of which may be turned into something event-driven:
    **The instant it is written down it is no longer a dream, it is a memory**, and from
    then on memory owns it. Anything not written down is genuinely gone.
 
+The panel keeps its own copy of each dream for three natural days — the whole text, the
+state, the thread candidates — written at weaving, waking and sweeping
+(core/_dream_archive.py). Nothing here reads it: for me the dream is gone all the same.
+
 ⏳ **The turn-count layer is the bridge's job** (the spec explicitly allows "if you
    cannot do it, ship the time layer alone"):
    "for me, the passage of time is really how many times I have been called" — **losing
@@ -215,6 +219,7 @@ from datetime import datetime, timedelta
 
 from utils import parse_bool
 
+from . import _dream_archive as _archive   # the panel's copy; written here, never read here
 from . import _holds as _H
 from . import _muse as M
 from . import _sources as _src
@@ -1198,6 +1203,8 @@ def degrade_on_wake() -> list[str]:
     for rec in load_dreams():
         if not str(rec.get("完整") or "").strip():
             continue
+        # The panel's copy keeps the whole text this strips (core/_dream_archive.py).
+        _keep_for_panel(rec, _archive.FADING, now)
         rec.pop("完整", None)
         rec["起算点"] = now.isoformat(timespec="seconds")
         rec["降级于"] = now.isoformat(timespec="seconds")
@@ -1260,12 +1267,26 @@ async def sweep_expired(c: dict | None = None) -> dict:
         except OSError as e:
             rt.logger.warning("删梦文件失败 %s: %s", p, e)
             continue
+        _keep_for_panel(rec, _archive.GONE, now)
         removed.append(str(rec.get("id") or ""))
         try:
             traces.append(await leave_a_trace(rec))
         except Exception as e:                      # noqa: BLE001 - a failed trace must not blow up the sweep
             rt.logger.warning("梦的留痕没写成（文件已删）: %s", e)
+    try:
+        _archive.sweep(now=now)
+    except Exception as e:                          # noqa: BLE001 - the panel's copy never stops a sweep
+        rt.logger.warning("[dream] 面板的梦存档没扫成: %s", e)
     return {"删了": removed, "留痕": traces}
+
+
+def _keep_for_panel(rec: dict, state: str, now: datetime) -> None:
+    """Write or move forward the panel's copy of this dream (core/_dream_archive.py).
+    Panel-only: a failure is logged and never stops the dream's own lifecycle."""
+    try:
+        _archive.keep(rec, state=state, at=now)
+    except Exception as e:                          # noqa: BLE001
+        rt.logger.warning("[dream] 面板的梦存档没写成 %s: %s", rec.get("id"), e)
 
 
 # ============================================================
@@ -1470,6 +1491,9 @@ async def _commit(rec: dict) -> list[str]:
         tainted = await _tainted(rec)
         if not tainted:
             save_record(rec)
+            # The panel's copy is written under the same leases, so a source change
+            # clearing this dream finds the copy too.
+            _keep_for_panel(rec, _archive.WAITING, _w.now())
     return tainted
 
 

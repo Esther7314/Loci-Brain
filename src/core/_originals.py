@@ -46,7 +46,8 @@ The answer: HTTP 200 and a JSON object of exactly these keys (anything else coun
 answer):
 
     {"v": 1, "status": "given",
-     "lines": [{"id": "m_0012", "revision": "r3", "text": "…"},
+     "lines": [{"id": "m_0012", "revision": "r3", "text": "…", "speaker": "小周",
+                "at": "2026-10-06T21:04:11+08:00"},
                {"id": "m_0013", "revision": null, "missing": "unavailable"},
                {"id": "m_0014", "revision": null, "text": "…", "cut": true}],
      "truncated_after": "m_0014"}
@@ -64,6 +65,13 @@ answer):
       missing         in place of text: withdrawn · deleted · out_of_scope · unavailable
                       (for now) · not_found (the host has no record of it — not the same
                       word as deleted)
+      speaker         optional: who said the line, as a display name the audience may see;
+                      left out when the host does not know
+      at              optional: when it was said, ISO 8601 with its offset; left out when
+                      the host does not know
+                      A speaker or an at that does not read (not text, empty, too long, a
+                      control character; a time with no offset) is taken as absent: it
+                      never makes the answer unreadable
     truncated_after   given only: null, or the id of the last line sent when the lines
                       after it were left out (it is then the last line listed)
 
@@ -121,7 +129,7 @@ else.
 
 Exports: GIVEN · UNAVAILABLE · NOT_ALLOWED · NO_HOST · GONE_WORDS · MISSING_NOW ·
          HOLD_WORDS · GONE_HTTP · TLS_FAILED · TEMPORARY_STATUSES · Settings · settings_from · Line · Answer · host_for · scope_wire ·
-         build_request · parse_answer · fetch ·
+         build_request · parse_answer · speaker_of · at_of · SPEAKER_MAX · fetch ·
          deployment_hosts() · source_records_of(meta) · hold_what_hosts_said(answers, store)
 ========================================
 """
@@ -141,6 +149,7 @@ import httpx
 from utils import WAS_QUOTED_FROM, read_prov
 
 from . import _sources as _src
+from . import _when as _w
 from . import runtime as rt
 from . import scope as _scope
 from .scope import IMPORT_SYSTEM, LOCI
@@ -156,7 +165,9 @@ NOT_FOUND = "not_found"
 # The host's words that a source is gone for good: the caller holds it.
 HOLD_WORDS = ("withdrawn", "deleted")
 _ANSWER_KEYS = frozenset({"v", "status", "reason", "lines", "truncated_after"})
-_LINE_KEYS = frozenset({"id", "revision", "text", "cut", "missing"})
+_LINE_KEYS = frozenset({"id", "revision", "text", "cut", "missing", "speaker", "at"})
+# A speaker is a display name: past this many characters it is not one.
+SPEAKER_MAX = 64
 
 # Why an answer is UNAVAILABLE (for the reply's wording and the log; never the text).
 UNREACHABLE, TIMEOUT, HOST_SAYS, NO_TOKEN, ALL_MISSING = (
@@ -203,12 +214,15 @@ def settings_from(config: Optional[Mapping]) -> Settings:
 
 @dataclass(frozen=True)
 class Line:
-    """One line of what the host gave: its text, or why it is missing."""
+    """One line of what the host gave: its text, or why it is missing; who said it and
+    when (local ISO 8601) when the host knows."""
     id: str
     revision: Optional[str] = None
     text: Optional[str] = None
     cut: bool = False
     missing: Optional[str] = None
+    speaker: Optional[str] = None
+    at: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -297,6 +311,24 @@ def _optional_text(value) -> bool:
     return value is None or isinstance(value, str)
 
 
+def speaker_of(value) -> Optional[str]:
+    """A line's `speaker` as the host sent it, or None when absent or not a display name
+    (not text, empty, longer than SPEAKER_MAX, a control character)."""
+    if not isinstance(value, str):
+        return None
+    name = value.strip()
+    if not name or len(name) > SPEAKER_MAX or any(ord(c) < 32 or ord(c) == 127 for c in name):
+        return None
+    return name
+
+
+def at_of(value) -> Optional[str]:
+    """A line's `at` as local ISO 8601 with its offset (core/_when.parse_instant), or None
+    when absent or not a moment with an offset."""
+    moment = _w.parse_instant(value)
+    return moment.isoformat(timespec="seconds") if moment is not None else None
+
+
 def parse_answer(raw: bytes, identity, settings: Settings) -> Answer:
     """The host's HTTP 200 body -> an Answer (`source` and `host` are the caller's to
     fill in). See the module header for how each shape is taken."""
@@ -342,8 +374,12 @@ def parse_answer(raw: bytes, identity, settings: Settings) -> Answer:
             return _malformed("cut is true or false")
         if missing is not None and missing not in (*GONE_WORDS, *MISSING_NOW):
             return Answer(NOT_ALLOWED, reason=UNKNOWN_WORD)
+        speaker, at = speaker_of(row.get("speaker")), at_of(row.get("at"))
+        if (speaker is None and row.get("speaker") is not None) or (
+                at is None and row.get("at") is not None):
+            logger.info("[originals] a line's speaker or at does not read; taken as absent")
         lines.append(Line(id=lid, revision=row.get("revision"), text=text, cut=cut,
-                          missing=missing))
+                          missing=missing, speaker=speaker, at=at))
     ids = [ln.id for ln in lines]
     after = data.get("truncated_after")
     if len(set(ids)) != len(ids) or ids[0] != sid.id:

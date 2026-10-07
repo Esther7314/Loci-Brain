@@ -5,8 +5,9 @@ tests/test_panel_turns.py — GET /api/loci/turns/{window}: one window, turn by 
 Each turn carries the cards it was handed and what became of each (offered, delivered,
 dropped), what breath showed and recall found in that turn (joined by the usage line's
 write key), and the holds live now on any of them. Turns come newest first and page
-with as_of. The search's query reaches the panel and no host: a host credential gets
-nothing from this route, and a non-panel read leaves the query out.
+with as_of. A host's credential reads its own windows (decision Q1) and no other
+host's; the search's query reaches the panel and no host: a non-panel read leaves it
+out.
 """
 
 import asyncio
@@ -188,18 +189,26 @@ def test_a_non_panel_read_never_carries_the_query(seeded):
     assert "甜品" not in text.replace("考完去吃那家甜品。", "") and '"query"' not in text
 
 
-def test_a_host_credential_gets_nothing_from_the_panel_route(seeded, monkeypatch):
+def test_a_host_reads_its_own_windows_and_never_the_query(seeded, monkeypatch):
     sh, PA = seeded["sh"], seeded["PA"]
     monkeypatch.setenv("T_LIFE", "life-key")
     monkeypatch.setattr(sh, "config", {**sh.config, "hosts": {
         "life": {"token_env": "T_LIFE", "scope_mode": "open"}}})
     monkeypatch.setattr(PA, "gate_needed", lambda: True)
-    monkeypatch.setattr(PA, "has_session", lambda r: True)
-    status, out = seeded["get"]("/api/loci/turns/{window}", {"window": "w1"},
-                                headers=[(b"x-loci-hook-token", b"life-key")], host="life")
-    assert status == 403 and "甜品" not in json.dumps(out, ensure_ascii=False)
-    for route in ("/api/loci/turns/{window}", "/api/loci/recall/timeline", "/api/loci/usage",
-                  "/api/loci/grow/today", "/api/loci/grow/slices", "/api/loci/muse",
-                  "/api/loci/embedding/missing", "/api/loci/embedding/backfill"):
-        assert not PA.is_hook(route) and not PA.is_public(route), route
+    monkeypatch.setattr(PA, "has_session", lambda r: False)
+    key = [(b"x-loci-hook-token", b"life-key")]
+    status, out = seeded["get"]("/api/loci/turns/{window}", {"window": "w1"}, headers=key)
+    assert status == 200 and out["host"] == "life", out
+    assert out["scope"] == "〔范围：全库（open）〕"
+    text = json.dumps(out, ensure_ascii=False)
+    assert "甜品" not in text.replace("考完去吃那家甜品。", "") and '"query"' not in text
+    status, out = seeded["get"]("/api/loci/turns/{window}", {"window": "w1"}, headers=key,
+                                host="bot")
+    assert status == 403 and "别的宿主搜的" not in json.dumps(out, ensure_ascii=False)
+    for route in ("/api/loci/turns/{window}", "/api/loci/usage"):
+        assert PA.is_host_read(route) and not PA.is_hook(route), route
+    for route in ("/api/loci/recall/timeline", "/api/loci/grow/today", "/api/loci/grow/slices",
+                  "/api/loci/muse", "/api/loci/embedding/missing",
+                  "/api/loci/embedding/backfill"):
+        assert not (PA.is_hook(route) or PA.is_public(route) or PA.is_host_read(route)), route
         assert any(path == route for _m, path in seeded["routes"]), route

@@ -72,6 +72,35 @@ class _Gated:
         if panel_auth.is_public(path):
             return inner
 
+        # The panel's reads a host may make too (panel_auth.HOST_READ_PATHS): a host's
+        # credential reads by that host's scope, as on the hook routes; no credential is
+        # the panel behind its own gate. GET only — a write registered on one of these
+        # paths would be a write a host credential opens, so it does not register.
+        if panel_auth.is_host_read(path):
+            if list(methods or []) != ["GET"]:
+                raise ValueError(f"{path} is a host read (panel_auth.HOST_READ_PATHS): GET "
+                                 f"only, every write stays the panel's; got {methods}")
+
+            def read_deco(fn):
+                import functools
+                from starlette.responses import JSONResponse
+                from core import scope as _scope
+
+                @functools.wraps(fn)
+                async def host_read_guarded(request):
+                    refused, caller = panel_auth.host_read_caller(request)
+                    if refused is not None:
+                        status, why = refused
+                        return JSONResponse({"error": why}, status_code=status)
+                    req = panel_auth.request_scope_of(request, caller)
+                    request.state.loci_request = req
+                    with _scope.request_scope(req):
+                        return await fn(request)
+
+                return inner(host_read_guarded)
+
+            return read_deco
+
         # The bridge-facing routes: no cookie required (the bridge has none), but a key is
         # required whenever the gate is locked. The reasoning is written above
         # panel_auth.HOOK_PATHS. Who is calling (a host, or the panel) and

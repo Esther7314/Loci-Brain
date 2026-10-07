@@ -17,8 +17,8 @@ them. Two lists, each paged on its own (`part`):
 A cluster's id is `c_` + the first 10 hex of sha1 over its members' ids, sorted (the
 same group as core/_muse.rejection_key: one member more or fewer is a new cluster). A
 gesture is named the same way, by the ids it points at, or by its kind and days when it
-points at none. A nudge on a cluster (`nudge`) is not kept anywhere: every
-cluster says `none`.
+points at none. A cluster's `nudge` is its 「戳一下」 (core/_nudge.py): `none`, `poked`
+with when, or `seen` with when it was said to the model.
 
 Exports: PARTS · cluster_id · evidence_words · panel_view
 ========================================
@@ -70,12 +70,12 @@ def _newest(items) -> datetime | None:
     return max(stamps) if stamps else None
 
 
-def _cluster_row(c: "M.Cluster") -> dict:
+def _cluster_row(c: "M.Cluster", nudges: dict) -> dict:
     stamps = [it.created for it in c.items if it.created is not None]
     return {"id": cluster_id(c.ids), "kind": "thoughts", "n": len(c.ids),
             "ids": list(c.ids), "evidence_words": evidence_words(c),
             "oldest": _day(min(stamps)) if stamps else None,
-            "nudge": {"state": "none"}}
+            "nudge": nudges.get(cluster_id(c.ids)) or {"state": "none"}}
 
 
 def _finger_row(name: str, f: "M.Finger") -> dict:
@@ -91,11 +91,11 @@ def _finger_row(name: str, f: "M.Finger") -> dict:
 
 
 def panel_view(clusters: list, fingers: dict, *, part: str, offset: int, limit: int,
-               as_of: datetime) -> dict:
+               as_of: datetime, nudges: dict | None = None) -> dict:
     """One part of muse's page, paged: the clusters in the order muse lays them out, or
     the gestures (word bursts, then drifts, then blank stretches). A cluster or gesture
     with a member written after `as_of` is left out — it is a new group since the first
-    page."""
+    page. `nudges`: {cluster_id: {state, at}} (core/_nudge.states)."""
     if part not in PARTS:
         raise ValueError(f"part must be one of {PARTS}")
     rows = []
@@ -103,7 +103,7 @@ def panel_view(clusters: list, fingers: dict, *, part: str, offset: int, limit: 
         for c in clusters or []:
             newest = _newest(c.items)
             if not past(newest, as_of):
-                rows.append(_cluster_row(c))
+                rows.append(_cluster_row(c, nudges or {}))
     else:
         for name in _GESTURES:
             for f in (fingers or {}).get(name, []):

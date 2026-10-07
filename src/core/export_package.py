@@ -305,6 +305,8 @@ _LEFT_BEHIND: tuple[tuple[str, str], ...] = (
     ("_state/thresholds_model.json", "the embedding model this installation's similarity "
                                      "lines were last looked at with; the lines themselves "
                                      "are config"),
+    ("_state/dream_archive/*", "the panel's copy of the last three days' dreams: for the "
+                               "panel alone, never a road back to a dream"),
     ("embeddings.db.backup", "the vectors before a model switch"),
     ("embeddings.db.migrating", "a model switch's unfinished vectors"),
     ("embeddings.db*", "the vector database's side files"),

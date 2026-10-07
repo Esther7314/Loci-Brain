@@ -85,7 +85,10 @@ for review, not cleared):
 
     dream_records      dream files whose ingredients include an entry or a derived memory,
                        that were fed the changed source itself (the quote share's `来源`),
-                       or whose text holds the entries' words
+                       or whose text holds the entries' words; and the words of the
+                       panel's copy of such a dream, and of every dream file removed
+                       (core/_dream_archive.clear: text and candidates blanked, the card
+                       kept). `done` when a file was removed or a copy held words
     dehydration_cache  cache rows keyed by an entry's body, or whose summary holds its words
     slices             pending slices over the changed lines: gist blanked, an open one dropped
     usage_log          the query of a lookup that listed what is cleared or typed its words
@@ -322,6 +325,7 @@ async def _derived(store, entries: list[str]) -> list[str]:
 
 def _dream_records(store, ctx) -> str:
     from . import _dream
+    from . import _dream_archive as _archive
     ids = set(ctx["entries"]) | set(ctx["derived"])
     registry = getattr(store, "sources", None)
     # Once a later change gave the source back, a dream fed by it since is not this
@@ -329,6 +333,7 @@ def _dream_records(store, ctx) -> str:
     fed = (lambda rec: False) if ctx.get("superseded") else (
         lambda rec: _dream.fed_by(rec, ctx["sid"], registry))
     hit = 0
+    removed: list[str] = []
     for rec in _dream.load_dreams(store.base_dir):
         path = rec.get("_路径") or ""
         used = set(_dream.ingredient_ids(rec))
@@ -338,6 +343,17 @@ def _dream_records(store, ctx) -> str:
             if path and os.path.exists(path):
                 os.remove(path)
                 hit += 1
+                removed.append(str(rec.get("id") or ""))
+
+    # The panel's copy of each dream (core/_dream_archive.py) holds the whole text the
+    # file lost at waking, and outlives the file: the same match clears its words, and
+    # the copy of every file removed above.
+    def reaches(copy: dict) -> bool:
+        text = json.dumps({k: v for k, v in copy.items() if not k.startswith("_")},
+                          ensure_ascii=False)
+        return bool((set(_archive.ingredient_ids(copy)) & ids)
+                    or fed(_archive.as_dream(copy)) or ctx["words"].hit(text))
+    hit += _archive.clear(store.base_dir, reaches, removed)
     return DONE if hit else NONE
 
 

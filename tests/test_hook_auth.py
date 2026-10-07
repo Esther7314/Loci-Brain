@@ -91,8 +91,12 @@ def test_an_ordinary_api_route_is_neither():
     # Ordinary routes must keep going through the cookie gate. If one of them
     # drifted into the hook set it would start accepting the bridge token instead
     # of a login — a downgrade dressed up as a fix.
-    assert not PA.is_hook("/api/loci/recall")
-    assert not PA.is_public("/api/loci/recall")
+    assert not PA.is_hook("/api/loci/graph")
+    assert not PA.is_public("/api/loci/graph")
+    assert not PA.is_host_read("/api/loci/graph")
+    # recall is a host read (decision Q1): a host's credential reads it under its scope,
+    # but without one it is still the panel's, behind the login — not a hook route.
+    assert PA.is_host_read("/api/loci/recall") and not PA.is_hook("/api/loci/recall")
 
 
 # ───────────────────────── the door is not locked ─────────────────────────

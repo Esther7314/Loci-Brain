@@ -495,6 +495,30 @@ def test_both_routes_want_the_hook_key_when_the_panel_is_locked(store, monkeypat
     assert call("GET", key="s3cret")[1]["pending"] == 3
 
 
+def test_a_batch_carries_when_its_host_last_wrote_its_daily_report(store, monkeypatch):
+    call = _routes(monkeypatch, store, stub(THREE))
+    status, out = call("POST", body(report_at="2026-10-07T05:12:00+08:00"))
+    assert status == 200, out
+    [row] = [json.loads(x) for x in store.slices.path.read_text(encoding="utf-8").splitlines()]
+    assert (row["host"], row["report_at"]) == ("legacy", "2026-10-07T05:12:00+08:00")
+    moment, host = store.slices.last_report()
+    assert host == "legacy" and moment.isoformat() == "2026-10-07T05:12:00+08:00"
+    assert store.slices.last_report("someone-else") is None
+    status, out = call("POST", body(day="2026-10-08"))
+    assert status == 200 and store.slices.last_report()[0] == moment, "absent keeps none"
+
+
+@pytest.mark.parametrize("bad", ["2026-10-07T05:12:00", "2026-10-07", "this morning", 1728249120,
+                                 "2026-13-07T05:12:00+08:00"])
+def test_a_report_at_that_does_not_read_is_a_400_and_nothing_is_stored(store, monkeypatch, bad):
+    calls = []
+    call = _routes(monkeypatch, store, stub(THREE, calls=calls))
+    status, out = call("POST", body(report_at=bad))
+    assert status == 400 and "report_at" in out["error"] and "offset" in out["error"], out
+    assert calls == [] and store.slices.pending_count() == 0
+    assert store.slices.last_report() is None
+
+
 def test_the_hosts_order_of_a_batch_outlives_its_slices(store, tmp_path):
     take(store, stub(THREE))
     run_ = "lento:home/private:U#m_0002..m_0006"

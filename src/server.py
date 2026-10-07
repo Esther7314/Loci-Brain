@@ -480,7 +480,8 @@ async def _with_notice(coro: Awaitable[str], op: str = "", args: dict | None = N
     1. On entry: begin_warnings() initializes this call's W/I channel, and the request
        is resolved (who is calling, what it may read, its write key) and set for the call.
     2. On exit: the concatenation order is [scope line, on a read] + [deletion notice] +
-       [tool output] + [the W/I notices this call produced].
+       [tool output] + [the W/I notices this call produced] + [a poke from the panel's
+       muse page waiting to be said, said once (core/_nudge.py)].
     3. On exception: catch it, record OB-E004, and return the standard format (including
        the last 15 log lines), so the MCP protocol layer never sees a bare exception string.
     4. When op is non-empty, emit the structured log at all three points.
@@ -550,7 +551,22 @@ async def _run_with_notice(coro: Awaitable[str], op: str = "", args: dict | None
         extras = ""
     notice = _pop_deletion_notice()
     body = (notice + result) if notice else result
-    return body + extras if extras else body
+    body = body + extras if extras else body
+    return body + await _nudge_lines()
+
+
+async def _nudge_lines() -> str:
+    """The poke line: a poke from the panel's muse page, said once, at the end of the next
+    tool reply that may see the whole cluster (core/_nudge.py). Never fails the call."""
+    from core import _nudge, _when
+    from tools._common import read_scope
+    try:
+        lines = await _nudge.take_lines(bucket_mgr.base_dir, bucket_mgr, read_scope,
+                                        _when.now())
+    except Exception as e:                      # noqa: BLE001
+        logger.warning(f"[nudge] could not hand out the poke line: {type(e).__name__}: {e}")
+        return ""
+    return "".join(f"\n\n{line}" for line in lines)
 
 
 # =============================================================

@@ -9,17 +9,25 @@ recall's timeline, usage, grow, muse, the missing vectors, and 「现在补」
                                            (core/activity.timeline)
     GET  /api/loci/usage                -> shown / found / stood on, per memory
                                            (core/activity.usage_counts)
-    GET  /api/loci/grow/today           -> written since today began (core/grow_view)
+    GET  /api/loci/grow/today           -> written since today began: `?since=`, else the
+                                           last daily report a slices batch carried
+                                           (`?host=` one host's; any host's without it),
+                                           else local midnight (core/grow_view.day_cut)
     GET  /api/loci/grow/slices          -> every batch of slices, with states (core/grow_view)
     GET  /api/loci/muse                 -> clusters or unnamed days (core/muse_view)
+    POST /api/loci/muse/nudge           -> 「戳一下」 on a cluster (core/_nudge)
+    GET  /api/loci/dreams               -> the last three natural days' dreams, from the
+                                           panel's own copy (core/_dream_archive)
     GET  /api/loci/embedding/missing    -> what has no vector, and why (core/vector_view)
     POST /api/loci/embedding/backfill   -> 「现在补」 (core/vector_view.backfill)
 
 Each route reads the library, logs and engines off `web/_shared` at call time, hands them
 to its core function and returns the dict as JSON. Every list takes `offset` / `limit` /
-`as_of` (core/paging.py); one that does not read is a 400. Every route here is the panel's
-alone (no entry in panel_auth.HOOK_PATHS): a search's query text comes back on these
-routes and on no host route (core/_usage.py).
+`as_of` (core/paging.py); one that does not read is a 400. turns and usage are host reads
+too (panel_auth.HOST_READ_PATHS): a host's credential reads them under its own scope,
+turns only for its own windows, and never with a search's query text, which comes back to
+the panel alone (core/_usage.py). Every other route here is the panel's alone, and the
+dream page is the one reader of the copy of dreams the model has forgotten.
 ========================================
 """
 
@@ -27,8 +35,9 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from . import _shared as sh
-from ._guards import _request_of, _write_body
-from .loci_detail import library_view as _library_view
+from ._guards import _caller_host, _request_of, _write_body
+from .loci_detail import library_view as _library_view, read_scope_of
+from core import _nudge
 from core import _when as _w
 from core import activity as _act
 from core import paging as _pg
@@ -64,20 +73,31 @@ def _failed(what: str, e: Exception) -> Response:
 # What each turn was handed (core/activity.py)
 # ---------------------------------------------------------
 async def api_loci_turns(request: Request) -> Response:
+    """The panel names the host (`?host=`). A host reads only its own windows: `host`
+    may be left out, and naming another is a 403. Only the panel sees what a search
+    typed."""
     window = str(request.path_params.get("window") or "").strip()
     host = (request.query_params.get("host") or "").strip()
+    caller = _caller_host(request)
     if not window:
         return JSONResponse({"error": "缺窗口的编号"}, status_code=400)
+    if caller is not None:
+        if host and host != caller.name:
+            return JSONResponse({"error": "宿主只看得到自己的窗口",
+                                 "scope": _scope_line(request)}, status_code=403)
+        host = caller.name
     if not host:
         return JSONResponse({"error": "要带 host：哪个宿主的窗口"}, status_code=400)
     try:
+        refused, view, _line = await read_scope_of(request)
+        if refused is not None:
+            return refused
         now = _w.now()
         offset, limit, as_of = _paging(request, now)
         out = _act.turns(sh.bucket_mgr.cues, _usage_rows(),
                          await sh.bucket_mgr.list_all(include_archive=True),
                          host=host, window=window, now=now, offset=offset, limit=limit,
-                         as_of=as_of, scope=await _library_view(),
-                         panel=_request_of(request) is None)
+                         as_of=as_of, scope=view, panel=caller is None)
     except Exception as e:                       # noqa: BLE001
         return _failed("turns", e)
     if out is None:
@@ -93,7 +113,7 @@ async def api_loci_recall_timeline(request: Request) -> Response:
         out = _act.timeline(sh.bucket_mgr.cues.events(), _usage_rows(),
                             await sh.bucket_mgr.list_all(include_archive=True),
                             now=now, offset=offset, limit=limit, as_of=as_of,
-                            scope=await _library_view(), panel=_request_of(request) is None)
+                            scope=await _library_view(), panel=_caller_host(request) is None)
     except Exception as e:                       # noqa: BLE001
         return _failed("recall/timeline", e)
     return JSONResponse({**out, "scope": _scope_line(request)})
@@ -102,6 +122,9 @@ async def api_loci_recall_timeline(request: Request) -> Response:
 async def api_loci_usage(request: Request) -> Response:
     from datetime import timedelta
     try:
+        refused, view, _line = await read_scope_of(request)
+        if refused is not None:
+            return refused
         now = _w.now()
         offset, limit, as_of = _paging(request, now)
         since = _w.parse_date_or_none((request.query_params.get("since") or "").strip())
@@ -113,7 +136,7 @@ async def api_loci_usage(request: Request) -> Response:
         out = _act.usage_counts(_usage_rows(),
                                 await sh.bucket_mgr.list_all(include_archive=True),
                                 since=since, offset=offset, limit=limit, as_of=as_of,
-                                scope=await _library_view())
+                                scope=view)
     except Exception as e:                       # noqa: BLE001
         return _failed("usage", e)
     return JSONResponse({**out, "scope": _scope_line(request)})
@@ -127,7 +150,10 @@ async def api_loci_grow_today(request: Request) -> Response:
     try:
         now = _w.now()
         offset, limit, as_of = _paging(request, now)
-        since, since_from = _gv.day_cut(now, request.query_params.get("since"))
+        host = (request.query_params.get("host") or "").strip() or None
+        since, since_from = _gv.day_cut(now, request.query_params.get("since"),
+                                        pending=getattr(sh.bucket_mgr, "slices", None),
+                                        host=host)
         out = _gv.written_since(await sh.bucket_mgr.list_all(include_archive=False), since,
                                 now=now, offset=offset, limit=limit, as_of=as_of)
     except Exception as e:                       # noqa: BLE001
@@ -168,9 +194,55 @@ async def api_loci_muse(request: Request) -> Response:
         offset, limit, as_of = _paging(request, now)
         clusters, _scattered, _default, fingers, _stats = await M.both_sides()
         out = _mv.panel_view(clusters, fingers, part=part, offset=offset, limit=limit,
-                             as_of=as_of)
+                             as_of=as_of, nudges=_nudge.states(sh.bucket_mgr.base_dir))
     except Exception as e:                       # noqa: BLE001
         return _failed("muse", e)
+    return JSONResponse({**out, "scope": _scope_line(request)})
+
+
+async def api_loci_muse_nudge(request: Request) -> Response:
+    """「戳一下」 on a cluster of thoughts: {"cluster": "c_…"} -> {ok, cluster, state}.
+    The cluster has to be one muse lays out now (core/muse_view.cluster_id); poking it
+    again is one poke. Same-origin JSON only (web/_guards._write_body); writes
+    `_state/muse_nudges.json` (core/_nudge.py), not the ledger."""
+    from core import _muse as M
+    from core import muse_view as _mv
+    try:
+        body = await _write_body(request)
+    except PermissionError as e:
+        return JSONResponse({"error": str(e)}, status_code=403)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    cid = str(body.get("cluster") or "").strip()
+    if not cid:
+        return JSONResponse({"error": "要带 cluster：戳的是哪一团（团的 id）"}, status_code=400)
+    try:
+        clusters, _scattered, _default, _fingers, _stats = await M.both_sides()
+        match = next((c for c in clusters if _mv.cluster_id(c.ids) == cid), None)
+        if match is None:
+            return JSONResponse({"error": f"现在没有这一团：{cid}（团里多一条少一条就是新的一团，"
+                                          "刷新再戳）"}, status_code=404)
+        out = _nudge.poke(sh.bucket_mgr.base_dir, cid, list(match.ids), _w.now())
+    except Exception as e:                       # noqa: BLE001
+        return _failed("muse/nudge", e)
+    return JSONResponse({"ok": True, "cluster": cid, "state": out["state"]})
+
+
+# ---------------------------------------------------------
+# The dream page (core/_dream_archive.py): the panel's own copy of each dream of the last
+# three natural days, the one reader of that copy
+# ---------------------------------------------------------
+async def api_loci_dreams(request: Request) -> Response:
+    from core import _dream_archive as _da
+    try:
+        now = _w.now()
+        offset, limit, as_of = _paging(request, now)
+        out = _da.panel_view(_da.load(sh.bucket_mgr.base_dir),
+                             await sh.bucket_mgr.list_all(include_archive=False),
+                             lambda: list(sh.bucket_mgr.ledger_mirror.iter_events()),
+                             now=now, offset=offset, limit=limit, as_of=as_of)
+    except Exception as e:                       # noqa: BLE001
+        return _failed("dreams", e)
     return JSONResponse({**out, "scope": _scope_line(request)})
 
 

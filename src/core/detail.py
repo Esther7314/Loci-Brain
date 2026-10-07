@@ -481,7 +481,11 @@ async def fetch_original(meta: dict, index: int, *, store, hosts, registry, sett
                          request=None) -> dict:
     """The original of the entry's source number `index` (as `source_view` numbers them),
     asked of its host. Raises IndexError for a number it does not have. What a host says
-    is gone is held (core/_originals.hold_what_hosts_said), as on every fetch."""
+    is gone is held (core/_originals.hold_what_hosts_said), as on every fetch.
+
+    Each line given is {id, who, at, text, cut?}: `who` / `at` from the import's own rows
+    for lines Loci holds, else the host's `speaker` / `at` (local ISO 8601); null when
+    unknown. A missing line is {id, missing, missing_words}."""
     from .import_memory import speaker_label   # lazy: import_memory imports _originals
     records = _O.source_records_of(meta or {})
     if not 0 <= index < len(records):
@@ -504,6 +508,9 @@ async def fetch_original(meta: dict, index: int, *, store, hosts, registry, sett
             continue
         text = ln.text or ""
         row = rows.get(ln.id)
+        # A host's line carries who said it and when only when the host knows
+        # (core/_originals: `speaker`, `at`, already read or dropped there); null otherwise.
+        item["who"], item["at"] = ln.speaker, ln.at
         if row is not None:
             who = speaker_label(row.get("role"), bool(batch.get("same_self", True)),
                                 str(batch.get("human") or "用户"))

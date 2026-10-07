@@ -34,7 +34,9 @@ replaces its pending slices instead of doubling them.
 
 The pending store is `<buckets>/_sources/pending_slices.jsonl`, append-only like the
 source registry beside it: a `batch` line carries the batch (source, day, revision,
-each line's id and hash) and its slices; `close` and `recut` lines change one
+each line's id and hash, the host that handed it over and, when the host sent one, its
+`report_at`: when it last wrote its daily report, which is where grow's page starts
+"today", core/grow_view.day_cut) and its slices; `close` and `recut` lines change one
 slice. A closed slice stays in the file as what handled it, so a second use of its id
 is refused by name. The index is rebuilt from the file on first use and whenever it
 has grown. An append-only log rather than a file per batch: every change is one whole
@@ -55,7 +57,8 @@ core/_source_change.registration_refusal).
 The registry is read again when the slices are written, under the pending store's lease:
 a line that became withdrawn, deleted or held while the side model was slicing drops the
 whole batch (BatchStale), so no gist of it is written after its clearing has run.
-Past that, nothing here knows which host it is or where the lines came from. An imported
+Past that and the host's name kept on the batch line, nothing here knows which host it
+is or where the lines came from. An imported
 conversation (core/import_memory.py) goes through the same slicing and the same pending
 store, with its own prompt: each of its slices also carries a `draft`, the side model's
 candidate entry for the main model to check, and its batch line carries `import` (the
@@ -69,7 +72,7 @@ Exports: SLICER_PROMPT_VERSION · SLICER_PROMPT · GIST_MAX · DRAFT_MAX · Slic
          read_batch · batch_id_of · fingerprint_of · slice_fingerprint · FINGERPRINT_BY ·
          guess_covering · take_batch · PendingSlices (record_batch · get · record_for ·
          run_length · close · recut · withdraw_lines · purge · open_batches · batches ·
-         pending_count · rebuild_index)
+         last_report · pending_count · rebuild_index)
 ========================================
 """
 
@@ -326,7 +329,7 @@ def side_model(dehydrator, config: Optional[dict],
 # The batch the host hands over
 # ============================================================
 
-_BODY_KEYS = {"source", "day", "lines", "revision", "fingerprint_by"}
+_BODY_KEYS = {"source", "day", "lines", "revision", "fingerprint_by", "report_at"}
 _LINE_KEYS = {"id", "text", "at", "speaker", "revision"}
 _SOURCE_KEYS = ("system", "instance", "container")
 _DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -365,11 +368,25 @@ def _short_text(value, key: str, limit: int, where: str) -> Optional[str]:
     return text or None
 
 
+def _report_at(value) -> Optional[str]:
+    """The batch's `report_at` (when the host last wrote its daily report): absent or null
+    is None; otherwise ISO 8601 with a time and its offset (core/_when.parse_instant),
+    kept as the host wrote it. Raises BatchError for anything else."""
+    if value is None:
+        return None
+    if _w.parse_instant(value) is None:
+        raise BatchError("report_at must be ISO 8601 with a time and its offset (when "
+                         "this host last wrote its daily report), e.g. "
+                         f"2026-10-07T05:12:00+08:00; got {str(value)[:64]!r}")
+    return value.strip()
+
+
 def read_batch(body, *, max_lines: int = DEFAULT_MAX_LINES_PER_BATCH) -> dict:
-    """The intake body -> {source, day, revision, lines, batch_id}. Every line id has to
-    make a valid source record (core/_sources); ids are unique. A `fingerprint_by` in
-    the body is taken as text and not used: the fingerprints are Loci's own
-    (FINGERPRINT_BY). Raises BatchError."""
+    """The intake body -> {source, day, revision, lines, batch_id, report_at}. Every line
+    id has to make a valid source record (core/_sources); ids are unique. A
+    `fingerprint_by` in the body is taken as text and not used: the fingerprints are
+    Loci's own (FINGERPRINT_BY). `report_at` is optional (`_report_at`). Raises
+    BatchError."""
     if not isinstance(body, dict):
         raise BatchError("the body must be a JSON object")
     extra = sorted(set(map(str, body)) - _BODY_KEYS)
@@ -389,6 +406,7 @@ def read_batch(body, *, max_lines: int = DEFAULT_MAX_LINES_PER_BATCH) -> dict:
         raise BatchError(f"{len(lines)} lines is over the {max_lines}-line cap of one "
                          "batch; send the day in parts")
     _short_text(body.get("fingerprint_by"), "fingerprint_by", 32, "body")
+    report_at = _report_at(body.get("report_at"))
     template = {k: source.get(k) for k in _SOURCE_KEYS}
     template.update(revision=body.get("revision"), fingerprint_by=FINGERPRINT_BY)
     out_lines: list[dict] = []
@@ -425,7 +443,8 @@ def read_batch(body, *, max_lines: int = DEFAULT_MAX_LINES_PER_BATCH) -> dict:
     norm_source = {k: record[k] for k in _SOURCE_KEYS}
     return {"source": norm_source, "day": day, "revision": record["revision"],
             "lines": out_lines,
-            "batch_id": batch_id_of(norm_source, day, [ln["id"] for ln in out_lines])}
+            "batch_id": batch_id_of(norm_source, day, [ln["id"] for ln in out_lines]),
+            "report_at": report_at}
 
 
 # ============================================================
@@ -536,6 +555,7 @@ async def take_batch(store, body, *, model: ModelCall,
         slices=[{"first": s.first, "last": s.last, "gist": s.gist, "guesses": g}
                 for s, g in zip(slices, guesses)],
         model=str(getattr(model, "model_name", "") or ""),
+        host=getattr(host, "name", None), report_at=batch["report_at"],
         recheck=(None if registry is None
                  else lambda: _unusable_lines(registry, batch["source"], ids)))
     # The host's order of these lines outlives the batch: it is how a run cut from them
@@ -579,13 +599,16 @@ class PendingSlices:
         self._seq = 0
         self._batches: dict[str, dict] = {}
         self._slices: dict[str, dict] = {}
+        # (host name or "", report_at) of every batch line that carried a report_at: a
+        # resend replaces a batch's slices, not the report an earlier send said.
+        self._reports: list[tuple[str, str]] = []
 
     # ---------- the index ----------
 
     def rebuild_index(self) -> None:
         with self._guard:
             size = _src._size(self.path)
-            self._seq, self._batches, self._slices = 0, {}, {}
+            self._seq, self._batches, self._slices, self._reports = 0, {}, {}, []
             for row in _src._read_lines(self.path):
                 self._index(row)
             self._size = size
@@ -609,6 +632,8 @@ class PendingSlices:
                 slices = list(row["slices"])
             except (KeyError, TypeError, ValueError):
                 return
+            if row.get("report_at"):
+                self._reports.append((str(row.get("host") or ""), str(row["report_at"])))
             prev = self._batches.get(bid)
             for sid in (prev or {}).get("slice_ids", []):
                 st = self._slices.get(sid)
@@ -699,6 +724,25 @@ class PendingSlices:
                     if order[sid.id] <= order[sid.through]:
                         return order[sid.through] - order[sid.id] + 1
             return None
+
+    def last_report(self, host: Optional[str] = None, *, not_after=None):
+        """(moment, host name) of the latest daily report a batch carried (`report_at`),
+        read as local time; only `host`'s batches when a name is given, any host's when
+        None. A report later than `not_after` is passed over (a clock ahead would cut
+        "today" in the future). None when there is none."""
+        self._fresh()
+        with self._guard:
+            reports = list(self._reports)
+        best = None
+        for name, raw in reports:
+            if host is not None and name != host:
+                continue
+            moment = _w.parse_instant(raw)
+            if moment is None or (not_after is not None and moment > not_after):
+                continue
+            if best is None or moment > best[0]:
+                best = (moment, name)
+        return best
 
     def pending_count(self) -> int:
         """How many slices wait to be handled."""
@@ -815,15 +859,19 @@ class PendingSlices:
                            lines: list[tuple[str, str]], slices: list[dict],
                            model: str = "",
                            origin: Optional[dict] = None,
+                           host: Optional[str] = None,
+                           report_at: Optional[str] = None,
                            recheck: Optional[Callable[[], dict]] = None
                            ) -> tuple[dict, int]:
         """Append a batch and its slices (each gets its slice_id here). The same batch_id
         again replaces the slices of the earlier one still pending; those already
         handled stay handled. `origin` is an imported conversation's {batch, same_self,
-        title}, kept on the batch line as `import`. `recheck`, called under the store's
-        lease before anything is appended, returns {line id: state} for lines that may no
-        longer be used; when it returns any, nothing is appended and BatchStale is
-        raised. Returns (the batch line, how many were replaced)."""
+        title}, kept on the batch line as `import`. `host` is the name of the host that
+        handed the batch over and `report_at` when it last wrote its daily report (both
+        kept on the batch line when given; `last_report` reads them). `recheck`, called
+        under the store's lease before anything is appended, returns {line id: state} for
+        lines that may no longer be used; when it returns any, nothing is appended and
+        BatchStale is raised. Returns (the batch line, how many were replaced)."""
         async with self._turn():
             if recheck is not None:
                 stale = recheck()
@@ -847,6 +895,10 @@ class PendingSlices:
                     "model": model, "prompt_version": SLICER_PROMPT_VERSION}
                 if origin:
                     row["import"] = dict(origin)
+                if host:
+                    row["host"] = str(host)
+                if report_at:
+                    row["report_at"] = str(report_at)
                 return self._append(row), replaced
 
     async def close(self, slice_id: str, how: str, by: list[str]) -> dict:

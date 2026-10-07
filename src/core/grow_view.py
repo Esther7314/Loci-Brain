@@ -8,8 +8,9 @@ waiting to be written
                  the human tags (core/detail.human_tags) — what grow's page lists as
                  「今天记住的」.
   day_cut        where that page's "today" starts: the moment the caller hands over (a
-                 host knows its own daily report, `since_from: "report"`), else local
-                 midnight (`since_from: "midnight"`).
+                 host knows its own daily report), else the latest daily report a host's
+                 slices batch carried (`report_at`) — both `since_from: "report"` — else
+                 local midnight (`since_from: "midnight"`).
   slice_batches  every batch of slices the pending store holds — the open ones and those
                  already handled or replaced — newest first, each slice with its state
                  and the guesses at or above the guess line that it was already recorded
@@ -53,13 +54,24 @@ SLICE_STATE_WORDS = {
 
 # ── today ────────────────────────────────────────────────────────────────────
 
-def day_cut(now: datetime, given=None) -> tuple[datetime, str]:
-    """(where today starts, what it was cut by): the moment the caller handed over — a
-    host's own daily report — else local midnight. Loci itself knows of no daily report
-    (open question Q6); this is the one place that would read it."""
+def day_cut(now: datetime, given=None, *, pending=None,
+            host: str | None = None) -> tuple[datetime, str]:
+    """(where today starts, what it was cut by), the one place grow's "today" is decided:
+
+      1. the moment the caller hands over (`given`: a host's page knows its own daily
+         report) -> SINCE_REPORT;
+      2. else the latest daily report a slices batch carried (`report_at` on POST
+         /api/v2/slices, `pending` the store's PendingSlices.last_report), not later
+         than `now` -> SINCE_REPORT. Whose: `host`'s batches when a name is given; with
+         None, any host's — the panel reads the whole library, so its "today" starts at
+         the most recent report any host wrote, and `?host=` narrows it to one;
+      3. else local midnight -> SINCE_MIDNIGHT."""
     cut = _w.parse_stamp(given) if given else None
     if cut is not None:
         return cut, SINCE_REPORT
+    reported = pending.last_report(host, not_after=now) if pending is not None else None
+    if reported is not None:
+        return reported[0], SINCE_REPORT
     return _w.to_local(now).replace(hour=0, minute=0, second=0, microsecond=0), SINCE_MIDNIGHT
 
 

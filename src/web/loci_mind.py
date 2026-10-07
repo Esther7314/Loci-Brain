@@ -13,7 +13,9 @@ Each read is a core function plus a thin route (core/breath_snapshot.py, core/pr
 `awake_pool` / `hanging`, core/changes_feed.py): the route lists the store off `web/_shared`,
 hands it over, pages the rows and adds the scope line. The panel reads its whole library,
 so the line is always the open one, except on the breath page, which carries the line the
-breath was handed out under.
+breath was handed out under. breath/last, awake and hanging are host reads too
+(panel_auth.HOST_READ_PATHS): a host's credential reads them under its own scope, and
+breath/last only its own last breath.
 
 Lists page by `offset` (default 0) and `limit` (default 5, at most 50), newest first, and
 `as_of`: the first page's `as_of` sent back keeps rows that arrived since from shifting the
@@ -31,7 +33,8 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from . import _shared as sh
-from ._guards import _request_of, _write_body
+from ._guards import _caller_host, _request_of, _scope_withholds, _write_body
+from .loci_detail import read_scope_of
 from core import _when as _w
 from core import breath_snapshot as _snap
 from core import changes_feed as _changes
@@ -90,23 +93,45 @@ async def build_breath_last(host: str | None) -> dict:
 
 
 async def api_loci_breath_last(request: Request) -> Response:
+    """The panel picks any host's (`?host=`). A host reads only its own (`?host=` naming
+    another is a 403), and only unscoped: what was handed out was handed out under that
+    moment's scope, and a scoped request now gets the block withheld rather than a
+    skeleton filtered against a scope it was not made under."""
+    withheld = _scope_withholds(request, "上一次递出去的 breath ")
+    if withheld is not None:
+        return withheld
     host = str(request.query_params.get("host") or "").strip() or None
+    caller = _caller_host(request)
+    if caller is not None:
+        if host is not None and host != caller.name:
+            return JSONResponse({"error": "宿主只看得到自己上一次递出去的 breath",
+                                 "scope": _scope_line(request)}, status_code=403)
+        host = caller.name
     try:
-        return JSONResponse(await build_breath_last(host))
+        out = await build_breath_last(host)
     except Exception as e:
         logger.warning(f"[loci] breath/last failed: {e}")
         return _bad(e, 500)
+    if caller is not None:
+        out["hosts"] = [h for h in out.get("hosts") or [] if h == caller.name]
+    return JSONResponse(out)
 
 
 # ---------------------------------------------------------
 # surface: the awake pool
 # ---------------------------------------------------------
-async def build_awake(reason: str = "") -> list[dict]:
+async def _view(view=None):
+    """The view a read runs under: the request's (web/loci_detail.read_scope_of), else the
+    whole library as the panel reads it."""
+    return view if view is not None else await _scope.view_of(sh.bucket_mgr, None)
+
+
+async def build_awake(reason: str = "", view=None) -> list[dict]:
     all_buckets = await sh.bucket_mgr.list_all(include_archive=False)
     return _profile.awake_pool(all_buckets, _w.now(),
                                settings=_profile.breath_settings(sh.config),
                                delivered_at=_delivered_at(), reason=reason,
-                               scope=await _scope.view_of(sh.bucket_mgr, None))
+                               scope=await _view(view))
 
 
 async def api_loci_awake(request: Request) -> Response:
@@ -118,7 +143,10 @@ async def api_loci_awake(request: Request) -> Response:
     except _pg.BadPage as e:
         return _bad(e)
     try:
-        rows = await build_awake(reason)
+        refused, view, _line = await read_scope_of(request)
+        if refused is not None:
+            return refused
+        rows = await build_awake(reason, view)
     except Exception as e:
         logger.warning(f"[loci] awake failed: {e}")
         return _bad(e, 500)
@@ -128,12 +156,11 @@ async def api_loci_awake(request: Request) -> Response:
 # ---------------------------------------------------------
 # trace: what still hangs open, and its buttons
 # ---------------------------------------------------------
-async def build_hanging() -> dict:
+async def build_hanging(view=None) -> dict:
     all_buckets = await sh.bucket_mgr.list_all(include_archive=False)
     return _profile.hanging(all_buckets, _w.now(),
                             settings=_profile.breath_settings(sh.config),
-                            delivered_at=_delivered_at(),
-                            scope=await _scope.view_of(sh.bucket_mgr, None))
+                            delivered_at=_delivered_at(), scope=await _view(view))
 
 
 async def api_loci_hanging(request: Request) -> Response:
@@ -145,7 +172,10 @@ async def api_loci_hanging(request: Request) -> Response:
     except _pg.BadPage as e:
         return _bad(e)
     try:
-        halves = await build_hanging()
+        refused, view, _line = await read_scope_of(request)
+        if refused is not None:
+            return refused
+        halves = await build_hanging(view)
     except Exception as e:
         logger.warning(f"[loci] hanging failed: {e}")
         return _bad(e, 500)

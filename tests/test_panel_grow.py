@@ -3,8 +3,9 @@
 tests/test_panel_grow.py — grow's page: what was written today, and the slices.
 
 GET /api/loci/grow/today: memories on the timeline written since today began, newest
-first. Today starts at the `since` a host hands over (its daily report), else at local
-midnight — Loci knows of no report itself. GET /api/loci/grow/slices: every batch the
+first. Today starts at the `since` a host hands over (its daily report), else at the
+latest `report_at` a host's slices batch carried (one host's with `?host=`; never one in
+the future), else at local midnight. GET /api/loci/grow/slices: every batch the
 pending store holds, open, handled and replaced slices alike, each with its state in
 words and only the guesses at or above the guess line; an imported conversation's batch
 is labelled by its title and its open slices wait to be checked.
@@ -118,6 +119,42 @@ def test_the_day_cut_is_one_function():
         hour=0, minute=0, second=0, microsecond=0)
     cut, how = GV.day_cut(now, "2026-10-07T05:12:00+08:00")
     assert how == GV.SINCE_REPORT and cut.isoformat().startswith("2026-10-07T05:12:00")
+
+
+def _reported(store, host, report_at, n=1):
+    """A slices batch from `host` carrying `report_at` (POST /api/v2/slices keeps both)."""
+    lines = [(f"r{n}", f"sha256:{n:064x}")]
+    run(store.slices.record_batch(
+        batch_id=f"b_{host}_{n}", source=SRC, day="2026-10-06", revision=None, lines=lines,
+        slices=[{"first": f"r{n}", "last": f"r{n}", "gist": "日报那天", "guesses": []}],
+        host=host, report_at=report_at))
+
+
+def test_today_starts_at_the_last_report_a_batch_carried(written):
+    store, get = written["store"], written["get"]
+    life, bot = _at(hours=-30), _at(hours=-50)
+    _reported(store, "life", life, 1)
+    _reported(store, "life", _at(minutes=5), 2)            # a clock ahead is passed over
+    _reported(store, "bot", bot, 3)
+    status, out = get("/api/loci/grow/today")
+    assert status == 200 and out["since_from"] == "report", out
+    assert out["since"] == life, "the latest any host wrote, not later than now"
+    assert out["total"] == 2
+    _s, out = get("/api/loci/grow/today", host="bot")
+    assert out["since_from"] == "report" and out["since"] == bot
+    _s, out = get("/api/loci/grow/today", host="nobody")
+    assert out["since_from"] == "midnight"
+    given = _at(days=-4)
+    _s, out = get("/api/loci/grow/today", since=given)
+    assert out["since"] == given and out["since_from"] == "report", "the caller's own wins"
+
+
+def test_the_report_survives_a_restart(written):
+    from core import _slicer as SL
+    _reported(written["store"], "life", "2026-10-07T05:12:00+08:00")
+    fresh = SL.PendingSlices(written["store"].base_dir)
+    cut, how = GV.day_cut(W.now(), pending=fresh)
+    assert how == GV.SINCE_REPORT and cut.isoformat() == "2026-10-07T05:12:00+08:00"
 
 
 def test_human_tags_come_from_core_detail(written, monkeypatch):

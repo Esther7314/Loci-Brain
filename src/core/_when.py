@@ -25,7 +25,7 @@ becomes wrong.** If that change is made, the write side must start
 emitting the `+08:00` suffix in the same commit — with a suffix present, this side
 can tell.
 
-Exports: `LOCAL_TZ` · `now()` · `today()` · `parse_stamp()` · `ts_of()` · `parse_date()` · `to_local()` · `tz_status()`
+Exports: `LOCAL_TZ` · `now()` · `today()` · `parse_stamp()` · `parse_instant()` · `ts_of()` · `parse_date()` · `to_local()` · `tz_status()`
 """
 
 import os
@@ -140,6 +140,26 @@ def parse_stamp(value) -> datetime | None:
         except ValueError:
             return None
     return None
+
+
+def parse_instant(value) -> datetime | None:
+    """A moment another system tells us — ISO 8601 with a time of day and an offset
+    (`2026-10-07T05:12:00+08:00`, or `Z`) — as a local aware datetime; None for anything
+    else: not text, a bare date, prose, or a time with no offset. Stricter than
+    `parse_stamp` on purpose: a stamp from outside with no offset names no instant here
+    (the table above reads a naive one as UTC, which is only true of our own stamps)."""
+    if not isinstance(value, str):
+        return None
+    s = value.strip()
+    if not s or len(s) > 64 or _DATE_ONLY.match(s):
+        return None
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None or dt.utcoffset() is None:
+        return None
+    return dt.astimezone(LOCAL_TZ)
 
 
 def ts_of(meta: dict) -> datetime | None:

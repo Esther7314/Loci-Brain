@@ -9,6 +9,9 @@ web/loci_reads.py — the panel's reads, and the builders behind them
     GET  /api/loci/profile            -> the note by the door
     GET  /api/loci/recollect          -> pull a faded or sunk memory back up
     GET  /api/loci/subjects           -> the "who is in here" screen
+
+recall and rooms are host reads too (panel_auth.HOST_READ_PATHS): a host's credential
+reads them under its own scope, and each reply carries the request's scope line.
 ========================================
 """
 
@@ -16,14 +19,22 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from . import _shared as sh
+from ._guards import _request_of, _scope_refusal
 from core import _when as _w      # "today" in the user's local timezone — never call datetime.now() directly
 from core import census as _census
 from core import starfield as _starfield
 from core.profile import _PROFILE_TAG
-from .loci_detail import library_view as _library_view
+from .loci_detail import library_view as _library_view, read_scope_of
 from utils import read_from_ids
 
 logger = sh.logger
+
+
+def _scope_line(request: Request) -> str:
+    """The scope line a read reply carries: the request's, else the open one."""
+    from core.scope import OPEN_LINE
+    req = _request_of(request)
+    return req.first_line() if req is not None else OPEN_LINE
 
 # `_REMIND_DAYS` (30 days) and `_is_closed` live with the note by the door's contract source
 # (`tools/breath/awaken.py`) — **do not put a second 30 here**. Two 30s are two rulesets, and
@@ -39,9 +50,10 @@ logger = sh.logger
 # store off `sh` and hands it over.
 # ============================================================
 
-async def build_rooms() -> dict:
-    """The directory both doors open onto (core/census.rooms)."""
-    return _census.rooms(await sh.bucket_mgr.list_all(include_archive=False))
+async def build_rooms(view=None) -> dict:
+    """The directory both doors open onto (core/census.rooms), counted over what `view`
+    (the request's read scope) may read; the whole library when None."""
+    return _census.rooms(await sh.bucket_mgr.list_all(include_archive=False), view)
 
 
 async def build_subjects() -> dict:
@@ -236,6 +248,11 @@ async def api_loci_recall(request: Request) -> Response:
             floor = max(0.0, min(100.0, float(q.get("floor"))))
     except (TypeError, ValueError):
         floor = None
+    # A host's credential searches under its own scope: the search reads the request's
+    # scope where it collects (tools/_common.read_scope), as the tool does.
+    refused = _scope_refusal(request)
+    if refused is not None:
+        return refused
     try:
         # Not recall_data() and recall_core() separately: each runs its own _collect —
         #    **the same search computed twice** (measured with a query: 3 seconds on the
@@ -245,7 +262,7 @@ async def api_loci_recall(request: Request) -> Response:
         data = await recall_text_and_data(**gates, floor=floor, max_cells=slices)
         if not data.get("ok"):
             return JSONResponse(data, status_code=400)
-        return JSONResponse(data)
+        return JSONResponse({**data, "scope": _scope_line(request)})
     except Exception as e:
         logger.warning(f"[loci] recall 失败: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -255,7 +272,10 @@ async def api_loci_recall(request: Request) -> Response:
 async def api_loci_rooms(request: Request) -> Response:
     from starlette.responses import JSONResponse
     try:
-        return JSONResponse(await build_rooms())
+        refused, view, line = await read_scope_of(request)
+        if refused is not None:
+            return refused
+        return JSONResponse({**await build_rooms(view), "scope": line})
     except Exception as e:
         logger.warning(f"[loci] rooms 失败: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)

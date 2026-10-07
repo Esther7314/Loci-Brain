@@ -58,8 +58,8 @@ ordered table, and the list here is the one list of what the panel can reach.
                                          (`?cursor=…&limit=`) and never sees those numbers
                                          (hook key; core/_ledger.py)
 
-🔴 THE WRITE SURFACE — fifteen POST routes here and four in the page blocks below
-(entry/fix, names/action, trace, embedding/backfill), and every one of them writes
+🔴 THE WRITE SURFACE — fifteen POST routes here and five in the page blocks below
+(entry/fix, names/action, trace, muse/nudge, embedding/backfill), and every one of them writes
 something.
 
     POST /api/loci/similar/action     -> a human verdict on a suspected duplicate: keep
@@ -87,7 +87,8 @@ something.
                                          carries on; {action: "abandon"} throws it away
                                          (the old model stays)
     POST /api/v2/slices               -> the host hands over a day's raw lines; a side model
-                                         slices them and the slices are stored as pending
+                                         slices them and the slices are stored as pending,
+                                         with the batch's `report_at` when it carries one
                                          (hook key; the raw text is not kept)
     POST /api/v2/source/change        -> a host's change to one piece of its material: the
                                          source registry, the block on what stood on it, and
@@ -134,8 +135,8 @@ assembled and worded in core/detail.py and core/census.py. Both POSTs write:
     POST /api/loci/names/action       -> not_person / merge / rename / set_kind on one name
                                          (aliases.yaml)
 
-The breath, surface, trace and regrow/fold pages (web/loci_mind.py; panel only). Lists
-page by offset / limit / as_of. 🔴 POST /api/loci/trace writes.
+The breath, surface, trace and regrow/fold pages (web/loci_mind.py). Lists page by
+offset / limit / as_of. 🔴 POST /api/loci/trace writes.
 
     GET  /api/loci/breath/last        -> the last breath actually handed out, per host
                                          (`?host=`, else the most recent): its structure
@@ -156,9 +157,10 @@ page by offset / limit / as_of. 🔴 POST /api/loci/trace writes.
                                          ledger with seq as each row's id
                                          (core/changes_feed.py)
 
-What Loci handed out and took in — turns, recall's timeline, usage, grow, muse, vectors
-(web/loci_activity.py; core/activity.py, core/grow_view.py, core/muse_view.py,
-core/vector_view.py). Panel only; one of them writes.
+What Loci handed out and took in — turns, recall's timeline, usage, grow, muse, dreams,
+vectors (web/loci_activity.py; core/activity.py, core/grow_view.py, core/muse_view.py,
+core/_nudge.py, core/_dream_archive.py, core/vector_view.py). turns and usage are host
+reads too (panel_auth.HOST_READ_PATHS); the rest are the panel's alone. Two of them write.
 
     GET  /api/loci/turns/{window}     -> one window of a host (`?host=`), turn by turn, newest
                                          first: the cards each turn was handed and what became
@@ -170,18 +172,32 @@ core/vector_view.py). Panel only; one of them writes.
     GET  /api/loci/usage              -> per memory since a day: how often shown, found, stood
                                          on; shown often and never stood on first
     GET  /api/loci/grow/today         -> the memories written since today began (`?since=`, a
-                                         host's daily report; else local midnight)
+                                         host's daily report; else the latest `report_at` a
+                                         slices batch carried, `?host=` for one host's;
+                                         else local midnight)
     GET  /api/loci/grow/slices        -> every batch of slices, handled and replaced ones
                                          included, each slice with its state and the guesses
                                          at or above the guess line
     GET  /api/loci/muse               -> `?part=clusters` the thoughts that look like one
                                          thing / `?part=days` the stretches without a name,
                                          each with its evidence and member ids
+    POST /api/loci/muse/nudge         -> 「戳一下」 on a cluster ({cluster}): the next tool
+                                         reply tells the model once (core/_nudge.py;
+                                         writes _state/muse_nudges.json, not the ledger)
+    GET  /api/loci/dreams             -> the last three natural days' dreams, whole text,
+                                         state and thread candidates, from the panel's own
+                                         copy no road of the model reads
+                                         (core/_dream_archive.py)
     GET  /api/loci/embedding/missing  -> the memories with no vector and why (queued, keeps
                                          failing, not queued), from the embedding outbox
     POST /api/loci/embedding/backfill -> 「现在补」: queue what has no vector and make every
                                          waiting item due now (EmbeddingOutbox.reconcile +
                                          retry_now; writes the outbox file, not the ledger)
+
+Host reads (panel_auth.HOST_READ_PATHS, panel contract §六): breath/last, awake, hanging,
+names, names/{name}, recall, rooms, bucket, lineage, source, turns and usage answer a
+host's credential too, under that host's scope; GET only. The panel's other routes, and
+every write among them, stay the panel's: a host's credential is refused there.
 
 Where each group lives (a new route goes into its group's module and gets its line in
 `register`, which adds the routes in this order). A read that computes something over the
@@ -205,8 +221,9 @@ core/health.py, core/profile.py):
     web/loci_mind.py      breath/last, awake, hanging, trace, changes/recent
                           (core/breath_snapshot.py, core/profile.py, core/changes_feed.py)
     web/loci_activity.py  turns, recall/timeline, usage, grow/today, grow/slices, muse,
-                          embedding/missing, embedding/backfill (core/activity.py,
-                          core/grow_view.py, core/muse_view.py, core/vector_view.py)
+                          muse/nudge, dreams, embedding/missing, embedding/backfill
+                          (core/activity.py, core/grow_view.py, core/muse_view.py,
+                          core/_nudge.py, core/_dream_archive.py, core/vector_view.py)
     web/host_api.py       /api/v2/* (a host's credential, not the panel's)
     web/library_api.py    export, export/originals, import-package, embedding/migration
     web/loci_version.py   version
@@ -328,8 +345,8 @@ def register(mcp) -> None:
     mcp.custom_route("/api/loci/changes/recent", methods=["GET"])(_mind.api_loci_changes_recent)
 
     # ---------------------------------------------------------
-    # What Loci handed out and took in: turns, recall's timeline, usage, grow, muse, and
-    # the missing vectors. The handlers are web/loci_activity.py's.
+    # What Loci handed out and took in: turns, recall's timeline, usage, grow, muse and
+    # its poke, dreams, and the missing vectors. The handlers are web/loci_activity.py's.
     # ---------------------------------------------------------
     from . import loci_activity as _act
     mcp.custom_route("/api/loci/turns/{window}", methods=["GET"])(_act.api_loci_turns)
@@ -339,6 +356,8 @@ def register(mcp) -> None:
     mcp.custom_route("/api/loci/grow/today", methods=["GET"])(_act.api_loci_grow_today)
     mcp.custom_route("/api/loci/grow/slices", methods=["GET"])(_act.api_loci_grow_slices)
     mcp.custom_route("/api/loci/muse", methods=["GET"])(_act.api_loci_muse)
+    mcp.custom_route("/api/loci/muse/nudge", methods=["POST"])(_act.api_loci_muse_nudge)
+    mcp.custom_route("/api/loci/dreams", methods=["GET"])(_act.api_loci_dreams)
     mcp.custom_route("/api/loci/embedding/missing", methods=["GET"])(
         _act.api_loci_embedding_missing)
     mcp.custom_route("/api/loci/embedding/backfill", methods=["POST"])(

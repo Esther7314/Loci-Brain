@@ -37,9 +37,10 @@ from .starfield import node_ts
 from .visibility import on_timeline
 
 
-def rooms(all_buckets: list) -> dict:
+def rooms(all_buckets: list, scope=None) -> dict:
     """The directory both doors open onto: how many entries in each of the four rooms, plus
-    the ten most frequent tags.
+    the ten most frequent tags — counted over what `scope` (the request's read scope) may
+    read.
 
     The I/YOU dimension lives in subjects — "who is this about" is not carried by the room.
     """
@@ -48,7 +49,7 @@ def rooms(all_buckets: list) -> dict:
     homeless = 0
     for b in all_buckets:
         meta = b.get("metadata", {}) or {}
-        if not on_timeline(meta):
+        if not on_timeline(meta, scope):
             continue
         # Normalize before counting: a room that is not one of the four counts as homeless,
         # and the doors read only the four.
@@ -236,7 +237,8 @@ def name_card(all_buckets: list, name: str, *, offset: int = 0, limit: int = PAG
               as_of: datetime | None = None, scope=None) -> dict | None:
     """One name's card: what the table says it is and where it hangs, the MIND entry
     filed as its card, and the entries whose subjects name it (after the table's
-    normalising), newest first. None when neither the table nor the store knows it."""
+    normalising), newest first. None when neither the table nor the store knows it, and
+    under a narrowing `scope` when no entry it may read names it."""
     n = str(name or "").strip()
     if not n:
         return None
@@ -259,6 +261,11 @@ def name_card(all_buckets: list, name: str, *, offset: int = 0, limit: int = PAG
         if key in raws:
             hits.append(b)
     if rec is None and not hits and card_row is None:
+        return None
+    # The names table is the whole library's: a scoped read learns what it says of a
+    # name only through an entry it may read that names it.
+    from .scope import narrows
+    if narrows(scope) and not hits and card_row is None:
         return None
     hits = written_before(hits, as_of)
     hits.sort(key=_newest_first)

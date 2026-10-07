@@ -492,6 +492,14 @@ class DecayEngine:
         # --- Self-heal: backfill missing vectors (periodic; see _self_heal_embeddings) ---
         backfilled_embeddings = await self._self_heal_embeddings(buckets)
 
+        # --- The panel's copies of dreams past their three natural days go, even on days
+        # nothing wakes the dream's own lazy sweep (core/_dream_archive.py) ---
+        try:
+            from . import _dream_archive
+            _dream_archive.sweep(getattr(self.bucket_mgr, "base_dir", None))
+        except Exception as e:
+            logger.warning(f"Dream archive sweep failed / 面板的梦存档没扫成: {e}")
+
         # --- Warm bm25 up while we are here: a lazy rebuild waiting for the first search
         # would make the first search after a restart score against an **empty index** —
         # bm25 is 37.5% of the two-dimension scheme, and that first search comes out

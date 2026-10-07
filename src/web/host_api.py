@@ -38,9 +38,14 @@ def _slices_config() -> tuple[int, float]:
 async def api_v2_slices_take(request: Request) -> Response:
     """The host hands over a stretch of raw lines before it lets go of them:
     {source: {system, instance, container}, day, lines: [{id, text, at?, speaker?, revision?}],
-    revision?}. The side model slices them; the slices wait for the main model
+    revision?, report_at?}. The side model slices them; the slices wait for the main model
     (recall(view="slices")). A `fingerprint_by` in the body is accepted and not used:
-    a slice's fingerprint is Loci's own (core/_slicer.py). 400 for a malformed batch
+    a slice's fingerprint is Loci's own (core/_slicer.py). `report_at` (optional): when
+    this host last wrote its daily report, ISO 8601 with a time and its offset
+    (`2026-10-07T05:12:00+08:00`); it is kept with the batch, under the host's name, and
+    the panel's grow page starts "today" at the latest one when it is given no `since`
+    (core/grow_view.day_cut). A `report_at` that does not read is a 400 that says so, and
+    nothing is stored; absent or null, nothing is kept. 400 for a malformed batch
     or one holding a line the registry reads as withdrawn, deleted or held; 403 past the
     host's max_grant or for lines it is neither authority nor registrar for; 502 when
     the side model fails — then nothing is stored, and the host may send the same batch

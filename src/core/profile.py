@@ -1014,10 +1014,13 @@ def hanging(all_buckets: list, now: datetime, *, settings: BreathSettings | None
           condition? (a cue)}
     An entry is one row: a hold is a hold whatever else it carries; a promise waiting on a
     cue is a promise whose row also offers `withdraw` (the cue comes off, the promise
-    stays). Which entries count is the `list` road's (live, current, the read scope)."""
+    stays). Which entries count is the `list` road's (live, current, the read scope); a
+    scoped read gets a hold's `on` only when it may read that entry ("" otherwise)."""
     s = settings or BreathSettings()
     today = now.date()
     out: dict[str, list[tuple]] = {"surface": [], "deep": []}
+    from .scope import narrows
+    narrowed = narrows(scope)
     for b in all_buckets:
         meta = b.get("metadata", {}) or {}
         bid = str(meta.get("id") or b.get("id") or "")
@@ -1030,7 +1033,12 @@ def hanging(all_buckets: list, now: datetime, *, settings: BreathSettings | None
             if not _H.hold_is_live(meta, now):
                 continue
             level = str(meta.get("hold") or "")
-            row.update(kind="hold", on=str(meta.get("exception_of") or "").strip(),
+            on = str(meta.get("exception_of") or "").strip()
+            # A scoped read names only what it may read: a hold on an entry out of scope
+            # is listed without the id it hangs on.
+            if on and narrowed and not scope.permits_id(on):
+                on = ""
+            row.update(kind="hold", on=on,
                        hold=level, hold_words=_HOLD_WORDS.get(level, level),
                        why_words=_hold_words(meta), actions=[WITHDRAW])
         elif is_open_promise(meta):

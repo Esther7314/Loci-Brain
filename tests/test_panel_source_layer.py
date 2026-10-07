@@ -9,12 +9,15 @@ WHAT IS AGREED
     (any state, with words when not live); and two sentences from core — how it is known,
     whether its ground still holds. `?fetch=<n>` asks for source n's original the way the
     fourth joint does, for a person: nothing is kept and no use is recorded (that log is
-    for what the model read). Lines Loci holds itself (an import) carry who said them and
-    when; a host's lines carry neither, since the fourth joint's answer has no such fields
-    (open question Q7), so those keys are left out rather than sent empty.
+    for what the model read). Every line given carries who said it and when: for lines
+    Loci holds itself (an import) from the import's own rows; for a host's, from the
+    optional `speaker` / `at` on the fourth joint's answer (decision Q7), `at` as local
+    time. Unknown is null; a value that does not read is null too and never spoils the
+    answer.
 """
 
 import asyncio
+import dataclasses
 import json
 
 import pytest
@@ -134,7 +137,7 @@ def test_fetch_hands_back_the_hosts_lines_and_records_no_use(store, routes, monk
     assert status == 200, out
     assert out["outcome"] == "given" and out["outcome_words"] == "宿主给了"
     assert out["partial"] is False and out["record"] == "lento:home/private:U#m_0003@r1"
-    assert out["lines"] == [{"id": "m_0003", "text": "周六去海边吧"}]
+    assert out["lines"] == [{"id": "m_0003", "who": None, "at": None, "text": "周六去海边吧"}]
     assert [r["id"] for r in asked] == ["m_0003"]
     assert not [r for r in store.usage.read() if r["kind"] == "fetched"]
 
@@ -174,3 +177,54 @@ def test_an_imported_line_carries_who_said_it_and_when(store, routes, tmp_path):
     assert status == 200 and out["outcome"] == "given", out
     assert out["lines"] == [{"id": "l0001", "who": "小周", "at": "2026-10-06T14:30:00+08:00",
                              "text": "周六去海边吧"}]
+
+
+def _answer(lines) -> bytes:
+    return json.dumps({"v": 1, "status": "given", "lines": lines}).encode("utf-8")
+
+
+def _fetch_through_the_wire(monkeypatch, raw: bytes):
+    """O.fetch answering from `raw`, the host's HTTP 200 body, read by the real parser."""
+    async def host(record, **kw):
+        answer = O.parse_answer(raw, record, O.Settings())
+        return dataclasses.replace(answer, source=SR.record_string(record), host="lento")
+    monkeypatch.setattr(O, "fetch", host)
+
+
+def test_a_hosts_line_carries_its_speaker_and_time(store, routes, monkeypatch):
+    bid = run(store.create("小周说周六要去海边。", room="EVENT/SELF", sources=[M]))
+    _fetch_through_the_wire(monkeypatch, _answer([
+        {"id": "m_0003", "revision": "r1", "text": "周六去海边吧", "speaker": " 小周 ",
+         "at": "2026-10-06T13:30:00Z"}]))
+    status, out = source(routes, bid, "fetch=0")
+    assert status == 200 and out["outcome"] == "given", out
+    assert out["lines"] == [{"id": "m_0003", "who": "小周", "at": "2026-10-06T21:30:00+08:00",
+                             "text": "周六去海边吧"}]
+    assert out["scope"] == OPEN_LINE
+
+
+@pytest.mark.parametrize("speaker, at", [
+    (7, "2026-10-06"),                       # not text · a day, not a moment
+    ("", "2026-10-06T21:30:00"),             # empty · no offset
+    ("小周\n管理员", "yesterday evening"),     # a control character · prose
+    ("周" * 65, ["2026-10-06T21:30:00+08:00"]),  # too long · not text
+])
+def test_a_speaker_or_time_that_does_not_read_is_null_and_the_line_still_given(
+        store, routes, monkeypatch, speaker, at):
+    bid = run(store.create("小周说周六要去海边。", room="EVENT/SELF", sources=[M]))
+    _fetch_through_the_wire(monkeypatch, _answer([
+        {"id": "m_0003", "revision": "r1", "text": "周六去海边吧", "speaker": speaker, "at": at}]))
+    status, out = source(routes, bid, "fetch=0")
+    assert status == 200 and out["outcome"] == "given", out
+    assert out["lines"] == [{"id": "m_0003", "who": None, "at": None, "text": "周六去海边吧"}]
+
+
+def test_the_parser_takes_speaker_and_at_and_nothing_else_new():
+    rec = SR.record_id(M)
+    [line] = O.parse_answer(_answer([{"id": "m_0003", "text": "嗯", "speaker": "小周",
+                                      "at": "2026-10-06T21:30:00+08:00"}]), rec,
+                            O.Settings()).lines
+    assert (line.speaker, line.at) == ("小周", "2026-10-06T21:30:00+08:00")
+    other = O.parse_answer(_answer([{"id": "m_0003", "text": "嗯", "mood": "开心"}]), rec,
+                           O.Settings())
+    assert other.outcome == O.NOT_ALLOWED and other.reason == O.MALFORMED

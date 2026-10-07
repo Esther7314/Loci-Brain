@@ -9,8 +9,9 @@ lives here is what a route still has to check on its own:
 - the same-origin check every panel write runs before it reads its body
   (`_origin_reject`, `_write_body`). web/library_api.py and web/import_api.py use it too,
   through web.loci;
-- the hook request's scope as the guard resolved it, and what a refused or scoped request
-  gets back (`_request_of`, `_scope_refusal`, `_scope_withholds`).
+- the hook request's scope as the guard resolved it, who is calling, and what a refused or
+  scoped request gets back (`_request_of`, `_caller_host`, `_scope_refusal`,
+  `_scope_withholds`).
 ========================================
 """
 
@@ -75,6 +76,13 @@ def _request_of(request: Request):
     """The hook request as the guard resolved it (web/__init__ `_Gated`, core/scope.py);
     None outside the guard (a route called directly)."""
     return getattr(request.state, "loci_request", None)
+
+
+def _caller_host(request: Request):
+    """The host this request is (a `core.scope.Host`), or None for the panel (a logged-in
+    browser, an unlocked panel, or a route called directly)."""
+    req = _request_of(request)
+    return req.host if req is not None else None
 
 
 def _scope_refusal(request: Request):

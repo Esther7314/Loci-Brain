@@ -16,7 +16,9 @@ web/loci_detail.py — the detail window's routes
 
 Everything the window shows is assembled and worded in core/detail.py; these routes list
 the store, hand it over, and turn the dict into JSON. Reads say the request's scope line
-(`scope`); an entry out of scope reads as one that does not exist. The write goes through
+(`scope`); an entry out of scope reads as one that does not exist. The three reads are
+host reads too (panel_auth.HOST_READ_PATHS): a host's credential reads them under its own
+scope, and `?fetch=` asks the serving host under that scope. The write goes through
 `_write_body` (same origin, JSON) and through the same tools the model uses.
 
 Also here: `correct_event`, the 内容错了 write that POST /api/loci/event/correct shares,
@@ -166,7 +168,7 @@ async def api_loci_source(request: Request) -> Response:
                     request=_scope.current_request())
             except IndexError:
                 return JSONResponse({"error": f"这条没有第 {raw} 个来源"}, status_code=404)
-            return JSONResponse(out)
+            return JSONResponse({**out, "scope": line})
         lookup = await _named(meta, [])
         return JSONResponse({**_D.source_view(meta, registry=registry,
                                               hosts=_O.deployment_hosts(), scope=view,

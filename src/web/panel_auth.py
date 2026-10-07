@@ -32,6 +32,8 @@ false explicitly; the reasoning has not changed, it just only applies inside tha
 The bridge-facing routes are where hosts come in (core/scope.py): `hook_caller` says which
 host a request is — its credential in the key header, or the legacy host where today's
 callers come without one — and `request_scope_of` resolves what that request may read.
+The panel's reads on HOST_READ_PATHS let a host in the same way, and only to read
+(`host_read_caller`).
 
 A `hosts:` table changes three things, all closed by default (single-host setups without
 a table are untouched): a caller presenting no host credential is nobody, not `legacy`; a
@@ -42,8 +44,9 @@ are refused on every door (`lock_problem`), the log says so, and the setup scree
 red (web/loci.build_setup, `hosts_lock`).
 
 Public surface: register(mcp) · has_session(request) · gate_needed() · PUBLIC_PATHS ·
-                KEEPALIVE_PATH ·
-                hosts() · hook_caller(request) · hook_ok(request) · request_scope_of() ·
+                KEEPALIVE_PATH · HOOK_PATHS · HOST_READ_PATHS · is_host_read(path) ·
+                hosts() · hook_caller(request) · hook_ok(request) ·
+                host_read_caller(request) · request_scope_of() ·
                 panel_refusal(request) · lock_problem(hosts) · mcp_auth_on()
 ========================================
 """
@@ -122,6 +125,34 @@ HOOK_PATHS = frozenset([
     "/api/v2/cue/dropped",
 ])
 HOOK_HEADER = "x-loci-hook-token"
+
+# **The panel's reads a host may make too** (panel contract 「面板接口」 §六, decision Q1):
+# what a host's own memory page shows (Lento's, asked by its 3010 with the host key) —
+# breath as last handed out, the awake pool, what hangs open, names and a name's card,
+# recall and the rooms, the detail window's body / lineage / source, a window's turns and
+# the usage counts. They are the hook routes' sort for a host and the panel's own for
+# everyone else (web/__init__ `_Gated`, `host_read_caller`):
+#   · a request carrying a host's credential is that host, decided exactly as on the hook
+#     routes (`hook_caller`), and reads by that host's scope as its own reads do;
+#   · a request carrying none is the panel, behind the panel's own gate
+#     (`panel_refusal`): the page works as on its other routes, unlocked panel included.
+# **GET only.** Every write stays the panel's: `_Gated` refuses to register any other
+# method on these paths, and the buttons that act on what they show (trace, names/action,
+# entry/fix, embedding/backfill) are other paths, which a host credential never opens.
+HOST_READ_PATHS = frozenset([
+    "/api/loci/breath/last",
+    "/api/loci/awake",
+    "/api/loci/hanging",
+    "/api/loci/names",
+    "/api/loci/names/{name}",
+    "/api/loci/recall",
+    "/api/loci/rooms",
+    "/api/loci/bucket/{bucket_id}",
+    "/api/loci/lineage/{bucket_id}",
+    "/api/loci/source/{bucket_id}",
+    "/api/loci/turns/{window}",
+    "/api/loci/usage",
+])
 
 _PUBLIC_PREFIXES = ("/loci/vendor/",)   # the page's static assets
 
@@ -237,6 +268,10 @@ def is_public(path: str) -> bool:
 
 def is_hook(path: str) -> bool:
     return path in HOOK_PATHS
+
+
+def is_host_read(path: str) -> bool:
+    return path in HOST_READ_PATHS
 
 
 def hook_token() -> str:
@@ -401,6 +436,23 @@ def hook_caller(request: Request):
         return True, "", hs.default
     _ok, why = _key_check(got)
     return False, why, None
+
+
+def host_read_caller(request: Request):
+    """Who a request on one of HOST_READ_PATHS is: (refusal, caller). The refusal is None
+    or (HTTP status, what to say); the caller a `core.scope.Host`, PANEL, or None when
+    refused.
+
+    Carrying a host's credential (the key header, or a bearer / `loci-mcp-token` that is a
+    host's) -> decided as on the hook routes (`hook_caller`, 401 when it lets the request
+    nowhere). Carrying none -> the panel, decided as on the panel's own routes
+    (`panel_refusal`)."""
+    _host, carried = _host_credential(request, hosts())
+    if carried:
+        ok, why, caller = hook_caller(request)
+        return (None, caller) if ok else ((401, why), None)
+    refused = panel_refusal(request)
+    return (refused, None) if refused is not None else (None, PANEL)
 
 
 def _key_check(got: str) -> tuple[bool, str]:
