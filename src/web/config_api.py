@@ -55,6 +55,19 @@ _MAX_PROVIDER_URL_CHARS = 2048
 _MAX_PROVIDER_FORMAT_CHARS = 64
 _MAX_ENV_VALUE_CHARS = 8192
 
+# The `surfacing` numbers POST /api/config accepts: (key, lowest, highest).
+# The three `awake_*` are breath's awake reasons (core/profile.breath_settings): written in
+# the last N days · a date N days ahead · a strong-reminder card delivered in the last N
+# days; 0 turns that reason off.
+_SURFACING_INTS = (
+    ("breath_max_results", 1, 50),
+    ("breath_max_tokens", 500, 20000),
+    ("feel_max_tokens", 500, 20000),
+    ("awake_recent_days", 0, 365),
+    ("awake_date_days", 0, 365),
+    ("awake_cue_days", 0, 365),
+)
+
 
 def _rebuild_embedding_runtime():
     """Rebuild and publish one embedding engine to every runtime holder."""
@@ -204,6 +217,8 @@ def register(mcp) -> None:
         emb = sh.config.get("embedding", {})
         api_key = dehy.get("api_key", "")
         masked_key = f"{api_key[:4]}...{api_key[-4:]}" if len(api_key) > 8 else ("***" if api_key else "")
+        from core.profile import breath_settings
+        awake = breath_settings(sh.config)   # the values breath runs on, defaults filled
         return JSONResponse({
             "dehydration": {
                 "model": dehy.get("model", ""),
@@ -231,6 +246,9 @@ def register(mcp) -> None:
                 "breath_max_results": int(sh.config.get("surfacing", {}).get("breath_max_results") or 20),
                 "breath_max_tokens": int(sh.config.get("surfacing", {}).get("breath_max_tokens") or 10000),
                 "feel_max_tokens": int(sh.config.get("surfacing", {}).get("feel_max_tokens") or 6000),
+                "awake_recent_days": awake.recent_days,
+                "awake_date_days": awake.date_days,
+                "awake_cue_days": awake.cue_days,
             },
             "merge_threshold": sh.config.get("merge_threshold", 75),
             # The panel lock: the switch itself, plus **whether it is actually locked**
@@ -558,21 +576,19 @@ def register(mcp) -> None:
             except (TypeError, ValueError):
                 pass
 
-        # --- Surfacing defaults (breath/feel token & result caps) ---
+        # --- Surfacing numbers (`_SURFACING_INTS`): clamped into range; one that is not a
+        # number is skipped. The clamped value is what runs and what is persisted. ---
+        surfacing_ints: dict[str, int] = {}
         if "surfacing" in body and isinstance(body["surfacing"], dict):
             sf = sh.config.setdefault("surfacing", {})
-            for key, lo, hi in (
-                ("breath_max_results", 1, 50),
-                ("breath_max_tokens", 500, 20000),
-                ("feel_max_tokens", 500, 20000),
-            ):
+            for key, lo, hi in _SURFACING_INTS:
                 if key in body["surfacing"]:
                     try:
                         val = int(body["surfacing"][key])
-                        sf[key] = max(lo, min(hi, val))
-                        updated.append(f"surfacing.{key}")
                     except (TypeError, ValueError):
-                        pass
+                        continue
+                    surfacing_ints[key] = sf[key] = max(lo, min(hi, val))
+                    updated.append(f"surfacing.{key}")
 
         persisted_after: dict | None = None
 
@@ -632,12 +648,7 @@ def register(mcp) -> None:
                     if not isinstance(sc_sf, dict):
                         sc_sf = {}
                         save_config["surfacing"] = sc_sf
-                    for key in ("breath_max_results", "breath_max_tokens", "feel_max_tokens"):
-                        if key in body["surfacing"]:
-                            try:
-                                sc_sf[key] = int(body["surfacing"][key])
-                            except (TypeError, ValueError):
-                                pass
+                    sc_sf.update(surfacing_ints)
                     if "sampling" in body["surfacing"] and isinstance(body["surfacing"]["sampling"], dict):
                         sc_samp = sc_sf.setdefault("sampling", {})
                         if not isinstance(sc_samp, dict):
