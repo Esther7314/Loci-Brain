@@ -120,14 +120,15 @@ export function header(nav, current) {
 }
 
 /** The row under the header. `tabs`: [{label, href, on}] (a page's sub-tabs, the current
- *  one underlined), or a node in their place; `tip`: the i after them; `aside`: what sits
+ *  one underlined), or a node in their place (a line of words: its i sits close after it);
+ *  `tip`: the i after them; `aside`: what sits
  *  at the right (a date line, a page's secondary entry) — under the tabs on the phone. */
 export function subbar({ tabs, tip: tipText, aside } = {}) {
   const left = Array.isArray(tabs)
     ? h("div", { class: "nav tabs" }, tabs.map((t) => h("a", {
       href: t.href, class: t.on ? "on" : null, "aria-current": t.on ? "page" : null, text: t.label,
     })), tipText ? tip(tipText) : null)
-    : h("div", { class: "nav tabs" }, tabs || null, tipText ? tip(tipText) : null);
+    : h("div", { class: `nav tabs${tipText ? " line" : ""}` }, tabs || null, tipText ? tip(tipText) : null);
   return h("div", { class: "subbar" }, left, aside || null);
 }
 

@@ -54,6 +54,8 @@ a:hover { color: #000000; }
    secondary entry or its date on the right */
 .subbar { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 24px; padding: 16px 0 32px; }
 .tabs { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; font-size: 17px; }
+/* one line of words in the tabs' place, its i right after it (boards changes, trace, dream) */
+.tabs.line { gap: 6px; }
 .subbar .aside { font-size: 15px; color: var(--small); }
 
 .sections { display: flex; flex-direction: column; gap: 56px; }
@@ -128,7 +130,7 @@ input[type=radio], input[type=checkbox] { accent-color: var(--ink); }
 .gate { min-height: 100vh; padding: 140px 20px 48px; box-sizing: border-box; }
 .gate.forgot { padding-top: 120px; }
 .gate main { max-width: 360px; margin: 0 auto; display: flex; flex-direction: column; gap: 22px; }
-.gate .brand { margin-bottom: 14px; }
+.gate .brand { margin-bottom: 14px; font-size: 44px; }
 .gate h1 { margin: 0; font-size: 26px; font-weight: 800; }
 .gate .back { font-size: 15px; color: var(--small); }
 .fld { display: flex; flex-direction: column; gap: 6px; }
@@ -152,6 +154,8 @@ input[type=radio], input[type=checkbox] { accent-color: var(--ink); }
 .dlg h1 { flex: 1; min-width: 0; margin: 0; font-size: 22px; font-weight: 700; line-height: 1.4; overflow-wrap: anywhere; }
 .dlg .meta { gap: 4px 20px; align-items: center; }
 .dlg .cap { margin: 0 0 6px; font-size: 13px; color: var(--small); }
+.dlg .cap.sum { margin-top: 22px; }
+.dlg .said { margin-top: 24px; }
 .dlg .body { margin: 0; font-size: 16px; line-height: 1.6; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
 .dlg hr { border: 0; border-top: 1px solid var(--line); margin: 22px 0 4px; }
 .dlg .h { margin: 0 0 4px; font-size: 17px; font-weight: 500; color: var(--ink); }
@@ -190,9 +194,10 @@ input[type=radio], input[type=checkbox] { accent-color: var(--ink); }
 .item.member .txt { padding-left: 20px; }
 .item.member .c { font-size: 15px; color: var(--small); }
 .item.member .r { font-size: 13px; }
-/* a settings row: its name and words on the left, the control on the right (n11: on the
-   phone too, unless it does not fit) */
-.item.set { grid-template-columns: minmax(0, 1fr) auto; }
+/* a settings row: its name and words on the left, the control on the right in the row's
+   own column (170px, or 300px when wide), so the rules between rows stop where the
+   boards stop them (n11: on the phone the control stays beside the words unless it does
+   not fit) */
 .item.set .acts { align-items: center; flex-wrap: nowrap; }
 .item.set .why { white-space: normal; }
 .setnote { margin: 10px 0 0; line-height: 1.6; }
@@ -201,7 +206,6 @@ input[type=radio], input[type=checkbox] { accent-color: var(--ink); }
 @media (max-width: 640px) {
   .days > .rows { gap: 44px; }
   .days > .pager { margin-left: 0; }
-  .item.set { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 16px; align-items: center; }
   .item.set .acts { padding: 0; }
   .item.member .txt { padding-left: 16px; }
   .item.member .r { padding-left: 16px; }
@@ -221,11 +225,16 @@ input[type=radio], input[type=checkbox] { accent-color: var(--ink); }
 .ln + .ln { border-top: 1px solid var(--line); }
 /* 待认的: a row's box (跟谁是一个, + 新类别) spans under it; 是… opens under its button */
 .item.pending { position: relative; }
+/* its buttons take the width they need and stay on one line (board name-pending) */
+.item.wide.pending { grid-template-columns: minmax(0, 1fr) auto; }
+.item.pending > .acts { flex-wrap: nowrap; }
 .namebox { grid-column: 1 / -1; padding: 0 0 12px; }
 .namebox:empty { display: none; }
 .namebox .cap { margin: 0 0 4px; font-size: 13px; color: var(--small); }
 .namebox-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
-.menu.kinds { top: 52px; right: 0; width: 150px; }
+.menu.kinds { top: 52px; right: 0; width: 150px; border-color: var(--edge); box-shadow: 0 8px 24px rgba(14, 16, 18, 0.12); }
+.menu.kinds .mi { height: 36px; padding: 0 10px; font-size: 14px; }
+.menu.kinds hr { margin: 4px 0; }
 .btn.dark[aria-expanded="true"] { background: var(--ink); border-color: var(--ink); }
 .mi.dim { color: var(--small); }
 
@@ -279,6 +288,12 @@ input[type=radio], input[type=checkbox] { accent-color: var(--ink); }
   .dlg .grab { display: block; width: 36px; height: 4px; border-radius: 2px; background: var(--edge); margin: 0 auto 10px; }
   .dlg .head { gap: 8px; }
   .dlg h1 { font-size: 20px; }
+  .dlg .cap.sum { margin-top: 20px; }
+  .dlg .said { margin-top: 22px; }
+  /* 编辑 open: the detail window greys the button only, the name card also darkens its edge */
+  .dlg:not(.namecard) .btn[aria-expanded="true"] { border-color: var(--edge); }
+  .dlg.namecard .head { gap: 10px; }
+  .dlg.namecard .head .btn { font-size: 14px; }
   .dlg .meta { gap: 4px 16px; }
   .dlg hr { margin-top: 20px; }
   .dlg .line { display: flex; flex-direction: column; gap: 2px; padding: 8px 0; }
@@ -349,17 +364,24 @@ span.lnk { font-size: 13px; }
   .adv { height: 44px; padding: 0 16px; border-radius: 22px; font-size: 15px; }
   .flt { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 12px; padding-top: 16px; }
   .fg { gap: 8px; }
-  .fl { width: 44px; flex-shrink: 0; font-size: 15px; }
+  .fg .fl { width: 44px; flex-shrink: 0; font-size: 15px; }
   .flt .pill { flex: 1; min-width: 0; width: auto; height: 40px; border-radius: 20px; font-size: 15px; padding: 0 10px; }
   .flt .pill.yyyy { flex: 1.5; }
+}
+
 /* dream, name, the name card on the phone: the kinds row slides sideways like the header
    (note n11); the 是… menu is the same sheet from the bottom as 编辑 */
 @media (max-width: 640px) {
   .tabs.slide { flex-wrap: nowrap; gap: 16px; overflow-x: auto; white-space: nowrap; margin: 0 -20px -2px; padding: 0 20px 10px; scrollbar-width: none; }
   .tabs.slide::-webkit-scrollbar { display: none; }
-  .menu.kinds { top: auto; right: 12px; width: auto; }
+  .menu.kinds { top: auto; right: 12px; width: auto; box-shadow: none; }
+  .menu.kinds .mi { height: 56px; padding: 0; font-size: 17px; }
+  .item.pending > .acts { flex-wrap: wrap; }
   .menu.kinds .card { max-height: 60vh; overflow-y: auto; }
   .namebox { padding-top: 10px; }
+}
+
+/* ==========================================================
    Settings pages (boards setting, setting-phone, setting-local-embed, present,
    present-phone, present-settings)
    ========================================================== */
@@ -373,12 +395,16 @@ span.lnk { font-size: 13px; }
 .acts .lnk { white-space: nowrap; flex-shrink: 0; }
 select.btn { appearance: none; -webkit-appearance: none; padding-right: 28px; background: #FFFFFF url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23717880'/%3E%3C/svg%3E") no-repeat right 12px center; min-width: 200px; max-width: 100%; text-overflow: ellipsis; }
 .hint { display: block; margin-top: 6px; }
+/* a list whose first row carries the rule under the row above it (向量's missing list) */
+.ruled-first .rows > .item:first-child .txt { border-top: 1px solid var(--line); }
+/* setting's grey boxes sit a little tighter than present's (board setting) */
+.sections.setting .panel { padding: 12px 18px 14px; margin: 2px 0 12px; }
 
 /* a form: the field's name in a 110px column, the field after it */
 .form { display: grid; grid-template-columns: 110px minmax(0, 560px); column-gap: 20px; row-gap: 14px; align-items: center; }
 .form > .fn { font-size: 15px; color: var(--small); }
 .form .inp { width: 100%; }
-.form .pick { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.form .pick { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
 
 /* 称呼 and 安全问题: two labelled boxes and a button on one line */
 .pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: center; column-gap: 24px; row-gap: 12px; padding: 4px 0; }
@@ -392,7 +418,7 @@ select.btn { appearance: none; -webkit-appearance: none; padding-right: 28px; ba
 
 /* the log box */
 .logbox { background: var(--grey); border-radius: 12px; padding: 12px 16px; display: flex; flex-direction: column; gap: 4px; }
-.logl { display: grid; grid-template-columns: 150px 72px minmax(0, 1fr); column-gap: 12px; font-family: ui-monospace, Consolas, monospace; font-size: 13px; line-height: 1.7; }
+.logl { display: grid; grid-template-columns: 150px 64px minmax(0, 1fr); column-gap: 12px; font-family: ui-monospace, Consolas, monospace; font-size: 13px; line-height: 1.7; }
 .logl .t { color: var(--off); }
 .logl .lv { font-weight: 600; }
 .logl .m { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -426,6 +452,8 @@ select.btn { appearance: none; -webkit-appearance: none; padding-right: 28px; ba
 @media (max-width: 640px) {
   .item.set { flex-direction: row; align-items: center; justify-content: space-between; gap: 12px; }
   .item.set .txt { flex: 1; }
+  .ruled-first .rows > .item:first-child { border-top: 1px solid var(--line); }
+  .ruled-first .rows > .item:first-child .txt { border-top: 0; }
   .item.set .c { white-space: normal; }
   .item.set > .acts, .item.set > .r { padding: 0; flex-shrink: 0; justify-content: flex-end; }
   .item.set.stack { flex-direction: column; align-items: flex-start; gap: 8px; }
@@ -437,7 +465,7 @@ select.btn { appearance: none; -webkit-appearance: none; padding-right: 28px; ba
   .sw span { width: 20px; height: 20px; }
   .seg button { height: 36px; font-size: 15px; }
   .btn.set { height: 36px; padding: 0 16px; border-radius: 18px; font-size: 15px; }
-  .panel { padding: 14px 16px 16px; }
+  .panel, .sections.setting .panel { padding: 14px 16px 16px; }
   .acts.end { justify-content: flex-end; padding: 0; }
 
   .form { display: flex; flex-direction: column; align-items: stretch; gap: 0; }

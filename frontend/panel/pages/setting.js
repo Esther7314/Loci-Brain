@@ -557,7 +557,7 @@ async function vectorBlock() {
   return h("div", null,
     row({ text: "", lead: count, why: "「现在补」= 不等后台了，马上把缺的这几条算上", right: acts(now), layout: "set" }),
     note, s.el,
-    h("div", { style: { borderTop: "1px solid var(--line)" } }, listBox),
+    h("div", { class: "ruled-first" }, listBox),
     small("在排队 = 等着轮到它；一直失败 = 试了几次都没成，多半是向量模型没配好，或者网断了。", { marginTop: "12px" }));
 }
 
@@ -991,7 +991,7 @@ export default {
     const cfgP = api.get("/api/config");
     cfgP.catch(() => {});
     const logs = logsBlock();
-    view.append(subbar({}), h("main", { class: "sections", style: "--gl-w: 96px" },
+    view.append(subbar({}), h("main", { class: "sections setting", style: "--gl-w: 96px" },
       hostsGroup(),
       group("称呼", { tip: TIP.names }, later(() => namesBlock(cfgP))),
       group("账号", {}, later(accountBlock)),

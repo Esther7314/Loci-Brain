@@ -85,7 +85,7 @@ async function half({ part, label, tip }) {
 
 export default {
   async render(view) {
-    view.append(subbar({ tabs: h("span", { text: LINE }), tip: TIP }));
+    view.append(subbar({ tabs: h("span", { style: { color: "var(--ink)" }, text: LINE }), tip: TIP }));
     const halves = await Promise.all(HALVES.map(half));
     view.append(h("main", { class: "sections", style: "--gl-w: 116px" }, halves));
   },

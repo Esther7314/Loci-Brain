@@ -173,7 +173,7 @@ function makeWindow() {
       h("div", { class: "why meta", style: { marginTop: "8px" } },
         h("span", { text: `#${b.short}` }), b.date ? h("span", { text: b.date }) : null, tags),
       state.notice ? h("p", { class: "why", role: "status", style: { margin: "14px 0 0" }, text: state.notice }) : null,
-      summary ? h("p", { class: "cap", style: { marginTop: "22px" }, text: `摘要：${summary}` }) : null,
+      summary ? h("p", { class: "cap sum", text: `摘要：${summary}` }) : null,
       h("div", { class: "entry-body", style: { marginTop: summary ? "18px" : "22px" } },
         h("p", { class: "cap", text: "正文" }), body),
       facts.length ? h("div", { class: "why meta", style: { marginTop: "22px" } }, facts) : null,
@@ -310,7 +310,7 @@ function makeWindow() {
     const parts = [];
     const originals = src.originals || [];
     if (originals.length) {
-      parts.push(h("section", { style: { marginTop: "24px" } }, h("h2", { class: "h", text: "原话" }),
+      parts.push(h("section", { class: "said" }, h("h2", { class: "h", text: "原话" }),
         originals.map((o) => originalBlock(o))));
     }
     if ((src.derived_from || []).length) {

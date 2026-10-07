@@ -2,14 +2,15 @@
    pages/present.js — present and its 高级设置 (boards present, present-phone,
    present-settings)
 
-   #/present           昨日日报 · 自动唤醒 · 主动推送, as the board lays them out.
-   #/present/settings  the prompt cards: 写日报的 and 自动唤醒的. The board's sample under
-                       the report card is left out: its text speaks of the owner in the
-                       third person, which shipped code does not (scripts/check_english.py).
+   #/present           自助压缩 · 昨日日报 · 自动唤醒 · 主动推送, as the board lays them out.
+   #/present/settings  the three prompt cards: 自助压缩的, 写日报的, 自动唤醒的. The board's
+                       samples under the first two are left out: their text speaks of the
+                       owner in the third person, which shipped code does not
+                       (scripts/check_english.py).
 
    The server has no present yet (note n8): the page says 「还没接上」, nothing is read and
-   nothing is written, every control is off. The board's 自助压缩 block and its prompt card
-   are not drawn here: nothing of self-compression reaches the panel.
+   nothing is written, every control is off. What a self-compression writes goes to the
+   model only (n8): the page holds its settings, never that text.
    ========================================================== */
 
 import { h, subbar, group, row, tip, btn, sw, radio, num, customBox } from "../ui.js";
@@ -20,6 +21,7 @@ const NOT_WIRED = "还没接上";
 const TIP = {
   report: "夜里把这一天写成一份日报，第二天开一个新窗口，从日报接着聊。",
   when: "在夜间 4–8 点之间，你没有说话 30 分钟之后就会写日报。",
+  compress: "快满的时候他自己压一下，压完换个新窗口接着聊。",
   wake: "隔一阵叫醒他一次，让他自己想想、做点事。1小时之内可以保住缓存，你下次开口接得更快、也更省。醒来的时候会顺手带上昨夜的梦和 muse 攒下的，这两样各自在 dream、muse 的高级设置里开关。",
   push: "他醒来想跟你说话的时候，用 Bark 推到你手机上。",
 };
@@ -58,6 +60,24 @@ function choice(name, label, checked, ...extra) {
 
 function addLink(words, style) {
   return h("div", { style }, off(h("button", { class: "lnk", type: "button", style: { fontSize: "14px" } }, words)));
+}
+
+function compressGroup() {
+  const custom = customBox([
+    h("div", { style: { marginTop: "6px" } },
+      setRow({ text: "弱提醒线", why: "这个水位线会提醒他，压缩与否由他决定。", right: acts(box("", "弱提醒线")) }),
+      addLink("+ 再加一条提醒", { padding: "4px 0 10px" }),
+      setRow({ text: "强制压缩线", why: "兜底压缩线，不考虑他的意见了。", right: acts(box("", "强制压缩线")) })),
+    h("p", { class: "why", style: { margin: "10px 0 0", lineHeight: "1.6" },
+      text: "如果你开 auto compact（自动压缩），记得关掉，不然两边会起冲突。" }),
+  ], { open: true });
+  return group("自助压缩", { tip: TIP.compress },
+    h("div", null,
+      setRow({ text: "开关", right: acts(off(sw({ checked: true, label: "自助压缩开关" }))) }),
+      setRow({ text: "压缩水位线", right: acts(box("", "水位线")) }),
+      setRow({ text: "压缩完留多少条原话", right: acts(box("", "留多少条")) }),
+      setRow({ text: "手动压缩", why: "不等水位线，现在就压一次", right: acts(off(btn("现在压"))) })),
+    custom);
 }
 
 function reportGroup() {
@@ -111,7 +131,7 @@ function renderPresent(view) {
       h("div", { class: "nav tabs" }, h("span", { style: { color: "var(--ink)" }, text: "今天就在眼前" }),
         h("span", { class: "why", text: NOT_WIRED })),
       h("a", { href: href("present", "settings"), style: { fontSize: "15px", color: "var(--small)" }, text: "高级设置" })),
-    h("main", { class: "sections", style: "--gl-w: 96px" }, reportGroup(), wakeGroup(), pushGroup()));
+    h("main", { class: "sections", style: "--gl-w: 96px" }, compressGroup(), reportGroup(), wakeGroup(), pushGroup()));
 }
 
 /** One prompt card: its title, the prompt box, 恢复默认 / 保存 under it. */
@@ -129,7 +149,8 @@ function renderSettings(view) {
       h("span", { style: { color: "var(--ink)" }, text: "高级设置" }),
       h("span", { class: "why", text: NOT_WIRED })) }),
     h("main", { class: "sections" },
-      group("提示词", {}, promptCard("写日报的提示词"), promptCard("自动唤醒的提示词"))));
+      group("提示词", {}, promptCard("自助压缩的提示词"), promptCard("写日报的提示词"),
+        promptCard("自动唤醒的提示词"))));
 }
 
 export default {
