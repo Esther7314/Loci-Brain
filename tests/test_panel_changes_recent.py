@@ -123,3 +123,23 @@ def test_a_moved_basis_rewritten_put_away_or_kept(store, tmp_path, monkeypatch):
 def test_bad_paging_is_refused_and_the_page_is_the_panel_s(store, monkeypatch):
     assert routes(monkeypatch)("GET", "/api/loci/changes/recent", "limit=0").status == 400
     assert routes(monkeypatch, locked=True)("GET", "/api/loci/changes/recent").status == 401
+
+
+def test_only_the_last_two_weeks_are_on_the_page(store, monkeypatch):
+    async def seed():
+        old = await store.create("Rest before arguing.", room="MIND/VIEWS", name="old")
+        await store.update(old, pinned=True)
+        new = await store.create("Sleep before deciding.", room="MIND/VIEWS", name="new")
+        await store.update(new, pinned=True)
+        return old, new
+    old, new = run(seed())
+    real = list(store.ledger_mirror.iter_events())
+    ago = (W.now() - timedelta(days=CF.WINDOW_DAYS, hours=1)).isoformat(timespec="seconds")
+    events = [dict(e, recorded_at=ago) if e.get("trace_id") == old else e for e in real]
+    monkeypatch.setattr(store.ledger_mirror, "iter_events", lambda: iter(events))
+
+    everything = CF.recent(events, run(store.list_all(include_archive=True)))
+    assert {r["entry"]["id"] for r in everything} == {old, new}
+    # Criterion: the line older than two weeks stays in the ledger but not on the page.
+    page = routes(monkeypatch)("GET", "/api/loci/changes/recent").json
+    assert [r["entry"]["id"] for r in page["items"]] == [new] and page["total"] == 1

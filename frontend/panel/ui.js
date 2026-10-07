@@ -220,12 +220,14 @@ export function errorLine(err) {
  *  `load(query)` reads one page: query is {offset, limit, as_of}; it returns the reply
  *  {items, total, offset, limit, next_offset, as_of}. The first page's `as_of` is sent
  *  back on every later page, so rows written meanwhile do not shift the pages.
- *  `item(row)` turns one item into its row node.
+ *  `item(row)` turns one item into its row node; `items(list)`, given instead, turns a
+ *  whole page at once (a page that groups its rows, by day or by batch).
  *
- *  Resolves to {el, total, reply, reload()} once the first page is in; it rejects when
- *  the first page cannot be read, so the page decides what to show. With one page only,
- *  the ‹ › line is left out. */
-export async function pagedList({ load, item, limit = 5 }) {
+ *  Resolves to {el, total, reply, reload(), again()} once the first page is in; it rejects
+ *  when the first page cannot be read, so the page decides what to show. With one page
+ *  only, the ‹ › line is left out. `again()` reads the page shown once more, as of now —
+ *  after a write took a row off it (one page back when that one is now empty). */
+export async function pagedList({ load, item, items, limit = 5 }) {
   const rows = h("div", { class: "rows" });
   const status = h("span", { class: "why" });
   const prev = h("button", { class: "pg", type: "button", "aria-label": "上一页" }, "‹");
@@ -242,7 +244,7 @@ export async function pagedList({ load, item, limit = 5 }) {
     if (!state.asOf) state.asOf = reply.as_of || null;
     state.offset = offset;
     state.reply = reply;
-    fill(rows, (reply.items || []).map(item));
+    fill(rows, items ? items(reply.items || []) : (reply.items || []).map(item));
     const pages = Math.max(1, Math.ceil((reply.total || 0) / limit));
     const here = Math.floor(offset / limit) + 1;
     status.textContent = `${here} / ${pages}`;
@@ -262,6 +264,12 @@ export async function pagedList({ load, item, limit = 5 }) {
     total: first.total || 0,
     reply: first,
     reload: () => { state.asOf = null; return go(0); },
+    again: async () => {
+      state.asOf = null;
+      const reply = await go(state.offset);
+      if (!(reply.items || []).length && state.offset > 0) return go(Math.max(0, state.offset - limit));
+      return reply;
+    },
   };
 }
 
@@ -301,6 +309,36 @@ export function inp(attrs = {}) {
 /** A small pill number box. */
 export function num(attrs = {}) {
   return h("input", { class: "num", inputmode: "decimal", ...attrs });
+}
+
+/** A prompt card (grow, dream, present's 高级设置): its title, 「改过 <day>」 when it was
+ *  changed, the prompt in a box the full width, what is better left alone and why, and
+ *  恢复默认 · 保存 under the box. `card` is one of GET /api/loci/prompts:
+ *  {key, title, text, changed, notes[]}; `title` the board's words for it. `onSave(text)`
+ *  and `onReset()` write and resolve to the server's reply; a failure shows its words. */
+export function promptCard({ title, card, label, onSave, onReset }) {
+  const id = `prompt-${card.key}`;
+  const area = h("textarea", { class: "prompt", id, rows: "11" });
+  area.value = card.text ?? "";
+  const status = h("div");
+  const changed = typeof card.changed === "string" && card.changed ? `改过 ${card.changed}` : "";
+  const notes = (card.notes || []).map((n) => {
+    const words = typeof n === "string" ? n : [n.part, n.why].filter(Boolean).join(" —— ");
+    return words ? h("p", { class: "why", style: { margin: "12px 0 0" }, text: `不建议改：${words}` }) : null;
+  });
+  const run = (fn) => async () => {
+    fill(status);
+    try { await fn(); } catch (e) { fill(status, errorLine(e)); }
+  };
+  return h("div", null,
+    h("h3", { class: "st", style: { marginBottom: "6px" }, text: title }),
+    changed ? h("p", { class: "why", style: { margin: "0 0 12px" }, text: changed }) : null,
+    h("label", { for: id, class: "sr", text: label || title }),
+    area, notes,
+    h("div", { class: "acts", style: { marginTop: "20px" } },
+      btn("恢复默认", { onClick: run(() => onReset()) }),
+      btn("保存", { dark: true, onClick: run(() => onSave(area.value)) })),
+    status);
 }
 
 /** 「自定义设置」: folded, only its link; open, a grey box with the link on top. */

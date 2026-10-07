@@ -32,7 +32,11 @@ such line).
 Each row carries the ledger's `seq` as its id — the panel's alone: a host with a ceiling
 never sees seq numbers (core/_ledger.py).
 
-Exports: recent(events, all_buckets, *, scope=None, as_of=None) -> list[dict]
+The page shows the last `WINDOW_DAYS` days (the owner's rule for regrow/fold): `since` cuts
+the older lines off; they stay in the ledger, only not on this page.
+
+Exports: WINDOW_DAYS · recent(events, all_buckets, *, scope=None, as_of=None, since=None)
+-> list[dict]
 ========================================
 """
 
@@ -58,6 +62,9 @@ INVALIDATION = "invalidation"
 REWRITE = "rewrite"
 ARCHIVE = "archive"
 KEPT = "kept"
+
+# How far back the page reaches: two weeks.
+WINDOW_DAYS = 14
 
 _INVALIDATION_WORDS = {REWRITE: "依据变了，重写了一版", ARCHIVE: "依据变了，收起来了",
                        KEPT: "依据变了，看过照留"}
@@ -100,7 +107,8 @@ def _pinned_now(payload: dict) -> bool:
     return value is True or str(value).strip().lower() in ("true", "1", "yes")
 
 
-def recent(events, all_buckets: list, *, scope=None, as_of: datetime | None = None) -> list[dict]:
+def recent(events, all_buckets: list, *, scope=None, as_of: datetime | None = None,
+           since: datetime | None = None) -> list[dict]:
     """The page's rows, newest first:
 
         {id: seq, at, kind, words, entry: {id, short, text}, how? (invalidation),
@@ -109,7 +117,7 @@ def recent(events, all_buckets: list, *, scope=None, as_of: datetime | None = No
     `events` are the ledger's lines in order; `all_buckets` every entry, archive included
     (an entry put away is still named). `scope` (a core.scope.ScopeView) leaves out entries
     the request may not read; `as_of` leaves out lines recorded after it
-    (core/paging.past)."""
+    (core/paging.past); `since` leaves out lines recorded before it."""
     by_id = {str((b.get("metadata") or {}).get("id") or b.get("id") or ""): b
              for b in all_buckets}
     rows: list[dict] = []
@@ -127,7 +135,7 @@ def recent(events, all_buckets: list, *, scope=None, as_of: datetime | None = No
         if stamp is None:
             continue
         stamp = stamp.replace(microsecond=0)        # the row's `at` is to the second
-        if past(stamp, as_of):
+        if past(stamp, as_of) or (since is not None and stamp < since):
             continue
         payload = _payload(event)
         changed = {str(f) for f in payload.get("changed_fields") or []}

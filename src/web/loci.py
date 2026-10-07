@@ -13,7 +13,8 @@ of what the panel can reach.
     GET  /loci/panel/{path:path}      -> the panel's modules and stylesheet (frontend/panel,
                                          .js and .css only, public: the login page is one
                                          of them)
-    GET  /api/loci/recall             -> recall's second skin (card + list)
+    GET  /api/loci/recall             -> recall's second skin (card + list), and `rows`:
+                                         the text skin's lines, paged by offset / limit
     GET  /api/loci/graph              -> starfield: nodes + real edges + weak edges + constellations
     GET  /api/loci/similar            -> suspected-duplicate pairs + score distribution (adjustable threshold)
     GET  /api/loci/profile            -> the note by the door
@@ -123,12 +124,15 @@ The detail window, the name card and the names page (panel contract 「面板接
 web/loci_names.py (names, names/pending, names/{name}, names/action); what they show is
 assembled and worded in core/detail.py and core/census.py. Both POSTs write:
 
-    GET  /api/loci/bucket/{id}        -> one entry verbatim, its metadata, the tag row, the
-                                         关联 counts, its source layer and the edits offered
+    GET  /api/loci/bucket/{id}        -> one entry verbatim, its title (the line every list
+                                         shows for it), its metadata, the tag row, the 关联
+                                         counts, its source layer and the edits offered
     GET  /api/loci/lineage/{id}       -> 关联: what came after it, its cue and live holds
-    GET  /api/loci/source/{id}        -> 来源: its sources and their state, what it stands
-                                         on, how it is known; `?fetch=<n>` asks the host for
-                                         source n's original (nothing stored or logged)
+    GET  /api/loci/source/{id}        -> 来源: its sources and their state (an import's
+                                         with when its first and last line were said), what
+                                         it stands on, how it is known; `?fetch=<n>` asks the
+                                         host for source n's original (nothing stored or
+                                         logged)
     GET  /api/loci/names              -> the names the table knows, by kind; paged
     GET  /api/loci/names/pending      -> the names it does not know yet, each with the
                                          entry it first appeared in; paged
@@ -144,8 +148,10 @@ offset / limit / as_of. 🔴 POST /api/loci/trace writes.
 
     GET  /api/loci/breath/last        -> the last breath actually handed out, per host
                                          (`?host=`, else the most recent): its structure
-                                         with titles read now, and the scope line it was
-                                         handed out under (core/breath_snapshot.py)
+                                         with titles read now, each 依据变了的 item with why
+                                         it is there in breath's words (`why`), and the
+                                         scope line it was handed out under
+                                         (core/breath_snapshot.py)
     GET  /api/loci/awake              -> the awake pool computed now, every reason each
                                          entry is awake in words (`?reason=` keeps one);
                                          core/profile.awake_pool
@@ -157,9 +163,9 @@ offset / limit / as_of. 🔴 POST /api/loci/trace writes.
                                          against the hanging list first, written through
                                          trace_core with closed_by="user"
     GET  /api/loci/changes/recent     -> new versions, merges, periods, pins, and what was
-                                         done about a moved basis, newest first, from the
-                                         ledger with seq as each row's id
-                                         (core/changes_feed.py)
+                                         done about a moved basis in the last two weeks,
+                                         newest first, from the ledger with seq as each
+                                         row's id (core/changes_feed.py)
 
 What Loci handed out and took in — turns, recall's timeline, usage, grow, muse, dreams,
 vectors (web/loci_activity.py; core/activity.py, core/grow_view.py, core/muse_view.py,

@@ -3,12 +3,14 @@
 web/loci_detail.py — the detail window's routes
 ========================================
 
-    GET  /api/loci/bucket/{id}        -> one entry verbatim, its metadata, the tag row, the
+    GET  /api/loci/bucket/{id}        -> one entry verbatim, its title (the line every
+                                         list shows for it), its metadata, the tag row, the
                                          关联 counts, its source layer, the edits offered
     GET  /api/loci/lineage/{id}       -> 关联: what came after it and its signposts
-    GET  /api/loci/source/{id}        -> 来源: its sources and their state, what it stands
-                                         on, how it is known; `?fetch=<n>` asks the host
-                                         for source n's original
+    GET  /api/loci/source/{id}        -> 来源: its sources and their state (an import's
+                                         with when its first and last line were said),
+                                         what it stands on, how it is known; `?fetch=<n>`
+                                         asks the host for source n's original
     POST /api/loci/entry/fix          -> 字写错了 (trace old_str/new_str) · 内容错了 (an
                                          event: a new version marked 人改的; a MIND entry:
                                          her `disputed` mark, nothing rewritten) · 删除

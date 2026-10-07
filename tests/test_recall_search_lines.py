@@ -5,7 +5,8 @@ tests/test_recall_search_lines.py — what one search line says, and in what ord
 A search line carries how the hit matched (字面 / 意思 / 部分字面) right after its score and
 how many days ago it was written. Hits that grew from the same root are one line that still
 names every other hit by its id. Lines holding an open promise go first, newest first within
-each part — and only among what the search matched.
+each part — and only among what the search matched. The panel's search results are these
+same lines (`rows`), paged by the route.
 """
 
 import asyncio
@@ -157,3 +158,84 @@ def test_the_panel_gets_the_same_facts(store):
         assert by_id[kid]["how"] == "字面" and by_id[kid]["written_days"] == 0
         assert by_id[kid]["open_promise"] is False
     asyncio.run(go())
+
+
+def test_the_panel_lines_are_the_text_skins_lines(store):
+    async def go():
+        root = await _new(store, "小周说周六想去海边看日落。")
+        a = await _new(store, "小周喜欢海边，日落的时候心情会变好。",
+                       prov=[{"rel": "wasDerivedFrom", "target": root}])
+        b = await _new(store, "海边那次小周提了两遍，大概真的很想去。",
+                       prov=[{"rel": "wasDerivedFrom", "target": a}])
+        data = await R.recall_data(when="", room="", tag="", query="海边")
+        [line] = data["rows"]
+        assert line["id"] == root and line["short"] == root[:6]
+        assert line["how"] == "字面" and line["roots"] == [root]
+        assert line["score"] >= data["floor"] and line["written_words"] == "今天写的"
+        assert {o["id"] for o in line["others"]} == {a, b}, "what 「+ N 条派生」 counts"
+        assert all(o["open_promise"] is False for o in line["others"])
+    asyncio.run(go())
+
+
+def test_the_panel_lines_keep_the_order_and_leave_out_what_is_under_the_line(store):
+    async def go():
+        promise = await _new(store, "答应小周找一天去海边放风筝。", when="2026-09-01",
+                             direction_of_fit="telic", bound=["AI"])
+        newest = await _new(store, "海边下了一整天雨。", when="2026-09-20")
+        older = await _new(store, "小周把海边的照片设成了屏保。", when="2026-09-10")
+        data = await R.recall_data(when="", room="", tag="", query="海边")
+        assert [r["id"] for r in data["rows"]] == [promise, newest, older]
+        assert [r["open_promise"] for r in data["rows"]] == [True, False, False]
+    asyncio.run(go())
+
+
+def test_a_hit_under_the_line_is_not_a_panel_line():
+    from datetime import datetime
+
+    def hit(bid, score, literal):
+        return {"id": bid, "meta": {"name": bid}, "content": bid, "score": score,
+                "literal": literal, "ts": datetime(2026, 9, 1), "roots": frozenset({bid})}
+    rows = R.search_rows_json([hit("aaaaaaaaaaaa", 20.0, False),
+                               hit("bbbbbbbbbbbb", 20.0, True)], 35.0)
+    assert [r["id"] for r in rows] == ["bbbbbbbbbbbb"], "a literal hit is lifted to the line"
+    assert rows[0]["score"] == 35.0
+
+
+def test_without_a_query_every_entry_is_a_line_newest_first(store):
+    async def go():
+        first = await _new(store, "九月一号记下的一件事。", when="2026-09-01")
+        second = await _new(store, "九月五号记下的一件事。", when="2026-09-05")
+        data = await R.recall_data(when="2026-09", room="", tag="", query="")
+        assert [r["id"] for r in data["rows"]] == [second, first]
+        assert "score" not in data["rows"][0] and data["rows"][0]["others"] == []
+        assert data["rows"][0]["date"] == "2026-09-05"
+    asyncio.run(go())
+
+
+def test_the_route_pages_the_lines(store, monkeypatch):
+    import json
+    from urllib.parse import urlencode
+    from starlette.requests import Request
+    from web import loci_reads as WR
+
+    def get(**query):
+        req = Request({"type": "http", "method": "GET", "path": "/api/loci/recall",
+                       "path_params": {}, "headers": [],
+                       "query_string": urlencode(query).encode()})
+        resp = asyncio.run(WR.api_loci_recall(req))
+        return resp.status_code, json.loads(resp.body)
+
+    async def seed():
+        return [await _new(store, f"海边的第 {n} 件事。", when=f"2026-09-{n:02d}")
+                for n in range(1, 8)]
+    ids = asyncio.run(seed())
+    status, out = get(query="海边")
+    assert status == 200, out
+    rows = out["rows"]
+    assert rows["total"] == 7 and rows["offset"] == 0 and rows["next_offset"] == 5
+    assert [r["id"] for r in rows["items"]] == ids[::-1][:5]
+    _s, more = get(query="海边", offset=5, as_of=rows["as_of"])
+    assert [r["id"] for r in more["rows"]["items"]] == ids[::-1][5:]
+    assert more["rows"]["next_offset"] is None
+    status, bad = get(query="海边", offset="x")
+    assert status == 400 and bad["error"]

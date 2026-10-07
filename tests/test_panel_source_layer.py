@@ -111,7 +111,9 @@ def test_a_host_source_says_who_serves_it_its_state_and_whether_it_can_be_fetche
     [row] = out["originals"]
     assert row["index"] == 0 and row["record"] == "lento:home/private:U#m_0003@r1"
     assert (row["host"], row["container"]) == ("lento", "private:U")
-    assert row["span"] == {"first": "m_0003", "last": "m_0003", "count": 1}
+    # A host's lines carry no time until fetched.
+    assert row["span"] == {"first": "m_0003", "last": "m_0003", "count": 1,
+                           "first_at": None, "last_at": None}
     assert (row["state"], row["state_words"], row["can_fetch"]) == ("active", "在", True)
     assert len(row["at"]) == 10
     assert out["how_known"] == "从lento那边的对话里记下的（听来的，不是亲历）"
@@ -228,3 +230,24 @@ def test_the_parser_takes_speaker_and_at_and_nothing_else_new():
     other = O.parse_answer(_answer([{"id": "m_0003", "text": "嗯", "mood": "开心"}]), rec,
                            O.Settings())
     assert other.outcome == O.NOT_ALLOWED and other.reason == O.MALFORMED
+
+
+def test_an_imported_run_says_when_its_first_and_last_line_were_said(store, routes, tmp_path):
+    # Criterion: the 来源 row of an import carries the local times of the run's first and
+    # last line (the board's 「日期 几点 – 几点」); a single line has the one time twice.
+    ImportStore(tmp_path).create(
+        {"batch": BATCH, "same_self": True, "human": "小周",
+         "conversations": [{"container": "c0001"}]},
+        {"c0001": [{"id": "l0001", "role": "user", "at": "2026-10-06T06:30:00Z",
+                    "text": "周六去海边吧"},
+                   {"id": "l0002", "role": "assistant", "at": "2026-10-06T06:42:00Z",
+                    "text": "好，周六去。"}]})
+    run_rec = {"system": "import", "instance": BATCH, "container": "c0001", "id": "l0001",
+               "through": "l0002"}
+    one = {"system": "import", "instance": BATCH, "container": "c0001", "id": "l0002"}
+    bid = run(store.create("小周说周六要去海边。", room="EVENT/SELF", sources=[run_rec, one]))
+    _, out = source(routes, bid)
+    spans = [(o["at"], o["span"]["first_at"], o["span"]["last_at"]) for o in out["originals"]]
+    assert spans == [
+        ("2026-10-06", "2026-10-06T14:30:00+08:00", "2026-10-06T14:42:00+08:00"),
+        ("2026-10-06", "2026-10-06T14:42:00+08:00", "2026-10-06T14:42:00+08:00")]

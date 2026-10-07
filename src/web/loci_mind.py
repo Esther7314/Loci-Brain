@@ -7,7 +7,8 @@ web/loci_mind.py — the panel's breath, surface, trace and regrow/fold pages
     GET  /api/loci/awake              -> the awake pool now, every reason on each entry
     GET  /api/loci/hanging            -> what still hangs open, awake (surface) or asleep (deep)
     POST /api/loci/trace              -> a trace button: done / drop / withdraw
-    GET  /api/loci/changes/recent     -> how the library reshaped itself, newest first
+    GET  /api/loci/changes/recent     -> how the library reshaped itself in the last two
+                                         weeks, newest first
 
 Each read is a core function plus a thin route (core/breath_snapshot.py, core/profile.py
 `awake_pool` / `hanging`, core/changes_feed.py): the route lists the store off `web/_shared`,
@@ -27,7 +28,7 @@ tools.trace.core.trace_core with closed_by="user", the same road the model's tra
 ========================================
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -254,9 +255,11 @@ async def api_loci_trace(request: Request) -> Response:
 # regrow/fold: how the library reshaped itself
 # ---------------------------------------------------------
 async def build_changes(as_of: datetime) -> list[dict]:
+    """The page's rows: the last two weeks before `as_of` (changes_feed.WINDOW_DAYS)."""
     events = list(sh.bucket_mgr.ledger_mirror.iter_events())
     all_buckets = await sh.bucket_mgr.list_all(include_archive=True)
     return _changes.recent(events, all_buckets, as_of=as_of,
+                           since=as_of - timedelta(days=_changes.WINDOW_DAYS),
                            scope=await _scope.view_of(sh.bucket_mgr, None))
 
 

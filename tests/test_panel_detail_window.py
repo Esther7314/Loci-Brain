@@ -395,3 +395,18 @@ def test_a_fix_from_another_origin_or_not_json_is_refused_and_writes_nothing(sto
     assert len(ledger(store)) == n and meta_of(store, bid).get("deleted_at") is None
     assert fix(routes, {"id": bid, "kind": "rewrite"})[0] == 400
     assert fix(routes, {"id": "0123456789ab", "kind": "delete"})[0] == 404
+
+
+def test_the_window_carries_the_title_every_list_shows(store, routes):
+    # Criterion: `title` is core.profile.entry_label — the summary, else the name without
+    # the time the store puts in front of it, else the start of the body — so the window
+    # opens under the line of the row that was clicked.
+    with_summary = event(store, "小周说牙又疼了。", name="周末陪小周去看牙",
+                         summary="答应这周末陪小周去看牙")
+    named = event(store, "小周说牙又疼了。", name="2026-10-07 21:00 周末陪小周去看牙")
+    bare = event(store, "小周说牙又疼了，\n我说周末陪小周去。")
+    for bid in (with_summary, named, bare):
+        _, out = bucket(routes, bid)
+        assert out["title"] == P.entry_label(meta_of(store, bid), out["content"]), out
+    assert bucket(routes, with_summary)[1]["title"] == "答应这周末陪小周去看牙"
+    assert bucket(routes, named)[1]["title"] == "周末陪小周去看牙"

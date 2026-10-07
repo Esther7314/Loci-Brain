@@ -5,9 +5,13 @@
                      breath actually handed out, as it was, never one computed now.
                      Three groups:
                        核心  档案 (the name page, whole) · 原则 (the pinned rules)
-                       最近  近三天 · 惦记的事 (each with why it is there now, 还有 N 条,
-                             the slices and imported stretches still waiting)
-                       旧事  忽然想起 (how each came up) · 依据变了的 (only when there is any)
+                       最近  近三天 (its entries with their titles read now: the copy keeps
+                             no text, so the card the model read is not kept; see
+                             core/breath_snapshot.py) · 惦记的事 (each with why it is
+                             there now, 还有 N 条, the slices and imported stretches
+                             still waiting)
+                       旧事  忽然想起 (how each came up) · 依据变了的 (only when there is
+                             any; each with why, one phrase per reason, in breath's words)
                      「最近一次 · <when>」 at the right; the scope line beside it when it
                      was handed out under a narrower one; 「最早的一条记在 <day>」 at the
                      bottom. Nothing handed out yet: the API's `note`.
@@ -92,7 +96,7 @@ async function renderBreath(view) {
   const sudden = ((b.involuntary || {}).items || []).map((it) => row({ text: lineOf(it), why: whyOf(it, it.why),
     open: open(it.id), layout: "start" }));
   const moved = b.invalidation || {};
-  const movedRows = (moved.items || []).map((it) => row({ text: lineOf(it), why: whyOf(it), open: open(it.id),
+  const movedRows = (moved.items || []).map((it) => row({ text: lineOf(it), why: whyOf(it, ...(it.why || [])), open: open(it.id),
     right: srcLink(it.short, openSource(it.id)), layout: "start" }));
 
   const planBlock = planRows.length || asks.length || waiting

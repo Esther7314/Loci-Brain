@@ -34,12 +34,27 @@
    ========================================================== */
 
 import { start } from "./router.js";
+import { onSubject } from "./detail.js";
+import { openNameCard } from "./namecard.js";
 
 // A nav page's module, loaded the first time its address is opened. A nav page missing
 // here shows the placeholder.
 const FRAMED = {
   breath: () => import("./pages/breath.js"),
+  grow: () => import("./pages/grow.js"),
+  recall: () => import("./pages/recall.js"),
+  regrow: () => import("./pages/regrow.js"),
+  muse: () => import("./pages/muse.js"),
+  trace: () => import("./pages/trace.js"),
+  dream: () => import("./pages/dream.js"),
+  name: () => import("./pages/name.js"),
+  present: () => import("./pages/present.js"),
+  setting: () => import("./pages/setting.js"),
 };
+
+// A name in the detail window opens its name card. detail.js does not import namecard.js
+// itself: the card opens memories in the detail window, and the two stay one-way.
+onSubject(openNameCard);
 
 // Pages without the header.
 const STANDALONE = {

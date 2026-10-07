@@ -6,15 +6,16 @@
    the dimmed page. Phone: a card rising from the bottom.
 
    Three layers, one window (boards detail-*, source-*):
-     the entry      GET /api/loci/bucket/{id} — title, 编辑, #short · date · the tag row
-                    (tags_human), 摘要, 正文 verbatim, V · A · #tags · subjects; 关联 N
-                    when it has any; 来源 →
+     the entry      GET /api/loci/bucket/{id} — `title`, 编辑, #short · date · the tag
+                    row (tags_human), 摘要 (unless it is the title), 正文 verbatim,
+                    V · A · #tags · subjects; 关联 N when it has any; 来源 →
      关联           GET /api/loci/lineage/{id}, unfolded under the entry: 后来去了哪？
                     (derived · covered_by · periods · new_version) and 路标 (the cue and
                     its phrasings, the live holds with their end day)
      来源           GET /api/loci/source/{id}, the window turns to it with a back arrow:
-                    原话 per source (「看原话」 only when `can_fetch`, which asks
-                    `?fetch=<index>` and shows each line with who · time when given),
+                    原话 per source (host · 日期 几点 – 几点 when its lines carry their
+                    times, else the day · N 句; 「看原话」 only when `can_fetch`, which
+                    asks `?fetch=<index>` and shows each line with who · time when given),
                     「从哪几条长出来的」 for what it stands on, 怎么知道的, 来源还成立吗
 
    编辑 offers what the entry's `edit` lists, through POST /api/loci/entry/fix:
@@ -24,12 +25,14 @@
               version marked 人改的; "mark" (a MIND entry): a note, nothing rewritten, the
               entry carries 人说不对 until the model looks. Not offered while `disputed`.
      删除      a soft delete, set apart at the bottom of the menu
+   A subject (the names in the entry's last row) opens its name card through the opener
+   app.js gives `onSubject`; the window closes first, one window at a time.
    The server's `msg` is shown after a write; closing the window then re-renders the
    page under it (`loci:changed`).
    ========================================================== */
 
 import * as api from "./api.js";
-import { h, fill, clickable, richText, btn, errorLine, clock } from "./ui.js";
+import { h, fill, clickable, richText, btn, errorLine, clock, dayTime } from "./ui.js";
 
 const LABELS = { typo: "字写错了", content: "内容错了", delete: "删除" };
 
@@ -49,6 +52,13 @@ function icon(name) {
 }
 
 let current = null;   // the one open window
+let subjectOpener = null;
+
+/** What a click on one of the entry's subjects does: `fn(name)`, the name card's opener
+ *  (app.js sets it). Without one the subjects are plain words. */
+export function onSubject(fn) {
+  subjectOpener = typeof fn === "function" ? fn : null;
+}
 
 /** Open the window on entry `id`. `layer: "source"` opens it on its 来源 layer. */
 export function openDetail(id, { layer } = {}) {
@@ -98,13 +108,9 @@ function makeWindow() {
     return h("button", { class: "ib close", type: "button", "aria-label": "关闭", on: { click: close } }, icon("close"));
   }
 
-  /** The window's title: the entry's name without the time the store puts in front of
-   *  it (the same cut core.profile.entry_label makes), else its summary, else its first
-   *  line. */
+  /** The window's title: the server's `title`, the line every list shows for the entry. */
   function titleOf(b) {
-    const name = String(b.name || "").replace(/^[\d\- :]+/, "").trim();
-    const first = String(b.content || "").split("\n").map((s) => s.trim()).find(Boolean) || "";
-    return name || b.summary || first || `#${b.short}`;
+    return b.title || `#${b.short}`;
   }
 
   async function show(id, layer) {
@@ -141,10 +147,16 @@ function makeWindow() {
       facts.push(h("span", { text: `V ${round(b.valence)}　A ${round(b.arousal)}` }));
     }
     for (const t of b.tags || []) facts.push(h("span", { text: `#${t}` }));
-    for (const s of b.subjects || []) facts.push(h("span", { text: s }));
+    for (const s of b.subjects || []) {
+      facts.push(subjectOpener
+        ? clickable(h("a", { class: "nm", text: s }), () => { close(); subjectOpener(s); })
+        : h("span", { text: s }));
+    }
 
     const body = h("p", { class: "body" });
     richText(body, b.content || "");
+    // The title is the summary when the entry has one; it is not said twice.
+    const summary = b.summary && b.summary !== b.title ? b.summary : "";
 
     const related = (b.related ? (b.related.later || 0) + (b.related.signposts || 0) : 0);
     const rel = h("div");
@@ -161,8 +173,8 @@ function makeWindow() {
       h("div", { class: "why meta", style: { marginTop: "8px" } },
         h("span", { text: `#${b.short}` }), b.date ? h("span", { text: b.date }) : null, tags),
       state.notice ? h("p", { class: "why", role: "status", style: { margin: "14px 0 0" }, text: state.notice }) : null,
-      b.summary ? h("p", { class: "cap", style: { marginTop: "22px" }, text: `摘要：${b.summary}` }) : null,
-      h("div", { class: "entry-body", style: { marginTop: b.summary ? "18px" : "22px" } },
+      summary ? h("p", { class: "cap", style: { marginTop: "22px" }, text: `摘要：${summary}` }) : null,
+      h("div", { class: "entry-body", style: { marginTop: summary ? "18px" : "22px" } },
         h("p", { class: "cap", text: "正文" }), body),
       facts.length ? h("div", { class: "why meta", style: { marginTop: "22px" } }, facts) : null,
       h("hr"),
@@ -321,7 +333,7 @@ function makeWindow() {
 
   function originalBlock(o) {
     const lines = h("div", { class: "lines" });
-    const facts = [o.host, o.at, o.span && o.span.count ? `${o.span.count} 句` : null,
+    const facts = [o.host, saidWhen(o), o.span && o.span.count ? `${o.span.count} 句` : null,
       o.state !== "active" ? o.state_words : null].filter(Boolean).map((t) => h("span", { text: t }));
     const said = h("div");
     let fetchBtn = null;
@@ -344,6 +356,17 @@ function makeWindow() {
       h("div", { class: "origin" }, h("span", { class: "why meta", style: { gap: "4px 20px" } }, facts), fetchBtn),
       said,
       o.can_fetch ? null : h("p", { class: "why", style: { margin: "0" }, text: "「看原话」只有宿主给得出原文才出现。" }));
+  }
+
+  /** 「日期 几点 – 几点」 when the source's lines carry their times (an import), else the
+   *  day alone. */
+  function saidWhen(o) {
+    const span = o.span || {};
+    const first = dayTime(span.first_at);
+    const last = dayTime(span.last_at);
+    if (!first) return o.at;
+    if (!last || last === first) return first;
+    return last.slice(0, 10) === first.slice(0, 10) ? `${first} – ${last.slice(11)}` : `${first} – ${last}`;
   }
 
   function lineRow(ln) {

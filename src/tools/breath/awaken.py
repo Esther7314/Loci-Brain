@@ -233,43 +233,17 @@ def _prospective_lines(p: dict) -> list[str]:
     return out
 
 
-# How much of the owner's note on a disputed judgement the block quotes; a read by id
-# shows it whole (tools/recall).
-_NOTE_SHOWN = 80
-
-
 def _invalidation_lines(block: dict) -> list[str]:
     out: list[str] = []
     edited = False
     disputed = False
     for it in block["items"]:
-        why: list[str] = []
-        if it["edited"]:
-            edited = True
-            why.append("人在面板上改过，你还没看")
-        for r in it.get("disputed") or []:
-            disputed = True
-            note = r["text"]
-            if len(note) > _NOTE_SHOWN:
-                note = note[:_NOTE_SHOWN] + "…"
-            why.append(f"人在面板上说这条不对（{r['at'][5:10]}）" + (f"：「{note}」" if note else ""))
-        for r in it["overturned"]:
-            why.append(f"它站着的 {short_id(r['of'])} 被 {short_id(r['by'])} 推翻了（{r['at'][5:10]}）")
-        for r in it["revised"]:
-            why.append(f"来源 {r['source']} 出了新版本（{r['revision'][:16]}）")
-        for r in it.get("basis_revised") or []:
-            why.append(f"它站着的 {short_id(r['via'])} 的来源 {r['source']} 出了新版本"
-                       f"（{r['revision'][:16]}）")
-        for r in it["restored"]:
-            why.append(f"来源 {r['source']} 撤回或删除过、现在恢复了，这条是从站在它上面的"
-                       "记忆派生的，等你看过才回来")
-        if it["failed"]:
-            failed = "、".join(f"{r['source']} {_I.state_word(r['state'])}" for r in it["failed"])
-            left = (f"还剩 {'、'.join(it['remaining'])}：只凭它们重写" if it["remaining"]
-                    else "一条来源都不剩：只能收起来")
-            why.append(f"依据 {failed}，正文不给了；{left}")
+        # Why it is here: the contract source's words, the same ones the panel shows
+        # under the item (core/_invalidation.why_words).
+        edited = edited or bool(it["edited"])
+        disputed = disputed or bool(it.get("disputed"))
         head = it["text"] if it["text"] is not None else "（正文不给）"
-        out.append(f"· {head} ({it['short']}) —— {'；'.join(why)}")
+        out.append(f"· {head} ({it['short']}) —— {'；'.join(_I.why_words(it))}")
     if block["more"]:
         out.append(f"…还有 {block['more']} 条")
     out.append('   └ 重写就 regrow（新版不带记号）；收起来就 trace(delete=True)；'

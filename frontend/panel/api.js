@@ -80,6 +80,42 @@ export function post(path, body, opts) {
   }, opts);
 }
 
+/** POST a FormData (a file upload) as multipart; the browser sets the boundary and the
+ *  Origin the server's write check wants. Errors as for post. */
+export function postForm(path, form) {
+  return send(path, { method: "POST", body: form });
+}
+
+/** GET a file the server hands out (an export zip) and give it to the browser to save
+ *  under the server's own filename. A refusal arrives as JSON and throws ApiError with its
+ *  words, like every other read. */
+export async function download(path, fallbackName = "download") {
+  let r;
+  try {
+    r = await fetch(path, { credentials: "same-origin" });
+  } catch (e) {
+    throw new ApiError(e && e.message ? e.message : String(e), 0, null);
+  }
+  if (!r.ok) {
+    const body = await r.json().catch(() => null);
+    if (r.status === 401) toLogin();
+    const words = body && typeof body.error === "string" && body.error ? body.error : `HTTP ${r.status}`;
+    throw new ApiError(words, r.status, body);
+  }
+  const blob = await r.blob();
+  const m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(r.headers.get("content-disposition") || "");
+  const name = m ? decodeURIComponent(m[1]) : fallbackName;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  return { name, headers: r.headers };
+}
+
 /** The path segment for an id or a name: always encoded. */
 export function seg(value) {
   return encodeURIComponent(String(value));

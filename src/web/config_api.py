@@ -8,7 +8,8 @@ trap: hitting save on a stale, unrefreshed page writes the old values straight b
 the new ones.
 
 - /api/config (GET/POST): read runtime config and hot-update it (including hot-swapping
-  the embedding backend, and the similarity lines in `thresholds:`, core/thresholds.py).
+  the embedding backend, the similarity lines in `thresholds:`, core/thresholds.py, and
+  muse's reminder in `muse:`, core/_muse.muse_config).
   `config.yaml` is the single source of truth.
 - /api/test/dehydration, /api/test/embedding: connectivity self-tests for compression and
   vectorization.
@@ -68,6 +69,42 @@ _SURFACING_INTS = (
     ("awake_date_days", 0, 365),
     ("awake_cue_days", 0, 365),
 )
+
+# muse's reminder (muse-settings 「提醒」): the numbers POST /api/config accepts in `muse`,
+# (key, lowest, highest), and the switch. /api/muse/pending reads all three
+# (web/loci_dream.build_muse_pending).
+_MUSE_INTS = (
+    ("poke_min_clusters", 1, 99),
+    ("poke_min_age_days", 0, 365),
+)
+_MUSE_SWITCH = "poke_on_wake"
+
+
+def _muse_view(config: Mapping) -> dict:
+    """The reminder as it runs now, and its defaults for 恢复默认."""
+    from core import _muse as M
+    keys = [k for k, _lo, _hi in _MUSE_INTS] + [_MUSE_SWITCH]
+    live = M.muse_config(dict(config))
+    out = {k: live[k] for k in keys}
+    out["defaults"] = {k: M.MUSE_DEFAULTS[k] for k in keys}
+    return out
+
+
+def _muse_changes(payload) -> dict:
+    """The `muse` values a request sets: numbers clamped into range, one that is not a
+    number skipped; the switch read as a bool."""
+    out: dict = {}
+    if not isinstance(payload, dict):
+        return out
+    for key, lo, hi in _MUSE_INTS:
+        if key in payload:
+            try:
+                out[key] = max(lo, min(hi, int(payload[key])))
+            except (TypeError, ValueError):
+                continue
+    if _MUSE_SWITCH in payload:
+        out[_MUSE_SWITCH] = _parse_bool(payload[_MUSE_SWITCH])
+    return out
 
 
 def _live_model() -> str:
@@ -270,6 +307,7 @@ def register(mcp) -> None:
                 "awake_cue_days": awake.cue_days,
             },
             "merge_threshold": sh.config.get("merge_threshold", 75),
+            "muse": _muse_view(sh.config),
             # The similarity lines as they run now, each with its default and range, and
             # whether the embedding model changed since they were last looked at (a note
             # for the person; nothing is reset).
@@ -368,6 +406,9 @@ def register(mcp) -> None:
                 return JSONResponse(
                     {"error": "surfacing must be an object"}, status_code=400
                 )
+            if "muse" in body and not isinstance(body.get("muse"), dict):
+                return JSONResponse({"error": "muse must be an object"}, status_code=400)
+            muse_changes = _muse_changes(body.get("muse"))
             # The similarity lines: every value checked before anything is applied; one
             # bad value refuses the whole request and says which and why.
             threshold_changes: dict = {}
@@ -625,6 +666,17 @@ def register(mcp) -> None:
                     surfacing_ints[key] = sf[key] = max(lo, min(hi, val))
                     updated.append(f"surfacing.{key}")
 
+        # --- muse's reminder: applied to the running config, so the next
+        # /api/muse/pending reads it ---
+        if muse_changes:
+            section = sh.config.get("muse")
+            if not isinstance(section, dict):
+                section = {}
+                sh.config["muse"] = section
+            for key, val in muse_changes.items():
+                section[key] = val
+                updated.append(f"muse.{key}")
+
         # --- The similarity lines (core/thresholds): applied to the running config, so
         # the next search, write or fold reads them; None takes a line back to its
         # default. Saving a line or dismissing the note settles the retune note on the
@@ -723,6 +775,13 @@ def register(mcp) -> None:
                                 sc_samp["temperature"] = float(src_samp["temperature"])
                             except (TypeError, ValueError):
                                 pass
+
+                if muse_changes:
+                    sc_muse = save_config.get("muse")
+                    if not isinstance(sc_muse, dict):
+                        sc_muse = {}
+                        save_config["muse"] = sc_muse
+                    sc_muse.update(muse_changes)
 
                 if threshold_changes:
                     sc_th = save_config.get("thresholds")

@@ -208,7 +208,9 @@ def test_every_batch_with_every_slice_and_its_state(slices):
     assert done["slice_id"] == slices["first"] and done["state"] == "closed"
     assert done["how"] == "trace" and done["by"] == [slices["a"]]
     assert done["state_words"] == "补进已有的了"
-    assert done["span"] == {"first": "m1", "last": "m3", "count": 3}
+    assert done["span"] == {"first": "m1", "last": "m3", "count": 3,
+                            "from_line": 1, "to_line": 3}, "line numbers counted from 1"
+    assert waiting["span"]["from_line"] == 4 and waiting["span"]["to_line"] == 6
     assert [g["id"] for g in done["guesses"]] == [slices["a"]], "only at or above 0.65"
     assert done["guesses"][0]["text"] == "周末陪去看牙。" and done["guesses"][0]["score"] == 0.81
     assert waiting["state"] == "open" and waiting["state_words"] == "等他看"

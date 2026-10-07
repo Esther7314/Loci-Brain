@@ -1425,6 +1425,33 @@ def _search_rows(hit: list[dict], floor: float) -> list[tuple[dict, frozenset, l
     return rows
 
 
+def search_rows_json(entries: list[dict], floor: float) -> list[dict]:
+    """The panel's lines of a recall, the same lines the text skin lists.
+
+    With a query (the entries carry scores): `_search_rows` over the hits at or above
+    `floor` — one line per root, open promises first, then newest — each line its lead
+    with how it matched (`_how_mark`), its effective score, and the group's other hits
+    (`others`: what 「+ N 条派生」 counts). What is under the line is not a line. Without a
+    query: every entry is a line of its own, newest first."""
+    def line(e: dict, others: list[dict]) -> dict:
+        out = {"id": e["id"], "short": _short_id(e["id"]), "text": _label_of(e),
+               "date": e["ts"].strftime("%Y-%m-%d"), "written_words": _written(e),
+               "open_promise": _P.is_open_promise(e["meta"])}
+        if e.get("score") is not None:
+            out.update(score=round(_eff_score(e, floor), 2), how=_how_mark(e),
+                       roots=sorted(e.get("roots") or ()))
+        out["others"] = [{"id": m["id"], "short": _short_id(m["id"]),
+                          "open_promise": _P.is_open_promise(m["meta"])} for m in others]
+        return out
+
+    if not any(e.get("score") is not None for e in entries):
+        return [line(e, []) for e in reversed(entries)]
+    hit = [e for e in entries if e.get("score") is not None and _eff_score(e, floor) >= floor]
+    return [line(lead, sorted((m for m in members if m is not lead),
+                              key=lambda m: m["ts"], reverse=True))
+            for lead, _key, members in _search_rows(hit, floor)]
+
+
 def _render_search(entries, gates, floor: float = None, ledger: dict | None = None) -> str:
     """Searching: I am looking for something and I know what. **This is the
     default view whenever there is a query.**
@@ -1719,6 +1746,9 @@ async def recall_data(when: str, room: str, tag: str, query: str,
         "topk_dropped": ledger.get("topk砍掉", 0),
         "below": sum(1 for e in entries
                      if e.get("score") is not None and _eff_score(e, fl) < fl),
+        # The lines the text skin lists, for the panel's search results (paged by the
+        # route, web/loci_reads.api_loci_recall).
+        "rows": search_rows_json(entries, fl),
     }
 
 

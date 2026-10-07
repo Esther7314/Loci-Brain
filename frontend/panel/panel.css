@@ -181,6 +181,54 @@ input[type=radio], input[type=checkbox] { accent-color: var(--ink); }
 .mi.danger { color: var(--red); }
 .menu .cancel, .menu-scrim { display: none; }
 
+/* ---------------- regrow/fold · muse · trace ---------------- */
+/* a list grouped by day (regrow/fold): one group per day on the page, the pager under the
+   content column */
+.days > .rows { display: flex; flex-direction: column; gap: 56px; }
+.days > .pager { margin-left: calc(var(--gl-w) + 28px); }
+/* a group's members unfolded under it (muse): indented, smaller, greyed */
+.item.member .txt { padding-left: 20px; }
+.item.member .c { font-size: 15px; color: var(--small); }
+.item.member .r { font-size: 13px; }
+/* a settings row: its name and words on the left, the control on the right (n11: on the
+   phone too, unless it does not fit) */
+.item.set { grid-template-columns: minmax(0, 1fr) auto; }
+.item.set .acts { align-items: center; flex-wrap: nowrap; }
+.item.set .why { white-space: normal; }
+.setnote { margin: 10px 0 0; line-height: 1.6; }
+.setacts { margin-top: 16px; }
+
+@media (max-width: 640px) {
+  .days > .rows { gap: 44px; }
+  .days > .pager { margin-left: 0; }
+  .item.set { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 16px; align-items: center; }
+  .item.set .acts { padding: 0; }
+  .item.member .txt { padding-left: 16px; }
+  .item.member .r { padding-left: 16px; }
+}
+/* ---------------- dream, name, the name card ---------------- */
+/* dream: a group's label is the night (2026-10-06), wider than the 72px column */
+.sections.dream { --gl-w: 124px; }
+.dream-text { padding: 8px 0 4px; }
+/* a name that opens its name card (the detail window's subjects, the card's 什么关系) */
+.nm { text-decoration: underline; text-decoration-color: var(--edge); text-underline-offset: 3px; }
+/* the name card: its sentences and its memory lines */
+.dlg .card-body { display: flex; flex-direction: column; gap: 18px; margin-top: 22px; }
+.dlg .card-body:empty { display: none; }
+.dlg .say { display: block; margin: 0; font-size: 16px; line-height: 1.7; color: var(--ink); overflow-wrap: anywhere; }
+.dlg hr.card-rule { margin: 22px 0 14px; }
+.ln { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding: 12px 0; }
+.ln + .ln { border-top: 1px solid var(--line); }
+/* 待认的: a row's box (跟谁是一个, + 新类别) spans under it; 是… opens under its button */
+.item.pending { position: relative; }
+.namebox { grid-column: 1 / -1; padding: 0 0 12px; }
+.namebox:empty { display: none; }
+.namebox .cap { margin: 0 0 4px; font-size: 13px; color: var(--small); }
+.namebox-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.menu.kinds { top: 52px; right: 0; width: 150px; }
+.btn.dark[aria-expanded="true"] { background: var(--ink); border-color: var(--ink); }
+.mi.dim { color: var(--small); }
+
 /* ==========================================================
    The phone (the 440 boards)
    ========================================================== */
@@ -250,4 +298,170 @@ input[type=radio], input[type=checkbox] { accent-color: var(--ink); }
   .mi:hover { background: transparent; }
   .menu .card .mi + .mi, .menu .card hr + .mi { border-top: 1px solid var(--line); }
   .menu .cancel { display: flex; background: #FFFFFF; border-radius: 14px; font-weight: 600; }
+}
+
+/* ==========================================================
+   grow and recall (boards grow*, recall*)
+   ========================================================== */
+
+/* a list paged as groups (recall's days, grow's batches): the groups spaced as sections,
+   the ‹ › line under the content column */
+.grouped > .rows { display: flex; flex-direction: column; gap: 56px; }
+.grouped > .pager { padding-left: calc(var(--gl-w) + 28px); }
+.batches { --gl-w: 112px; }
+/* a group label with a line under it (a batch's day, and 「lento · 4 段」) */
+.glw.stack { flex-direction: column; align-items: flex-start; gap: 6px; }
+.glw.stack .why { margin: 0; line-height: 1.5; }
+span.lnk { font-size: 13px; }
+
+/* the prompt card's box: the full width, 恢复默认 · 保存 under it */
+.prompt { display: block; width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; font: inherit; font-size: 15px; line-height: 1.7; color: var(--ink); background: #FFFFFF; resize: vertical; }
+.prompt:focus { outline: none; border-color: var(--edge); }
+
+/* recall's search box, 高级搜索 and its room / when / tag */
+.searchhead { padding: 20px 0 40px; }
+.sbar { display: flex; align-items: center; gap: 16px; margin: 0; }
+.sq { flex: 1; display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 18px; border: 1.5px solid var(--off); border-radius: 20px; box-sizing: border-box; min-width: 0; }
+.sq input { flex: 1; min-width: 0; border: 0; background: transparent; font: inherit; font-size: 16px; color: var(--ink); outline: none; -webkit-appearance: none; appearance: none; }
+.sq input::placeholder { color: var(--off); }
+.adv { display: inline-flex; align-items: center; height: 40px; padding: 0 26px; border: 0; border-radius: 20px; background: var(--ink); font: inherit; font-size: 16px; color: #FFFFFF; white-space: nowrap; cursor: pointer; }
+.adv:hover { background: var(--graphite); }
+.flt { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 32px; padding-top: 18px; }
+.fg { display: flex; align-items: center; gap: 12px; font-size: 16px; color: var(--off); }
+.pill { height: 34px; border: 1.5px solid var(--off); border-radius: 17px; background: transparent; font: inherit; font-size: 16px; color: var(--ink); text-align: center; padding: 0 14px; box-sizing: border-box; }
+.pill:disabled { opacity: 0.5; }
+.pill::placeholder { color: var(--off); }
+.pill.door { width: 154px; }
+.pill.side { width: 150px; }
+.pill.yyyy { width: 110px; }
+.pill.mm { width: 76px; }
+.pill.dd { width: 64px; }
+.pill.tagbox { width: 184px; }
+.why.lead { margin: 0 0 4px; display: flex; align-items: center; gap: 6px; }
+
+@media (max-width: 640px) {
+  .grouped > .rows { gap: 36px; }
+  .grouped > .pager { padding-left: 0; }
+
+  .searchhead { padding: 18px 0 28px; }
+  .sbar { gap: 10px; }
+  .sq { gap: 8px; height: 44px; padding: 0 16px; border-radius: 22px; }
+  .adv { height: 44px; padding: 0 16px; border-radius: 22px; font-size: 15px; }
+  .flt { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 12px; padding-top: 16px; }
+  .fg { gap: 8px; }
+  .fl { width: 44px; flex-shrink: 0; font-size: 15px; }
+  .flt .pill { flex: 1; min-width: 0; width: auto; height: 40px; border-radius: 20px; font-size: 15px; padding: 0 10px; }
+  .flt .pill.yyyy { flex: 1.5; }
+/* dream, name, the name card on the phone: the kinds row slides sideways like the header
+   (note n11); the 是… menu is the same sheet from the bottom as 编辑 */
+@media (max-width: 640px) {
+  .tabs.slide { flex-wrap: nowrap; gap: 16px; overflow-x: auto; white-space: nowrap; margin: 0 -20px -2px; padding: 0 20px 10px; scrollbar-width: none; }
+  .tabs.slide::-webkit-scrollbar { display: none; }
+  .menu.kinds { top: auto; right: 12px; width: auto; }
+  .menu.kinds .card { max-height: 60vh; overflow-y: auto; }
+  .namebox { padding-top: 10px; }
+   Settings pages (boards setting, setting-phone, setting-local-embed, present,
+   present-phone, present-settings)
+   ========================================================== */
+
+/* a settings row: name left, control right; on the phone the control stays on the same
+   line (`.set`) unless the row is long (`.set.stack`, the control goes under) */
+.item.set .acts, .item.set .r { align-items: center; }
+.item .r.wrap { white-space: normal; overflow-wrap: anywhere; }
+.num:disabled, .inp:disabled, .sw:disabled, .seg button:disabled, .area:disabled, select.btn:disabled { opacity: 0.5; cursor: default; }
+.lnk:disabled { opacity: 0.5; cursor: default; text-decoration: none; }
+.acts .lnk { white-space: nowrap; flex-shrink: 0; }
+select.btn { appearance: none; -webkit-appearance: none; padding-right: 28px; background: #FFFFFF url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23717880'/%3E%3C/svg%3E") no-repeat right 12px center; min-width: 200px; max-width: 100%; text-overflow: ellipsis; }
+.hint { display: block; margin-top: 6px; }
+
+/* a form: the field's name in a 110px column, the field after it */
+.form { display: grid; grid-template-columns: 110px minmax(0, 560px); column-gap: 20px; row-gap: 14px; align-items: center; }
+.form > .fn { font-size: 15px; color: var(--small); }
+.form .inp { width: 100%; }
+.form .pick { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+
+/* 称呼 and 安全问题: two labelled boxes and a button on one line */
+.pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: center; column-gap: 24px; row-gap: 12px; padding: 4px 0; }
+.pair > label { display: flex; align-items: center; gap: 12px; font-size: 16px; color: var(--ink); min-width: 0; }
+.pair .num.name { width: 180px; text-align: left; padding: 0 14px; }
+.pair .inp { flex: 1; min-width: 0; }
+
+/* the inline 改密码 box */
+.pwbox { display: flex; flex-direction: column; gap: 14px; max-width: 420px; margin: 4px 0 12px; }
+.pwbox .inp { width: 100%; }
+
+/* the log box */
+.logbox { background: var(--grey); border-radius: 12px; padding: 12px 16px; display: flex; flex-direction: column; gap: 4px; }
+.logl { display: grid; grid-template-columns: 150px 72px minmax(0, 1fr); column-gap: 12px; font-family: ui-monospace, Consolas, monospace; font-size: 13px; line-height: 1.7; }
+.logl .t { color: var(--off); }
+.logl .lv { font-weight: 600; }
+.logl .m { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.loghead { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.loghead .seg { margin-left: auto; }
+
+/* the three local steps (setting-local-embed) */
+.steps { border: 1px solid var(--line); border-radius: 12px; padding: 4px 18px; margin-bottom: 20px; }
+.step { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; column-gap: 14px; align-items: start; padding: 14px 0; }
+.step + .step { border-top: 1px solid var(--line); }
+.step .acts { align-items: center; }
+.no { width: 24px; height: 24px; border-radius: 50%; border: 1px solid var(--off); display: inline-flex; align-items: center; justify-content: center; font-size: 13px; color: var(--small); box-sizing: border-box; }
+.no.ok { background: var(--ink); border-color: var(--ink); color: #FFFFFF; }
+.prog { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; margin-top: 10px; max-width: 420px; }
+.prog span { display: block; height: 100%; background: var(--ink); }
+
+/* 导入之后会怎样 */
+.how { margin: 10px 0 0; padding-left: 20px; }
+.how li { margin: 0 0 8px; line-height: 1.7; }
+.how .c { white-space: normal; }
+
+/* present: the report stands in as grey bars; a prompt card's box; the Bark box */
+.bar { height: 9px; border-radius: 5px; background: var(--line); }
+.bars { display: flex; flex-direction: column; gap: 10px; padding: 8px 0 4px; }
+.prompt { width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; font: inherit; font-size: 15px; line-height: 1.7; color: var(--ink); resize: vertical; background: #FFFFFF; }
+.bark { width: 100%; box-sizing: border-box; border: 0; border-radius: 8px; background: var(--grey); padding: 12px 14px; font: inherit; font-size: 15px; line-height: 1.6; color: var(--ink); resize: vertical; }
+.tbtn { border: 0; background: transparent; padding: 0; font: inherit; font-size: 16px; color: var(--ink); cursor: pointer; }
+.tbtn:disabled { opacity: 0.5; cursor: default; }
+.subbar.one { flex-wrap: nowrap; }
+
+@media (max-width: 640px) {
+  .item.set { flex-direction: row; align-items: center; justify-content: space-between; gap: 12px; }
+  .item.set .txt { flex: 1; }
+  .item.set .c { white-space: normal; }
+  .item.set > .acts, .item.set > .r { padding: 0; flex-shrink: 0; justify-content: flex-end; }
+  .item.set.stack { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .item.set.stack > .acts, .item.set.stack > .r { justify-content: flex-start; flex-shrink: 1; max-width: 100%; }
+  .item .r.wrap { text-align: left; }
+  .item.set:has(> .r.wrap) { flex-direction: column; align-items: flex-start; gap: 4px; }
+  .num { height: 36px; border-radius: 18px; font-size: 15px; }
+  .sw { width: 44px; height: 26px; border-radius: 13px; }
+  .sw span { width: 20px; height: 20px; }
+  .seg button { height: 36px; font-size: 15px; }
+  .btn.set { height: 36px; padding: 0 16px; border-radius: 18px; font-size: 15px; }
+  .panel { padding: 14px 16px 16px; }
+  .acts.end { justify-content: flex-end; padding: 0; }
+
+  .form { display: flex; flex-direction: column; align-items: stretch; gap: 0; }
+  .form > .fn { padding-top: 10px; margin-bottom: 6px; }
+  .form .inp { height: 40px; }
+
+  .pair { display: flex; flex-direction: column; align-items: stretch; gap: 0; padding: 0; }
+  .pair > label { justify-content: space-between; padding: 12px 0; }
+  .pair > label + label { border-top: 1px solid var(--line); }
+  .pair .num.name { width: 170px; }
+  .pair > .btn { align-self: flex-end; margin-top: 14px; }
+  .pair.qa > label { flex-direction: column; align-items: stretch; gap: 6px; padding: 10px 0; font-size: 15px; color: var(--small); }
+  .pair.qa > label + label { border-top: 0; }
+  .pair.qa .inp { height: 40px; color: var(--ink); }
+
+  .logl { display: flex; flex-direction: column; gap: 2px; line-height: 1.6; padding: 4px 0; }
+  .logl + .logl { border-top: 1px solid var(--edge); }
+  .loghead { flex-wrap: wrap; }
+  .loghead .seg { order: 3; margin-left: 0; }
+
+  .step { grid-template-columns: 28px minmax(0, 1fr); row-gap: 8px; }
+  .step > .acts { grid-column: 2; justify-content: flex-start; }
+  .steps { padding: 4px 14px; }
+  .how { list-style: none; padding-left: 0; }
+
+  .subbar.one { display: flex; justify-content: space-between; }
 }

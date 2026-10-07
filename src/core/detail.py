@@ -350,7 +350,9 @@ def _import_rows(base_dir: str, sid) -> tuple[dict, dict]:
 def _original_row(index: int, rec: dict, meta: dict, *, registry, hosts) -> dict:
     """One source as the 来源 layer lists it. `at` is the day the entry was formed from it
     (for an import, the day its first line was said); `span.count` is None for a run whose
-    lines the host has not registered."""
+    lines the host has not registered. `span.first_at` / `span.last_at` are when its first
+    and last line were said (local ISO 8601), known only for lines Loci holds itself (an
+    import); a host's lines carry no time until fetched, so null there."""
     sid = _src.record_id(rec)
     imported = sid.system == IMPORT_SYSTEM
     host = None if imported else _O.host_for(hosts, sid)
@@ -362,15 +364,18 @@ def _original_row(index: int, rec: dict, meta: dict, *, registry, hosts) -> dict
         members = registry.members_of(sid) if registry is not None else None
         count = len(members) if members else None
     at = date_of({"created": meta.get("created")}) or None
+    first = last = None
     if imported:
         _, rows = _import_rows(getattr(registry, "base_dir", ""), sid)
         first = local_stamp((rows.get(sid.id) or {}).get("at"))
+        last = local_stamp((rows.get(sid.through or sid.id) or {}).get("at"))
         at = first[:10] if first else at
     reachable = imported or bool(host is not None and getattr(host, "fetch_token", ""))
     return {"index": index, "record": _src.record_string(rec),
             "host": LOCI if imported else (host.name if host is not None else None),
             "container": sid.container,
-            "span": {"first": sid.id, "last": sid.through or sid.id, "count": count},
+            "span": {"first": sid.id, "last": sid.through or sid.id, "count": count,
+                     "first_at": first, "last_at": last},
             "at": at, "state": state,
             "state_words": _SOURCE_STATE_WORDS.get(state, state),
             "can_fetch": reachable and order_known and state not in _BLOCKED}
@@ -533,8 +538,8 @@ async def fetch_original(meta: dict, index: int, *, store, hosts, registry, sett
 # ============================================================
 
 def entry_view(bucket: dict, lin: dict, *, scope_line: str) -> dict:
-    """The detail window for one bucket: verbatim body, metadata, the tag row, the 关联
-    counts (from its lineage dict), the source layer and the edits offered."""
+    """The detail window for one bucket: its title, verbatim body, metadata, the tag row,
+    the 关联 counts (from its lineage dict), the source layer and the edits offered."""
     meta = _meta(bucket)
     bid = str(meta.get("id") or bucket.get("id") or "")
     room = normalize_room(meta.get("room")) or str(meta.get("room") or "")
@@ -543,6 +548,9 @@ def entry_view(bucket: dict, lin: dict, *, scope_line: str) -> dict:
     return {
         "id": bid,
         "short": short_id(bid),
+        # The line every list shows for this entry (core/profile.entry_label), so the
+        # window opens under the words of the row clicked.
+        "title": entry_label(meta, str(bucket.get("content") or "")),
         "name": str(meta.get("name") or ""),
         "date": date_of(meta),
         "tags_human": human_tags(meta),

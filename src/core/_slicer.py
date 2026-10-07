@@ -775,10 +775,12 @@ class PendingSlices:
     def batches(self, include_closed: bool = True) -> list[dict]:
         """Every batch, newest first, with its slices in line order: [{batch_id, source,
         day, revision, recorded_at, import, slices: [{slice_id, span, gist, draft?,
-        guesses, edited, state, closed}]}]. With `include_closed` a batch's handled
-        slices and those a resend replaced come too (a replaced slice's span reads
-        against the lines of the batch that replaced it, `count` None when they are not
-        there); without it, as `open_batches`."""
+        guesses, edited, state, closed}]}]. A span here also says where it sits among
+        the batch's lines, counted from 1 (`from_line`, `to_line`: the panel's 「第 12–40
+        行」). With `include_closed` a batch's handled slices and those a resend replaced
+        come too (a replaced slice's span reads against the lines of the batch that
+        replaced it; `count` and the line numbers are None when they are not there);
+        without it, as `open_batches`."""
         self._fresh()
         with self._guard:
             by_batch: dict[str, list[dict]] = {}
@@ -794,10 +796,12 @@ class PendingSlices:
                 rows = []
                 for st in states:
                     a, z = order.get(st["first"]), order.get(st["last"])
-                    count = z - a + 1 if a is not None and z is not None else None
+                    known = a is not None and z is not None
                     row = {"slice_id": st["slice_id"],
                            "span": {"first": st["first"], "last": st["last"],
-                                    "count": count},
+                                    "count": z - a + 1 if known else None,
+                                    "from_line": a + 1 if known else None,
+                                    "to_line": z + 1 if known else None},
                            "gist": st["gist"],
                            "guesses": [{**g, "short": _short_id(str(g.get("id") or ""))}
                                        for g in st["guesses"]],

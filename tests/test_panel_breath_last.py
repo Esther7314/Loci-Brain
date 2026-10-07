@@ -18,6 +18,7 @@ from datetime import timedelta
 import pytest
 
 from _panel_kit import make_store, routes, run
+from core import _invalidation as I
 from core import _when as W
 from core import breath_snapshot as S
 from core import scope as SC
@@ -220,3 +221,70 @@ def test_the_json_skin_carries_the_reason_words(store, monkeypatch):
 def test_the_page_is_behind_the_panel_gate(store, monkeypatch):
     call = routes(monkeypatch, locked=True)
     assert call("GET", "/api/loci/breath/last").status == 401
+
+
+# ── 依据变了的: why each item is there ──────────────────────────────────────
+
+NOTE = "not nervous, tired"
+
+
+def _disputed(store):
+    async def go():
+        judgement = await store.create(f"She wants company when nervous. {SECRET}",
+                                       room="MIND/VIEWS", evidential="inference",
+                                       name="company when nervous")
+        await store.add_invalidation_record(
+            judgement, I.dispute_record(judgement, NOTE, W.now().isoformat(timespec="seconds")))
+        return judgement
+    return run(go())
+
+
+def test_a_moved_item_carries_why_in_the_words_breath_showed(store, tmp_path, monkeypatch):
+    # Criterion: the page's `why` is, phrase for phrase, what the model read after the
+    # item's title — her note included — while the copy keeps neither the note nor any
+    # other text.
+    judgement = _disputed(store)
+    text = run(A.surface_awaken())
+    raw = _file(tmp_path)
+    assert NOTE not in raw and SECRET not in raw and '"text"' not in raw
+    page = routes(monkeypatch)("GET", "/api/loci/breath/last").json
+    [it] = page["breath"]["invalidation"]["items"]
+    assert it["id"] == judgement and it["text"] == "company when nervous"
+    [why] = it["why"]
+    assert why.startswith("人在面板上说这条不对（") and why.endswith(f"）：「{NOTE}」")
+    assert f"· company when nervous ({judgement[:6]}) —— {why}" in text
+
+
+def test_her_note_is_read_now_and_left_out_once_the_entry_cannot_be_read(store, tmp_path):
+    # Criterion: the note is not kept; it comes from the entry at reading time, so an
+    # entry the gate no longer gives (here: gone from the library) loses it, and the
+    # phrase stops at the day, as breath words a dispute left without a note.
+    judgement = _disputed(store)
+    run(A.surface_awaken())
+    kept = S.load(str(tmp_path))["breath"]
+    [gone] = S.relabel(kept, [])["invalidation"]["items"]
+    assert gone["text"] is None and gone["state_words"] == "找不到了"
+    [why] = gone["why"]
+    assert why.startswith("人在面板上说这条不对（") and why.endswith("）") and NOTE not in why
+    [here] = S.relabel(kept, run(store.list_all(include_archive=True)))["invalidation"]["items"]
+    assert here["id"] == judgement and here["why"][0].endswith(f"「{NOTE}」")
+
+
+def test_why_words_are_the_contract_words_for_every_reason():
+    item = {"edited": True,
+            "disputed": [{"at": "2026-10-05T09:00:00+08:00", "text": "x" * 90}],
+            "overturned": [{"of": "a" * 12, "by": "b" * 12, "at": "2026-10-04T08:00:00+08:00"}],
+            "revised": [{"source": "lento:home/p#m_1", "revision": "sha256:" + "f" * 64}],
+            "basis_revised": [{"source": "lento:home/p#m_2", "revision": "r9", "via": "c" * 12}],
+            "restored": [{"source": "lento:home/p#m_3", "at": "2026-10-03"}],
+            "failed": [{"source": "lento:home/p#m_4", "state": "withdrawn"}],
+            "remaining": ["lento:home/p#m_5"]}
+    assert I.why_words(item) == [
+        "人在面板上改过，你还没看",
+        f"人在面板上说这条不对（10-05）：「{'x' * 80}…」",
+        "它站着的 aaaaaa 被 bbbbbb 推翻了（10-04）",
+        "来源 lento:home/p#m_1 出了新版本（sha256:fffffffff）",
+        "它站着的 cccccc 的来源 lento:home/p#m_2 出了新版本（r9）",
+        "来源 lento:home/p#m_3 撤回或删除过、现在恢复了，这条是从站在它上面的记忆派生的，等你看过才回来",
+        "依据 lento:home/p#m_4 已撤回，正文不给了；还剩 lento:home/p#m_5：只凭它们重写",
+    ]

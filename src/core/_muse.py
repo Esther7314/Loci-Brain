@@ -176,6 +176,7 @@ MUSE_DEFAULTS: dict = {
     #    and whether to stay quiet at night are the gateway's business.
     "poke_min_clusters": 2,      # how many clusters/gestures must pile up before a nudge is worth it
     "poke_min_age_days": 3,      # how long the oldest one must have hung before a nudge is worth it
+    "poke_on_wake": True,        # the panel's 「醒来的时候提一句」: off, the query never says it is time
 }
 
 # Three pool configurations — **one engine, three ways of feeding it**

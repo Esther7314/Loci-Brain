@@ -3,7 +3,9 @@
 web/loci_reads.py — the panel's reads, and the builders behind them
 ========================================
 
-    GET  /api/loci/recall             -> recall's second skin (card + list)
+    GET  /api/loci/recall             -> recall's second skin (card + list), and `rows`:
+                                         the text skin's lines, one page of them
+                                         (`offset` / `limit` / `as_of`)
     GET  /api/loci/rooms              -> the four rooms and what is in them
     GET  /api/loci/graph              -> starfield: nodes + real edges + weak edges + constellations
     GET  /api/loci/profile            -> the note by the door
@@ -253,6 +255,11 @@ async def api_loci_recall(request: Request) -> Response:
     refused = _scope_refusal(request)
     if refused is not None:
         return refused
+    from core import paging as _pg
+    try:
+        paging = _pg.args_of(q, now=_w.now())
+    except _pg.BadPage as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
     try:
         # Not recall_data() and recall_core() separately: each runs its own _collect —
         #    **the same search computed twice** (measured with a query: 3 seconds on the
@@ -262,6 +269,9 @@ async def api_loci_recall(request: Request) -> Response:
         data = await recall_text_and_data(**gates, floor=floor, max_cells=slices)
         if not data.get("ok"):
             return JSONResponse(data, status_code=400)
+        # The search's lines are one list worked out whole; the panel reads them a page
+        # at a time (core/paging), the first page's as_of carried back as on every list.
+        data["rows"] = _pg.page(data.get("rows") or [], *paging)
         return JSONResponse({**data, "scope": _scope_line(request)})
     except Exception as e:
         logger.warning(f"[loci] recall 失败: {e}")

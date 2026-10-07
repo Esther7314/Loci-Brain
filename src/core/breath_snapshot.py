@@ -14,6 +14,13 @@ how and why something came up — never a memory's text: every `text` is cut on 
 deleted, archived or standing on a withdrawn source since then shows as that, not as what
 it said. Nothing here has to be cleared when a source is withdrawn.
 
+Two things the model read in that breath are therefore not kept and not shown as text:
+近三天's card (recall's three-day overview: it names memories by their titles, so keeping it
+would put this file among the places a source change has to clear) — the panel lists the
+block's entries with their titles read now instead; and the owner's note on a disputed
+judgement (her words, under the record's `text`), which `relabel` reads again from the
+entry when it words why each 依据变了的 item is there (`why`, core/_invalidation.why_words).
+
 One small file, `<buckets>/_state/breath_last.json`:
     {"version": 1, "hosts": {host: {"at", "host", "scope", "breath"}}}
 Each host's entry is replaced whole every time. `host` is "" for a call made outside any
@@ -33,6 +40,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+from . import _invalidation as _I
 from . import visibility as _V
 from .ledger_mirror import file_lease
 
@@ -115,7 +123,9 @@ def relabel(breath: dict, all_buckets: list, scope=None) -> dict:
     through the gate's `read` road: `text`, and `state_words` when the entry is no longer
     live. An entry missing, out of the request's scope, or standing on a withdrawn or
     deleted source gets `text` None. The name page shows its whole body and a rule its
-    body on one line, as breath prints them; everything else its one-line label."""
+    body on one line, as breath prints them; everything else its one-line label. Each
+    依据变了的 item gains `why`: the phrases breath showed after its title, one per reason
+    (core/_invalidation.why_words), with a disputed note read now (`_with_notes`)."""
     from .profile import entry_label, label_of   # lazy: profile is the heavier import
 
     by_id = {str((b.get("metadata") or {}).get("id") or b.get("id") or ""): b
@@ -164,4 +174,22 @@ def relabel(breath: dict, all_buckets: list, scope=None) -> dict:
         fill(it)
     for it in (out.get("invalidation") or {}).get("items") or []:
         fill(it)
+        it["why"] = _I.why_words(_with_notes(it, by_id.get(str(it.get("id") or "")), scope))
     return out
+
+
+def _with_notes(item: dict, row, scope) -> dict:
+    """A 依据变了的 item with each disputed record's note read now from the entry, matched
+    by when she said it. The note is her own words on the panel, quoted to the model in
+    that breath; it is read again rather than kept, so it shows only while the entry is
+    readable through the gate, as its title does."""
+    disputed = item.get("disputed") or []
+    if not disputed:
+        return item
+    notes: dict[str, str] = {}
+    meta = (row or {}).get("metadata") or {}
+    if row is not None and _V.visible_for(meta, scope, road=_V.READ).shown:
+        notes = {str(r.get("at") or ""): str(r.get(_I.NOTE) or "")
+                 for r in _I.records(meta) if r.get("kind") == _I.DISPUTED}
+    return {**item, "disputed": [{**r, "text": notes.get(str(r.get("at") or ""), "")}
+                                 for r in disputed]}

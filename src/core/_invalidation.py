@@ -93,11 +93,11 @@ corrections, the `invalidation` road for the rest (core/visibility.py).
 Exports: FIELD · OVERTURN · SOURCE_REVISED · BASIS_REVISED · EDITED · DISPUTED ·
          CONFIRMED · CONFIRMED_AT ·
          SOURCE_GONE · SOURCE_HELD · SOURCE_RESTORED · RESTORED_READ_LINE · CLEARED ·
-         HELD_WORD · NOTE · NOTE_MAX · records ·
+         HELD_WORD · NOTE · NOTE_MAX · NOTE_SHOWN · records ·
          is_open · open_records · gone_records · disputed_open · dispute_record ·
          library_lookup ·
          edit_confirmed · SourceFindings · source_findings · waiting_on_overturn ·
-         state_word · confirm · block
+         state_word · why_words · confirm · block
 ========================================
 """
 
@@ -196,6 +196,46 @@ def library_lookup(registry):
 
 def state_word(state: str) -> str:
     return _STATE_WORD.get(state, state)
+
+
+# How much of the owner's note on a disputed judgement 依据变了的 quotes; a read by id
+# shows it whole (tools/recall).
+NOTE_SHOWN = 80
+
+
+def why_words(item: dict) -> list[str]:
+    """Why one 依据变了的 item (a `block` item) is there, one phrase per reason, in the
+    words breath shows the model after its title (tools/breath/awaken) and the panel shows
+    under it. A disputed record's `text` is the owner's note, quoted up to `NOTE_SHOWN`;
+    without one, the phrase stops at the day."""
+    from .profile import short_id   # lazy: profile imports this module
+
+    why: list[str] = []
+    if item.get("edited"):
+        why.append("人在面板上改过，你还没看")
+    for r in item.get("disputed") or []:
+        note = str(r.get("text") or "")
+        if len(note) > NOTE_SHOWN:
+            note = note[:NOTE_SHOWN] + "…"
+        why.append(f"人在面板上说这条不对（{str(r.get('at') or '')[5:10]}）"
+                   + (f"：「{note}」" if note else ""))
+    for r in item.get("overturned") or []:
+        why.append(f"它站着的 {short_id(r['of'])} 被 {short_id(r['by'])} 推翻了（{r['at'][5:10]}）")
+    for r in item.get("revised") or []:
+        why.append(f"来源 {r['source']} 出了新版本（{r['revision'][:16]}）")
+    for r in item.get("basis_revised") or []:
+        why.append(f"它站着的 {short_id(r['via'])} 的来源 {r['source']} 出了新版本"
+                   f"（{r['revision'][:16]}）")
+    for r in item.get("restored") or []:
+        why.append(f"来源 {r['source']} 撤回或删除过、现在恢复了，这条是从站在它上面的"
+                   "记忆派生的，等你看过才回来")
+    if item.get("failed"):
+        failed = "、".join(f"{r['source']} {state_word(r['state'])}" for r in item["failed"])
+        remaining = item.get("remaining") or []
+        left = (f"还剩 {'、'.join(remaining)}：只凭它们重写" if remaining
+                else "一条来源都不剩：只能收起来")
+        why.append(f"依据 {failed}，正文不给了；{left}")
+    return why
 
 
 @dataclass
@@ -484,7 +524,7 @@ def block(all_buckets: list, registry, *, scope=None) -> list[dict]:
         it["basis_revised"] = [{"source": s, "revision": rv, "via": via}
                                for s, rv, via in basis]
         # The owner's note rides under `text`: the breath snapshot keeps no text
-        # (core/breath_snapshot.skeleton).
+        # (core/breath_snapshot.skeleton) and reads it again from the entry (`relabel`).
         it["disputed"] = [{"at": str(r.get("at") or ""), "text": str(r.get(NOTE) or "")}
                           for r in disputed]
         if found.failed:

@@ -53,8 +53,10 @@ async def build_muse_pending() -> dict:
          "oldest_days": how many days the oldest one has been pending,
          "worth_poking": whether a nudge is warranted}
     `worth_poking` = (clusters or fingers reached `poke_min_clusters`) **and** (the oldest
-    has been pending for `poke_min_age_days`).
-    Both thresholds live in the `muse:` section of `config.yaml` and are read live —
+    has been pending for `poke_min_age_days`) **and** `poke_on_wake` is on (the panel's
+    「醒来的时候提一句」: off, a host's wake never hears it is time; a poke from the panel
+    still reaches the model, core/_nudge.py).
+    All three live in the `muse:` section of `config.yaml` and are read live —
     **nothing is hardcoded ahead of time.**
     """
     from core import _muse as M
@@ -90,7 +92,8 @@ async def build_muse_pending() -> dict:
         "mind_clusters": cluster_count,
         "gist_fingers": finger_count,
         "oldest_days": int(oldest),
-        "worth_poking": bool((cluster_count >= min_clusters or finger_count >= min_clusters)
+        "worth_poking": bool(cfg["poke_on_wake"]
+                             and (cluster_count >= min_clusters or finger_count >= min_clusters)
                              and oldest >= min_age_days),
     }
 
