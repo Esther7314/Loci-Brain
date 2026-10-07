@@ -523,9 +523,14 @@ def _seed_child(base: str) -> int:
         return 2
     sys.path.insert(0, SRC)
     from core import runtime as rt
+    from core import schema
     from core.bucket_manager import BucketManager
     from tools.grow import rooms_path
 
+    # Stamped before the first memory, as server start stamps a new library: memories on
+    # disk with no version file read as a library from before versions existed (version
+    # 1), and its export package would be refused by this version's importer.
+    schema.stamp_new_library(paths["buckets"])
     cfg = {"buckets_dir": paths["buckets"]}
     store = BucketManager(cfg)
     rt.bucket_mgr, rt.config = store, cfg
