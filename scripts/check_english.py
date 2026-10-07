@@ -63,10 +63,10 @@ What counts as an offence, and what deliberately does not
                   while being wrong for this repo, and no regex can tell the difference
                   between one being translated and one being deleted.
 
-`frontend/loci.html` is a special case with a rule of its own: it is a panel that gets
-used every day in Chinese, so its interface copy stays in Chinese. Only its comments
-and its personal references are in scope. Its Chinese line count is therefore reported
-as context and never enforced.
+The panel (`frontend/loci.html` and its modules under `frontend/panel/`) is a special case
+with a rule of its own: it gets used every day in Chinese, so its interface copy stays
+in Chinese. Only its comments and its personal references are in scope. Its Chinese lines
+are therefore left out of the comment-line count, and never enforced.
 
 `docs/`, `README`, `CHANGELOG` are prose for people to read, not code. Out of scope
 entirely — that was decided separately, and this file does not get a vote.
@@ -157,8 +157,9 @@ CODE_EXT = (".py", ".js", ".mjs", ".ts", ".yaml", ".yml", ".sh")
 # Directories whose code must end up fully in English.
 SCOPE = ["src", "gateway", "scripts", "tests", "config"]
 
-# Counted for context, never enforced: interface copy stays in Chinese here.
+# Interface copy stays in Chinese here: the panel's shell and every module under it.
 COPY_EXEMPT = {os.path.join("frontend", "loci.html")}
+COPY_EXEMPT_DIRS = (os.path.join("frontend", "panel") + os.sep,)
 
 # Neither this file **nor its tests** is scanned. Both have to contain the very strings
 # they search for, so scanning them makes the count go up by however thoroughly the check
@@ -351,7 +352,8 @@ def scan() -> dict:
             except (OSError, UnicodeDecodeError):
                 continue
 
-            exempt_copy = os.path.relpath(path, ROOT) in COPY_EXEMPT
+            relpath = os.path.relpath(path, ROOT)
+            exempt_copy = relpath in COPY_EXEMPT or relpath.startswith(COPY_EXEMPT_DIRS)
 
             for line in text.splitlines():
                 if CJK.search(line) and not exempt_copy:

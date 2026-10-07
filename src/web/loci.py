@@ -3,12 +3,16 @@
 web/loci.py — where the standalone Loci dashboard's routes are assembled
 ========================================
 
-Four pages: the main pool, the starfield, the similarity check, and the profile. The
+The panel is one page, frontend/loci.html, a shell that loads its ES modules from
+frontend/panel (a router, the API client, shared components, one module per page). The
 handlers and the data builders behind them live in the sibling modules listed further
-down; all rendering lives in frontend/loci.html. `register` adds every route in one
-ordered table, and the list here is the one list of what the panel can reach.
+down. `register` adds every route in one ordered table, and the list here is the one list
+of what the panel can reach.
 
     GET  /loci                        -> the page itself
+    GET  /loci/panel/{path:path}      -> the panel's modules and stylesheet (frontend/panel,
+                                         .js and .css only, public: the login page is one
+                                         of them)
     GET  /api/loci/recall             -> recall's second skin (card + list)
     GET  /api/loci/graph              -> starfield: nodes + real edges + weak edges + constellations
     GET  /api/loci/similar            -> suspected-duplicate pairs + score distribution (adjustable threshold)
@@ -206,7 +210,7 @@ and engines off `web/_shared` at call time, hands them to the core function, and
 route turns its dict into JSON (core/starfield.py, core/census.py, core/similarity.py,
 core/health.py, core/profile.py):
 
-    web/loci_pages.py     /loci, /loci/vendor
+    web/loci_pages.py     /loci, /loci/panel, /loci/vendor
     web/loci_reads.py     recall, rooms, graph, profile, recollect, subjects, and the
                           builders behind them
     web/loci_similar.py   similar, similar/action
@@ -265,6 +269,7 @@ __all__ = [
 
 def register(mcp) -> None:
     mcp.custom_route("/loci", methods=["GET"])(loci_pages.loci_page)
+    mcp.custom_route("/loci/panel/{path:path}", methods=["GET"])(loci_pages.loci_panel_asset)
     mcp.custom_route("/loci/vendor/{path:path}", methods=["GET"])(loci_pages.loci_vendor)
     mcp.custom_route("/api/loci/recall", methods=["GET"])(loci_reads.api_loci_recall)
     mcp.custom_route("/api/loci/rooms", methods=["GET"])(loci_reads.api_loci_rooms)

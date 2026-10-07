@@ -1,10 +1,15 @@
 """
 ========================================
-web/loci_pages.py — the panel page itself, and the three.js it loads
+web/loci_pages.py — the panel page itself, its modules, and the three.js it loads
 ========================================
 
     GET  /loci                        -> frontend/loci.html, with the AI's name filled in
+    GET  /loci/panel/{path:path}      -> the panel's ES modules and stylesheet (frontend/panel)
     GET  /loci/vendor/{path:path}     -> three.js, served locally, which the starfield page needs
+
+The two asset routes are public (panel_auth._PUBLIC_PREFIXES): the login page is itself one
+of the panel's modules, so they have to load before anyone is logged in. They hold code and
+no data.
 ========================================
 """
 
@@ -32,6 +37,40 @@ async def loci_page(request: Request) -> Response:
     html = html.replace("{{AI_NAME}}", get_ai_name())
     return HTMLResponse(
         html, headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
+
+
+_PANEL_TYPES = {".js": "text/javascript", ".css": "text/css"}
+
+
+def _inside(root: str, rel: str) -> str | None:
+    """The real path of `rel` under `root`, or None when it resolves outside it. No string
+    from a request is trusted as a path: after realpath it must still be inside `root`."""
+    root = os.path.realpath(root)
+    target = os.path.realpath(os.path.join(root, rel))
+    if target != root and not target.startswith(root + os.sep):
+        return None
+    return target
+
+
+async def loci_panel_asset(request: Request) -> Response:
+    """The panel's own code: frontend/panel/**, `.js` and `.css` only.
+
+    Served no-cache, like the page: the modules import one another by plain relative
+    paths with no version in them, so a cached module from before an update would run
+    against the new ones. The same traversal rule as `loci_vendor`."""
+    from starlette.responses import JSONResponse
+    rel = str(request.path_params.get("path") or "")
+    ext = os.path.splitext(rel)[1].lower()
+    media = _PANEL_TYPES.get(ext)
+    target = _inside(os.path.join(sh.repo_root, "frontend", "panel"), rel) if media else None
+    if target is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    try:
+        with open(target, "rb") as f:
+            return Response(f.read(), media_type=media,
+                            headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
+    except OSError:
+        return JSONResponse({"error": "not found"}, status_code=404)
 
 
 async def loci_vendor(request: Request) -> Response:

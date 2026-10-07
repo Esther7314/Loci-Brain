@@ -335,7 +335,7 @@ _web.register_all(mcp)
 
 
 # =============================================================
-# The panel page and its assets (/loci, /loci/vendor/*) are served by web/loci.py.
+# The panel page and its assets (/loci, /loci/panel/*, /loci/vendor/*) are served by web/loci.py.
 # =============================================================
 
 
@@ -1725,7 +1725,7 @@ except (AttributeError, RuntimeError, TypeError, ValueError) as _strict_all_exc:
 #   web/config_api.py  /api/config, /api/test/dehydration, /api/test/embedding, /api/models
 #   web/import_api.py  /api/import/*
 #   web/panel_auth.py  /auth/*
-#   web/loci.py        the page (/loci, /loci/vendor/*), /api/loci/*, /api/v2/*, /api/logs,
+#   web/loci.py        the page (/loci, /loci/panel/*, /loci/vendor/*), /api/loci/*, /api/v2/*, /api/logs,
 #                      /api/dream/current, /api/muse/pending — its header lists every one
 # =============================================================
 

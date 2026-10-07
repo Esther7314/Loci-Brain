@@ -154,7 +154,9 @@ HOST_READ_PATHS = frozenset([
     "/api/loci/usage",
 ])
 
-_PUBLIC_PREFIXES = ("/loci/vendor/",)   # the page's static assets
+# The page's static assets: its own modules (the login page is one of them, so they load
+# before anyone is logged in) and three.js. Code only, no data.
+_PUBLIC_PREFIXES = ("/loci/panel/", "/loci/vendor/")
 
 
 # **The auth file being unreadable is not the same as "no password was set".**
