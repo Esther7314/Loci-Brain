@@ -219,7 +219,7 @@ def test_the_checker_does_not_count_itself():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# The stamps on the eight 她 that stay (DELIBERATE_SHE)
+# The stamps on the seven 她 that stay (DELIBERATE_SHE)
 #
 # WHY THESE EXIST
 #     Getting to "0 mentions of 她" was not done by translating the last eight — it was
@@ -290,5 +290,5 @@ def test_the_stamped_total_matches_what_the_ratchet_zeroed_out():
     r = CE.scan()
     assert CE.BASELINE["she"] == 0
     assert r["she_total"] == 0
-    assert r["stamped_she"] == 8, "eight stamped 她 — the owner ruled on exactly these"
+    assert r["stamped_she"] == 7, "seven stamped 她 — the owner ruled on exactly these"
     assert r["stale_stamps"] == []

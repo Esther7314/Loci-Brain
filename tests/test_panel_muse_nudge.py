@@ -72,10 +72,9 @@ def test_a_poke_is_said_once_with_the_count_and_the_first_label(panel):
     assert nudge["state"] == "poked" and nudge["at"]
 
     label = _first_label(panel["store"], panel["cluster"].ids[0])
-    # The wording itself is pinned where it is stamped (scripts/check_english.py,
-    # DELIBERATE_SHE): that line must stay exactly as the owner worded it.
+    # The owner's wording, word for word; "ta" because whoever pokes may be anyone.
     line = NG.line_of(3, label)
-    assert line.endswith(f"戳了戳你：这团（3 条，第一条是《{label}》）")
+    assert line == f"ta戳了戳你：这团（3 条，第一条是《{label}》）"
     assert _take(panel) == [line]
     assert _take(panel) == [], "said once, never again"
     seen = call("GET", "/api/loci/muse").json["items"][0]["nudge"]

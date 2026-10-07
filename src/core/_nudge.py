@@ -54,7 +54,7 @@ NONE, POKED, SEEN = "none", "poked", "seen"
 
 def line_of(n: int, label: str) -> str:
     """The line he is told."""
-    return f"她戳了戳你：这团（{n} 条，第一条是《{label}》）"
+    return f"ta戳了戳你：这团（{n} 条，第一条是《{label}》）"
 
 
 def _path(base_dir: str) -> Path:

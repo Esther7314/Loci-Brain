@@ -85,21 +85,19 @@ JS_CONST_FN = re.compile(r"^\s*(?:const|let|var)\s+([^\s=]+)\s*=\s*(?:async\s*)?
 SHE = "她"
 SHE_SAID = re.compile(r"她(说|的原话|定的|拍的|要求|提的)")
 
-# ── The eight 她 that stay, each one stamped ─────────────────────────────────
+# ── The seven 她 that stay, each one stamped ─────────────────────────────────
 # Not a mute button. Every entry is an exact substring of the line it exempts, so
 # **editing that line invalidates its stamp**: the count comes back, the run says which
 # stamp went stale, and a person looks at whether the change should still be exempt.
 # A stamp that survives its own line being rewritten would be worse than no stamp.
 #
-# Three kinds, and they are exempt for different reasons:
+# Two kinds, and they are exempt for different reasons:
 #   ① a stop-word list — 她 is *data* here, and deleting the word breaks behaviour:
 #      pronouns would start being stored as legitimate subjects ("她今天很开心" would
 #      file 她 away as a person's name).
 #   ② live LLM prompt text — rewriting the wording *is* changing model behaviour, and
 #      these prompts carry version numbers, so a reword invalidates every cached tag.
-#   ③ a line the model is told, worded by the owner word for word — the wording is the
-#      decision, not a description of her.
-# None is a leftover from the translation, and none is find-and-replaceable.
+# Neither is a leftover from the translation, and neither is find-and-replaceable.
 DELIBERATE_SHE = {
     "src/core/names.py": [
         ("我 你 他 她 它 咱 咱们 我们 你们 他们 她们 它们 自己 大家 别人 人家 对方 谁",
@@ -116,10 +114,6 @@ DELIBERATE_SHE = {
          "② prompt: DIGEST_PROMPT opening line"),
         ("（我/你/他/她/它/我们/自己/对方等）——代词是指代不是名字",
          "② prompt: the do-not-extract-pronouns rule in BACKFILL_PROMPT"),
-    ],
-    "src/core/_nudge.py": [
-        ('return f"她戳了戳你：这团（{n} 条，第一条是《{label}》）"',
-         "③ the poke line from the panel's muse page, worded by the owner (panel contract Q9)"),
     ],
 }
 
