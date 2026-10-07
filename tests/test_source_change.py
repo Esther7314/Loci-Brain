@@ -5,8 +5,8 @@ tests/test_source_change.py — a host's source change: state, block, clearing, 
 A memory E is formed from one message M of the host; D is derived from E. M carries a
 phrase nothing else has, and the phrase is put in every place Loci keeps text: E's body
 and name, its sunk original, its vector row, a dream woven from it, the dehydration
-cache, a pending slice's gist, a lookup's query in the usage log, and a ledger line
-written the old way (whole metadata). After `withdrawn` the phrase is nowhere under the
+cache, a pending slice's gist, a lookup's query in the usage log, the words a card was
+picked on in the card ledger, and a ledger line written the old way (whole metadata). After `withdrawn` the phrase is nowhere under the
 library — read back byte by byte — and each place answered `done`. Then: D is held for
 review on every road and E's body is gone for good; a crash halfway is finished by a
 resend; a restore gives the source back but D waits for review until it is confirmed
@@ -104,6 +104,10 @@ def library(tmp_path, monkeypatch):
         model=side_model))
     store.usage.record("found", [e], "recall.search", query=PHRASE, gates={"when": ""})
     store.usage.record("found", [d], "recall.search", query="夏天", gates={"when": ""})
+    # A strong-reminder card handed out for E, picked on its phrasing.
+    store.cues.open_window("life", "w1", [])
+    store.cues.offer("life", "w1", "t1", [{"card": f"{e}@0123456789ab", "id": e,
+                                           "kind": "memory", "why": PHRASE}])
     # A ledger line written before lines held names only.
     store.ledger_mirror.append_event(event_type="TraceUpdated", trace_id=e,
                                      trace_kind="dynamic",

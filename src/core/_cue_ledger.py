@@ -49,6 +49,11 @@ the state it describes (offers older than `OFFER_KEEP_DAYS` dropped, deliveries 
 `events()` hands the rows themselves to the panel, which replays what became of every
 card a turn was handed (core/activity.py).
 
+A card's `why` is text: the phrasing of the entry the owner's words matched. When a source
+behind the entry is withdrawn or deleted, the clearing blanks it (`scrub`, the
+`cue_ledger` place of core/_source_change.py) and keeps everything else of the card — its
+key, entry id, kind, times and what became of it.
+
 Exports: CueLedger · WindowState · LEDGER_DIR · LEDGER_FILE
 ========================================
 """
@@ -378,6 +383,55 @@ class CueLedger:
             self._append([{"op": "drop", "at": _stamp(_w.now()), "host": host,
                            "window": window, "cards": gone}])
         return gone
+
+    # ---------- a source withdrawn or deleted ----------
+
+    def scrub(self, ids, hit=None) -> int:
+        """Blank the `why` of every card handed out for one of `ids`, or whose `why` `hit`
+        matches (the words of what a source change clears, core/_source_change.py): the
+        words a card was picked on are the entry's own phrasing. The card's key, its entry
+        id, its kind, every time and what became of it are kept. The file is rewritten
+        under the lease with a new `gen`, so every reader starts over. Returns how many
+        cards were blanked."""
+        from ._sources import json_line
+        ids = {str(i) for i in ids or () if i}
+        if not ids and hit is None:
+            return 0
+        if not self.path.exists():
+            return 0
+
+        def blank(cards) -> int:
+            n = 0
+            for c in cards or []:
+                if not isinstance(c, dict) or not c.get("why"):
+                    continue
+                if str(c.get("id") or "") in ids or (hit is not None and hit(str(c["why"]))):
+                    c["why"] = ""
+                    n += 1
+            return n
+
+        with file_lease(self.lock_path, timeout=_LOCK_TIMEOUT):
+            rows: list[dict] = []
+            n = 0
+            with self.path.open("rb") as f:
+                for raw in f:
+                    row = json_line(raw)
+                    if not isinstance(row, dict) or row.get("op") == "gen":
+                        continue
+                    if row.get("op") == "offer":
+                        n += blank(row.get("cards")) + blank(row.get("ever"))
+                    rows.append(row)
+            if not n:
+                return 0
+            tmp = self.path.with_name(self.path.name + ".rewrite")
+            with tmp.open("w", encoding="utf-8", newline="\n") as f:
+                for r in [{"op": "gen", "gen": uuid.uuid4().hex}] + rows:
+                    f.write(json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n")
+            replace_file(tmp, self.path)
+            with self._guard:
+                self._reset()
+            self.refresh()
+        return n
 
     # ---------- compaction ----------
 

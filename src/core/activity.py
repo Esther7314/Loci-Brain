@@ -185,7 +185,10 @@ def card_replay(events: list[dict]) -> dict[tuple[str, str], dict[str, dict]]:
 def _card_line(lib: dict, c: dict, scope) -> Optional[dict]:
     """A card as the panel shows it: the memory it shows (a name card without an entry:
     the name), what kind it is, why it was picked, and what became of it. None for a card
-    whose memory a scoped request may not read: it is left out, id and all."""
+    whose memory a scoped request may not read: it is left out, id and all. Why it was
+    picked is the entry's own phrasing, so it is shown only where the entry's text is: a
+    card for a memory the gate keeps off (a source behind it withdrawn) or that is gone
+    says no why."""
     kind = c.get("kind") or ""
     key = c["card"]
     if c.get("id"):
@@ -195,8 +198,9 @@ def _card_line(lib: dict, c: dict, scope) -> Optional[dict]:
     else:
         name = key[len("name:"):].rpartition("@")[0] if key.startswith("name:") else ""
         ref = {"id": "", "short": "", "text": name, "state": "", "state_words": ""}
+    why = (c.get("why") or "") if ref["text"] else ""
     out = {"card": key, "id": ref["id"], "short": ref["short"], "kind": kind,
-           "kind_words": _cue.CARD_KIND_WORDS.get(kind, ""), "why": c.get("why") or "",
+           "kind_words": _cue.CARD_KIND_WORDS.get(kind, ""), "why": why,
            "text": ref["text"], "state": c["state"],
            "state_words": CARD_STATE_WORDS[c["state"]],
            "has_original": bool(ref["id"] and ref["text"] and _has_original(lib, ref["id"]))}

@@ -13,7 +13,8 @@ stood on it, clears what has to go, and answers with where every place stands:
      "applied_seq": 18422, "entries": ["3f9c1a2b7d40"], "derived_pending": ["a81e0c55d912"],
      "cleanup": {"body": "done", "embeddings": "done", "bm25": "done",
                  "dream_records": "none", "sunk_text": "done", "dehydration_cache": "none",
-                 "media": "none", "slices": "none", "usage_log": "none", "ledger": "done"}}
+                 "media": "none", "slices": "none", "usage_log": "none",
+                 "cue_ledger": "none", "ledger": "done"}}
 
 The receipt of a change for a run (`id..through`) also says what the change reached
 (`reach`): `lines` when the run's lines are registered — the change reached every line it
@@ -88,6 +89,9 @@ for review, not cleared):
     dehydration_cache  cache rows keyed by an entry's body, or whose summary holds its words
     slices             pending slices over the changed lines: gist blanked, an open one dropped
     usage_log          the query of a lookup that listed what is cleared or typed its words
+    cue_ledger         the words a strong-reminder card was picked on (`why`), on a card
+                       for what is cleared or derived from it or holding its words; the
+                       card's key, entry, times and delivery stay (core/_cue_ledger.scrub)
     sunk_text          archive/原文/<id>.txt
     body               the body, every text field, the name in the file name
                        (BucketManager.clear_body)
@@ -154,10 +158,10 @@ from . import _when as _w
 
 logger = logging.getLogger("loci_brain.source_change")
 
-PLACES = ("dream_records", "dehydration_cache", "slices", "usage_log", "sunk_text", "body",
-          "embeddings", "bm25", "media", "ledger")
+PLACES = ("dream_records", "dehydration_cache", "slices", "usage_log", "cue_ledger",
+          "sunk_text", "body", "embeddings", "bm25", "media", "ledger")
 # The places that match the entries' words: they run while the words are still there.
-_WORD_PLACES = frozenset({"dream_records", "dehydration_cache", "usage_log"})
+_WORD_PLACES = frozenset({"dream_records", "dehydration_cache", "usage_log", "cue_ledger"})
 CLEARING = (_src.WITHDRAWN, _src.DELETED)
 DONE, NONE, PENDING = "done", "none", "pending"
 PROGRESS_FILE = "cleanup.jsonl"
@@ -382,6 +386,14 @@ def _usage_log(store, ctx) -> str:
     return DONE if n else NONE
 
 
+def _cue_ledger(store, ctx) -> str:
+    cues = getattr(store, "cues", None)
+    if cues is None:
+        return NONE
+    n = cues.scrub(set(ctx["entries"]) | set(ctx["derived"]), ctx["words"].hit)
+    return DONE if n else NONE
+
+
 def _sunk_text(store, ctx) -> str:
     hit = 0
     for bid in ctx["entries"]:
@@ -456,7 +468,8 @@ def _ledger_place(store, ctx) -> str:
 
 
 _RUN = {"dream_records": _dream_records, "dehydration_cache": _dehydration_cache,
-        "slices": _slices, "usage_log": _usage_log, "sunk_text": _sunk_text, "body": _body,
+        "slices": _slices, "usage_log": _usage_log, "cue_ledger": _cue_ledger,
+        "sunk_text": _sunk_text, "body": _body,
         "embeddings": _embeddings, "bm25": _bm25, "media": _media, "ledger": _ledger_place}
 
 

@@ -150,3 +150,56 @@ def test_a_registry_with_nothing_withdrawn_is_not_walked(library, monkeypatch):
     assert view.whole_library and view.metas == {}, "nothing to walk for"
     monkeypatch.setattr(store, "meta_of", lambda bid: pytest.fail("read by id"))
     assert not view.source_blocked(asyncio.run(store.get(e)))
+
+
+# ── the card ledger keeps no words of what was cleared ─────────────────────
+
+RAIN = "明天可能下雨要带伞。"
+
+
+def _turn_cards(store, window: str, buckets) -> dict:
+    from datetime import timedelta
+
+    from core import _when as W
+    from core import activity as ACT
+    now = W.now() + timedelta(minutes=1)
+    out = ACT.turns(store.cues, [], buckets, host=OPEN_HOST.name, window=window, now=now,
+                    offset=0, limit=20, as_of=now)
+    return {c["id"]: c for item in out["items"] for c in item["cards"]}
+
+
+def test_the_clearing_blanks_why_a_card_was_picked_and_keeps_the_rest(library):
+    store, e, _d = library
+    x = asyncio.run(store.create(RAIN, room="EVENT/SELF", direction_of_fit="telic",
+                                 cue={"condition": "下雨", "phrasings": ["下雨"]}))
+    shown = asyncio.run(_cards(store, _open(), "去看风车，怕下雨", "w"))
+    assert sorted(shown) == sorted([e, x])
+    store.cues.deliver(OPEN_HOST.name, "w", turn="t")
+    before = _turn_cards(store, "w", asyncio.run(store.list_all()))
+    assert before[e]["why"] == "看风车" and before[x]["why"] == "下雨", "positive control"
+    key = before[e]["card"]
+
+    status, out = asyncio.run(SC.handle(store, {
+        "change_id": "c-1", "source": M_STR, "host_seq": 1, "change": "withdrawn"},
+        OPEN_HOST))
+    assert status == 200 and out["cleanup"]["cue_ledger"] == "done", out
+    raw = store.cues.path.read_bytes().decode("utf-8")
+    assert "风车" not in raw and "下雨" in raw
+    after = _turn_cards(store, "w", asyncio.run(store.list_all(include_archive=True)))
+    assert after[e]["why"] == "" and after[e]["card"] == key
+    assert after[e]["state"] == "delivered" and after[x]["why"] == "下雨"
+    assert store.cues.is_delivered(OPEN_HOST.name, "w", key), "the delivery is kept"
+
+
+def test_the_replay_says_no_why_where_the_memory_is_not_shown(library):
+    """A ledger written before the clearing blanked anything: the panel still says no why
+    for a card whose memory stands on a withdrawn source."""
+    store, e, _d = library
+    asyncio.run(_cards(store, _open(), "去看风车", "w"))
+    rows = asyncio.run(store.list_all())
+    assert _turn_cards(store, "w", rows)[e]["why"] == "看风车", "positive control"
+    gone = [{**r, "metadata": {**r["metadata"], "invalidation": [
+        {"kind": "source_gone", "of": M_STR, "by": "withdrawn", "at": "2026-10-01T10:00:00"}]}}
+        if r["metadata"]["id"] == e else r for r in rows]
+    card = _turn_cards(store, "w", gone)[e]
+    assert card["why"] == "" and card["text"] == "" and card["state"] == "offered"
