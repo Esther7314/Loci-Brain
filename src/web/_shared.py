@@ -288,67 +288,6 @@ write_deletion_notice = None   # def(names: list) -> None
 pop_deletion_notice = None     # def() -> str
 
 
-# --- Project .env read/write ---
-# The .env lives at src/.env: this file is under src/web/, so two levels up is src/.
-# No route calls `_read_env_var` or `_write_env_var`.
-def _project_env_path() -> str:
-    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
-
-
-def _read_env_var(name: str) -> str:
-    """Return current value of `name` from process env first, then .env file (best-effort)."""
-    val = os.environ.get(name, "").strip()
-    if val:
-        return val
-    env_path = _project_env_path()
-    if not os.path.exists(env_path):
-        return ""
-    try:
-        with open(env_path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                k, _, v = line.partition("=")
-                if k.strip() == name:
-                    return v.strip().strip('"').strip("'")
-    except Exception:
-        pass
-    return ""
-
-
-def _write_env_var(name: str, value: str) -> None:
-    """Idempotent upsert of `NAME=value` in project .env. Creates file if missing.
-    Preserves other entries verbatim. Quotes values containing spaces.
-    """
-    env_path = _project_env_path()
-    quoted = f'"{value}"' if value and (" " in value or "#" in value) else value
-    new_line = f"{name}={quoted}\n"
-
-    lines: list[str] = []
-    if os.path.exists(env_path):
-        with open(env_path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-
-    replaced = False
-    for i, raw in enumerate(lines):
-        stripped = raw.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        k, _, _v = stripped.partition("=")
-        if k.strip() == name:
-            lines[i] = new_line
-            replaced = True
-            break
-    if not replaced:
-        if lines and not lines[-1].endswith("\n"):
-            lines[-1] += "\n"
-        lines.append(new_line)
-
-    with open(env_path, "w", encoding="utf-8") as f:
-        f.writelines(lines)
-
-
 # --- Dashboard auth constants ---
 # There is no panel cookie login, and /api/* is not authenticated at this layer.
 # **The password and login rate-limit family is here** because bridge/oauth.py's
