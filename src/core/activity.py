@@ -31,13 +31,13 @@ to its cards by (host, turn) — see `_turn_lines`.
 What a search typed (`query`) is the panel's alone (core/_usage.py): every read here
 takes `panel`, and only a panel read carries it.
 
-Every list is paged the same way (offset / limit / as_of, `page`): newest first, and a row
+Every list pages the way every panel list does (core/paging.py): newest first, and a row
 stamped after `as_of` is left out, so rows arriving while someone pages do not shift the
 pages. `entry_ref` is the one place a memory becomes a line here: its id, short handle and
 label, or — when the read gate would not show it — no text and a state saying why.
 
-Exports: PAGE_LIMIT · PAGE_MAX · CARD_STATE_WORDS · page_args · past · page · stamp · index ·
-         entry_ref · card_replay · turns · timeline_since · timeline · usage_counts
+Exports: CARD_STATE_WORDS · index · entry_ref · card_replay · turns · timeline_since ·
+         timeline · usage_counts
 ========================================
 """
 
@@ -51,10 +51,9 @@ from . import _holds as _H
 from . import _usage
 from . import _when as _w
 from . import visibility as _V
+from .paging import page, past, stamp
 from .profile import entry_label, short_id
 
-PAGE_LIMIT = 5
-PAGE_MAX = 50
 TIMELINE_DAYS = 3
 
 OFFERED, DELIVERED, DROPPED = "offered", "delivered", "dropped"
@@ -67,50 +66,6 @@ _STATE_WORDS = {
     _V.DELETED: "删掉了（在归档区）",
 }
 _SUPERSEDED_WORDS = "有新版本了"
-
-
-# ── paging ───────────────────────────────────────────────────────────────────
-
-def stamp(dt: Optional[datetime]) -> Optional[str]:
-    """A moment as the panel reads it: local, with its offset, to the second."""
-    if dt is None:
-        return None
-    return _w.to_local(dt).isoformat(timespec="seconds")
-
-
-def _int(raw, default: int) -> int:
-    try:
-        return int(str(raw).strip())
-    except (TypeError, ValueError):
-        return default
-
-
-def page_args(offset=None, limit=None, as_of=None,
-              now: Optional[datetime] = None) -> tuple[int, int, datetime]:
-    """(offset, limit, as_of) from a request's raw values: offset from 0, limit 1..PAGE_MAX
-    (PAGE_LIMIT when absent or unreadable), as_of the first page's moment handed back, or
-    now (to the second) on a first page."""
-    off = max(0, _int(offset, 0)) if offset not in (None, "") else 0
-    lim = _int(limit, PAGE_LIMIT) if limit not in (None, "") else PAGE_LIMIT
-    lim = max(1, min(PAGE_MAX, lim))
-    cut = _w.parse_stamp(as_of) if as_of else None
-    if cut is None:
-        cut = _w.to_local(now or _w.now()).replace(microsecond=0)
-    return off, lim, cut
-
-
-def past(at: Optional[datetime], as_of: datetime) -> bool:
-    """Was `at` stamped after `as_of`? Compared to the second, the precision as_of is
-    handed out in: a row of the first page's own second stays on every page."""
-    return at is not None and at.replace(microsecond=0) > as_of
-
-
-def page(rows: list, offset: int, limit: int, as_of: datetime) -> dict:
-    """One page of rows already sorted newest first and cut at as_of."""
-    total = len(rows)
-    end = offset + limit
-    return {"items": rows[offset:end], "total": total, "offset": offset, "limit": limit,
-            "next_offset": end if end < total else None, "as_of": stamp(as_of)}
 
 
 # ── memories as lines ────────────────────────────────────────────────────────

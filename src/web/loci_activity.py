@@ -17,9 +17,9 @@ recall's timeline, usage, grow, muse, the missing vectors, and 「现在补」
 
 Each route reads the library, logs and engines off `web/_shared` at call time, hands them
 to its core function and returns the dict as JSON. Every list takes `offset` / `limit` /
-`as_of` (core/activity.page_args). Every route here is the panel's alone (no entry in
-panel_auth.HOOK_PATHS): a search's query text comes back on these routes and on no host
-route (core/_usage.py).
+`as_of` (core/paging.py); one that does not read is a 400. Every route here is the panel's
+alone (no entry in panel_auth.HOOK_PATHS): a search's query text comes back on these
+routes and on no host route (core/_usage.py).
 ========================================
 """
 
@@ -30,6 +30,7 @@ from . import _shared as sh
 from ._guards import _request_of, _write_body
 from core import _when as _w
 from core import activity as _act
+from core import paging as _pg
 
 logger = sh.logger
 
@@ -41,8 +42,8 @@ def _scope_line(request: Request) -> str:
 
 
 def _paging(request: Request, now):
-    q = request.query_params
-    return _act.page_args(q.get("offset"), q.get("limit"), q.get("as_of"), now=now)
+    """(offset, limit, as_of); core/paging.BadPage when an argument does not read."""
+    return _pg.args_of(request.query_params, now=now)
 
 
 def _usage_rows() -> list:
@@ -51,6 +52,9 @@ def _usage_rows() -> list:
 
 
 def _failed(what: str, e: Exception) -> Response:
+    """A paging argument that does not read is the caller's (400); anything else is ours."""
+    if isinstance(e, _pg.BadPage):
+        return JSONResponse({"error": str(e)}, status_code=400)
     logger.warning(f"[loci] {what} failed: {e}")
     return JSONResponse({"error": str(e)}, status_code=500)
 
@@ -125,7 +129,7 @@ async def api_loci_grow_today(request: Request) -> Response:
                                 now=now, offset=offset, limit=limit, as_of=as_of)
     except Exception as e:                       # noqa: BLE001
         return _failed("grow/today", e)
-    return JSONResponse({"since": _act.stamp(since), "since_from": since_from, **out,
+    return JSONResponse({"since": _pg.stamp(since), "since_from": since_from, **out,
                          "scope": _scope_line(request)})
 
 

@@ -28,7 +28,8 @@ from datetime import datetime
 from typing import Iterable, Optional
 
 from . import _when as _w
-from .activity import entry_ref, index, page, past, stamp
+from .activity import entry_ref, index
+from .paging import page, past, stamp
 
 RETRYING, QUEUED, NOT_QUEUED = "retrying", "queued", "not_queued"
 WHY_WORDS = {QUEUED: "排着队，还没轮到",

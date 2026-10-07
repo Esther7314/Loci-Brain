@@ -16,12 +16,13 @@ The names page and the name card (contract 「面板接口」 §四, §五 name)
 listing: `names_page` (the names the table knows, by kind, most mentioned first),
 `pending_names` (the names it does not know yet, each with the entry it first appeared
 in, newest first), `name_card` (one name: what the table says, its card, the entries it
-appears in). Their lists page by offset / limit, counting only entries written before
-`as_of` so a page does not shift while it is read (`page_of`, `written_before`).
+appears in). Their lists page the way every panel list does (core/paging.py), counting
+only entries written before `as_of` so a page does not shift while it is read
+(`written_before`).
 `name_action` is the one way the names page's buttons write: it goes through
 core/names (aliases.yaml only, never an entry) and says what it did in words.
 
-Exports: rooms(all_buckets) · subjects(all_buckets) · page_of · written_before ·
+Exports: rooms(all_buckets) · subjects(all_buckets) · written_before ·
          names_page · pending_names · name_card · NAME_ACTIONS · name_action
 ========================================
 """
@@ -31,6 +32,7 @@ from datetime import datetime
 
 from . import names as subj
 from ._rooms import ALL_ROOMS, normalize_room, room_cn
+from .paging import PAGE_LIMIT, cut, page
 from .starfield import node_ts
 from .visibility import on_timeline
 
@@ -170,27 +172,12 @@ def subjects(all_buckets: list) -> dict:
 # The names page and the name card
 # ============================================================
 
-def page_of(items: list, offset: int, limit: int) -> dict:
-    """One page of an already ordered list: {items, total, offset, limit, next_offset};
-    next_offset is None on the last page."""
-    total = len(items)
-    nxt = offset + limit
-    return {"items": items[offset:nxt], "total": total, "offset": offset, "limit": limit,
-            "next_offset": nxt if nxt < total else None}
-
-
 def written_before(all_buckets: list, as_of: datetime | None) -> list:
-    """The entries written at or before `as_of` (all of them when it is None); one with
-    no readable `created` counts as written before."""
-    if as_of is None:
-        return list(all_buckets)
+    """The entries not written after `as_of` (core/paging.past; all of them when it is
+    None); one with no readable `created` counts as written before."""
     from ._when import parse_stamp
-    out = []
-    for b in all_buckets:
-        created = parse_stamp((b.get("metadata") or {}).get("created"))
-        if created is None or created <= as_of:
-            out.append(b)
-    return out
+    return cut(all_buckets, as_of,
+               lambda b: parse_stamp((b.get("metadata") or {}).get("created")))
 
 
 def _newest_first(b: dict) -> float:
@@ -208,8 +195,8 @@ def _memory_line(b: dict) -> dict:
             "text": entry_label(meta, str(b.get("content") or ""))}
 
 
-def names_page(all_buckets: list, *, kind: str = "", offset: int = 0, limit: int = 5,
-               as_of: datetime | None = None) -> dict:
+def names_page(all_buckets: list, *, kind: str = "", offset: int = 0,
+               limit: int = PAGE_LIMIT, as_of: datetime | None = None) -> dict:
     """The names page: the names the table knows that appear in the store, most
     mentioned first, filtered to one `kind` when given; the kinds with how many names
     each; how many names wait to be recognised."""
@@ -225,11 +212,11 @@ def names_page(all_buckets: list, *, kind: str = "", offset: int = 0, limit: int
                       "aliases": list(rec.aliases) if rec else [], "last": r["last"]})
     return {"kinds": [{"kind": k, "n": n} for k, n in
                       sorted(kinds.items(), key=lambda kv: (-kv[1], kv[0]))],
-            **page_of(items, offset, limit),
+            **page(items, offset, limit, as_of),
             "pending_count": sum(1 for r in rows if not r["canonical"])}
 
 
-def pending_names(all_buckets: list, *, offset: int = 0, limit: int = 5,
+def pending_names(all_buckets: list, *, offset: int = 0, limit: int = PAGE_LIMIT,
                   as_of: datetime | None = None) -> dict:
     """The names the table does not know yet, the most recently first seen on top, each
     with the entry it first appeared in."""
@@ -242,10 +229,10 @@ def pending_names(all_buckets: list, *, offset: int = 0, limit: int = 5,
         b = by_id.get(r["first_bucket"])
         items.append({"name": r["name"], "n": r["n"], "pronoun": r["pronoun"],
                       "first": _memory_line(b) if b else None})
-    return page_of(items, offset, limit)
+    return page(items, offset, limit, as_of)
 
 
-def name_card(all_buckets: list, name: str, *, offset: int = 0, limit: int = 5,
+def name_card(all_buckets: list, name: str, *, offset: int = 0, limit: int = PAGE_LIMIT,
               as_of: datetime | None = None, scope=None) -> dict | None:
     """One name's card: what the table says it is and where it hangs, the MIND entry
     filed as its card, and the entries whose subjects name it (after the table's
@@ -286,7 +273,7 @@ def name_card(all_buckets: list, name: str, *, offset: int = 0, limit: int = 5,
             "present_in": list(rec.present_in) if rec else [],
             "member_of": list(rec.member_of) if rec else [],
             "card": card,
-            "memories": page_of([_memory_line(b) for b in hits], offset, limit)}
+            "memories": page([_memory_line(b) for b in hits], offset, limit, as_of)}
 
 
 NAME_ACTIONS = ("not_person", "merge", "rename", "set_kind")

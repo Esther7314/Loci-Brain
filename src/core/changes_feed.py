@@ -47,6 +47,7 @@ from . import _fold as _F
 from . import _invalidation as _I
 from . import _when as _w
 from . import visibility as _V
+from .paging import past
 
 REVISED = "revised"
 MERGED = "merged"
@@ -107,7 +108,8 @@ def recent(events, all_buckets: list, *, scope=None, as_of: datetime | None = No
 
     `events` are the ledger's lines in order; `all_buckets` every entry, archive included
     (an entry put away is still named). `scope` (a core.scope.ScopeView) leaves out entries
-    the request may not read; `as_of` leaves out lines recorded after it."""
+    the request may not read; `as_of` leaves out lines recorded after it
+    (core/paging.past)."""
     by_id = {str((b.get("metadata") or {}).get("id") or b.get("id") or ""): b
              for b in all_buckets}
     rows: list[dict] = []
@@ -125,7 +127,7 @@ def recent(events, all_buckets: list, *, scope=None, as_of: datetime | None = No
         if stamp is None:
             continue
         stamp = stamp.replace(microsecond=0)        # the row's `at` is to the second
-        if as_of is not None and stamp > as_of:
+        if past(stamp, as_of):
             continue
         payload = _payload(event)
         changed = {str(f) for f in payload.get("changed_fields") or []}

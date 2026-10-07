@@ -33,7 +33,8 @@ from . import _slicer as _sl
 from . import _when as _w
 from . import detail as _detail
 from . import visibility as _V
-from .activity import entry_ref, index, page, past, stamp
+from .activity import entry_ref, index
+from .paging import page, past, stamp
 from .profile import entry_label, short_id
 
 SINCE_REPORT, SINCE_MIDNIGHT = "report", "midnight"

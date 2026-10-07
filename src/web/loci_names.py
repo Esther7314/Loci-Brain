@@ -15,7 +15,7 @@ web/loci_names.py — the names page and the name card
 
 The counting is core/census.py's (names_page, pending_names, name_card), the one write
 dispatcher core/census.name_action; these routes list the store, hand it over and turn
-the dict into JSON. Lists page by offset / limit / as_of (web/loci_detail.paging_of).
+the dict into JSON. Lists page by offset / limit / as_of (core/paging.py).
 POST /api/loci/subjects/action shares `api_loci_names_action`.
 ========================================
 """
@@ -25,8 +25,9 @@ from starlette.responses import JSONResponse, Response
 
 from . import _shared as sh
 from ._guards import _write_body
-from .loci_detail import paging_of, read_scope_of
+from .loci_detail import read_scope_of
 from core import census as _census
+from core import paging as _pg
 
 logger = sh.logger
 
@@ -41,14 +42,14 @@ async def api_loci_names(request: Request) -> Response:
         if refused is not None:
             return refused
         try:
-            offset, limit, as_of, as_of_text = paging_of(request)
-        except ValueError as e:
+            offset, limit, as_of = _pg.args_of(request.query_params)
+        except _pg.BadPage as e:
             return JSONResponse({"error": str(e)}, status_code=400)
         listing = [b for b in await _listing()
                    if view is None or view.permits(b.get("metadata") or {})]
         out = _census.names_page(listing, kind=(request.query_params.get("kind") or "").strip(),
                                  offset=offset, limit=limit, as_of=as_of)
-        return JSONResponse({**out, "as_of": as_of_text, "scope": line})
+        return JSONResponse({**out, "scope": line})
     except Exception as e:                       # noqa: BLE001
         logger.warning(f"[loci] names 失败: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -60,13 +61,13 @@ async def api_loci_names_pending(request: Request) -> Response:
         if refused is not None:
             return refused
         try:
-            offset, limit, as_of, as_of_text = paging_of(request)
-        except ValueError as e:
+            offset, limit, as_of = _pg.args_of(request.query_params)
+        except _pg.BadPage as e:
             return JSONResponse({"error": str(e)}, status_code=400)
         listing = [b for b in await _listing()
                    if view is None or view.permits(b.get("metadata") or {})]
         out = _census.pending_names(listing, offset=offset, limit=limit, as_of=as_of)
-        return JSONResponse({**out, "as_of": as_of_text, "scope": line})
+        return JSONResponse({**out, "scope": line})
     except Exception as e:                       # noqa: BLE001
         logger.warning(f"[loci] names/pending 失败: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -78,8 +79,8 @@ async def api_loci_name_card(request: Request) -> Response:
         if refused is not None:
             return refused
         try:
-            offset, limit, as_of, as_of_text = paging_of(request)
-        except ValueError as e:
+            offset, limit, as_of = _pg.args_of(request.query_params)
+        except _pg.BadPage as e:
             return JSONResponse({"error": str(e)}, status_code=400)
         name = str(request.path_params.get("name") or "").strip()
         card = _census.name_card(await _listing(), name, offset=offset, limit=limit,
@@ -87,7 +88,6 @@ async def api_loci_name_card(request: Request) -> Response:
         if card is None:
             return JSONResponse({"error": f"名字表里没有「{name}」，也没有哪条记忆提到它"},
                                 status_code=404)
-        card["memories"]["as_of"] = as_of_text
         return JSONResponse({**card, "scope": line})
     except Exception as e:                       # noqa: BLE001
         logger.warning(f"[loci] names/{{name}} 失败: {e}")

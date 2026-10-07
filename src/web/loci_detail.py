@@ -18,7 +18,7 @@ the store, hand it over, and turn the dict into JSON. Reads say the request's sc
 `_write_body` (same origin, JSON) and through the same tools the model uses.
 
 Also here: `correct_event`, the 内容错了 write that POST /api/loci/event/correct shares,
-and the request helpers web/loci_names.py reads with (`read_scope_of`, `paging_of`).
+and the request helper web/loci_names.py reads with (`read_scope_of`).
 ========================================
 """
 
@@ -38,12 +38,9 @@ from utils import read_from_ids
 
 logger = sh.logger
 
-DEFAULT_LIMIT = 5
-MAX_LIMIT = 50
-
 
 # ---------------------------------------------------------
-# Request helpers: the scope a read runs under, and the paging arguments
+# Request helper: the scope a read runs under
 # ---------------------------------------------------------
 
 async def read_scope_of(request: Request):
@@ -57,29 +54,6 @@ async def read_scope_of(request: Request):
         return None, None, OPEN_LINE
     from tools._common import read_scope
     return None, await read_scope(), req.first_line()
-
-
-def paging_of(request: Request):
-    """(offset, limit, as_of datetime, as_of text). Raises ValueError for an argument that
-    does not read. limit defaults to 5 and is held to 1..50; as_of defaults to now and is
-    handed back so the next page asks with the same one."""
-    q = request.query_params
-    try:
-        offset = int(q.get("offset") or 0)
-        limit = int(q.get("limit") or DEFAULT_LIMIT)
-    except ValueError:
-        raise ValueError("offset / limit 要是整数")
-    if offset < 0:
-        raise ValueError("offset 不能是负数")
-    limit = max(1, min(limit, MAX_LIMIT))
-    raw = (q.get("as_of") or "").strip()
-    if raw:
-        as_of = _w.parse_stamp(raw)
-        if as_of is None:
-            raise ValueError(f"as_of 读不懂：{raw}（照第一页回给你的原样带回来）")
-    else:
-        as_of = _w.now().replace(microsecond=0)
-    return offset, limit, as_of, as_of.isoformat(timespec="seconds")
 
 
 def _gone(bucket_id: str) -> JSONResponse:

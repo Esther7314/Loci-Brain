@@ -17,14 +17,14 @@ breath was handed out under.
 
 Lists page by `offset` (default 0) and `limit` (default 5, at most 50), newest first, and
 `as_of`: the first page's `as_of` sent back keeps rows that arrived since from shifting the
-pages. The reply: {items, total, offset, limit, next_offset (null at the end), as_of}.
+pages. The reply: {items, total, offset, limit, next_offset (null at the end), as_of}. The
+reading and the page are core/paging.py's, the same for every panel list.
 
 The one write goes through `_write_body` (the same-origin check) and through
 tools.trace.core.trace_core with closed_by="user", the same road the model's trace takes.
 ========================================
 """
 
-import re
 from datetime import datetime
 
 from starlette.requests import Request
@@ -35,13 +35,12 @@ from ._guards import _request_of, _write_body
 from core import _when as _w
 from core import breath_snapshot as _snap
 from core import changes_feed as _changes
+from core import paging as _pg
 from core import profile as _profile
 from core import scope as _scope
 
 logger = sh.logger
 
-LIMIT_DEFAULT = 5
-LIMIT_MAX = 50
 PARTS = ("surface", "deep")
 ACTIONS = (_profile.DONE, _profile.DROP, _profile.WITHDRAW)
 
@@ -55,36 +54,14 @@ def _scope_line(request: Request) -> str:
 
 
 def _paging(request: Request) -> tuple[int, int, datetime]:
-    """(offset, limit, as_of) from the query; ValueError says what is wrong."""
-    q = request.query_params
-    try:
-        offset = int(q.get("offset") or 0)
-        limit = int(q.get("limit") or LIMIT_DEFAULT)
-    except ValueError:
-        raise ValueError("offset 和 limit 要是整数") from None
-    if offset < 0 or limit < 1:
-        raise ValueError("offset 不能小于 0，limit 至少 1")
-    raw = str(q.get("as_of") or "").strip()
-    # An offset's "+" sent unescaped arrives as a space ("…T21:04:11 08:00").
-    raw = re.sub(r"T(\d{2}:\d{2}:\d{2}(?:\.\d+)?) (\d{2}:\d{2})$", r"T\1+\2", raw)
-    as_of = _w.parse_stamp(raw) if raw else _w.now()
-    if as_of is None:
-        raise ValueError(f"as_of 读不懂：{raw}")
-    # Rows carry their time to the second, and so does the as_of handed back.
-    return offset, min(limit, LIMIT_MAX), as_of.replace(microsecond=0)
+    """(offset, limit, as_of) from the query (core/paging.py); BadPage says what is wrong."""
+    return _pg.args_of(request.query_params)
 
 
 def _page(rows: list[dict], offset: int, limit: int, as_of: datetime) -> dict:
     """One page of `rows` (newest first), leaving out rows whose `at` is after `as_of`."""
-    def before(row: dict) -> bool:
-        at = _w.parse_stamp(row.get("at"))
-        return at is None or at <= as_of
-    kept = [r for r in rows if before(r)]
-    items = kept[offset:offset + limit]
-    end = offset + len(items)
-    return {"items": items, "total": len(kept), "offset": offset, "limit": limit,
-            "next_offset": end if end < len(kept) else None,
-            "as_of": as_of.isoformat(timespec="seconds")}
+    kept = _pg.cut(rows, as_of, lambda r: _w.parse_stamp(r.get("at")))
+    return _pg.page(kept, offset, limit, as_of)
 
 
 def _bad(e: Exception, status: int = 400) -> Response:
@@ -137,7 +114,7 @@ async def api_loci_awake(request: Request) -> Response:
         return _bad(ValueError(f"reason 只有：{' / '.join(_profile.AWAKE_WORDS)}"))
     try:
         offset, limit, as_of = _paging(request)
-    except ValueError as e:
+    except _pg.BadPage as e:
         return _bad(e)
     try:
         rows = await build_awake(reason)
@@ -163,7 +140,7 @@ async def api_loci_hanging(request: Request) -> Response:
         return _bad(ValueError("part 只有 surface / deep"))
     try:
         offset, limit, as_of = _paging(request)
-    except ValueError as e:
+    except _pg.BadPage as e:
         return _bad(e)
     try:
         halves = await build_hanging()
@@ -253,7 +230,7 @@ async def build_changes(as_of: datetime) -> list[dict]:
 async def api_loci_changes_recent(request: Request) -> Response:
     try:
         offset, limit, as_of = _paging(request)
-    except ValueError as e:
+    except _pg.BadPage as e:
         return _bad(e)
     try:
         rows = await build_changes(as_of)

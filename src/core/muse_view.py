@@ -30,7 +30,7 @@ import hashlib
 from datetime import datetime
 
 from . import _muse as M
-from .activity import page, past
+from .paging import page, past
 
 CLUSTERS, DAYS = "clusters", "days"
 PARTS = (CLUSTERS, DAYS)
