@@ -13,8 +13,7 @@ ordered table, and the list here is the one list of what the panel can reach.
     GET  /api/loci/graph              -> starfield: nodes + real edges + weak edges + constellations
     GET  /api/loci/similar            -> suspected-duplicate pairs + score distribution (adjustable threshold)
     GET  /api/loci/profile            -> the note by the door
-    GET  /api/loci/bucket/{id}        -> one bucket, verbatim, plus its metadata
-    GET  /api/dream/current           -> the current dream (current layer + level; 204 when there is none, and it writes a recall state)
+    GET  /api/dream/current          -> the current dream (current layer + level; 204 when there is none, and it writes a recall state)
     GET  /api/muse/pending            -> is it time to muse? (cluster count + age + worth_poking)
     GET  /api/loci/pulse              -> health check: how many entries, how much space, are the engines alive
     GET  /api/loci/poke               -> dream (delivery) + muse cluster count (nudge) + structured recall scores, all in one read-only call
@@ -51,15 +50,18 @@ ordered table, and the list here is the one list of what the panel can reach.
                                          (`?cursor=…&limit=`) and never sees those numbers
                                          (hook key; core/_ledger.py)
 
-🔴 THE WRITE SURFACE — fifteen POST routes, and every one of them writes something.
+🔴 THE WRITE SURFACE — fifteen POST routes here and two in the detail-window block below,
+and every one of them writes something.
 
     POST /api/loci/similar/action     -> a human verdict on a suspected duplicate: keep
                                          both, or sink one (trace delete=True — a soft
                                          delete, always recoverable by direct id lookup)
     POST /api/loci/want/resolve       -> close something that was wanted (trace status)
     POST /api/loci/want/asked         -> record that it was asked about (trace)
-    POST /api/loci/event/correct      -> regrow: writes a NEW VERSION of a memory
-    POST /api/loci/subjects/action    -> edits the alias table in the data volume
+    POST /api/loci/event/correct      -> regrow: writes a NEW VERSION of a memory (the
+                                         content kind of entry/fix, under its old name)
+    POST /api/loci/subjects/action    -> edits the alias table in the data volume (the
+                                         same handler as names/action)
     POST /api/loci/auth/set-password  -> sets the password guarding remote MCP access
     POST /api/loci/dream/wake         -> the demotion signal: drop a live "whole" dream
                                          layer down to the fragment layer (idempotent)
@@ -102,6 +104,26 @@ ordered table, and the list here is the one list of what the panel can reach.
                                          cards} / {window, turns} / {window, all: true}); they
                                          may be handed again (hook key)
 
+The detail window, the name card and the names page (panel contract 「面板接口」 §三 §四
+§五 name). Handlers in web/loci_detail.py (bucket, lineage, source, entry/fix) and
+web/loci_names.py (names, names/pending, names/{name}, names/action); what they show is
+assembled and worded in core/detail.py and core/census.py. Both POSTs write:
+
+    GET  /api/loci/bucket/{id}        -> one entry verbatim, its metadata, the tag row, the
+                                         关联 counts, its source layer and the edits offered
+    GET  /api/loci/lineage/{id}       -> 关联: what came after it, its cue and live holds
+    GET  /api/loci/source/{id}        -> 来源: its sources and their state, what it stands
+                                         on, how it is known; `?fetch=<n>` asks the host for
+                                         source n's original (nothing stored or logged)
+    GET  /api/loci/names              -> the names the table knows, by kind; paged
+    GET  /api/loci/names/pending      -> the names it does not know yet, each with the
+                                         entry it first appeared in; paged
+    GET  /api/loci/names/{name}       -> one name's card and the entries it appears in
+    POST /api/loci/entry/fix          -> 字写错了 (trace old_str/new_str) · 内容错了 (a new
+                                         version marked 人改的) · 删除 (trace delete=True)
+    POST /api/loci/names/action       -> not_person / merge / rename / set_kind on one name
+                                         (aliases.yaml)
+
 Where each group lives (a new route goes into its group's module and gets its line in
 `register`, which adds the routes in this order). A read that computes something over the
 store is a core function plus a thin builder here: the builder reads the library, config
@@ -110,8 +132,8 @@ route turns its dict into JSON (core/starfield.py, core/census.py, core/similari
 core/health.py, core/profile.py):
 
     web/loci_pages.py     /loci, /loci/vendor
-    web/loci_reads.py     recall, rooms, graph, profile, recollect, subjects, bucket,
-                          and the builders behind them
+    web/loci_reads.py     recall, rooms, graph, profile, recollect, subjects, and the
+                          builders behind them
     web/loci_similar.py   similar, similar/action
     web/loci_verdicts.py  want/resolve, want/asked, event/correct, subjects/action
     web/loci_password.py  auth/state, auth/set-password
@@ -195,7 +217,6 @@ def register(mcp) -> None:
     mcp.custom_route("/api/loci/poke", methods=["GET"])(loci_dream.api_loci_poke)
     mcp.custom_route("/api/loci/dream/wake", methods=["POST"])(loci_dream.api_loci_dream_wake)
     mcp.custom_route("/api/dream/current", methods=["GET"])(loci_dream.api_dream_current)
-    mcp.custom_route("/api/loci/bucket/{bucket_id}", methods=["GET"])(loci_reads.api_loci_bucket)
 
     # ---------------------------------------------------------
     # The export package, bringing one back, and the recompute after a change of
@@ -208,4 +229,20 @@ def register(mcp) -> None:
     mcp.custom_route("/api/loci/import-package", methods=["GET"])(_lib.import_status)
     mcp.custom_route("/api/loci/embedding/migration", methods=["GET"])(_lib.reembed_status)
     mcp.custom_route("/api/loci/embedding/migration", methods=["POST"])(_lib.reembed_action)
+
+    # ---------------------------------------------------------
+    # The detail window, the name card and the names page (web/loci_detail.py,
+    # web/loci_names.py). names/pending and names/action are registered before
+    # names/{name}, which would otherwise take them as a name.
+    # ---------------------------------------------------------
+    from . import loci_detail as _detail
+    from . import loci_names as _names
+    mcp.custom_route("/api/loci/bucket/{bucket_id}", methods=["GET"])(_detail.api_loci_bucket)
+    mcp.custom_route("/api/loci/lineage/{bucket_id}", methods=["GET"])(_detail.api_loci_lineage)
+    mcp.custom_route("/api/loci/source/{bucket_id}", methods=["GET"])(_detail.api_loci_source)
+    mcp.custom_route("/api/loci/entry/fix", methods=["POST"])(_detail.api_loci_entry_fix)
+    mcp.custom_route("/api/loci/names", methods=["GET"])(_names.api_loci_names)
+    mcp.custom_route("/api/loci/names/pending", methods=["GET"])(_names.api_loci_names_pending)
+    mcp.custom_route("/api/loci/names/action", methods=["POST"])(_names.api_loci_names_action)
+    mcp.custom_route("/api/loci/names/{name}", methods=["GET"])(_names.api_loci_name_card)
 

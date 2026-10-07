@@ -9,7 +9,6 @@ web/loci_reads.py — the panel's reads, and the builders behind them
     GET  /api/loci/profile            -> the note by the door
     GET  /api/loci/recollect          -> pull a faded or sunk memory back up
     GET  /api/loci/subjects           -> the "who is in here" screen
-    GET  /api/loci/bucket/{id}        -> one bucket, verbatim, plus its metadata
 ========================================
 """
 
@@ -21,7 +20,6 @@ from core import _when as _w      # "today" in the user's local timezone — nev
 from core import census as _census
 from core import starfield as _starfield
 from core.profile import _PROFILE_TAG
-from core.starfield import split_ids
 from utils import read_from_ids
 
 logger = sh.logger
@@ -315,63 +313,4 @@ async def api_loci_subjects(request: Request) -> Response:
         return JSONResponse(await build_subjects())
     except Exception as e:                       # noqa: BLE001
         logger.warning(f"[loci] subjects 失败: {e}")
-        return JSONResponse({"error": str(e)}, status_code=500)
-
-
-# ---------------------------------------------------------
-# Click through to the original text, reusing recall's direct-id-lookup rules: verbatim,
-# never truncated.
-# ---------------------------------------------------------
-async def api_loci_bucket(request: Request) -> Response:
-    from starlette.responses import JSONResponse
-    bucket_id = str(request.path_params.get("bucket_id") or "").strip()
-    if not bucket_id:
-        return JSONResponse({"error": "missing id"}, status_code=400)
-    try:
-        from tools.recall.core import _room_cn, _short_id
-        from core._rooms import normalize_room, is_event_room
-        b = await sh.bucket_mgr.get_including_archive(bucket_id)
-        if not b:
-            return JSONResponse(
-                {"error": f"查无此桶：{bucket_id}（可能已物理删除或打错，不做语义联想）"},
-                status_code=404)
-        meta = b.get("metadata", {}) or {}
-        room = normalize_room(meta.get("room")) or str(meta.get("room") or "")
-        archived = (str(meta.get("type") or "") == "archived"
-                    or bool(meta.get("tombstone")) or bool(meta.get("deleted_at")))
-        return JSONResponse({
-            "id": bucket_id,
-            "short": _short_id(bucket_id),
-            "name": str(meta.get("name") or ""),
-            "summary": str(meta.get("summary") or ""),
-            "content": str(b.get("content") or ""),   # verbatim, never truncated
-            "room": room,
-            "room_cn": _room_cn(meta.get("room")),
-            "when": str(meta.get("when") or ""),
-            "created": str(meta.get("created") or ""),
-            "last_active": str(meta.get("last_active") or ""),
-            "valence": meta.get("valence"),
-            "arousal": meta.get("arousal"),
-            "status": str(meta.get("status") or ""),
-            "pinned": bool(meta.get("pinned")),
-            "tags": [str(t) for t in (meta.get("tags") or [])],
-            # Subjects are a third kind of tag, sitting alongside tags and aliases and
-            # never mixed with them.
-            "subjects": [str(s) for s in (meta.get("subjects") or [])],
-            "from": read_from_ids(meta),
-            "supersedes": split_ids(meta.get("supersedes")),
-            "superseded_by": str(meta.get("superseded_by") or ""),
-            "archived": archived,
-            # The `meaning` write path is retired, but **existing data on disk is still
-            # displayed** — there are true things in there, and where they end up should
-            # be decided after reading them, not before.
-            "meaning": meta.get("meaning") or [],
-            "why_remembered": str(meta.get("why_remembered") or ""),
-            # Only an event may be corrected here; mind gets no such opening. Archived
-            # buckets cannot be edited either — correcting one means restoring it first,
-            # the same rule regrow follows.
-            "can_edit": bool(is_event_room(room)) and not archived,
-        })
-    except Exception as e:
-        logger.warning(f"[loci] bucket 失败: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)

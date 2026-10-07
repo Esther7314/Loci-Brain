@@ -12,7 +12,17 @@ Both measure the way recall does: the timeline gate (`core/visibility.on_timelin
 filters first, so the number on the panel is the number the model sees on waking.
 **Read-only; nothing is written to disk.**
 
-Exports: rooms(all_buckets) · subjects(all_buckets)
+The names page and the name card (contract 「面板接口」 §四, §五 name) count over the same
+listing: `names_page` (the names the table knows, by kind, most mentioned first),
+`pending_names` (the names it does not know yet, each with the entry it first appeared
+in, newest first), `name_card` (one name: what the table says, its card, the entries it
+appears in). Their lists page by offset / limit, counting only entries written before
+`as_of` so a page does not shift while it is read (`page_of`, `written_before`).
+`name_action` is the one way the names page's buttons write: it goes through
+core/names (aliases.yaml only, never an entry) and says what it did in words.
+
+Exports: rooms(all_buckets) · subjects(all_buckets) · page_of · written_before ·
+         names_page · pending_names · name_card · NAME_ACTIONS · name_action
 ========================================
 """
 
@@ -82,6 +92,8 @@ def subjects(all_buckets: list) -> dict:
     variants: dict[str, set] = {}             # canonical name -> the spellings actually found on disk
     last: dict[str, datetime] = {}
     last_bucket: dict[str, str] = {}
+    first: dict[str, datetime] = {}
+    first_bucket: dict[str, str] = {}
     blocked_hits: Counter = Counter()
     total = 0
     with_subj = 0
@@ -114,6 +126,9 @@ def subjects(all_buckets: list) -> dict:
             if ts is not None and (canon not in last or ts > last[canon]):
                 last[canon] = ts
                 last_bucket[canon] = bid
+            if ts is not None and (canon not in first or ts < first[canon]):
+                first[canon] = ts
+                first_bucket[canon] = bid
     names_out = []
     for nm, c in counts.most_common():
         ts = last.get(nm)
@@ -123,6 +138,8 @@ def subjects(all_buckets: list) -> dict:
             "n": c,
             "last": ts.strftime("%Y-%m-%d") if ts else "",
             "last_bucket": last_bucket.get(nm, ""),
+            "first": first[nm].strftime("%Y-%m-%d") if nm in first else "",
+            "first_bucket": first_bucket.get(nm, ""),
             # empty = not in the alias table yet (a newly appeared name)
             "canonical": table.get(nm.lower(), ""),
             # older spellings still on disk; a merge applies going forward and never
@@ -147,3 +164,157 @@ def subjects(all_buckets: list) -> dict:
         # not vanish into thin air — nobody can undo something that disappeared quietly.
         "blocked": [{"name": k, "n": v} for k, v in blocked_hits.most_common()],
     }
+
+
+# ============================================================
+# The names page and the name card
+# ============================================================
+
+def page_of(items: list, offset: int, limit: int) -> dict:
+    """One page of an already ordered list: {items, total, offset, limit, next_offset};
+    next_offset is None on the last page."""
+    total = len(items)
+    nxt = offset + limit
+    return {"items": items[offset:nxt], "total": total, "offset": offset, "limit": limit,
+            "next_offset": nxt if nxt < total else None}
+
+
+def written_before(all_buckets: list, as_of: datetime | None) -> list:
+    """The entries written at or before `as_of` (all of them when it is None); one with
+    no readable `created` counts as written before."""
+    if as_of is None:
+        return list(all_buckets)
+    from ._when import parse_stamp
+    out = []
+    for b in all_buckets:
+        created = parse_stamp((b.get("metadata") or {}).get("created"))
+        if created is None or created <= as_of:
+            out.append(b)
+    return out
+
+
+def _newest_first(b: dict) -> float:
+    """Sort key: newest first by node_ts; an entry with no time last."""
+    ts = node_ts(b.get("metadata") or {})
+    return -ts.timestamp() if ts is not None else float("inf")
+
+
+def _memory_line(b: dict) -> dict:
+    from .detail import date_of
+    from .profile import entry_label, short_id
+    meta = b.get("metadata") or {}
+    bid = str(meta.get("id") or b.get("id") or "")
+    return {"id": bid, "short": short_id(bid), "date": date_of(meta),
+            "text": entry_label(meta, str(b.get("content") or ""))}
+
+
+def names_page(all_buckets: list, *, kind: str = "", offset: int = 0, limit: int = 5,
+               as_of: datetime | None = None) -> dict:
+    """The names page: the names the table knows that appear in the store, most
+    mentioned first, filtered to one `kind` when given; the kinds with how many names
+    each; how many names wait to be recognised."""
+    rows = subjects(written_before(all_buckets, as_of))["names"]
+    known = [r for r in rows if r["canonical"]]
+    kinds = Counter(r["kind"] for r in known if r["kind"])
+    items = []
+    for r in known:
+        if kind and r["kind"] != kind:
+            continue
+        rec = subj.record_of(r["name"])
+        items.append({"name": r["name"], "kind": r["kind"], "n": r["n"],
+                      "aliases": list(rec.aliases) if rec else [], "last": r["last"]})
+    return {"kinds": [{"kind": k, "n": n} for k, n in
+                      sorted(kinds.items(), key=lambda kv: (-kv[1], kv[0]))],
+            **page_of(items, offset, limit),
+            "pending_count": sum(1 for r in rows if not r["canonical"])}
+
+
+def pending_names(all_buckets: list, *, offset: int = 0, limit: int = 5,
+                  as_of: datetime | None = None) -> dict:
+    """The names the table does not know yet, the most recently first seen on top, each
+    with the entry it first appeared in."""
+    listing = written_before(all_buckets, as_of)
+    by_id = {str((b.get("metadata") or {}).get("id") or b.get("id") or ""): b for b in listing}
+    rows = [r for r in subjects(listing)["names"] if not r["canonical"]]
+    rows.sort(key=lambda r: (r["first"], r["name"]), reverse=True)
+    items = []
+    for r in rows:
+        b = by_id.get(r["first_bucket"])
+        items.append({"name": r["name"], "n": r["n"], "pronoun": r["pronoun"],
+                      "first": _memory_line(b) if b else None})
+    return page_of(items, offset, limit)
+
+
+def name_card(all_buckets: list, name: str, *, offset: int = 0, limit: int = 5,
+              as_of: datetime | None = None, scope=None) -> dict | None:
+    """One name's card: what the table says it is and where it hangs, the MIND entry
+    filed as its card, and the entries whose subjects name it (after the table's
+    normalising), newest first. None when neither the table nor the store knows it."""
+    n = str(name or "").strip()
+    if not n:
+        return None
+    rec = subj.record_of(n)
+    key = rec.name if rec else n
+    table = subj.load_alias_table()
+    card_row = None
+    hits = []
+    for b in all_buckets:
+        meta = b.get("metadata") or {}
+        if not on_timeline(meta, scope):
+            continue
+        filed = str(meta.get("card_of") or "").strip()
+        if filed and subj.name_key(filed) == key:
+            if card_row is None or str(meta.get("created") or "") > str(
+                    (card_row.get("metadata") or {}).get("created") or ""):
+                card_row = b
+        raws = {table.get(str(x).strip().lower(), str(x).strip())
+                for x in (meta.get("subjects") or []) if str(x).strip()}
+        if key in raws:
+            hits.append(b)
+    if rec is None and not hits and card_row is None:
+        return None
+    hits = written_before(hits, as_of)
+    hits.sort(key=_newest_first)
+    card = None
+    if card_row is not None:
+        line = _memory_line(card_row)
+        card = {"id": line["id"], "short": line["short"],
+                "text": str(card_row.get("content") or "").strip() or line["text"]}
+    return {"name": key,
+            "kind": rec.instance_of if rec else "",
+            "aliases": list(rec.aliases) if rec else [],
+            "present_in": list(rec.present_in) if rec else [],
+            "member_of": list(rec.member_of) if rec else [],
+            "card": card,
+            "memories": page_of([_memory_line(b) for b in hits], offset, limit)}
+
+
+NAME_ACTIONS = ("not_person", "merge", "rename", "set_kind")
+
+
+def name_action(action: str, name, target=None, kind=None) -> dict:
+    """One button on the names page: {changed, note}. Raises ValueError for an action
+    it does not know or a name core/names refuses.
+
+      not_person  this is not a name -> the not-a-person list; no entry is touched
+      merge       these two are one -> `name` folded into `target`
+      rename      its proper name -> the same, `target` the new canonical name
+      set_kind    what it is (人 / 书 / 游戏 …) -> its instance_of
+
+    Like every edit of the table, it applies going forward: entries keep the spelling
+    they were written with, and the panel collapses them by the table."""
+    action = str(action or "").strip()
+    if action == "not_person":
+        changed = subj.mark_not_person(name)
+        note = "记下了，以后不再抽它（历史那几条没动）" if changed else "它已经在黑名单里了"
+    elif action in ("merge", "rename"):
+        changed = subj.merge_names(name, target)
+        note = ("写进别名表了 —— 只管以后，老条目盘上还是老名字" if changed
+                else "这条已经在表里了")
+    elif action == "set_kind":
+        changed = subj.set_kind(name, kind)
+        note = (f"记下了：「{str(name).strip()}」是{str(kind).strip()} —— 只改名字表，老条目没动"
+                if changed else "表里已经是这样了")
+    else:
+        raise ValueError("action 只有四个：not_person / merge / rename / set_kind")
+    return {"changed": bool(changed), "note": note}
