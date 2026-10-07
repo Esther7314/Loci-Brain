@@ -52,8 +52,10 @@ async def build_muse_pending() -> dict:
          "gist_fingers": fingers on the event side,
          "oldest_days": how many days the oldest one has been pending,
          "worth_poking": whether a nudge is warranted}
-    `worth_poking` = (clusters or fingers reached `poke_min_clusters`) **and** (the oldest
-    has been pending for `poke_min_age_days`) **and** `poke_on_wake` is on (the panel's
+    `worth_poking` = (clusters and fingers counted together reached `poke_min_clusters`:
+    the panel's 「攒够几团才提」 counts 「日子和想法加在一起」, so one day group and one
+    thought cluster make two) **and** (the oldest has been pending for
+    `poke_min_age_days`) **and** `poke_on_wake` is on (the panel's
     「醒来的时候提一句」: off, a host's wake never hears it is time; a poke from the panel
     still reaches the model, core/_nudge.py).
     All three live in the `muse:` section of `config.yaml` and are read live —
@@ -93,7 +95,7 @@ async def build_muse_pending() -> dict:
         "gist_fingers": finger_count,
         "oldest_days": int(oldest),
         "worth_poking": bool(cfg["poke_on_wake"]
-                             and (cluster_count >= min_clusters or finger_count >= min_clusters)
+                             and cluster_count + finger_count >= min_clusters
                              and oldest >= min_age_days),
     }
 
@@ -135,7 +137,8 @@ async def build_poke(query: str = "", when: str = "", room: str = "",
     `core._dream.withheld_ingredients()`. Left out is a shape the bridge already reads:
     no dream is the ordinary daytime answer.
 
-    `muse_pending`: the cluster count, reusing `build_muse_pending()` directly (one cached
+    `muse_pending`: how many are waiting, thought clusters and day groups together — the
+    count the threshold counts — reusing `build_muse_pending()` directly (one cached
     pass, the same numbers muse()'s first step sees, with no rescan of the store).
     **The threshold reuses the existing `worth_poking`** (`poke_min_clusters` and
     `poke_min_age_days` in config.yaml's `muse:` section). Below the threshold it reports 0,
@@ -184,7 +187,8 @@ async def build_poke(query: str = "", when: str = "", room: str = "",
         logger.warning(f"[loci] poke 取梦失败: {e}")
 
     muse = await build_muse_pending()
-    muse_pending = int(muse["mind_clusters"]) if muse.get("worth_poking") else 0
+    muse_pending = (int(muse["mind_clusters"]) + int(muse["gist_fingers"])
+                    if muse.get("worth_poking") else 0)
 
     scores: list[dict] = []
     q = str(query or "").strip()

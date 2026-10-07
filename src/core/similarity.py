@@ -16,7 +16,7 @@ time; nothing here reaches for a locator.
 
 Exports: SIM_DEFAULT / SIM_FLOOR / PAIRS_CAP · emb_db_path(buckets_dir) ·
          stored_ids(buckets_dir) · buckets_rev(buckets_dir) · load_vectors(buckets_dir) ·
-         visible(meta) · pairs(bucket_mgr, buckets_dir) · above(data, threshold, limit) ·
+         visible(meta) · pairs(bucket_mgr, buckets_dir) · above(data, threshold, limit, skip) ·
          has_pair(data, a, b) · invalidate()
 ========================================
 """
@@ -28,6 +28,7 @@ import sqlite3
 import threading
 import time
 from collections import Counter
+from typing import Callable
 
 from . import _fold as _F
 
@@ -240,10 +241,12 @@ async def pairs(bucket_mgr, buckets_dir: str) -> dict:
     return result
 
 
-def above(data: dict, threshold: float, limit: int) -> tuple[list, int]:
+def above(data: dict, threshold: float, limit: int,
+          skip: Callable[[str, str], bool] | None = None) -> tuple[list, int]:
     """The pairs at or above `threshold` whose two ends are both on the page, at most
     `limit` of them -> (those (score, a, b) pairs, how many pairs score at or above the line
-    in all)."""
+    in all). `skip(a, b)` true leaves a pair out of both (the pairs the owner kept,
+    core/similar_kept.py)."""
     info = data.get("info") or {}
     out = []
     for score, a, b in data.get("pairs", []):
@@ -251,10 +254,13 @@ def above(data: dict, threshold: float, limit: int) -> tuple[list, int]:
             break            # pairs is already sorted by descending score, so stop once below the line
         if a not in info or b not in info:
             continue
+        if skip is not None and skip(a, b):
+            continue
         out.append((score, a, b))
         if len(out) >= limit:
             break
-    counted = sum(1 for score, a, b in data.get("pairs", []) if score >= threshold)
+    counted = sum(1 for score, a, b in data.get("pairs", [])
+                  if score >= threshold and not (skip is not None and skip(a, b)))
     return out, counted
 
 

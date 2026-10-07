@@ -40,7 +40,7 @@ the last two.
 
 Exports: build_breath() -> dict · render_breath(breath) -> str · stamp_asked(breath) ·
          block_ids(breath) · record_shown(breath, text) · keep_last(breath) ·
-         handed_out(breath, text) · surface_awaken() -> str
+         handed_out(breath, text) · surface_awaken() -> str · recent_card(rows) -> str
 ========================================
 """
 
@@ -58,7 +58,7 @@ from core import breath_snapshot as _snap
 from core import scope as _scope
 from core.profile import (_PROFILE_TAG, breath_settings, door_note, involuntary,
                           owed_names, prospective, reason_words, short_id)
-from ..recall.core import recall_text_and_data
+from ..recall.core import entries_of, recall_core, recall_text_and_data
 
 # How many principle lines fit on the note by the door.
 # 📌 This was briefly raised to 12 once, as an **IOU**: removing the secondary
@@ -77,6 +77,10 @@ _RULES_ON_DOOR = 8
 
 TITLES = {"core": "核心（门口那张纸）", "prospective": "惦记的事", "recent": "近三天",
           "involuntary": "忽然想起", "invalidation": "依据变了的"}
+
+# 近三天 is recall's overview of this window in this many cells: one card.
+RECENT_WHEN = "3d"
+_RECENT_CELLS = 1
 
 
 def _rule_text(content: str) -> str:
@@ -147,8 +151,8 @@ async def build_breath() -> dict:
     plan["slices_pending"] = await _slices.pending_seen() - imports
     plan["imports_pending"] = imports
 
-    mid = await recall_text_and_data(when="3d", room="", tag="", query="", max_cells=1,
-                                     road=_V.RECENT)
+    mid = await recall_text_and_data(when=RECENT_WHEN, room="", tag="", query="",
+                                     max_cells=_RECENT_CELLS, road=_V.RECENT)
     recent = {"text": str(mid.get("card") or "") if mid.get("ok") else "",
               "items": [{"id": e["id"], "short": e["short"], "text": e["label"],
                          "date": e["date"]} for e in (mid.get("entries") or [])]}
@@ -168,6 +172,18 @@ async def build_breath() -> dict:
         "invalidation": {"items": changed[:cap], "more": max(0, len(changed) - cap)},
         "earliest": min(ts_pool).date().isoformat() if ts_pool else None,
     }
+
+
+async def recent_card(rows: list) -> str:
+    """The 近三天 card over the given entries (store buckets), made the way
+    `build_breath` makes it — recall's overview for `RECENT_WHEN` in one cell — but from
+    these entries instead of the window's. The panel's breath page shows the entries a
+    breath named this way, read now (web/loci_mind.build_breath_last). "" for none."""
+    entries = entries_of(rows)
+    if not entries:
+        return ""
+    return await recall_core(RECENT_WHEN, "", "", "", max_cells=_RECENT_CELLS,
+                             collected=(entries, "", {}))
 
 
 # ── the text skin ───────────────────────────────────────────────────────────

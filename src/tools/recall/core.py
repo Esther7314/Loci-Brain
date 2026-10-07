@@ -428,6 +428,30 @@ def _parse_when(when: str) -> tuple[datetime | None, datetime | None, str]:
 _visible = _V.on_timeline
 
 
+def _entry(b: dict, ts: datetime, score=None, literal: bool = False, words: bool = False,
+           meaning: bool = False) -> dict:
+    """One store bucket in the shape the renderers read."""
+    meta = b.get("metadata", {}) or {}
+    return {"id": str(meta.get("id") or b.get("id") or ""), "meta": meta, "ts": ts,
+            "content": str(b.get("content") or ""),
+            # score exists only when the query gate ran; None = this entry came in via when/room/tag
+            "score": score, "literal": literal, "words": words, "meaning": meaning}
+
+
+def entries_of(rows: list) -> list[dict]:
+    """Given store buckets as `_collect` hands them on (oldest first), without its gates:
+    for rendering a set of entries already chosen, as the panel's breath page renders the
+    近三天 entries a breath named (tools/breath/awaken.recent_card). A bucket without a
+    time coordinate is left out, as `_collect` leaves it out."""
+    out = []
+    for b in rows:
+        ts = _w.ts_of(b.get("metadata", {}) or {})
+        if ts is not None:
+            out.append(_entry(b, ts))
+    out.sort(key=lambda x: x["ts"])
+    return out
+
+
 async def _collect(when, room, tag, query, all_buckets=None) -> tuple[list[dict], str, dict]:
     """Filter down to what is being looked at this time. Returns
     `(entries, error, ledger)`.
@@ -518,12 +542,8 @@ async def _collect(when, room, tag, query, all_buckets=None) -> tuple[list[dict]
             continue
         bid = str(meta.get("id") or b.get("id") or "")
         words, meaning = how.get(bid, (False, False))
-        out.append({"id": bid, "meta": meta, "ts": ts,
-                    "content": str(b.get("content") or ""),
-                    # score exists only when the query gate ran; None = this entry came in via when/room/tag
-                    "score": scores.get(bid),
-                    "literal": bid in literals,
-                    "words": words, "meaning": meaning})
+        out.append(_entry(b, ts, score=scores.get(bid), literal=bid in literals,
+                          words=words, meaning=meaning))
     if scores and len(out) > _SEARCH_TOPK:
         # Only after every gate does relevance close it down: keep the k
         # highest-scoring entries, then return to the timeline.

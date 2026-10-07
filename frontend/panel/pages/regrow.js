@@ -11,10 +11,10 @@
                      /api/loci/similar: the suspected-duplicate pairs above the server's
                      line, five to a page in this same row system. A row: one side's label,
                      the other's under it (opens that one), the score; the line opens the
-                     first. 「留着」 is POST /api/loci/similar/action {action: "keep"}: the
-                     server stores nothing for it, so the pair leaves this page only until
-                     the page is loaded again. Sinking one of the pair is not offered: whether
-                     two merge is the model's call.
+                     first. 「留着」 is POST /api/loci/similar/action {action: "keep", a, b}:
+                     the server remembers the pair and leaves it out of the list until either
+                     entry's text changes; the list is read again after it. Sinking one of
+                     the pair is not offered: whether two merge is the model's call.
    ========================================================== */
 
 import * as api from "../api.js";
@@ -74,14 +74,10 @@ async function renderChanges(view) {
   view.append(h("main", null, list.el));
 }
 
-// Pairs kept on this visit: the server does not store 留着, so they are left out here.
-const kept = new Set();
-const pairKey = (p) => [p.a.id, p.b.id].sort().join("|");
-
 async function renderSimilar(view) {
   view.append(subbar({ tabs: tabs("similar") }));
-  const reply = await api.get("/api/loci/similar");
-  const pairs = () => (reply.pairs || []).filter((p) => !kept.has(pairKey(p)));
+  let reply = await api.get("/api/loci/similar");
+  const pairs = () => reply.pairs || [];
   let list = null;
 
   const pairRow = (p) => {
@@ -96,7 +92,7 @@ async function renderSimilar(view) {
         fill(err);
         try {
           await api.post("/api/loci/similar/action", { action: "keep", a: p.a.id, b: p.b.id });
-          kept.add(pairKey(p));
+          reply = await api.get("/api/loci/similar");
           if (!pairs().length) fill(view, subbar({ tabs: tabs("similar") }));
           else await list.again();
         } catch (e) {

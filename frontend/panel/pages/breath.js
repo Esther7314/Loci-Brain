@@ -2,14 +2,16 @@
    pages/breath.js — breath and surface, the two sub-tabs of the first page
 
    #/breath          (boards Main, breath-phone) GET /api/loci/breath/last: the last
-                     breath actually handed out, as it was, never one computed now.
-                     Three groups:
+                     breath actually handed out — what it named, never a breath computed
+                     now — with titles read now. Three groups:
                        核心  档案 (the name page, whole) · 原则 (the pinned rules)
-                       最近  近三天 (its entries with their titles read now: the copy keeps
-                             no text, so the card the model read is not kept; see
-                             core/breath_snapshot.py) · 惦记的事 (each with why it is
-                             there now, 还有 N 条, the slices and imported stretches
-                             still waiting)
+                       最近  近三天 (the card, `recent.text`, as the model reads it,
+                             rendered now from the entries that breath named; an entry
+                             that changed since and is left off it (`in_card` false) is a
+                             row under it saying what became of it; no entries at all:
+                             这三天没存东西; see core/breath_snapshot.py) · 惦记的事 (each
+                             with why it is there now, 还有 N 条, the slices and imported
+                             stretches still waiting)
                        旧事  忽然想起 (how each came up) · 依据变了的 (only when there is
                              any; each with why, one phrase per reason, in breath's words)
                      「最近一次 · <when>」 at the right; the scope line beside it when it
@@ -35,6 +37,9 @@ const TIPS = {
   sudden: "两条旧事自己冒出来：一条是碰上最近说过的词想起来的，一条是随手翻到的。",
   moved: "一条记忆站着的地基变了：原话被改了、撤回了、删了，或者你在面板上纠正过。他看到以后，自己决定重写还是收起来。没有就整块不出现。",
 };
+
+const EMPTY_RECENT = "这三天没存东西";
+const OFF_CARD = "这几条后来变了，没算进上面的卡";
 
 // The panel reads its whole library; this is the line every panel request carries
 // (contract §一.4), and the only one breath's date line leaves out.
@@ -81,8 +86,14 @@ async function renderBreath(view) {
   const rules = (core.rules || []).map((r) => row({ text: lineOf(r), why: whyOf(r), open: open(r.id),
     right: srcLink(r.short, openSource(r.id)), layout: "start" }));
 
-  const recent = ((b.recent || {}).items || []).map((it) => row({ text: lineOf(it), why: whyOf(it, it.date),
-    open: open(it.id), layout: "start" }));
+  const rec = b.recent || {};
+  const recentItems = rec.items || [];
+  const card = rec.text
+    ? h("p", { class: "c2", style: "padding-top: 6px", text: rec.text })
+    : recentItems.length ? null : h("p", { class: "why", style: "margin: 0; padding-top: 6px", text: EMPTY_RECENT });
+  const offCard = recentItems.filter((it) => it.in_card === false).map((it) => row({ text: lineOf(it),
+    why: whyOf(it, it.date), open: open(it.id), layout: "start" }));
+  const recent = [card, offCard.length ? h("p", { class: "more", text: OFF_CARD }) : null, offCard];
 
   const plan = b.prospective || {};
   const planRows = (plan.items || []).map((it) => row({ text: lineOf(it),

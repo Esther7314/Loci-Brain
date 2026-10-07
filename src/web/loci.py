@@ -16,7 +16,8 @@ of what the panel can reach.
     GET  /api/loci/recall             -> recall's second skin (card + list), and `rows`:
                                          the text skin's lines, paged by offset / limit
     GET  /api/loci/graph              -> starfield: nodes + real edges + weak edges + constellations
-    GET  /api/loci/similar            -> suspected-duplicate pairs + score distribution (adjustable threshold)
+    GET  /api/loci/similar            -> suspected-duplicate pairs + score distribution (adjustable threshold),
+                                         less the pairs kept (core/similar_kept.py)
     GET  /api/loci/profile            -> the note by the door
     GET  /api/dream/current          -> the current dream (current layer + level; 204 when there is none, and it writes a recall state)
     GET  /api/muse/pending            -> is it time to muse? (cluster count + age + worth_poking)
@@ -68,8 +69,10 @@ of what the panel can reach.
 something.
 
     POST /api/loci/similar/action     -> a human verdict on a suspected duplicate: keep
-                                         both, or sink one (trace delete=True — a soft
-                                         delete, always recoverable by direct id lookup)
+                                         both (writes _state/similar_kept.json: ids and
+                                         version markers), or sink one (trace delete=True
+                                         — a soft delete, always recoverable by direct id
+                                         lookup)
     POST /api/loci/want/resolve       -> close something that was wanted (trace status)
     POST /api/loci/want/asked         -> record that it was asked about (trace)
     POST /api/loci/event/correct      -> regrow: writes a NEW VERSION of a memory (the
@@ -148,7 +151,9 @@ offset / limit / as_of. 🔴 POST /api/loci/trace writes.
 
     GET  /api/loci/breath/last        -> the last breath actually handed out, per host
                                          (`?host=`, else the most recent): its structure
-                                         with titles read now, each 依据变了的 item with why
+                                         with titles read now, 近三天's card rendered now
+                                         from the entries it named (`recent.text`; each
+                                         item's `in_card`), each 依据变了的 item with why
                                          it is there in breath's words (`why`), and the
                                          scope line it was handed out under
                                          (core/breath_snapshot.py)

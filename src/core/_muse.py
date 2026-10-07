@@ -174,7 +174,7 @@ MUSE_DEFAULTS: dict = {
     #      **whether the user is idle, and how to nudge, belongs to the host**) ----
     # 🔴 Loci only exposes the query (count + age). What counts as idle, whether to nudge,
     #    and whether to stay quiet at night are the gateway's business.
-    "poke_min_clusters": 2,      # how many clusters/gestures must pile up before a nudge is worth it
+    "poke_min_clusters": 2,      # how many clusters and gestures, counted together, must pile up before a nudge is worth it
     "poke_min_age_days": 3,      # how long the oldest one must have hung before a nudge is worth it
     "poke_on_wake": True,        # the panel's 「醒来的时候提一句」: off, the query never says it is time
 }

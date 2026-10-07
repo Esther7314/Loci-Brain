@@ -114,3 +114,44 @@ def test_with_the_switch_off_pending_never_says_it_is_time(world, monkeypatch):
     assert asyncio.run(L.build_muse_pending())["worth_poking"] is True
     world["call"]("POST", "/api/config", {"muse": {"poke_on_wake": False}})
     assert asyncio.run(L.build_muse_pending())["worth_poking"] is False
+
+
+def _waiting(monkeypatch, n_clusters: int, n_fingers: int, days_old: int = 10) -> None:
+    old = W.now() - timedelta(days=days_old)
+    item = M.Item(id="a1c3e5f7b9d2", room="MIND/TRAITS", ts=None, created=old, v=0.6,
+                  a=0.3, tags=[], text="")
+    clusters = [M.Cluster(ids=[item.id], items=[item], shelf_v=0.6, shelf_a=0.3,
+                          from_core=[], semantic_add=[]) for _ in range(n_clusters)]
+    fingers = {"空白记账": [M.Finger(name="空白记账", ids=[item.id], items=[item], start=old,
+                                    end=old) for _ in range(n_fingers)]}
+
+    async def both_sides(force=False, scope=None):
+        return clusters, 0, 0, fingers, {}
+    monkeypatch.setattr(M, "both_sides", both_sides)
+
+
+def test_days_and_thoughts_are_counted_together_against_the_threshold(world, monkeypatch):
+    # Criterion: 「攒够几团才提」 counts 「日子和想法加在一起」 — one day group plus one
+    # thought cluster meets the default of two, while either one alone does not.
+    from web import loci_dream as L
+
+    assert M.MUSE_DEFAULTS["poke_min_clusters"] == 2
+    _waiting(monkeypatch, 1, 1)
+    pending = asyncio.run(L.build_muse_pending())
+    assert (pending["mind_clusters"], pending["gist_fingers"], pending["worth_poking"]) == (
+        1, 1, True)
+    # The poke reports the same count the threshold counted, so non-zero means it is time.
+    assert asyncio.run(L.build_poke())["muse_pending"] == 2
+
+    _waiting(monkeypatch, 0, 2)
+    assert asyncio.run(L.build_muse_pending())["worth_poking"] is True
+    assert asyncio.run(L.build_poke())["muse_pending"] == 2
+
+    for clusters, fingers in ((1, 0), (0, 1)):
+        _waiting(monkeypatch, clusters, fingers)
+        assert asyncio.run(L.build_muse_pending())["worth_poking"] is False
+        assert asyncio.run(L.build_poke())["muse_pending"] == 0
+
+    # The age condition still holds alongside the sum.
+    _waiting(monkeypatch, 1, 1, days_old=1)
+    assert asyncio.run(L.build_muse_pending())["worth_poking"] is False

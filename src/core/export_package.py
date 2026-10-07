@@ -98,6 +98,7 @@ from . import import_memory as _imports
 from . import names as _names
 from . import fields as _fields
 from . import schema as _schema
+from . import similar_kept as _similar_kept
 from . import visibility as _V
 from .scope import IMPORT_SYSTEM
 
@@ -230,6 +231,23 @@ def _scrub_dream(data: bytes, ctx: _Scrub) -> Optional[bytes]:
     return data
 
 
+def _scrub_similar_kept(data: bytes, ctx: _Scrub) -> Optional[bytes]:
+    """A kept pair naming an entry left out does not travel (core/similar_kept.py)."""
+    try:
+        doc = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    pairs = doc.get("pairs") if isinstance(doc, dict) else None
+    if not isinstance(pairs, dict):
+        return None
+    kept = {k: rec for k, rec in pairs.items()
+            if isinstance(rec, dict) and isinstance(rec.get("marks"), dict)
+            and not set(map(str, rec["marks"])) & ctx.left_out}
+    if not kept:
+        return None
+    return json.dumps({**doc, "pairs": kept}, ensure_ascii=False, indent=1).encode("utf-8")
+
+
 def _scrub_import_lines(data: bytes, ctx: _Scrub) -> Optional[bytes]:
     """An imported conversation's lines (core/import_memory.py): a line the registry holds
     as withdrawn or deleted does not travel. Withdrawing a whole batch deletes its folder,
@@ -280,6 +298,9 @@ STATE_FILES: tuple[StateFile, ...] = (
     StateFile("_state/case_recall_asked.json", FRESH,
               "scene words already asked about"),
     StateFile("_state/muse_rejected.json", FRESH, "musing pairs set aside"),
+    StateFile(f"_state/{_similar_kept.FILE}", FRESH,
+              "suspected-duplicate pairs kept on the panel (ids and version markers)",
+              _scrub_similar_kept),
     StateFile(f"night_fall/dreams/{_dream.FILE_PREFIX}*.json", FRESH, "dream records",
               _scrub_dream),
 )

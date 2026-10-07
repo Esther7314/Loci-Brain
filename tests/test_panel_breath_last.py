@@ -223,6 +223,79 @@ def test_the_page_is_behind_the_panel_gate(store, monkeypatch):
     assert call("GET", "/api/loci/breath/last").status == 401
 
 
+# ── 近三天: the card, rendered now from the entries that breath named ──────────
+
+def _recent_three(store):
+    async def go():
+        return [await store.create(f"{what}. {SECRET}", room="EVENT/SELF", name=name,
+                                   importance=imp)
+                for what, name, imp in (("Baked bread in the morning", "baked bread", 7),
+                                        ("Called her sister", "called sister", 6),
+                                        ("Watered the plants", "watered plants", 5))]
+    return run(go())
+
+
+def test_the_card_is_the_one_the_model_read_while_nothing_changed(store, tmp_path, monkeypatch):
+    # Criterion: with the entries unchanged, the page's card is byte for byte the 近三天
+    # card the breath handed out — while the copy on disk still holds no text.
+    _recent_three(store)
+    b = run(A.build_breath())
+    A.handed_out(b, A.render_breath(b))
+    assert b["recent"]["text"] and "baked bread" in b["recent"]["text"]
+    raw = _file(tmp_path)
+    assert SECRET not in raw and "baked bread" not in raw and '"text"' not in raw
+    page = routes(monkeypatch)("GET", "/api/loci/breath/last").json
+    recent = page["breath"]["recent"]
+    assert recent["text"] == b["recent"]["text"]
+    assert all(it["in_card"] for it in recent["items"])
+
+
+def test_the_card_reads_the_kept_entries_now_not_a_fresh_window(store, tmp_path, monkeypatch):
+    # Criterion: the card counts the entries that breath named, not what the three days
+    # hold now; a title changed since shows as it reads now; a deleted entry is off the
+    # card and its item says so, never with its old words.
+    bread, sister, plants = _recent_three(store)
+    run(A.surface_awaken())
+    run(store.create("Went to the cinema.", room="EVENT/SELF", name="cinema trip"))
+    run(store.update(bread, name="sourdough day"))
+    run(store.delete(plants))
+    page = routes(monkeypatch)("GET", "/api/loci/breath/last").json
+    recent = page["breath"]["recent"]
+    card = recent["text"]
+    assert "2 条" in card.splitlines()[0]
+    assert "sourdough day" in card and "called sister" in card
+    assert "baked bread" not in card and "watered plants" not in card
+    assert "cinema trip" not in card and SECRET not in card
+    by_id = {it["id"]: it for it in recent["items"]}
+    assert set(by_id) == {bread, sister, plants}
+    assert by_id[plants]["in_card"] is False
+    assert by_id[plants]["state_words"] == "在归档区（已删除）"
+    assert by_id[bread]["in_card"] is True and by_id[bread]["text"] == "sourdough day"
+
+
+def test_an_entry_on_a_withdrawn_source_is_off_the_card_without_its_words(store, tmp_path):
+    from tools.breath.awaken import recent_card
+    bread, sister, plants = _recent_three(store)
+    run(A.surface_awaken())
+    kept = S.load(str(tmp_path))["breath"]
+    rows = run(store.list_all(include_archive=True))
+    for r in rows:
+        if r["metadata"]["id"] == sister:
+            r["metadata"]["invalidation"] = [{"kind": "source_gone", "source": "lento:x#1"}]
+    page = S.relabel(kept, rows)
+    [gone] = [it for it in page["recent"]["items"] if it["id"] == sister]
+    assert gone["in_card"] is False and gone["text"] is None
+    assert gone["state_words"] == "依据的来源撤回或删除了，正文不给"
+    card = run(recent_card(S.recent_rows(kept, rows)))
+    assert "called sister" not in card and "baked bread" in card
+
+
+def test_nothing_in_the_three_days_gives_an_empty_card(store, tmp_path, monkeypatch):
+    run(A.surface_awaken())
+    recent = routes(monkeypatch)("GET", "/api/loci/breath/last").json["breath"]["recent"]
+    assert recent == {"items": [], "text": ""}
+
+
 # ── 依据变了的: why each item is there ──────────────────────────────────────
 
 NOTE = "not nervous, tired"

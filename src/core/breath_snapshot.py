@@ -14,12 +14,19 @@ how and why something came up — never a memory's text: every `text` is cut on 
 deleted, archived or standing on a withdrawn source since then shows as that, not as what
 it said. Nothing here has to be cleared when a source is withdrawn.
 
-Two things the model read in that breath are therefore not kept and not shown as text:
-近三天's card (recall's three-day overview: it names memories by their titles, so keeping it
-would put this file among the places a source change has to clear) — the panel lists the
-block's entries with their titles read now instead; and the owner's note on a disputed
-judgement (her words, under the record's `text`), which `relabel` reads again from the
-entry when it words why each 依据变了的 item is there (`why`, core/_invalidation.why_words).
+Two things the model read in that breath are text that is not kept, and are made again
+from the entries when the page is read:
+  · 近三天's card (recall's three-day overview). It names memories by their titles, so
+    keeping it would put this file among the places a source change has to clear. The
+    block's entry ids are kept instead, and the page renders the card from them now
+    (tools/breath/awaken.recent_card over `recent_rows`): the same overview, over the
+    entries that breath named — not a fresh three-day window. An entry the `recent` road
+    no longer gives (deleted, archived, on a withdrawn source, gone, replaced by a newer
+    version) is left out of the card; its item says what became of it (`state_words`,
+    `in_card` false), never its old words.
+  · The owner's note on a disputed judgement (her words, under the record's `text`), which
+    `relabel` reads again from the entry when it words why each 依据变了的 item is there
+    (`why`, core/_invalidation.why_words).
 
 One small file, `<buckets>/_state/breath_last.json`:
     {"version": 1, "hosts": {host: {"at", "host", "scope", "breath"}}}
@@ -27,7 +34,8 @@ Each host's entry is replaced whole every time. `host` is "" for a call made out
 host's request (a direct call).
 
 Exports: FILE · skeleton(breath) · save(base_dir, breath, *, host, scope_line, at) ·
-         load(base_dir, host=None) · hosts(base_dir) · relabel(breath, all_buckets, scope=None)
+         load(base_dir, host=None) · hosts(base_dir) · relabel(breath, all_buckets, scope=None) ·
+         recent_rows(breath, all_buckets, scope=None)
 ========================================
 """
 
@@ -125,7 +133,9 @@ def relabel(breath: dict, all_buckets: list, scope=None) -> dict:
     deleted source gets `text` None. The name page shows its whole body and a rule its
     body on one line, as breath prints them; everything else its one-line label. Each
     依据变了的 item gains `why`: the phrases breath showed after its title, one per reason
-    (core/_invalidation.why_words), with a disputed note read now (`_with_notes`)."""
+    (core/_invalidation.why_words), with a disputed note read now (`_with_notes`). Each
+    近三天 item gains `in_card`: whether the card rendered now names it (`_card_state`).
+    The card itself is not made here (`recent_rows`)."""
     from .profile import entry_label, label_of   # lazy: profile is the heavier import
 
     by_id = {str((b.get("metadata") or {}).get("id") or b.get("id") or ""): b
@@ -170,12 +180,51 @@ def relabel(breath: dict, all_buckets: list, scope=None) -> dict:
         fill(q)
     for it in (out.get("recent") or {}).get("items") or []:
         fill(it, "recent")
+        _card_state(it, by_id.get(str(it.get("id") or "")), scope)
     for it in (out.get("involuntary") or {}).get("items") or []:
         fill(it)
     for it in (out.get("invalidation") or {}).get("items") or []:
         fill(it)
         it["why"] = _I.why_words(_with_notes(it, by_id.get(str(it.get("id") or "")), scope))
     return out
+
+
+# Why a 近三天 entry that is still live and readable is no longer on the card.
+_OFF_CARD_WORDS = {_V.SUPERSEDED: "有了新版", _V.LATER_TODAY: "日子改到了今天晚些时候"}
+
+
+def _card_verdict(row, scope):
+    """The `recent` road's verdict on a kept 近三天 entry now — the road breath's block
+    passes its entries through — or None when the entry is not in the library."""
+    if row is None:
+        return None
+    return _V.visible_for(row.get("metadata") or {}, scope, road=_V.RECENT)
+
+
+def _card_state(item: dict, row, scope) -> None:
+    """Set `in_card` on a relabelled 近三天 item, and, when the entry is still readable
+    but off the card, `state_words` saying why."""
+    verdict = _card_verdict(row, scope)
+    item["in_card"] = bool(verdict)
+    if verdict is None or verdict.shown or item.get("state_words") or item.get("text") is None:
+        return
+    words = [_OFF_CARD_WORDS[r] for r in verdict.reasons if r in _OFF_CARD_WORDS]
+    if words:
+        item["state_words"] = "，".join(words)
+
+
+def recent_rows(breath: dict, all_buckets: list, scope=None) -> list:
+    """The store buckets of the 近三天 entries kept in `breath` that the card names now —
+    those the `recent` road still gives — in the order kept. The page renders the card
+    from them (tools/breath/awaken.recent_card)."""
+    by_id = {str((b.get("metadata") or {}).get("id") or b.get("id") or ""): b
+             for b in all_buckets}
+    rows = []
+    for it in (breath.get("recent") or {}).get("items") or []:
+        row = by_id.get(str((it or {}).get("id") or ""))
+        if _card_verdict(row, scope):
+            rows.append(row)
+    return rows
 
 
 def _with_notes(item: dict, row, scope) -> dict:

@@ -3,7 +3,8 @@
 web/loci_mind.py — the panel's breath, surface, trace and regrow/fold pages
 ========================================
 
-    GET  /api/loci/breath/last        -> the last breath each host was handed, as it was
+    GET  /api/loci/breath/last        -> the last breath each host was handed: what it
+                                         named, with titles and 近三天's card read now
     GET  /api/loci/awake              -> the awake pool now, every reason on each entry
     GET  /api/loci/hanging            -> what still hangs open, awake (surface) or asleep (deep)
     POST /api/loci/trace              -> a trace button: done / drop / withdraw
@@ -82,14 +83,21 @@ def _delivered_at():
 # ---------------------------------------------------------
 async def build_breath_last(host: str | None) -> dict:
     """{at, host, scope, breath, hosts}: `host`'s last breath (the most recent of any host
-    when None) with its titles read now; {breath: None, note, hosts} when there is none."""
+    when None) with its titles read now and 近三天's card (`breath.recent.text`) rendered
+    now from the entries that breath named; {breath: None, note, hosts} when there is
+    none."""
+    from tools.breath.awaken import recent_card   # lazy: the tools layer is the heavier import
+
     base_dir = str(sh.bucket_mgr.base_dir)
     known = _snap.hosts(base_dir)
     entry = _snap.load(base_dir, host)
     if entry is None:
         return {"breath": None, "note": "还没递过", "host": host, "hosts": known}
     all_buckets = await sh.bucket_mgr.list_all(include_archive=True)
-    entry["breath"] = _snap.relabel(entry["breath"], all_buckets)
+    kept = entry["breath"]
+    entry["breath"] = _snap.relabel(kept, all_buckets)
+    recent = entry["breath"].setdefault("recent", {})
+    recent["text"] = await recent_card(_snap.recent_rows(kept, all_buckets))
     return {**entry, "hosts": known}
 
 
