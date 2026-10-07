@@ -16,7 +16,9 @@ the new ones.
 There is no environment-variable editor, no token rotation and no transport switch; the
 notes beside the routes say why.
 These four are not authenticated at this layer, like the rest of the panel routes (the
-gate is web/panel_auth.py).
+gate is web/panel_auth.py). The four POSTs read their body through `_guards._write_body`
+like every panel write: same origin and `application/json`, else 403 / 400, before
+anything is changed or any provider is called.
 
 Public surface: register(mcp).
 ========================================
@@ -35,6 +37,7 @@ from bridge.public_origin import configured_public_origin
 from .deployment_profile import normalize_public_https_origin
 
 from . import _shared as sh
+from ._guards import _write_body
 
 from utils import (  # type: ignore
     get_ai_name as _get_ai_name,
@@ -132,6 +135,20 @@ def _panel_locked() -> bool:
         return False
 
 
+async def _test_refusal(request: Request):
+    """The two connectivity tests spend the configured keys on a provider call, so they
+    go through the same write guard: the refusal (403 / 400, in the tests' own
+    `{ok, error}` shape), else None. Their body carries nothing they read."""
+    from starlette.responses import JSONResponse
+    try:
+        await _write_body(request)
+    except PermissionError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=403)
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    return None
+
+
 def register(mcp) -> None:
     # MCP auth is bound into middleware and OAuth route visibility at process
     # startup. Keep the effective value separate from the desired persisted
@@ -168,7 +185,8 @@ def register(mcp) -> None:
         }
 
     # Four routes. The panel keeps one doorway and `config.yaml` is the single source of
-    # truth; `/api/*` is not authenticated at this layer.
+    # truth; `/api/*` is not authenticated at this layer, and every POST here goes through
+    # `_write_body` (the same-origin check).
 
     @mcp.custom_route("/api/config", methods=["GET"])
     async def api_config_get(request: Request) -> Response:
@@ -271,11 +289,11 @@ def register(mcp) -> None:
         """Hot-update runtime sh.config. Optionally persist to config.yaml."""
         from starlette.responses import JSONResponse
         try:
-            body = await request.json()
-        except Exception:
-            return JSONResponse({"error": "invalid JSON"}, status_code=400)
-        if not isinstance(body, dict):
-            return JSONResponse({"error": "JSON body must be an object"}, status_code=400)
+            body = await _write_body(request)
+        except PermissionError as e:
+            return JSONResponse({"error": str(e)}, status_code=403)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
 
         updated = []
         try:
@@ -724,6 +742,9 @@ def register(mcp) -> None:
     @mcp.custom_route("/api/test/dehydration", methods=["POST"])
     async def api_test_dehydration(request: Request) -> Response:
         from starlette.responses import JSONResponse
+        refused = await _test_refusal(request)
+        if refused is not None:
+            return refused
         # Use current runtime config (api_key may have been updated in-memory)
         dehyd = sh.config.get("dehydration", {})
         model = dehyd.get("model", "")
@@ -759,6 +780,9 @@ def register(mcp) -> None:
     @mcp.custom_route("/api/test/embedding", methods=["POST"])
     async def api_test_embedding(request: Request) -> Response:
         from starlette.responses import JSONResponse
+        refused = await _test_refusal(request)
+        if refused is not None:
+            return refused
         eng = sh.embedding_engine  # read the global; it is correctly rebuilt after a config save
         if not getattr(eng, "enabled", False) or getattr(eng, "_backend", None) is None:
             return JSONResponse({
@@ -793,9 +817,11 @@ def register(mcp) -> None:
     async def api_list_models(request: Request) -> Response:
         from starlette.responses import JSONResponse
         try:
-            body = await sh._read_json_object(request)
-        except Exception:
-            return JSONResponse({"ok": False, "error": "invalid JSON"}, status_code=400)
+            body = await _write_body(request)
+        except PermissionError as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=403)
+        except ValueError as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
 
         provider_fields = ("api_key", "base_url", "api_format")
         if any(key in body and not isinstance(body[key], str) for key in provider_fields):
