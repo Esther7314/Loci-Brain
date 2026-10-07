@@ -522,6 +522,106 @@ def test_a_panel_correction_is_carded_until_folded_or_confirmed(store, tmp_path)
     assert "人改的" in _disk(tmp_path, bid)["tags"]          # the mark of the edit stays
 
 
+def _dispute(store, bid, note="That is not why."):
+    rec = I.dispute_record(bid, note, W.now().isoformat(timespec="seconds"))
+    assert run(store.add_invalidation_record(bid, rec))
+
+
+def test_her_mark_on_a_judgement_is_closed_the_three_ways(store, tmp_path):
+    kept = run(store.create("They go quiet when they are tired.", room="MIND/TRAITS"))
+    rewritten = run(store.create("They like the hill walks best.", room="MIND/VIEWS"))
+    put_away = run(store.create("They never want to be asked twice.", room="MIND/VIEWS"))
+    for bid in (kept, rewritten, put_away):
+        _dispute(store, bid)
+    assert sorted(_carded(store)) == sorted([kept, rewritten, put_away])
+
+    # Keep as is: the record is confirmed, the note stays on disk.
+    assert "确认照留" in run(trace(bucket_id=kept, invalidation="confirmed"))
+    [rec] = _disk(tmp_path, kept)["invalidation"]
+    assert rec["kind"] == I.DISPUTED and rec["confirmed_at"] and rec["note"] == "That is not why."
+    # Rewrite: the new version carries no mark, the old one leaves the block.
+    run(regrow(bucket_id=rewritten, mode="supplement", text="They like the sea best.",
+               v=0.5, a=0.3))
+    newer = _disk(tmp_path, rewritten)["superseded_by"]
+    assert "invalidation" not in _disk(tmp_path, newer)
+    # Put away.
+    assert run(store.archive(put_away))
+    assert _carded(store) == []
+
+    # Once settled, a later word from her is a mark of its own.
+    _dispute(store, kept, "Still not why.")
+    [it] = I.block(run(store.list_all()), store.sources)
+    assert it["id"] == kept and it["disputed"][0]["text"] == "Still not why."
+    read = run(R.recall_core(when="", room="", tag="", query=kept))
+    assert "⚠️人在面板上说这条不对" in read and "「Still not why.」" in read
+
+
+def test_a_revision_behind_a_derived_memory_cards_it_one_layer_at_a_time(store, tmp_path):
+    root = run(store.create(ROOT, room="EVENT/SELF",
+                            sources=[{**SRC, "id": "m_0003", "revision": "1"}]))
+    child = run(store.create(CHILD, room="MIND/TRAITS", prov=_derived(root)))
+    grandchild = run(store.create(GRANDCHILD, room="MIND/VIEWS", prov=_derived(child)))
+    before = {bid: _disk(tmp_path, bid) for bid in (child, grandchild)}
+    _revise(store, "r1", 1, "m_0003", "2")
+    line = "lento:home/private:U#m_0003"
+
+    # The memory resting on the source comes first; what is derived from it waits.
+    assert _carded(store) == [root]
+    run(trace(bucket_id=root, invalidation="confirmed"))
+    [it] = I.block(run(store.list_all()), store.sources)
+    assert it["id"] == child and it["text"]
+    assert it["basis_revised"] == [{"source": line, "revision": "2", "via": root}]
+    assert it["revised"] == [] and it["failed"] == []
+    text = A._invalidation_lines({"items": [it], "more": 0})[0]
+    assert f"它站着的 {root[:6]} 的来源 {line} 出了新版本（2）" in text, text
+    # Criterion: flagged, never rewritten — its own understanding and provenance stay.
+    after = _disk(tmp_path, child)
+    for key in ("prov", "superseded_by", "invalidation", "dont_surface"):
+        assert after.get(key) == before[child].get(key), key
+    assert run(store.get(child))["content"].strip() == CHILD
+
+    from core import detail as D
+    says = D.source_view(after, registry=store.sources, hosts=None)["still_holds"]
+    assert says == "它站着的记忆的来源宿主那边改过 1 处，这条是按改之前推的，还没复核"
+
+    run(trace(bucket_id=child, invalidation="confirmed"))
+    [rec] = _disk(tmp_path, child)["invalidation"]
+    assert (rec["kind"], rec["of"], rec["by"]) == (I.BASIS_REVISED, line, "2")
+    assert rec["confirmed_at"]
+    [it] = I.block(run(store.list_all()), store.sources)
+    assert it["id"] == grandchild and it["basis_revised"][0]["via"] == root
+    assert run(store.archive(grandchild))
+    assert _carded(store) == []
+
+    # The same line revised again comes up again, root first.
+    _revise(store, "r2", 2, "m_0003", "3")
+    assert _carded(store) == [root]
+
+
+def test_a_regrown_or_archived_holder_lets_what_is_derived_from_it_come_up(store, tmp_path):
+    root = run(store.create(ROOT, room="EVENT/SELF",
+                            sources=[{**SRC, "id": "m_0003", "revision": "1"}]))
+    child = run(store.create(CHILD, room="MIND/TRAITS", prov=_derived(root)))
+    _revise(store, "r1", 1, "m_0003", "2")
+    assert _carded(store) == [root]
+    assert run(store.archive(root))
+    [it] = I.block(run(store.list_all()), store.sources)
+    assert it["id"] == child and it["basis_revised"][0]["via"] == root
+
+
+def test_a_withdrawn_source_behind_a_derived_memory_is_not_this_road(store, tmp_path):
+    root = run(store.create(ROOT, room="EVENT/SELF",
+                            sources=[{**SRC, "id": "m_0003", "revision": "1"}]))
+    child = run(store.create(CHILD, room="MIND/TRAITS", prov=_derived(root)))
+    _revise(store, "r1", 1, "m_0003", "2")
+    run(store.sources.apply_change({"change_id": "w1", "kind": "withdrawn", "host_seq": 2,
+                                    "source": "lento:home/private:U#m_0003"}))
+    items = I.block(run(store.list_all()), store.sources)
+    assert all(it["basis_revised"] == [] for it in items)
+    assert root in [it["id"] for it in items if it["failed"]]
+    assert child not in [it["id"] for it in items if it["basis_revised"]]
+
+
 def test_confirmed_at_reaches_disk_through_update(store, tmp_path):
     # Rule 8: a new record key goes through the normaliser and the pass-through list.
     bid = run(store.create("x", room="EVENT/SELF"))

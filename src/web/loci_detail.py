@@ -9,8 +9,10 @@ web/loci_detail.py — the detail window's routes
     GET  /api/loci/source/{id}        -> 来源: its sources and their state, what it stands
                                          on, how it is known; `?fetch=<n>` asks the host
                                          for source n's original
-    POST /api/loci/entry/fix          -> 字写错了 (trace old_str/new_str) · 内容错了 (a new
-                                         version marked 人改的) · 删除 (trace delete=True)
+    POST /api/loci/entry/fix          -> 字写错了 (trace old_str/new_str) · 内容错了 (an
+                                         event: a new version marked 人改的; a MIND entry:
+                                         her `disputed` mark, nothing rewritten) · 删除
+                                         (trace delete=True)
 
 Everything the window shows is assembled and worded in core/detail.py; these routes list
 the store, hand it over, and turn the dict into JSON. Reads say the request's scope line
@@ -225,10 +227,27 @@ async def correct_event(old_id: str, new_text: str):
     return 200, {"ok": True, "old_id": old_id, "new_id": new_id, "msg": msg}
 
 
+async def dispute_judgement(bucket_id: str, note: str) -> dict:
+    """内容错了 on a MIND entry: **nothing is rewritten**. A judgement is the model's own;
+    the owner's word that it is wrong hangs on it as a `disputed` invalidation record
+    with her note (core/_invalidation.py), and the entry comes up in breath's 依据变了的
+    for the model to rewrite, put away or keep. The ledger records the record added
+    (TraceUpdated naming `invalidation`)."""
+    from core import _invalidation as _I
+    stamp = _w.now().isoformat(timespec="seconds")
+    await sh.bucket_mgr.add_invalidation_record(bucket_id,
+                                                _I.dispute_record(bucket_id, note, stamp))
+    return {"ok": True, "kind": _D.CONTENT, "id": bucket_id, "new_id": None,
+            "mark": _I.DISPUTED,
+            "msg": "挂上了「人说不对」，他下次开口前会在「依据变了的」里看到，改不改由他定"}
+
+
 async def api_loci_entry_fix(request: Request) -> Response:
     """The window's 编辑 column, one kind per click: typo {old, new} · content {text} ·
     delete. The edits offered are asked again here (core/detail.edit_actions), so an id
-    cannot be edited in a way the window would not offer."""
+    cannot be edited in a way the window would not offer. content on an event writes a
+    corrected new version (`correct_event`); on a MIND entry `text` is her note, optional,
+    and the entry only carries her mark (`dispute_judgement`)."""
     try:
         body = await _write_body(request)
     except PermissionError as e:
@@ -247,14 +266,15 @@ async def api_loci_entry_fix(request: Request) -> Response:
         if not target:
             return _gone(bucket_id)
         meta = target.get("metadata") or {}
-        from core._rooms import is_mind_room
-        if kind == _D.CONTENT and is_mind_room(meta.get("room")):
-            status, out = await correct_event(bucket_id, str(body.get("text") or ""))
-            return JSONResponse(out, status_code=status)
+        if kind == _D.CONTENT and _D.disputed_view(meta) is not None:
+            return JSONResponse({"error": "这条已经挂着一个「人说不对」了，等他看过再说"},
+                                status_code=409)
         if kind not in _D.edit_actions(meta):
             return JSONResponse(
                 {"error": "这条现在不能这么改（在归档区要先恢复；旧版要在正在用的那一版上改）"},
                 status_code=409)
+        if kind == _D.CONTENT and _D.content_fix(meta) == _D.MARK:
+            return JSONResponse(await dispute_judgement(bucket_id, str(body.get("text") or "")))
         if kind == _D.CONTENT:
             status, out = await correct_event(bucket_id, str(body.get("text") or ""))
             if status != 200:

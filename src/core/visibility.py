@@ -95,7 +95,8 @@ through the strong-reminder card with the owner's next message, not through brea
   from, and the profile page's list of the same name).
 - edited: the panel edits in 依据变了的 (core/profile.edited_by_user).
 - invalidation: the rest of 依据变了的 — an overturned basis, a source revised, withdrawn
-  or deleted (core/_invalidation.py). A basis that changed is told whatever else the entry
+  or deleted, a source revised behind what it is derived from, a judgement the owner
+  said is wrong (core/_invalidation.py). A basis that changed is told whatever else the entry
   asked for: neither `dont_surface`, a hold nor a cover keeps it off. What the block may
   not hand back — the body of an entry standing on a withdrawn or deleted source — is that
   block's own rule.

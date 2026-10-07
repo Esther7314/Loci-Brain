@@ -20,8 +20,9 @@ Five blocks and a line, in this order:
 3. 近三天 — the overview from recall(when="3d"), free of charge.
 4. 忽然想起 (involuntary) — two old things coming back unbidden, each saying how
    (core/profile.involuntary).
-5. 依据变了的 (invalidation) — memories whose ground moved: a panel correction, an
-   overturned basis, a source revised, withdrawn or deleted (core/_invalidation.py).
+5. 依据变了的 (invalidation) — memories whose ground moved: a panel correction, a
+   judgement the owner said is wrong, an overturned basis, a source revised, withdrawn
+   or deleted, a source revised behind what it is derived from (core/_invalidation.py).
 6. 📍 the earliest entry's day.
 
 One structured object, two skins: `build_breath()` makes it, `render_breath()` turns it
@@ -232,18 +233,33 @@ def _prospective_lines(p: dict) -> list[str]:
     return out
 
 
+# How much of the owner's note on a disputed judgement the block quotes; a read by id
+# shows it whole (tools/recall).
+_NOTE_SHOWN = 80
+
+
 def _invalidation_lines(block: dict) -> list[str]:
     out: list[str] = []
     edited = False
+    disputed = False
     for it in block["items"]:
         why: list[str] = []
         if it["edited"]:
             edited = True
             why.append("人在面板上改过，你还没看")
+        for r in it.get("disputed") or []:
+            disputed = True
+            note = r["text"]
+            if len(note) > _NOTE_SHOWN:
+                note = note[:_NOTE_SHOWN] + "…"
+            why.append(f"人在面板上说这条不对（{r['at'][5:10]}）" + (f"：「{note}」" if note else ""))
         for r in it["overturned"]:
             why.append(f"它站着的 {short_id(r['of'])} 被 {short_id(r['by'])} 推翻了（{r['at'][5:10]}）")
         for r in it["revised"]:
             why.append(f"来源 {r['source']} 出了新版本（{r['revision'][:16]}）")
+        for r in it.get("basis_revised") or []:
+            why.append(f"它站着的 {short_id(r['via'])} 的来源 {r['source']} 出了新版本"
+                       f"（{r['revision'][:16]}）")
         for r in it["restored"]:
             why.append(f"来源 {r['source']} 撤回或删除过、现在恢复了，这条是从站在它上面的"
                        "记忆派生的，等你看过才回来")
@@ -260,6 +276,8 @@ def _invalidation_lines(block: dict) -> list[str]:
                '看过了照留就 trace(bucket_id=…, invalidation="confirmed")')
     if edited:
         out.append("   └ 人改的认同也可以 fold（folds=[那几条], text=…）；不认同就说出来")
+    if disputed:
+        out.append("   └ 人说不对的是你自己的判断：认同就 regrow 改写，不认同就照留，也可以说出来")
     return out
 
 

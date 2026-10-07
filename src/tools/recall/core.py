@@ -1892,6 +1892,15 @@ async def recall_core(when: str, room: str, tag: str, query: str,
                 else:
                     lines.append(f"⚠️依据变了：{rec.get('of')} 被 {rec.get('by')} 推翻了"
                                  f"（{str(rec.get('at') or '')[:10]}）——这条站在它上面，看的时候记着。")
+            # The owner said on the panel that this judgement is wrong (core/
+            # _invalidation.DISPUTED): her note whole, and the three ways out.
+            from core._invalidation import disputed_open, NOTE
+            for rec in disputed_open(meta):
+                note = str(rec.get(NOTE) or "")
+                lines.append(f"⚠️人在面板上说这条不对（{str(rec.get('at') or '')[:10]}）"
+                             + (f"：「{note}」" if note else "")
+                             + f"——认同就 regrow 改写；不认同就照留 trace(bucket_id=\"{q}\", "
+                               "invalidation=\"confirmed\")，也可以说出来。")
             if src_lines:
                 lines.append("来源:")
                 lines.extend(src_lines)

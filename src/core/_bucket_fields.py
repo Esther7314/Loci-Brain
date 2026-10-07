@@ -159,7 +159,8 @@ _MEDIA_NOTE_MAX = 500
 # --- invalidation: marks that a basis of this memory changed under it (W3C PROV) ---
 # A list of records {kind, of, by, at, confirmed_at?}, appended by regrow(mode="overturn")
 # on every descendant of the overturned version, and by the confirm gesture (core/
-# _invalidation.py) for a source revision or a panel edit looked at and kept. The memory
+# _invalidation.py) for a source revision or a panel edit looked at and kept, and by the
+# panel's 内容错了 on a MIND entry (a `disputed` record with the owner's `note`). The memory
 # keeps surfacing; the mark is shown wherever it is read by id. `confirmed_at` (a day) =
 # looked at on that day and kept as it is: the record no longer counts as open. Capped so
 # a basis overturned again and again cannot grow the frontmatter without bound: the newest
@@ -169,6 +170,7 @@ _INVALIDATION_KIND_MAX = 32
 _INVALIDATION_ID_MAX = 128
 _INVALIDATION_AT_MAX = 32
 _INVALIDATION_CHANGE_MAX = 200
+_INVALIDATION_NOTE_MAX = 500     # core/_invalidation.NOTE_MAX
 
 _METADATA_TEXT_LIMITS = {
     "status": 32,
@@ -413,6 +415,10 @@ class FieldsMixin:
                     row[key] = value[:_INVALIDATION_CHANGE_MAX]
             if rec.get("cleared") is True:
                 row["cleared"] = True
+            # A disputed record carries the owner's note (core/_invalidation.DISPUTED).
+            note = cls._sanitize_text(str(rec.get("note") or "")).strip()
+            if note:
+                row["note"] = note[:_INVALIDATION_NOTE_MAX]
             out.append(row)
         return out[-_INVALIDATION_MAX_ITEMS:]
 

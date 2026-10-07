@@ -17,8 +17,12 @@ same thing.
   edit_actions(meta)     which of 字写错了 / 内容错了 / 删除 the window offers; POST
                          /api/loci/entry/fix asks it again before writing. Only a live,
                          current entry is edited (an old version is edited through the
-                         version in use, an archived one after restoring it); 内容错了 is
-                         for an event only — a MIND entry is the model's own judgement.
+                         version in use, an archived one after restoring it). 内容错了
+                         on an event writes a corrected new version; on a MIND entry —
+                         the model's own judgement — it only hangs a `disputed` mark
+                         with her note, and the model decides (`content_fix`,
+                         core/_invalidation.py). It is not offered again while one hangs
+                         (`disputed_view`).
   lineage(...)           关联: what came after it (derived entries, the gists covering it,
                          the periods it falls in, its new version) and its signposts (the
                          cue it waits on, the holds live on it). Every linked entry goes
@@ -42,8 +46,9 @@ same thing.
 Every timestamp leaves as local ISO 8601 with its offset (core/_when); a day alone as
 YYYY-MM-DD.
 
-Exports: TAG_WORDS · HOLD_WORDS · FIX_KINDS · human_tags · date_of · local_stamp ·
-         state_words · clearing_due · edit_actions · lineage · related_counts · source_layer_of ·
+Exports: TAG_WORDS · HOLD_WORDS · FIX_KINDS · NEW_VERSION · MARK · human_tags · date_of ·
+         local_stamp · state_words · clearing_due · edit_actions · content_fix ·
+         disputed_view · lineage · related_counts · source_layer_of ·
          source_view · fetch_original · entry_view
 ========================================
 """
@@ -63,7 +68,7 @@ from . import _originals as _O
 from . import _sources as _src
 from . import _when as _w
 from . import visibility as _V
-from ._rooms import is_event_room, normalize_room, room_cn
+from ._rooms import is_event_room, is_mind_room, normalize_room, room_cn
 from .profile import _EDITED_BY_USER_TAG, entry_label, owed_names, short_id
 from .scope import IMPORT_SYSTEM, LOCI
 from .starfield import split_ids
@@ -74,11 +79,13 @@ TAG_WORDS = {
     "self": "亲历", "world": "听说", "telic": "想要", "promised": "我答应的",
     "inference": "推的", "assumption": "猜的", "dream": "梦里来的", "yearly": "每年",
     "resolved": "做完了", "abandoned": "不做了", "hold": "条子", "edited": "人改的",
+    "disputed": "人说不对·待复核",
 }
 HOLD_WORDS = {"defer": "先别催", "avoid": "别碰"}
 
 TYPO, CONTENT, DELETE = "typo", "content", "delete"
 FIX_KINDS = (TYPO, CONTENT, DELETE)
+NEW_VERSION, MARK = "new_version", "mark"     # what 内容错了 does (`content_fix`)
 
 _DAY = re.compile(r"^\d{4}-\d{2}-\d{2}")
 _YEARLY = "FREQ=YEARLY"
@@ -149,6 +156,8 @@ def human_tags(meta: dict) -> list[dict]:
         add("hold", f"条子·{HOLD_WORDS[m['hold']]}")
     if _EDITED_BY_USER_TAG in [str(t) for t in (m.get("tags") or [])]:
         add("edited")
+    if _I.disputed_open(m):
+        add("disputed")
     return out
 
 
@@ -188,7 +197,28 @@ def edit_actions(meta: dict) -> list[str]:
         return []
     if is_event_room(m.get("room")):
         return [TYPO, CONTENT, DELETE]
+    if is_mind_room(m.get("room")) and not _I.disputed_open(m):
+        return [TYPO, CONTENT, DELETE]
     return [TYPO, DELETE]
+
+
+def content_fix(meta: dict) -> str | None:
+    """What 内容错了 does to this entry when the window offers it: `new_version` for an
+    event (a corrected copy marked 人改的), `mark` for a MIND entry (a `disputed` record
+    the model settles); None when it is not offered."""
+    if CONTENT not in edit_actions(meta):
+        return None
+    return NEW_VERSION if is_event_room((meta or {}).get("room")) else MARK
+
+
+def disputed_view(meta: dict) -> dict | None:
+    """The `disputed` mark hanging on the entry, for the window: {at (local), text (her
+    note, "" when none)}; None when none hangs."""
+    open_ = _I.disputed_open(meta)
+    if not open_:
+        return None
+    r = open_[-1]
+    return {"at": local_stamp(r.get("at")) or "", "text": str(r.get(_I.NOTE) or "")}
 
 
 def _line(row, *, kind: bool = False) -> dict:
@@ -378,6 +408,9 @@ def still_holds(meta: dict, findings, originals: list[dict], derived_from: list[
         return f"宿主那边改过 {len(findings.revised)} 处，这条是按改之前记的"
     if _I.open_records(meta, _I.OVERTURN):
         return "它站着的那条被推翻了，还没复核"
+    if findings.upstream:
+        return (f"它站着的记忆的来源宿主那边改过 {len(findings.upstream)} 处，"
+                "这条是按改之前推的，还没复核")
     if originals:
         return "来源还在，没改过"
     if derived_from:
@@ -402,7 +435,7 @@ def source_view(meta: dict, *, registry, hosts, scope=None, lookup: dict | None 
             derived_from.append({**_missing_line(pid), "kind": ""})
         elif _in_scope(row, scope):
             derived_from.append(_line(row, kind=True))
-    findings = _I.source_findings(m, registry)
+    findings = _I.source_findings(m, registry, lookup=_I.library_lookup(registry))
     return {"id": bid, "short": short_id(bid), "layer": source_layer_of(m),
             "originals": originals,
             "how_known": how_known(m, originals, len(derived_from)),
@@ -530,6 +563,10 @@ def entry_view(bucket: dict, lin: dict, *, scope_line: str) -> dict:
         "related": related_counts(lin),
         "source_layer": source_layer_of(meta),
         "edit": edit,
-        "can_edit": CONTENT in edit,
+        # 内容错了 as a corrected new version (an event); a MIND entry's 内容错了 is
+        # `content_fix` == "mark".
+        "can_edit": content_fix(meta) == NEW_VERSION,
+        "content_fix": content_fix(meta),
+        "disputed": disputed_view(meta),
         "scope": scope_line,
     }

@@ -8,12 +8,14 @@ WHAT IS AGREED
     Every row carries its id and short; times leave as local ISO with the offset; the tag
     row, the 关联 counts and every word on the window come from core (core/detail.py);
     an entry out of the request's scope reads as one that does not exist. 编辑 offers
-    what the current rules allow (内容错了 for an event only; nothing on an archived entry
-    or an old version) and the write asks the same rules again before writing. The three
-    edits land in the ledger the way §七 says: 字写错了 a TraceUpdated naming the body,
-    内容错了 a TraceCreated for the new version marked 人改的, 删除 a TraceDeletedToArchive
-    (soft: the entry is still read by id). A write from another origin is refused and
-    writes nothing.
+    what the current rules allow (nothing on an archived entry or an old version) and the
+    write asks the same rules again before writing. The three edits land in the ledger
+    the way §七 says: 字写错了 a TraceUpdated naming the body, 内容错了 on an event a
+    TraceCreated for the new version marked 人改的, 删除 a TraceDeletedToArchive (soft:
+    the entry is still read by id). 内容错了 on a MIND entry (Q5) rewrites nothing: her
+    `disputed` mark hangs on it (a TraceUpdated naming `invalidation`), the window shows
+    it, and it is in breath's 依据变了的 with her note until the model deals with it. A
+    write from another origin is refused and writes nothing.
 
 Checked through the registered routes against a real BucketManager.
 """
@@ -175,11 +177,14 @@ def test_the_tag_row_says_each_kind_and_leaves_a_plain_record_bare():
     assert D.human_tags({"tags": ["人改的"]}) == [{"key": "edited", "text": "人改的"}]
 
 
-def test_a_mind_entry_offers_no_content_fix_and_an_archived_one_offers_nothing(store, routes):
+def test_a_mind_entry_offers_a_content_mark_and_an_archived_one_offers_nothing(store, routes):
     view = run(store.create("小周紧张的时候想有人陪着。", room="MIND/TRAITS",
                             evidential="inference"))
     _, out = bucket(routes, view)
-    assert out["edit"] == ["typo", "delete"] and out["can_edit"] is False
+    # 内容错了 on a judgement is her mark, not a corrected copy: `can_edit` (the old
+    # drawer's new-version form) stays off.
+    assert out["edit"] == ["typo", "content", "delete"] and out["can_edit"] is False
+    assert out["content_fix"] == "mark" and out["disputed"] is None
     assert out["tags_human"] == [{"key": "inference", "text": "推的"}]
     gone = event(store, "一条要收起来的。")
     run(store.delete(gone))
@@ -317,12 +322,57 @@ def test_the_old_correct_path_still_writes_the_same_new_version(store, routes):
     assert "人改的" in run(store.get(out["new_id"]))["metadata"]["tags"]
 
 
-def test_a_mind_entry_refuses_a_content_fix_but_takes_a_typo(store, routes):
+def test_content_wrong_on_a_mind_entry_hangs_her_mark_and_rewrites_nothing(store, routes):
+    from core import _invalidation as I
+    from tools.breath import awaken as A
     view = run(store.create("小周紧张的时候想有人陪看。", room="MIND/TRAITS"))
-    status, out = fix(routes, {"id": view, "kind": "content", "text": "改掉"})
-    assert status == 403 and "mind" in out["error"]
+    n_entries = len(run(store.list_all(include_archive=True)))
+    note = "不是紧张，是累了，想一个人待着"
+    status, out = fix(routes, {"id": view, "kind": "content", "text": note})
+    assert status == 200 and out["ok"] and out["kind"] == "content", out
+    assert out["id"] == view and out["new_id"] is None and out["mark"] == "disputed"
+    # Criterion: nothing is rewritten — no new version, the body as it was.
+    assert len(run(store.list_all(include_archive=True))) == n_entries
+    assert run(store.get(view))["content"].strip() == "小周紧张的时候想有人陪看。"
+    assert not meta_of(store, view).get("superseded_by")
+    last = ledger(store)[-1]
+    assert last["event_type"] == "TraceUpdated" and last["trace_id"] == view
+    assert last["payload"]["changed_fields"] == ["invalidation"]
+    [rec] = meta_of(store, view)["invalidation"]
+    assert rec["kind"] == I.DISPUTED and rec["note"] == note and not rec.get("confirmed_at")
+
+    # The window shows the mark hanging, with her note, and does not offer it twice.
+    _, win = bucket(routes, view)
+    assert {"key": "disputed", "text": "人说不对·待复核"} in win["tags_human"]
+    assert win["disputed"]["text"] == note and win["disputed"]["at"].endswith("+08:00")
+    assert win["edit"] == ["typo", "delete"] and win["content_fix"] is None
+    status, out = fix(routes, {"id": view, "kind": "content", "text": "再说一遍"})
+    assert status == 409 and len(meta_of(store, view)["invalidation"]) == 1
+
+    # It is in 依据变了的 for the model, with her note.
+    [it] = I.block(run(store.list_all()), store.sources)
+    assert it["id"] == view and it["disputed"] == [{"at": rec["at"], "text": note}]
+    lines = A._invalidation_lines({"items": [it], "more": 0})
+    assert f"人在面板上说这条不对（10-07）：「{note}」" in lines[0], lines
+    assert "人说不对的是你自己的判断" in lines[-1]
+
+    # The other two kinds keep theirs; the old correct path still refuses a judgement.
     status, out = fix(routes, {"id": view, "kind": "typo", "old": "陪看", "new": "陪着"})
     assert status == 200, out
+    status, out = post(routes, "/api/loci/event/correct", {"id": view, "text": "改掉"})
+    assert status == 403 and "mind" in out["error"]
+
+
+def test_her_mark_with_no_note_says_so_plainly(store, routes):
+    from core import _invalidation as I
+    from tools.breath import awaken as A
+    view = run(store.create("小周周末更想待在家里。", room="MIND/VIEWS"))
+    status, _ = fix(routes, {"id": view, "kind": "content"})
+    assert status == 200
+    [it] = I.block(run(store.list_all()), store.sources)
+    assert it["disputed"][0]["text"] == ""
+    line = A._invalidation_lines({"items": [it], "more": 0})[0]
+    assert line.endswith("人在面板上说这条不对（10-07）"), line
 
 
 def test_delete_is_soft_and_recorded_and_an_archived_entry_takes_no_fix(store, routes):

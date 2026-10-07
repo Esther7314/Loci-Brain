@@ -120,8 +120,9 @@ assembled and worded in core/detail.py and core/census.py. Both POSTs write:
     GET  /api/loci/names/pending      -> the names it does not know yet, each with the
                                          entry it first appeared in; paged
     GET  /api/loci/names/{name}       -> one name's card and the entries it appears in
-    POST /api/loci/entry/fix          -> 字写错了 (trace old_str/new_str) · 内容错了 (a new
-                                         version marked 人改的) · 删除 (trace delete=True)
+    POST /api/loci/entry/fix          -> 字写错了 (trace old_str/new_str) · 内容错了 (an
+                                         event: a new version marked 人改的; a MIND entry:
+                                         her `disputed` mark) · 删除 (trace delete=True)
     POST /api/loci/names/action       -> not_person / merge / rename / set_kind on one name
                                          (aliases.yaml)
 

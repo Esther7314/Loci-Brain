@@ -595,10 +595,14 @@ class _Library:
         why: list[str] = []
         if it["edited"]:
             why.append("人在面板上改过")
+        if it.get("disputed"):
+            why.append("人在面板上说这条不对")
         for r in it["overturned"]:
             why.append(f"它站着的 {short_id(r['of'])} 被 {short_id(r['by'])} 推翻了")
         for r in it["revised"]:
             why.append(f"来源 {r['source']} 出了新版本")
+        for r in it.get("basis_revised") or []:
+            why.append(f"它站着的 {short_id(r['via'])} 的来源 {r['source']} 出了新版本")
         for r in it["restored"]:
             why.append(f"来源 {r['source']} 撤回或删除过、现在恢复了，这条从那上面派生、"
                        "等你看过")
