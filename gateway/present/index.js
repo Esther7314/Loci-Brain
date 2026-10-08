@@ -17,6 +17,11 @@
 //            timeout; what they hand back becomes an overlay on her line (window.js)
 //         ②b the last turn's fill crossed a reminder line not yet offered in this
 //            window → his reminder goes at the tail of her line (compress.js)
+//         ②c what he said while she was away (away.js): held lines her history shows
+//            are confirmed; held lines not seen yet go in before her line as his own
+//            words, and this turn's answer starts with the prefix block (on_response
+//            adds it through stream_filter.js; the day store keeps the reply with it).
+//            A wake that spoke has already pushed them through Bark (push.js).
 //         ③ assembly: client system + carry + lines from the mark on, overlays replayed
 //         ④ a streamed request asks for usage (stream_filter.js)
 //       `body: null` means "forward the client's body as it is".
@@ -42,7 +47,8 @@
 //   owner_arrived()
 //       Called first thing for every chat request: a wake in flight is aborted (wake.js).
 //
-// heartbeat_tasks is what server.js hangs on its one beat, in order: wake (wake.js).
+// heartbeat_tasks is what server.js hangs on its one beat, in order: pack (pack.js), wake
+// (wake.js), push retries (push.js).
 // A finished answer also hands its request, as it went upstream, to wake.remember_turn:
 // the snapshot a wake's prefix is copied from (private, in the thread ledger).
 //
@@ -75,10 +81,13 @@ const { create_settings } = require("./settings.js");
 const { create_prompts } = require("./prompts.js");
 const { create_cue, DEFAULT_TIMEOUT_MS: CUE_TIMEOUT_MS } = require("./cue.js");
 const { create_context_windows } = require("./context_window.js");
-const { with_usage, create_sse_filter, create_json_filter, split_summary } = require("./stream_filter.js");
+const { with_usage, create_sse_filter, create_json_filter, split_summary,
+        create_sse_prefix, create_json_prefix } = require("./stream_filter.js");
 const { estimate_prompt, measure } = require("./fill.js");
 const { create_own_turn } = require("./own_turn.js");
 const { create_wake } = require("./wake.js");
+const { create_push } = require("./push.js");
+const { create_away } = require("./away.js");
 const win = require("./window.js");
 const compress = require("./compress.js");
 const { create_packer, PACK_WAIT_MS } = require("./pack.js");
@@ -123,8 +132,12 @@ function create_present({
   // the gateway's own paid turns; the relay hands it each accepted request's credential (memory only)
   const own_turn = create_own_turn({ env, data_root, upstream, loci_address: loci, clock, zone, log,
                                      read_own: () => settings.load().values.own });
+  // ── what he said while she was away: pushed (push.js), then prefixed on her next turn (away.js) ──
+  const push = create_push({ data_root, settings, clock, zone, log,
+                             bark_base: String(env.LOCI_BARK_BASE || "").trim() || undefined });
+  const away = create_away({ data_root, threads, zone, log });
   const wake = create_wake({ data_root, threads, day_store, settings, prompts, own_turn, clock, zone, log,
-                             loci_address: loci, poke_state });
+                             loci_address: loci, poke_state, on_spoke: (item) => push.on_spoke(item) });
 
   // ———— forced / manual packing and the wall's way out (pack.js · wall.js) ————
   const read_compress = () => settings.load().values.compress;
@@ -214,6 +227,15 @@ function create_present({
       if (offered) notes.push(`压缩提醒(${offered.line})`);
     }
 
+    // ②c away (away.js): held lines she has seen are confirmed; held lines not yet seen go
+    //    in as his messages before her line, and this turn's answer starts with the prefix
+    let away_prefix = null;
+    try {
+      const shown = away.prepare({ seen, messages: body.messages, thread, w });
+      away_prefix = shown.prefix;
+      if (shown.note) notes.push(shown.note);
+    } catch (err) { log(`[gateway] present: away failed: ${err?.message || err}`); }
+
     // ③ assembly — ④ usage
     const ids = win.map_ids(body.messages, thread.branch, seen.cursor);
     const built = win.assemble(body.messages, ids, w);
@@ -229,6 +251,7 @@ function create_present({
       estimate: estimate_prompt(forward),
       deliver: built.replayed.filter((o) => o.kind === "cue" && !o.delivered).map((o) => o.turn),
       forward, keep_head: built.keep_head,   // for the wall's cut-down resend (wall.js)
+      away_prefix,   // the block the client sees before this answer (away.js), or null
     };
     return { body: forward, ctx, note: bits.join(" "), notes };
   }
@@ -355,7 +378,8 @@ function create_present({
     capture_reply(stream, headers, (raw_reply) => {
       // what the day store keeps is what the client saw: the summary block taken out
       const split = split_summary(raw_reply.text);
-      const reply = { ...raw_reply, text: split.visible };
+      // … and the away prefix in front, as the client got it (away.js says why)
+      const reply = { ...raw_reply, text: (ctx.away_prefix || "") + split.visible };
       let thread_id = ctx.thread;
       try {
         const done = threads.record_reply(ctx.seen, reply);
@@ -384,8 +408,10 @@ function create_present({
     // reaches it, whether or not anyone asked for one
     const is_sse = /text\/event-stream/i.test(String(headers?.["content-type"] || ""));
     const filter = is_sse ? create_sse_filter({ strip_usage: ctx.strip }) : create_json_filter();
-    stream.on("error", () => filter.destroy());
-    return stream.pipe(filter);
+    const prefixer = !ctx.away_prefix ? null
+      : is_sse ? create_sse_prefix(ctx.away_prefix) : create_json_prefix(ctx.away_prefix);
+    stream.on("error", () => { filter.destroy(); prefixer?.destroy(); });
+    return prefixer ? stream.pipe(filter).pipe(prefixer) : stream.pipe(filter);
   }
 
   /** What the panel may see of a window: numbers and names, never the carry or an overlay's text. */
@@ -440,9 +466,12 @@ function create_present({
     owner_arrived: wake.owner_arrived,
     own_turn,
     wake,
+    push,
+    away,
     banner_lines,
     window_status,
-    heartbeat_tasks: [{ name: "pack", run: () => packer.beat() }, { name: "wake", run: () => wake.tick() }],
+    heartbeat_tasks: [{ name: "pack", run: () => packer.beat() }, { name: "wake", run: () => wake.tick() },
+                      { name: "push", run: () => push.beat() }],
     cue_timeout_ms,
     day_store,
     threads,

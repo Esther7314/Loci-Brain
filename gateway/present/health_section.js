@@ -16,6 +16,8 @@
 //   · compress  — when a window was last folded, any way (he did it, a pack, the panel's
 //                 button), and how many paid pack failures since (present/index.js
 //                 compress_health: times, ways and counts)
+//   · push      — when a Bark push last went through, failures since, retries in flight
+//                 (push.js health(); never the key or a text)
 // Nothing in this section reads the carry, an overlay or anything else that was said.
 // ============================================================
 
@@ -70,7 +72,7 @@ function build_present_health({ present, doors }) {
     report: not_built(),
     wake: present.wake.health(),
     compress: compress_section(present, now),
-    push: not_built(),
+    push: present.push ? present.push.health() : not_built(),
     settings: { state: loaded.state, errors: loaded.errors },
     doors: {
       present_api: door,

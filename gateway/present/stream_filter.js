@@ -39,6 +39,19 @@
 // window's carry; a half one is never stored anywhere. The day store gets the text the
 // client saw — split_summary() over the reply is the same scanner over the whole text,
 // so the two agree by construction.
+//
+// ─── The prefix block ───
+// One thing is added: on the turn that shows what he said while she was away
+// (present/away.js), the block goes in front of the answer — create_sse_prefix /
+// create_json_prefix, piped after the filters above, so the summary scanner never reads
+// it and starts on the model's own first character exactly as it would without it.
+//   · streamed: the first event the client gets is one more chunk carrying the block as
+//     choice 0's text (role assistant), with the id, object, created, model and
+//     system_fingerprint of upstream's first chunk; upstream's events follow unchanged.
+//     Comment lines and events with no data that come before it pass first (they are
+//     not chunks).
+//   · plain JSON: the block is put in front of choice 0's message text (a tool-call
+//     answer with no text gets the block as its text).
 // ============================================================
 
 const { Transform } = require("stream");
@@ -304,7 +317,85 @@ function create_json_filter({ scanner = null } = {}) {
   });
 }
 
+// ———— The prefix block (present/away.js) ————
+
+/** The chunk that carries the prefix, shaped after upstream's first chunk. */
+function prefix_event(template, prefix) {
+  const chunk = {};
+  for (const k of ["id", "object", "created", "model", "system_fingerprint"]) if (template && k in template) chunk[k] = template[k];
+  if (!chunk.object) chunk.object = "chat.completion.chunk";
+  chunk.choices = [{ index: 0, delta: { role: "assistant", content: prefix }, finish_reason: null }];
+  return Buffer.from(`data: ${JSON.stringify(chunk)}\n\n`);
+}
+
+/** An SSE pass-through that sends `prefix` as the first chunk; every upstream byte follows unchanged. */
+function create_sse_prefix(prefix) {
+  let pending = Buffer.alloc(0);
+  let sent = false;
+
+  function take(event_buf, transform) {
+    if (!sent) {
+      const { data, chunk } = parse_chunk(event_buf.toString("utf8"));
+      if (data === null) { transform.push(event_buf); return; }
+      transform.push(prefix_event(chunk, prefix));
+      sent = true;
+    }
+    transform.push(event_buf);
+  }
+
+  return new Transform({
+    transform(chunk, _enc, done) {
+      if (sent) { this.push(chunk); return done(); }
+      pending = pending.length ? Buffer.concat([pending, chunk]) : Buffer.from(chunk);
+      let start = 0;
+      let line_start = 0;
+      for (let i = 0; i < pending.length && !sent; i++) {
+        if (pending[i] !== 0x0a) continue;
+        const line_end = i > line_start && pending[i - 1] === 0x0d ? i - 1 : i;
+        if (line_end === line_start) {
+          take(pending.subarray(start, i + 1), this);
+          start = i + 1;
+        }
+        line_start = i + 1;
+      }
+      const rest = pending.subarray(start);
+      pending = Buffer.alloc(0);
+      if (sent) { if (rest.length) this.push(rest); } else pending = rest;
+      done();
+    },
+    flush(done) {
+      // the stream ended before a complete event: what came is passed on as it came
+      if (pending.length) this.push(pending);
+      pending = Buffer.alloc(0);
+      done();
+    },
+  });
+}
+
+/** A plain-JSON pass-through that puts `prefix` in front of choice 0's message text. */
+function create_json_prefix(prefix) {
+  const parts = [];
+  return new Transform({
+    transform(chunk, _enc, done) { parts.push(Buffer.from(chunk)); done(); },
+    flush(done) {
+      const raw_buf = Buffer.concat(parts);
+      let body = null;
+      try { body = JSON.parse(raw_buf.toString("utf8")); } catch { body = null; }
+      const message = body?.choices?.find?.((c) => (c?.index ?? 0) === 0)?.message;
+      if (!message || typeof message !== "object") { this.push(raw_buf); return done(); }
+      if (Array.isArray(message.content)) {
+        const first = message.content.find((p) => p && typeof p === "object" && typeof p.text === "string");
+        if (first) first.text = prefix + first.text;
+        else message.content.unshift({ type: "text", text: prefix });
+      } else message.content = prefix + (typeof message.content === "string" ? message.content : "");
+      this.push(Buffer.from(JSON.stringify(body)));
+      done();
+    },
+  });
+}
+
 module.exports = {
+  create_sse_prefix, create_json_prefix,
   with_usage, create_usage_strip, create_sse_filter, create_json_filter,
   create_summary_scanner, split_summary, is_usage_only, event_data, OPEN, CLOSE,
 };

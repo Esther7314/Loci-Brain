@@ -18,7 +18,7 @@
 //   · present.json that cannot be read → defaults shown, wake reads as "do not wake",
 //     a POST refused (409) rather than written over
 //   · prompt cards: defaults, a rewrite, a reset, the same shape as Loci's
-//   · compress / report / push-test answer 501 not_built
+//   · report answers 501 not_built; push-test with no Bark code says so (skipped_config_missing)
 //   · the sentinel appears in no reply of /present/*, /loci/source or /health
 // ============================================================
 
@@ -187,8 +187,7 @@ test("GET /present: host, connected, every default, honest placeholders", { time
   assert.strictEqual(s.wake.next_why_words, "自动唤醒关着");
   assert.deepStrictEqual([s.wake.last, s.wake.next_at, s.wake.held], [null, null, 0]);
   assert.deepStrictEqual(s.wake.today, { woke: 0, spoke: 0, paid_failures: 0, dry_run: 0 });
-  assert.strictEqual(s.push.state, "not_built");
-  assert.strictEqual(s.push.last, null);
+  assert.deepStrictEqual(s.push, { state: "off", last: null, retrying: 0 }, "no Bark code: off, nothing pushed yet");
 });
 
 test("POST /present: a good patch is kept, the Bark code is never echoed", { timeout: 20000 }, async () => {
@@ -354,7 +353,7 @@ test("prompt cards: defaults, a rewrite, back to the default, a reset", { timeou
   } finally { fs.rmSync(prompts_file); }
 });
 
-test("report and push-test are not built yet: 501, said plainly; compress queues a pack", { timeout: 20000 }, async () => {
+test("report is not built yet: 501, said plainly; push-test without a code says so; compress queues a pack", { timeout: 20000 }, async () => {
   // 「现在压」 on the planted conversation: queued (its one line is inside keep_raw, so the
   // pack finds nothing to fold and sends nothing); an unknown conversation is a 404
   const queued = await call("POST", "/present/compress", { body: {} });
@@ -362,12 +361,13 @@ test("report and push-test are not built yet: 501, said plainly; compress queues
   assert.deepStrictEqual(queued.json, { ok: true, queued: true, thread: THREAD });
   assert.strictEqual((await call("POST", "/present/compress", { body: { thread: "t_000000" } })).status, 404);
   assert.strictEqual((await call("POST", "/present/compress", { body: { thread: 7 } })).status, 400);
-  for (const route of ["/present/report", "/present/push-test"]) {
-    const r = await call("POST", route, { body: {} });
-    assert.strictEqual(r.status, 501, route);
-    assert.strictEqual(r.json.ok, false);
-    assert.strictEqual(r.json.state, "not_built");
-  }
+  const report = await call("POST", "/present/report", { body: {} });
+  assert.strictEqual(report.status, 501);
+  assert.strictEqual(report.json.ok, false);
+  assert.strictEqual(report.json.state, "not_built");
+  const pushed = await call("POST", "/present/push-test", { body: {} });
+  assert.strictEqual(pushed.status, 200);
+  assert.deepStrictEqual(pushed.json, { ok: false, status: "skipped_config_missing", error: "Bark not configured", endpoint_redacted: "" });
   assert.strictEqual((await call("GET", "/present/compress")).status, 404);
   assert.strictEqual((await call("GET", "/present/nope")).status, 404);
   assert.strictEqual((await call("DELETE", "/present")).status, 404);
@@ -379,11 +379,11 @@ test("/health: a present section that says when each part last succeeded", { tim
   assert.strictEqual(r.status, 200);
   const p = r.json.present;
   assert.deepStrictEqual(p.recording, { last_line_at: "2026-10-07T20:00:00+08:00", seconds_ago: 1800 });
-  for (const part of ["report", "push"]) {
-    assert.strictEqual(p[part].state, "not_built", part);
-    assert.strictEqual(p[part].last_ok_seconds_ago, null, part);
-    assert.strictEqual(p[part].failures_since_ok, null, part);
-  }
+  assert.strictEqual(p.report.state, "not_built");
+  assert.strictEqual(p.report.last_ok_seconds_ago, null);
+  assert.strictEqual(p.report.failures_since_ok, null);
+  assert.deepStrictEqual(p.push, { state: "off", last_ok_at: null, last_ok_seconds_ago: null, failures_since_ok: 0,
+                                   last_failure_status: null, retrying: 0 });
   assert.deepStrictEqual(p.wake, { state: p.wake.state, last_ok_at: null, last_ok_seconds_ago: null, failures_since_ok: 0, held: 0 });
   // no window was ever folded here; the manual pack above found nothing and is no failure
   assert.deepStrictEqual([p.compress.state, p.compress.last_ok_seconds_ago, p.compress.failures_since_ok], ["never", null, 0]);

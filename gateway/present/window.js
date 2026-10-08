@@ -18,7 +18,8 @@
 //              can keep one part and replace the other (same privacy as the carry)
 //   overlays   what the gateway put into the model's input that the client's history does
 //              not hold: Loci's cards, a dream or the muse line, the compression reminders,
-//              later the away lines. Each is "this text, before/after line X".
+//              the away lines (his, role assistant; replayed only until she has seen
+//              them, then taken out by away.js). Each is "this text, before/after line X".
 //   offered    the reminder lines already offered in this window ("weak:<pct>", "ask"),
 //              each offered once per window (present/compress.js)
 //   summary_pending  a summary he wrote in a reply that ended in tool calls, waiting for
@@ -186,7 +187,9 @@ function map_ids(messages, branch, cursor) {
   return ids;
 }
 
-function overlay_message(o) { return { role: OVERLAY_ROLE, content: o.text }; }
+// An overlay is a system message, except the away lines (present/away.js): what he said
+// while she was away goes in as his own words, role assistant.
+function overlay_message(o) { return { role: o.role === "assistant" ? "assistant" : OVERLAY_ROLE, content: o.text }; }
 
 /**
  * Build the upstream copy.

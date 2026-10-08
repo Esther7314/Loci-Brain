@@ -54,7 +54,8 @@
 //     nothing held, no count — and it is not a failure.
 //   · ok and silent (empty, 【无话】, "No response requested."): rest; nothing to push
 //   · ok and he spoke: a day-store line with `woke: true`, and an entry in held.json
-//     ({ at, line, thread, text }) for the away step to inject and push
+//     ({ at, line, thread, text }) for the away step to inject (away.js), handed on to
+//     on_spoke for the push (push.js)
 //   · paid failure: counted, takes a place under the cap, and the interval backs off
 //     ×2, then ×4, never more; never given up on; one success resets it
 //   · unpaid failure: not counted. "connect" (upstream unreachable) backs off as well,
@@ -186,12 +187,13 @@ function pick_dream(poked, delivered) {
  * @param poke_state     poke delivery's state file (armed for dream/wake after a dream)
  * @param fetch_poke     (address) → Loci's poke reply; the real REST call by default
  * @param report_ready   () → false while today's due day report is not written yet
+ * @param on_spoke       (held item) → called once what he said is held (push.js on_spoke)
  */
 function create_wake({
   data_root, threads, day_store, settings, prompts, own_turn, clock, zone, log = console.error,
   loci_address = poke.DEFAULT_ADDRESS, poke_state = path.join(data_root, "state", "poke-window.json"),
   fetch_poke = (address) => poke._internal.fetch_poke(address, { timeout_ms: POKE_TIMEOUT_MS }),
-  report_ready = () => true,
+  report_ready = () => true, on_spoke = null,
 }) {
   const counters_file = path.join(data_root, "counters.json");
   const held_file = path.join(data_root, "held.json");
@@ -408,7 +410,11 @@ function create_wake({
       try {
         const held = read_held();
         if (!held.ok) throw new Error(held.error);
-        write_json_file(held_file, { ...held.rest, items: [...held.items, { at: iso(finished), line: line_id, thread: thread.id, text: r.text }] });
+        const item = { at: iso(finished), line: line_id, thread: thread.id, text: r.text };
+        write_json_file(held_file, { ...held.rest, items: [...held.items, item] });
+        // ── push (push.js): fire and forget; a push that fails or throws never touches the wake ──
+        if (on_spoke) Promise.resolve().then(() => on_spoke(item))
+          .catch((err) => log(`[gateway] present: push after the wake failed: ${err?.message || err}`));
       } catch (err) { log(`[gateway] present: what he said was not held: ${err?.message || err}`); }
     }
 
