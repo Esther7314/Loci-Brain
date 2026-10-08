@@ -6,11 +6,11 @@
                      now — with titles read now. Three groups, their blocks numbered in
                      order as shown (01 档案 …):
                        核心  档案 (the name page, whole) · 原则 (the pinned rules)
-                       最近  近三天 (the card, `recent.text`, as the model reads it,
-                             rendered now from the entries that breath named, shown flat
-                             like the rows; an entry that changed since and is left off it
-                             (`in_card` false) is a row under it saying what became of it;
-                             no entries at all: 这三天没存东西; see core/breath_snapshot.py)
+                       最近  近三天 (the card, `recent.text`, rendered now from the
+                             entries that breath named, squeezed for reading here
+                             (squeezeRecent) — the model reads it unsqueezed; an entry
+                             that changed since and is left off it (`in_card` false) is a row
+                             under it saying what became of it; no entries at all: 这三天没存东西; see core/breath_snapshot.py)
                              · 惦记的事 (each with why it is there now, 还有 N 条, the
                              slices and imported stretches still waiting)
                        旧事  忽然想起 (how each came up) · 依据变了的 (only when there is
@@ -52,6 +52,33 @@ const SURFACE_PAGE = 15;
 // The panel reads its whole library; this is the line every panel request carries
 // (contract §一.4), and the only one breath's date line leaves out.
 const OPEN_LINE = "〔范围：全库（open）〕";
+
+/* 近三天 squeezed for the panel: blank lines and the ─ rule dropped, a row label
+   (「在做什么   …」) turned into 「在做什么：…」, an indented line joined to the row above,
+   a bucket heading joined to the 〔when〕 line, and 围着什么 sharing 在做什么's line. */
+function squeezeRecent(text) {
+  const out = [];
+  for (const raw of String(text).split("\n")) {
+    const line = raw.replace(/\s*─+\s*$/, "");
+    if (!line.trim()) continue;
+    const last = out.length - 1;
+    if (/^\s/.test(line) && last >= 0) { out[last] += " " + line.trim(); continue; }
+    const m = line.match(/^(\S+?) {2,}(.*)$/);
+    if (m) {
+      const said = `${m[1]}：${m[2]}`;
+      if (m[1] === "围着什么" && last >= 0 && out[last].startsWith("在做什么：")) {
+        out[last] += (/[。！？]$/.test(out[last]) ? "" : "。") + said;
+      } else out.push(said);
+      continue;
+    }
+    if (/^\d{2}-\d{2}/.test(line) && last >= 0 && out[last].startsWith("〔")) {
+      out[last] += "  " + line.trim();
+      continue;
+    }
+    out.push(line.trim());
+  }
+  return out.join("\n");
+}
 
 function tabs(on) {
   return [
@@ -97,7 +124,7 @@ async function renderBreath(view) {
   const rec = b.recent || {};
   const recentItems = rec.items || [];
   const card = rec.text
-    ? h("p", { class: "c2 flat", text: rec.text })
+    ? h("p", { class: "c2 flat", text: squeezeRecent(rec.text) })
     : recentItems.length ? null : h("p", { class: "why flat", style: { margin: "0" }, text: EMPTY_RECENT });
   const offCard = recentItems.filter((it) => it.in_card === false).map((it) => entryRow(it, { why: whyOf(it, it.date) }));
   const recent = [card, offCard.length ? h("p", { class: "more", text: OFF_CARD }) : null, offCard];
