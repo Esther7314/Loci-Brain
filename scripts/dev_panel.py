@@ -6,6 +6,8 @@ dev_panel.py — the panel on a throwaway library, for looking at it
     python scripts/dev_panel.py --port 0     # any free port
     python scripts/dev_panel.py --locked     # with a panel password, to see the login page
     python scripts/dev_panel.py --keep       # leave the library folder behind afterwards
+    python scripts/dev_panel.py --gateway    # also run the gateway (gateway/server.js), so
+                                             # the present page is connected (implies --locked)
 
 Starts the real server (src/server.py, streamable-http) on 127.0.0.1 over a library made
 fresh in the system temp folder and seeded with a small believable sample through the
@@ -34,6 +36,13 @@ model-filled tags or summaries, recall finds by words only (no 「意思相近�
 vector (embedding is off in the throwaway config), so the similarity page has no pairs and
 muse finds only what needs no vector (thoughts grown from one evening, a word burst);
 dreams and slicing a host's lines do not run. The panel's reads all answer.
+
+With --gateway the script also starts the gateway on another free port of 127.0.0.1, its
+data folder inside the throwaway folder, wired to this server the way the config's
+`hosts: gateway` example wires a real one (fresh keys each run). Its upstream is
+https://api.deepseek.com/v1 with no key, so nothing it does costs anything: no chat goes
+through it, wake and the night's report wait for a key that never comes. A hosts table
+means the panel must be locked, so --gateway implies --locked.
 
 Public surface: run as a script. `seed(store, base_dir)` fills a store and
 `seed_regrow_muse_trace(store, base_dir)` adds the regrow/fold, muse and trace pages'
@@ -112,7 +121,7 @@ def _child_env(paths: dict, port: int, hook_token: str) -> dict:
     return env
 
 
-def _write_config(paths: dict) -> None:
+def _write_config(paths: dict, gateway_url: str = "") -> None:
     # JSON is YAML: written without a YAML library, read back by the server's.
     cfg = {
         "transport": "streamable-http",
@@ -121,6 +130,19 @@ def _write_config(paths: dict) -> None:
         "embedding": {"enabled": False},
         "dehydration": {"api_key": ""},
     }
+    if gateway_url:
+        # legacy stays listed: the breath handed out below comes with the hook token
+        gw = {"system": "gateway", "instance": "gateway"}
+        cfg["hosts"] = {
+            "legacy": {"token_env": "LOCI_HOOK_TOKEN", "scope_mode": "open"},
+            "gateway": {
+                "token_env": "LOCI_HOST_TOKEN_GATEWAY", "scope_mode": "open",
+                "authority": [gw], "provides": [gw],
+                "fetch_url": f"{gateway_url}/loci/source",
+                "fetch_token_env": "LOCI_FETCH_TOKEN_GATEWAY",
+                "present_url": gateway_url,
+            },
+        }
     with open(paths["config"], "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=1)
 
@@ -614,6 +636,8 @@ def main() -> int:
     ap.add_argument("--dir", help="the throwaway folder (inside the system temp folder)")
     ap.add_argument("--locked", action="store_true", help="set a panel password (printed)")
     ap.add_argument("--keep", action="store_true", help="leave the folder behind on exit")
+    ap.add_argument("--gateway", action="store_true",
+                    help="also run the gateway, so the present page is connected (implies --locked)")
     ap.add_argument("--seed-into", help=argparse.SUPPRESS)
     args = ap.parse_args()
 
@@ -637,12 +661,27 @@ def main() -> int:
     fresh = not os.path.isdir(paths["buckets"])
     for d in (paths["buckets"], paths["logs"]):
         os.makedirs(d, exist_ok=True)
-    _write_config(paths)
-
     port = _free_port(args.port)
+    gw_port = _free_port(0) if args.gateway else 0
+    gw_url = f"http://127.0.0.1:{gw_port}" if args.gateway else ""
+    _write_config(paths, gw_url)
+
     hook = secrets.token_hex(16)
     env = _child_env(paths, port, hook)
-    password = secrets.token_urlsafe(9) if args.locked else ""
+    password = secrets.token_urlsafe(9) if args.locked or args.gateway else ""
+    gw_env = None
+    if args.gateway:
+        host_token, fetch_token = secrets.token_hex(16), secrets.token_hex(16)
+        env.update({"LOCI_HOST_TOKEN_GATEWAY": host_token, "LOCI_FETCH_TOKEN_GATEWAY": fetch_token})
+        gw_env = {k: v for k, v in os.environ.items() if not k.upper().startswith("LOCI_")}
+        gw_env.update({
+            "PORT": str(gw_port),
+            "LOCI_UPSTREAM": "https://api.deepseek.com/v1",
+            "LOCI_MCP": f"http://127.0.0.1:{port}/mcp",
+            "LOCI_GATEWAY_DATA": os.path.join(base, "gateway"),
+            "LOCI_GATEWAY_TOKEN": fetch_token,
+            "LOCI_HOOK_TOKEN": host_token,
+        })
 
     try:
         if fresh:
@@ -658,6 +697,11 @@ def main() -> int:
         log = open(os.path.join(paths["logs"], "server.out.txt"), "w", encoding="utf-8")
         server = subprocess.Popen([sys.executable, os.path.join(SRC, "server.py")], env=env,
                                   cwd=base, stdout=log, stderr=subprocess.STDOUT)
+        gateway = None
+        if gw_env:
+            gw_log = open(os.path.join(paths["logs"], "gateway.out.txt"), "w", encoding="utf-8")
+            gateway = subprocess.Popen(["node", os.path.join(ROOT, "gateway", "server.js")], env=gw_env,
+                                       cwd=base, stdout=gw_log, stderr=subprocess.STDOUT)
         try:
             if not _wait_up(port, server):
                 print(f"the server did not come up; its output: {log.name}", file=sys.stderr)
@@ -672,6 +716,8 @@ def main() -> int:
 
             print(f"Loci panel (throwaway library): http://127.0.0.1:{port}/loci", flush=True)
             print(f"library: {paths['buckets']}", flush=True)
+            if gateway:
+                print(f"gateway: {gw_url} (no upstream key: nothing it does costs anything)", flush=True)
             if password:
                 print(f"panel password: {password}  (security question 第一只猫叫什么 -> 团子)", flush=True)
             print("Ctrl+C stops it.", flush=True)
@@ -679,12 +725,14 @@ def main() -> int:
         except KeyboardInterrupt:
             pass
         finally:
-            if server.poll() is None:
-                server.terminate()
+            for proc in (server, gateway):
+                if proc is None or proc.poll() is not None:
+                    continue
+                proc.terminate()
                 try:
-                    server.wait(timeout=10)
+                    proc.wait(timeout=10)
                 except subprocess.TimeoutExpired:
-                    server.kill()
+                    proc.kill()
             log.close()
     finally:
         if made and not args.keep:
