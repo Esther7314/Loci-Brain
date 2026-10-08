@@ -5,6 +5,9 @@
 // the real model, and on the way it puts what the AI ought to know into this round's
 // messages — without changing a byte of the client's own history.
 //
+// Every chat request that reaches it is the owner talking: the client points a provider
+// of its own at the gateway, so there is no tag to look for (present/threads.js).
+//
 // What goes in, and where (present/window.js keeps them as overlays on the owner's line
 // and replays each one at the same place, with the same bytes, every later turn until
 // the window changes — the prompt cache and Loci's "delivered to this window" both
@@ -14,7 +17,12 @@
 //                                         upstream accepted the turn
 //   · dreams / muse (poke_delivery.js)   right **before** her line, only on the first
 //                                         line back after a long silence (the idle gate)
+//   · a fill reminder (compress.js)      at the true tail, once per line per window
+//   · what he said while she was away    right **before** her line, as his own words,
+//     (away.js)                           until her history shows them
 // and the window itself: past a mark, the carry stands in for the older lines.
+// The gateway's own turns (wake, the day report, forced packing) go upstream through
+// present/own_turn.js, on the one heartbeat below.
 //
 // ⛔ **This shell does not call breath() on the AI's behalf.** auto_attach.js also
 //    carries a function that pastes a whole breath() into the system prompt on the
@@ -32,12 +40,17 @@
 //     Loci not running, a reply that is not JSON — still forwards as usual and writes
 //     one log line. Better to miss an attachment this round than to stall a human
 //     conversation.
-//   · **Nearly all reads, barely any writes.** It touches cue (a read, plus the
-//     delivered acknowledgement that only keeps Loci's ledger of what this window holds)
-//     and poke / dream.wake (a read-only endpoint plus an idempotent signal).
-//     ⛔ It never modifies a memory.
-//   · **The judgement stays with the AI.** A card says what matched and what is open;
-//     whether it happened, whether to act on it, is the model's to decide after reading.
+//   · **The gateway never writes a memory itself.** A chat turn touches cue (a read,
+//     plus the delivered / dropped acknowledgements that only keep Loci's ledger of what
+//     a window holds) and poke / dream.wake (a read-only endpoint plus an idempotent
+//     signal). The nightly hand-off gives Loci the day's lines as slices waiting for the
+//     model (/api/v2/slices), not as memories. In the gateway's own turns the model may
+//     call Loci's tools, and whatever is written then is the model's doing, keyed by
+//     Loci-Turn.
+//   · **The judgement stays with the AI.** A card carries text by design — what matched
+//     and what is still open — and whether it happened, whether to act on it, is the
+//     model's to decide after reading. (Counts only, never text, is auto_attach.js's
+//     rule for its relevance line; this shell does not run that module.)
 //
 // Zero dependencies: only Node's built-in http / fetch (Node 18+).
 //
@@ -52,9 +65,10 @@
 //    live here: /health is health.js, the door (bind address and passphrase) is door.js,
 //    /present/* and /loci/source are present/present_api.js and present/source_api.js
 //    behind LOCI_GATEWAY_TOKEN, everything else is relay.js, and the present layer (day
-//    store, threads, the window and its overlays, cue, settings, prompt cards, and later
-//    the nightly report, wake and push) is gateway/present/. If this file grows, the
-//    lines that grew must be mounts.
+//    store, threads, the window and its overlays, cue, compression and packing, the
+//    nightly report, wake, away and push, settings, prompt cards) is gateway/present/.
+//    If this file grows, the lines that grew must be mounts.
+//    Setup, every env var and the common errors: gateway/README.md.
 // ============================================================
 
 const http = require("http");
@@ -76,15 +90,9 @@ const upstream = (process.env.LOCI_UPSTREAM || "").replace(/\/+$/, "");
 const LOCI = process.env.LOCI_MCP || poke.DEFAULT_ADDRESS;
 const idle_threshold_minutes = Number(process.env.POKE_IDLE_MINUTES || poke.DEFAULT_IDLE_MINUTES);
 const data_root = process.env.LOCI_GATEWAY_DATA || path.join(__dirname, "data");
-// ⚰️ **The "recent memory view" was pulled out wholesale.**
-//    What it did: on the first turn of the next day's window, paste excerpts of
-//    recall(when="yesterday") into the context. But "yesterday's memory" never needed
-//    a trip to Loci — **it is exactly the few sentences squeezed out when the previous
-//    window closed**, and carrying those into the next window is the whole job. Asking
-//    Loci a second time only buys a second way of doing the same thing.
-//    The idea is kept in gateway/README.md section four (closing-window compression);
-//    the code is not. Something the docs never mention but the code still runs is a
-//    road with no entrance.
+// Yesterday reaches the next window as the carry (present/window.js: the day report and
+// the summary he wrote), never as a recall(when="yesterday") pasted in: it is the same
+// few sentences, and a second way of doing one job is a road with no entrance.
 const log_path = path.join(data_root, "logs", "memory-actions.jsonl");
 // Loci → gateway: the key Loci presents on /present/* and /loci/source. Unset = both closed
 // (/present/* 404; /loci/source 503, which Loci reads as UNAVAILABLE — see present/http_io.js).
