@@ -60,6 +60,9 @@
 // tonight's hand-off did not go through, and the stretch's raw lines, numbered. Loci's
 // tools are offered (§七.7, at most own.tool_rounds rounds). The report is his last
 // answer's words (all the run's words when it has none); an empty one is a failure.
+// Those words never hold a 【窗口摘要】 block: own_turn.js takes it out of every answer,
+// and the report ignores it — the report file is what the panel shows and the export
+// carries, and a block is not for either.
 // Upstream refusing the letter as too long drops the oldest lines from it until it fits
 // (pack.js fit_newest), as a pack does; they stay in the day store and in Loci.
 // Her arrival does not abort a report (own_turn.js aborts only wake on arrival).

@@ -342,10 +342,10 @@ test("non-streamed: the block is taken out of the JSON answer and the window fli
   assert.strictEqual(t.window.no, 2);
   assert.strictEqual(t.window.mark, t.branch[0].id, "keep_raw 3 over 2 lines: the whole conversation is kept");
 
-  // a marker in the middle of a line is text: every byte as upstream sent it
-  const mid = await turn([SYS, u("mid-line 测试")], { text: `我说的${OPEN}不是记号` }, { stream: false });
+  // a quoted marker is a mention, not a block: every byte as upstream sent it
+  const mid = await turn([SYS, u("mid-line 测试")], { text: `我说的「${OPEN}」不是记号` }, { stream: false });
   assert.strictEqual(mid.text, fake_upstream.sent.at(-1));
-  const mid_s = await turn([SYS, u("mid-line 流式")], { text: `我说的${OPEN}不是记号` });
+  const mid_s = await turn([SYS, u("mid-line 流式")], { text: `我说的「${OPEN}」不是记号` });
   assert.strictEqual(mid_s.text, fake_upstream.without_usage_chunk.at(-1));
 });
 

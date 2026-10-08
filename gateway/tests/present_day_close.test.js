@@ -410,7 +410,9 @@ test("every_n: the hand-off every night, the report and the flip only on day N",
 });
 
 test("manual: the hand-off every night, no flip until 「现在写日报」, which writes and flips", { timeout: 30000 }, async () => {
-  up.plan((body, { kind, i }) => ({ text: kind === "report" ? "ta 说换的时候写的日报。" : REPLY(i) }));
+  // a summary block in the report's answer is taken out: the report file is what the panel shows and the export carries
+  const BLOCK = "【窗口摘要】哨兵·REPORT-BLOCK-60f2【/窗口摘要】";
+  up.plan((body, { kind, i }) => ({ text: kind === "report" ? `ta 说换的时候写的日报。${BLOCK}` : REPLY(i) }));
   const g = await boot({ settings: { compress: { keep_raw: 2 }, report: { flip: "manual" } } });
   await day_one(g);
   const r = await g.beat(at("2026-10-08T04:31:00"));
@@ -427,6 +429,8 @@ test("manual: the hand-off every night, no flip until 「现在写日报」, whi
   assert.strictEqual(g.present.report_now("now").status, 409, "a second press while it runs");
   await g.present.day_close.settle();
   assert.deepStrictEqual(g.reports(), ["2026-10-08.md"]);
+  assert.strictEqual(fs.readFileSync(path.join(g.reports_dir, "2026-10-08.md"), "utf8"), "ta 说换的时候写的日报。\n");
+  assert.ok(!JSON.stringify(g.thread().window).includes("REPORT-BLOCK"), "nor the carry's report part");
   assert.strictEqual(g.thread().window.no, 2);
   assert.strictEqual(g.thread().window.opened_by.how, "day");
   await g.say([...DAY1, a("好，去吧。"), u("我回来了。")]);

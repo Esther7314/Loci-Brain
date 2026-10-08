@@ -376,6 +376,34 @@ test("silence: empty, 【无话】 or \"No response requested.\" as the whole re
   assert.strictEqual(lines(r).at(-1).silent, true);
 });
 
+test("🔴 a summary block never reaches text or said; it comes back apart, and only the next round upstream sees it", async () => {
+  const S = "哨兵·OWN-TURN-SUMMARY-3a0e";
+  const OPEN = "【窗口摘要】";
+  const CLOSE = "【/窗口摘要】";
+  up.plan((body, i) => (i === 1
+    ? { text: `先查一下。${OPEN}早的${S}${CLOSE}`, calls: [["recall", { query: "q" }]] }
+    : { text: `好的。\n**${OPEN}**\n晚的${S}\n**${CLOSE}**\n` }));
+  const r = runner();
+  r.remember_owner({ headers: { authorization: `Bearer ${KEY}` }, model: "m" });
+  const res = await r.run({ kind: "wake", messages: MSG, tools: "loci" });
+  assert.strictEqual(res.outcome, "ok");
+  assert.strictEqual(res.text, "好的。\n\n");
+  assert.strictEqual(res.said, "先查一下。\n\n好的。\n\n");
+  assert.deepStrictEqual(res.summary, { text: `晚的${S}`, closed: true }, "the newest block");
+  assert.strictEqual(res.silent, false);
+  assert.ok(up.got[1].body.messages.some((m) => m.role === "assistant" && String(m.content).includes(`早的${S}`)),
+    "the tool round goes back to him as he wrote it");
+  assert.ok(!JSON.stringify(lines(r)).includes(S));
+
+  // a block and nothing else is silence; a block that never closes comes back marked so
+  up.plan(() => ({ text: `${OPEN}只收${S}${CLOSE}` }));
+  const only = await r.run({ kind: "wake", messages: MSG });
+  assert.deepStrictEqual([only.text, only.silent, only.summary], ["", true, { text: `只收${S}`, closed: true }]);
+  up.plan(() => ({ text: `嗯。${OPEN}半截${S}` }));
+  const half = await r.run({ kind: "pack", messages: MSG });
+  assert.deepStrictEqual([half.text, half.said, half.summary], ["嗯。", "嗯。", { text: `半截${S}`, closed: false }]);
+});
+
 test("the key never reaches the disk or the log, even when upstream echoes it back", async () => {
   const dir = fresh_dir();
   const r = runner({ data_root: dir });

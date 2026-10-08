@@ -81,6 +81,14 @@
 //   · ok and he spoke: a day-store line with `woke: true`, and an entry in held.json
 //     ({ at, line, thread, text }) for the away step to inject (away.js), handed on to
 //     on_spoke for the push (push.js)
+//   · 🔴 what "he spoke" means is own_turn's `text`: his words with any
+//     【窗口摘要】…【/窗口摘要】 block already taken out (stream_filter.js). The wake replays
+//     the last turn's request, and a compression reminder there is still in front of him,
+//     so a wake may fold the window. A closed block is handed to on_fold and does what a
+//     fold in a chat turn does — it becomes the carry and flips the window (index.js
+//     after_summary, the one path for both) — as long as the window the wake started in is
+//     still the current one. A block never reaches the day store, held.json, the push,
+//     the away prefix or the ledger's wake pairs. A wake that only folded said nothing.
 //   · paid failure: counted, takes a place under the cap, and the interval backs off
 //     ×2, then ×4, never more; never given up on; one success resets it
 //   · unpaid failure: not counted. "connect" (upstream unreachable) backs off as well,
@@ -229,12 +237,14 @@ function pick_dream(poked, delivered) {
  * @param fetch_poke     (address) → Loci's poke reply; the real REST call by default
  * @param report_ready   () → false while today's due day report is not written yet
  * @param on_spoke       (held item) → called once what he said is held (push.js on_spoke)
+ * @param on_fold        ({ thread, window, summary, half }) → a wake that wrote a summary
+ *                       block (index.js after_summary); `window` is the window it started in
  */
 function create_wake({
   data_root, threads, day_store, settings, prompts, own_turn, clock, zone, log = console.error,
   loci_address = poke.DEFAULT_ADDRESS, poke_state = path.join(data_root, "state", "poke-window.json"),
   fetch_poke = (address) => poke._internal.fetch_poke(address, { timeout_ms: POKE_TIMEOUT_MS }),
-  report_ready = () => true, on_spoke = null,
+  report_ready = () => true, on_spoke = null, on_fold = null,
 }) {
   const counters_file = path.join(data_root, "counters.json");
   const held_file = path.join(data_root, "held.json");
@@ -395,6 +405,7 @@ function create_wake({
     const seen = arrivals;
     const thread = g.thread;
     const snap = thread.last_sent;
+    const window = thread.window && typeof thread.window === "object" ? thread.window.name || null : null;
     let poked = null;
     try { poked = await fetch_poke(loci_address); }
     catch (err) { write_log({ event: "wake", phase: "poke", error: String(err?.message || err).slice(0, 300) }); }
@@ -428,7 +439,7 @@ function create_wake({
     update_state((w) => { w.last_started_at = now; });
     const r = await own_turn.run({ kind: "wake", messages: built.messages, tools: built.tools, models, extra: built.extra });
     after_wall(r, thread, snap);
-    return settle({ r, thread, snap, letter, dream, shape });
+    return settle({ r, thread, snap, letter, dream, shape, window });
   }
 
   /**
@@ -450,7 +461,7 @@ function create_wake({
     } catch (err) { log(`[gateway] present: handling a wake that hit the wall failed: ${err?.message || err}`); }
   }
 
-  function settle({ r, thread, snap, letter, dream, shape }) {
+  function settle({ r, thread, snap, letter, dream, shape, window }) {
     const finished = clock.now();
     if (r.outcome === "busy") {
       gate_log("busy");
@@ -488,6 +499,12 @@ function create_wake({
         threads.save(thread.id);
       }
       if (dream) arm_dream_wake(dream);
+      // he folded the window during the wake: after the pair above, as a chat turn keeps
+      // its snapshot before it flips
+      if (r.summary && on_fold) {
+        try { on_fold({ thread: thread.id, window, summary: r.summary.closed ? r.summary.text : null, half: !r.summary.closed }); }
+        catch (err) { log(`[gateway] present: the fold after the wake failed: ${err?.message || err}`); }
+      }
     }
 
     const w = update_state((w) => {

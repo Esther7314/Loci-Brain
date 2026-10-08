@@ -50,7 +50,9 @@
 //
 // heartbeat_tasks is what server.js hangs on its one beat, in order: pack retries
 // (pack.js), the night (day_close.js: hand-off, day report, flip), wake (wake.js), push
-// retries (push.js).
+// retries (push.js). A wake whose answer held a closed summary block folds the window
+// through the same after_summary as a chat turn (wake.js on_fold); its words reach the
+// day store and held.json without the block (own_turn.js).
 // A finished answer also hands its request, as it went upstream, to wake.remember_turn:
 // the snapshot a wake's prefix is copied from (private, in the thread ledger), with the
 // assembly's layout (where the client's own messages sit in it). Every flip — he folded
@@ -148,6 +150,8 @@ function create_present({
   let day_close = null;   // built below; wake asks it whether today's due report is written
   const wake = create_wake({ data_root, threads, day_store, settings, prompts, own_turn, clock, zone, log,
                              loci_address: loci, poke_state, on_spoke: (item) => push.on_spoke(item),
+                             // a wake that folded the window takes the same path as a chat turn that did
+                             on_fold: ({ thread, window, summary, half }) => after_summary(thread, window, { summary, half }, []),
                              report_ready: () => (day_close ? day_close.report_ready() : true) });
 
   // ———— forced / manual packing and the wall's way out (pack.js · wall.js) ————
@@ -392,12 +396,14 @@ function create_present({
   }
 
   /**
-   * After a finished reply: a closed summary block is kept for the flip; the flip happens
-   * once the turn has ended (a reply without tool calls). See compress.js.
+   * After a finished reply — a chat turn's, or a wake's (wake.js on_fold): a closed summary
+   * block is kept for the flip; the flip happens once the turn has ended (a reply without
+   * tool calls). Nothing happens when the window is no longer `window_name`, the one the
+   * reply was written in. See compress.js.
    */
-  function after_summary(thread_id, ctx, split, tools) {
+  function after_summary(thread_id, window_name, split, tools) {
     const thread = threads.get(thread_id);
-    if (!thread || !thread.window || thread.window.name !== ctx.window) return;
+    if (!thread || !thread.window || thread.window.name !== window_name) return;
     const w = thread.window;
     const values = settings.load().values.compress;
     if (split.half) console.log(`[gateway] present ${thread.id} a summary block that never closed was left out (not kept)`);
@@ -420,7 +426,24 @@ function create_present({
 
   function on_response(ctx, { status, headers, stream }) {
     if (!ctx || status < 200 || status >= 300) return null;
-    confirm_delivered(ctx);
+    // the client always gets the answer through the filter: the summary block never
+    // reaches it, whether or not anyone asked for one. Built first, so nothing below that
+    // throws can leave the relay piping the answer unfiltered
+    const is_sse = /text\/event-stream/i.test(String(headers?.["content-type"] || ""));
+    const filter = is_sse ? create_sse_filter({ strip_usage: ctx.strip }) : create_json_filter();
+    const prefixer = !ctx.away_prefix ? null
+      : is_sse ? create_sse_prefix(ctx.away_prefix) : create_json_prefix(ctx.away_prefix);
+    stream.on("error", () => { filter.destroy(); prefixer?.destroy(); });
+    const to_client = prefixer ? stream.pipe(filter).pipe(prefixer) : stream.pipe(filter);
+    try { confirm_delivered(ctx); }
+    catch (err) { log(`[gateway] present: confirming the cards failed: ${err?.message || err}`); }
+    try { listen(ctx, headers, stream); }
+    catch (err) { log(`[gateway] present: reading the answer failed: ${err?.message || err}`); }
+    return to_client;
+  }
+
+  /** Read the answer as it passes (reply_capture.js) and settle the turn once it finished. */
+  function listen(ctx, headers, stream) {
     capture_reply(stream, headers, (raw_reply) => {
       // what the day store keeps is what the client saw: the summary block taken out
       const split = split_summary(raw_reply.text);
@@ -446,19 +469,11 @@ function create_present({
       // the snapshot first: a flip this turn ends with rebuilds it for the new window
       try { wake.remember_turn(thread_id, ctx.sent, reply, ctx.layout); }
       catch (err) { log(`[gateway] present: keeping the wake snapshot failed: ${err?.message || err}`); }
-      try { after_summary(thread_id, ctx, split, reply.tools); }
+      try { after_summary(thread_id, ctx.window, split, reply.tools); }
       catch (err) { log(`[gateway] present: flipping the window failed: ${err?.message || err}`); }
       try { maybe_force(thread_id, ctx, reply.tools); }
       catch (err) { log(`[gateway] present: asking for a pack failed: ${err?.message || err}`); }
     });
-    // the client always gets the answer through the filter: the summary block never
-    // reaches it, whether or not anyone asked for one
-    const is_sse = /text\/event-stream/i.test(String(headers?.["content-type"] || ""));
-    const filter = is_sse ? create_sse_filter({ strip_usage: ctx.strip }) : create_json_filter();
-    const prefixer = !ctx.away_prefix ? null
-      : is_sse ? create_sse_prefix(ctx.away_prefix) : create_json_prefix(ctx.away_prefix);
-    stream.on("error", () => { filter.destroy(); prefixer?.destroy(); });
-    return prefixer ? stream.pipe(filter).pipe(prefixer) : stream.pipe(filter);
   }
 
   /** What the panel may see of a window: numbers and names, never the carry or an overlay's text. */

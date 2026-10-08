@@ -80,6 +80,13 @@
 // Silence: an answer that is empty, 【无话】 or "No response requested." — as the whole
 // reply, never as part of one — comes back `silent: true`. This file only recognises
 // them; nothing here (or in any prompt) teaches them.
+//
+// The summary block (stream_filter.js): every answer goes through the same scanner as the
+// client's stream before its words are kept, so `text` and `said` are only ever what he
+// said outside a 【窗口摘要】…【/窗口摘要】 block, and silence is judged on those words. The
+// block comes back apart as `summary`: a wake folds the window with it (wake.js), a pack
+// prefers it to the bare words (pack.js), a report ignores it. The request sent on after
+// a tool round keeps the answer as he wrote it: it goes back to him, nowhere else.
 // ============================================================
 
 const fs = require("fs");
@@ -88,6 +95,7 @@ const crypto = require("crypto");
 const { StringDecoder } = require("string_decoder");
 const { _internal: { make_client } } = require("../auto_attach.js");
 const { local_stamp } = require("./clock.js");
+const { create_summary_scanner } = require("./stream_filter.js");
 
 const DEFAULT_ALARM_MS = 10 * 60 * 1000;
 const DEFAULT_TOOL_ROUNDS = 6;
@@ -206,6 +214,19 @@ function parse_json_answer(raw) {
     arguments: typeof tc.function?.arguments === "string" ? tc.function.arguments : JSON.stringify(tc.function?.arguments ?? {}),
   })).filter((c) => c.name);
   return { text: content_text(message.content), calls, usage: body.usage && typeof body.usage === "object" ? body.usage : null };
+}
+
+/**
+ * One answer's words apart from its summary block (see the header):
+ * { visible, summary: { text, closed } | null }.
+ */
+function split_answer(text) {
+  const s = create_summary_scanner();
+  const visible = s.push(text) + s.finish();
+  const { summary, half } = s.result();
+  if (summary) return { visible, summary: { text: summary, closed: true } };
+  const half_text = half ? s.half_text() : "";
+  return { visible, summary: half_text ? { text: half_text, closed: false } : null };
 }
 
 function add_usage(sum, u) {
@@ -446,6 +467,7 @@ function create_own_turn({
     const convo = messages.slice();
     const usage = {};
     const said = [];
+    let summary = null;   // the run's newest summary block: { text, closed }
     let model_i = 0;
     let rounds = 0;
     let calls = 0;
@@ -481,10 +503,13 @@ function create_own_turn({
         if (got.kind === "bad_reply") { out = failure("bad_reply", got.error); break; }
 
         add_usage(usage, got.usage);
-        if (got.text) said.push(got.text);
-        if (!got.calls.length) { out = { outcome: "ok", reason: null, text: got.text, cut: false }; break; }
+        const split = split_answer(got.text);
+        // a newer block replaces an older one, except a half one a closed one
+        if (split.summary && (split.summary.closed || !summary?.closed)) summary = split.summary;
+        if (split.visible) said.push(split.visible);
+        if (!got.calls.length) { out = { outcome: "ok", reason: null, text: split.visible, cut: false }; break; }
         if (rounds >= max_rounds) {
-          out = { outcome: "ok", reason: null, text: got.text, cut: true, cut_tools: got.calls.map((c) => c.name) };
+          out = { outcome: "ok", reason: null, text: split.visible, cut: true, cut_tools: got.calls.map((c) => c.name) };
           break;
         }
 
@@ -518,6 +543,7 @@ function create_own_turn({
       kind, run: run_id, key: cred.source, model: chain[model_i], rounds, calls,
       tools_used: state.tools_used, tools_refused: state.tools_refused,
       said: said.join("\n\n"), usage, reached_upstream: state.reached, ms: clock.now() - started, ...out,
+      summary: out.outcome === "ok" ? summary : null,
     });
     write_log({
       phase: "result", run: run_id, kind, outcome: done.outcome, reason: done.reason, model: done.model,
@@ -537,9 +563,12 @@ function create_own_turn({
    *                   stream_broke · bad_reply · internal
    *   counted         a paid failure: what the caller counts and backs off on
    *   text            the last answer's words (on a cut, the words of the answer whose
-   *                   tool calls were not run) — what a report or a wake keeps
-   *   said            every answer's words in this run, in order
+   *                   tool calls were not run) — what a report or a wake keeps; never a
+   *                   summary block (see the header)
+   *   said            every answer's words in this run, in order, the same way
    *   silent          text is empty, 【无话】 or "No response requested."
+   *   summary         the run's newest summary block, { text, closed }, or null.
+   *                   closed: false = it never closed; only a pack may use its text
    *   cut             stopped at the tool-round limit
    *   tools_used      Loci tools executed, in order · tools_refused  names answered "not here"
    *   usage           summed prompt / completion / total tokens, plus last_prompt_tokens
@@ -558,6 +587,8 @@ function create_own_turn({
       text,
       said: String(r.said ?? ""),
       silent: is_silence(text),
+      summary: r.summary && typeof r.summary.text === "string" && r.summary.text
+        ? { text: r.summary.text, closed: Boolean(r.summary.closed) } : null,
       cut: Boolean(r.cut),
       cut_tools: r.cut_tools || [],
       rounds: r.rounds ?? 0,

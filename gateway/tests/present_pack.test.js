@@ -198,7 +198,7 @@ test("fill ≥ force line → a pack (forced shell, the lines before the kept ta
 
   // 90% ≥ 85: the gateway packs in the background, at once
   summary1 = `ta 今天考完试，很累。${SENTINEL}`;
-  pack_plans.push({ text: `${OPEN}${summary1}${CLOSE}`, usage: usage(2000) });
+  pack_plans.push({ text: `好的，摘要如下：${OPEN}${summary1}${CLOSE}`, usage: usage(2000) });
   history = [...history, a(R[1]), u("考完了，好累")];
   plans.push({ text: R[2], usage: usage(9000) });
   const r3 = await chat(history);
@@ -222,7 +222,7 @@ test("fill ≥ force line → a pack (forced shell, the lines before the kept ta
 
   const w = t.window;
   assert.strictEqual(w.opened_by.how, "forced");
-  assert.deepStrictEqual(w.carry_parts, { report: null, summary: summary1 }, "markers stripped");
+  assert.deepStrictEqual(w.carry_parts, { report: null, summary: summary1 }, "the block he wrapped it in, without the words around it");
   assert.ok(!w.carry.includes(OPEN) && !w.carry.includes(CLOSE));
   assert.strictEqual(t.branch.find((e) => e.id === w.mark).role, "user");
   assert.strictEqual(t.branch.length - t.branch.findIndex((e) => e.id === w.mark), 2, "keep_raw 2");

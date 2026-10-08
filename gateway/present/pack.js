@@ -43,10 +43,11 @@
 // waits for it instead (wait_for, up to PACK_WAIT_MS), and goes as it is past that.
 //
 // ─── The result ───
-// The summary is the last answer's words (all the run's words when the last answer has
-// none), with any 【窗口摘要】 / 【/窗口摘要】 markers stripped — the shell asks for bare
-// text, and a marker in the carry would be read as an instruction next window. An empty
-// summary is a failure. Then window.js open_next: mark as planned, carry = the old
+// The summary is the block he wrapped it in when he wrapped it anyway (own_turn.js
+// `summary`, closed or not: the whole answer is meant to be the summary), else the last
+// answer's words (all the run's words when the last answer has none), with any stray
+// 【窗口摘要】 / 【/窗口摘要】 marker stripped — the shell asks for bare text, and a marker
+// in the carry would be read as an instruction next window. An empty summary is a failure. Then window.js open_next: mark as planned, carry = the old
 // report part + this summary, how = forced | manual, window number + 1, fill and offered
 // lines cleared; Loci hears /cue/dropped for the old window (on_flip). A window that moved
 // on while the pack ran (he folded it himself, or another flip) is left alone and the
@@ -267,7 +268,7 @@ function create_packer({
     let reason = res.reason;
     let summary = "";
     if (res.ok) {
-      summary = clean_summary(res.text) || clean_summary(res.said);
+      summary = clean_summary(res.summary?.text) || clean_summary(res.text) || clean_summary(res.said);
       if (!summary) { outcome = "paid"; reason = "empty_summary"; }
     }
     const now_thread = threads.get(thread_id);

@@ -19,26 +19,39 @@
 // When he folds the window himself (present/prompts.js compress_self_shell) he writes
 //     【窗口摘要】…【/窗口摘要】
 // inside his reply. 🔴 The client never sees a character of it, in any shape the answer
-// comes in:
-//   · the opening marker only counts at the start of a line (the very start of the reply,
-//     or right after a "\n"): the same characters in the middle of a sentence are text;
+// comes in, whether or not he puts the markers where he was told:
+//   · the opening marker counts wherever it stands: at a line start, after a sentence
+//     (「好的。【窗口摘要】…」), after spaces or markdown (`**【窗口摘要】**`, `> 【窗口摘要】`).
+//     Decoration standing alone before it on its line, and after the closing marker up
+//     to the end of that line, goes with the block;
 //   · the closing marker counts anywhere once a block is open;
+//   · what is only a mention stays text: the marker right after an opening quote or
+//     bracket (「【窗口摘要】」, `【窗口摘要】`) or right before a closing one, and a closed
+//     "block" with no letter or digit inside (「用【窗口摘要】…【/窗口摘要】包起来」). The
+//     words without their brackets are never a marker;
+//   · every text field of every choice is scanned, each with its own scanner: the
+//     answer's `content` and the thinking some providers stream beside it
+//     (`reasoning_content`, `reasoning`), in a chunk's `delta` or in its `message`.
+//     Only choice 0's `content` is the reply; a block anywhere else is taken out and
+//     never kept;
 //   · a streamed answer is read event by event (an event is complete bytes up to its
 //     blank line, so a marker cut inside a multi-byte character is whole again by then),
-//     and the scanner below carries its state from one event's text to the next, so a
-//     marker split across events is still found. Only text that could still turn out to
-//     be the start of the opening marker is held back; as soon as it cannot, it is
-//     released, in the next event that carries text;
-//   · a plain JSON answer is read whole and its message text scanned the same way;
+//     and each scanner carries its state from one event's text to the next, so a marker
+//     split across events is still found. Only text that could still turn out to belong
+//     to a block is held back; as soon as it cannot, it is released, in the next event
+//     that carries that field;
+//   · a plain JSON answer is read whole and its message texts scanned the same way;
 //   · a block that never closes — the stream ended or was cut first, or the model just
 //     stopped — is dropped from the output like a closed one, and never captured.
-// An event the scanner did not change goes out as the bytes that came in; one it did
-// change is written again with only its text replaced, and one left with no text and
+// An event the scanners did not change goes out as the bytes that came in; one they did
+// change is written again with only its texts replaced, and one left with no text and
 // nothing else to say is not sent at all.
 // What the gateway keeps of a block (present/index.js): a closed one becomes the next
 // window's carry; a half one is never stored anywhere. The day store gets the text the
 // client saw — split_summary() over the reply is the same scanner over the whole text,
-// so the two agree by construction.
+// so the two agree by construction. The gateway's own turns (own_turn.js) put every
+// answer through split_summary() too: a wake, a pack and a report get the visible words
+// and the block apart, never one inside the other.
 //
 // ─── The prefix block ───
 // One thing is added: on the turn that shows what he said while she was away
@@ -93,68 +106,137 @@ function is_usage_only(text) {
 
 // ———— The scanner: text in, text the client may see out ————
 
+// Markdown and spacing that may stand around a marker on its own line.
+const DECORATION = new Set([" ", "\t", "　", "*", "_", "~", ">", "#", "-"]);
+// Right before the opening marker: the marker is being quoted, not used.
+const QUOTE_OPEN = new Set(["「", "『", "“", "‘", "\"", "'", "`", "《", "〈", "（", "(", "【", "["]);
+// Right after the opening marker: the same.
+const QUOTE_CLOSE = new Set(["」", "』", "”", "’", "\"", "'", "`", "》", "〉", "）", ")", "】", "]"]);
+const HAS_WORDS = /[\p{L}\p{N}]/u;
+
+/** A block's text as it may be kept: trimmed, with the emphasis around it gone. */
+function block_text(raw) {
+  return String(raw ?? "").replace(/^[\s*_~]+|[\s*_~]+$/g, "");
+}
+
 /**
- * Carries the block state across pieces of one reply's text. The output does not depend
+ * Carries the block state across pieces of one text field. The output does not depend
  * on how the text is cut into pieces.
- *   push(text) → the part of the text that may be shown now
- *   finish()   → whatever was held back and turned out not to be a marker; a block still
- *                open is dropped and counted as half
- *   result()   → { summary: closed blocks' text joined (trimmed) or null, half: bool }
+ *   push(text)  → the part of the text that may be shown now
+ *   finish()    → whatever was held back and turned out not to belong to a block; a block
+ *                 still open is dropped and counted as half
+ *   result()    → { summary: closed blocks' text joined or null, half: bool }
+ *   half_text() → what the last block that never closed held, or "" — for a pack only,
+ *                 whose whole answer is meant to be the summary (pack.js)
  */
 function create_summary_scanner() {
   let inside = false;
-  let line_start = true;
-  let hold = "";
+  let head = true;         // nothing but decoration on this line so far
+  let lead = "";           // that decoration, held back while it may belong to a marker
+  let hold = "";           // what could still become the opening marker
+  let prev = "\n";         // the character before `hold`
   let block = "";
+  let block_lead = "";     // decoration taken with the block, given back if it was a mention
+  let first = false;       // the next character is the first inside the block
+  let after_close = false;
+  let trail = "";          // decoration after a closing marker, dropped at the line's end
   const closed = [];
   let half = false;
+  let half_raw = "";
 
   function push(text) {
     let out = "";
     for (const c of String(text ?? "")) {
       if (inside) {
+        if (first) {
+          first = false;
+          if (QUOTE_CLOSE.has(c)) {   // 【窗口摘要】」 — a mention
+            out += block_lead + OPEN + c;
+            inside = false; head = false; prev = c;
+            continue;
+          }
+        }
         block += c;
         if (block.endsWith(CLOSE)) {
-          closed.push(block.slice(0, -CLOSE.length));
-          block = "";
+          const raw = block.slice(0, -CLOSE.length);
           inside = false;
-          line_start = false;
+          head = false;
+          block = "";
+          if (!HAS_WORDS.test(raw)) {   // nothing written inside — a mention
+            out += block_lead + OPEN + raw + CLOSE;
+            prev = "】";
+          } else {
+            closed.push(raw);
+            after_close = true;
+            trail = "";
+            prev = "】";
+          }
         }
         continue;
       }
-      if (hold || line_start) {
+      if (after_close) {
+        if (c !== "\n" && DECORATION.has(c)) { trail += c; continue; }
+        if (c !== "\n") out += trail;
+        trail = "";
+        after_close = false;
+      }
+      // right after an opening quote (「【窗口摘要】) the marker is a mention: nothing is held
+      if (hold || (c === OPEN[0] && !QUOTE_OPEN.has(prev))) {
         const candidate = hold + c;
         if (OPEN.startsWith(candidate)) {
-          if (candidate === OPEN) { inside = true; hold = ""; block = ""; }
-          else hold = candidate;
-          line_start = false;
+          if (candidate !== OPEN) { hold = candidate; continue; }
+          hold = "";
+          inside = true;
+          first = true;
+          block = "";
+          block_lead = lead;
+          lead = "";
           continue;
         }
-        if (hold) { out += hold; hold = ""; }
+        // not the marker after all: what was held is text, and this character starts over
+        out += lead + hold;
+        lead = "";
+        head = false;
+        prev = hold[hold.length - 1];
+        hold = "";
+        if (c === OPEN[0] && !QUOTE_OPEN.has(prev)) { hold = c; continue; }
       }
-      out += c;
-      line_start = c === "\n";
+      if (head && DECORATION.has(c)) { lead += c; prev = c; continue; }
+      out += lead + c;
+      lead = "";
+      head = c === "\n";
+      prev = c;
     }
     return out;
   }
 
   function finish() {
-    const out = hold;
-    hold = "";
-    if (inside) { half = true; inside = false; block = ""; }
-    line_start = true;
+    let out = "";
+    if (inside) {
+      half = true;
+      half_raw = block;
+      inside = false; block = ""; block_lead = ""; first = false;
+    } else out = lead + hold;
+    lead = ""; hold = ""; trail = "";
+    after_close = false;
+    head = true;
+    prev = "\n";
     return out;
   }
 
   function result() {
-    const text = closed.map((s) => s.trim()).filter(Boolean).join("\n\n");
+    const text = closed.map(block_text).filter(Boolean).join("\n\n");
     return { summary: text || null, half };
   }
 
-  return { push, finish, result, holding: () => inside || hold.length > 0 };
+  return {
+    push, finish, result,
+    half_text: () => block_text(half_raw),
+    holding: () => inside || hold.length > 0 || lead.length > 0 || trail.length > 0,
+  };
 }
 
-/** The whole reply at once: { visible, summary, half } — exactly what the stream filter shows and keeps. */
+/** The whole text at once: { visible, summary, half } — exactly what the stream filter shows and keeps. */
 function split_summary(text) {
   const s = create_summary_scanner();
   const visible = s.push(text) + s.finish();
@@ -179,62 +261,149 @@ function rewrite_event(event_text, chunk) {
   return [...kept, `data: ${JSON.stringify(chunk)}`].join(eol) + eol + eol;
 }
 
-/** An event that only carries text for choice 0, shaped after the last chunk seen. */
-function text_event(template, text) {
+// The text fields of a choice's `delta` / `message` the model writes into.
+const TEXT_FIELDS = ["content", "reasoning_content", "reasoning", "refusal"];
+const CHOICE_KEYS = new Set(["index", "delta", "message", "logprobs", "finish_reason"]);
+
+/**
+ * One scanner per choice and text field of one answer. Choice 0's `content` is the reply:
+ * it uses `main` when one is given, so the caller can read what was captured.
+ */
+function create_scanners(main = null) {
+  const all = new Map();
+  return {
+    get(index, field) {
+      const key = `${index}|${field}`;
+      if (!all.has(key)) all.set(key, index === 0 && field === "content" && main ? main : create_summary_scanner());
+      return all.get(key);
+    },
+    /** [[index, field, scanner], …] for the given choice, or for every choice. */
+    list(index = null) {
+      const out = [];
+      for (const [key, s] of all) {
+        const [i, field] = key.split("|");
+        if (index === null || Number(i) === index) out.push([Number(i), field, s]);
+      }
+      return out;
+    },
+    holding() { for (const s of all.values()) if (s.holding()) return true; return false; },
+  };
+}
+
+/** Scan the text fields of one `delta` or `message` in place; true when any of them changed. */
+function scan_box(box, index, scanners, { whole = false } = {}) {
+  let changed = false;
+  for (const field of TEXT_FIELDS) {
+    const v = box[field];
+    if (typeof v === "string") {
+      const s = scanners.get(index, field);
+      const shown = s.push(v) + (whole ? s.finish() : "");
+      if (shown !== v) { box[field] = shown; changed = true; }
+    } else if (Array.isArray(v)) {
+      const parts = v.filter((p) => p && typeof p === "object" && typeof p.text === "string");
+      if (!parts.length) continue;
+      const s = scanners.get(index, field);
+      parts.forEach((p, k) => {
+        const shown = s.push(p.text) + (whole && k === parts.length - 1 ? s.finish() : "");
+        if (shown !== p.text) { p.text = shown; changed = true; }
+      });
+    }
+  }
+  return changed;
+}
+
+/** Put released text at the end of a box's field. */
+function append_text(box, field, text) {
+  const v = box[field];
+  if (Array.isArray(v)) v.push({ type: "text", text });
+  else box[field] = (typeof v === "string" ? v : "") + text;
+}
+
+/** An event that only carries `field` text for one choice, shaped after the last chunk seen. */
+function text_event(template, index, field, text) {
   const chunk = {};
   for (const k of ["id", "object", "created", "model", "system_fingerprint"]) if (template && k in template) chunk[k] = template[k];
-  chunk.choices = [{ index: 0, delta: { content: text } }];
+  chunk.choices = [{ index, delta: { [field]: text } }];
   return Buffer.from(`data: ${JSON.stringify(chunk)}\n\n`);
+}
+
+/** A rewritten chunk that no longer says anything: no text, no finish, no usage, nothing else. */
+function says_nothing(chunk) {
+  const empty_box = (b) => b === undefined || b === null
+    || (typeof b === "object" && Object.entries(b).every(([k, v]) => TEXT_FIELDS.includes(k)
+      && (v === "" || v === null || (Array.isArray(v) && v.every((p) => p?.text === "")))));
+  return !chunk.usage && chunk.choices.every((c) => c && typeof c === "object" && !c.finish_reason
+    && Object.keys(c).every((k) => CHOICE_KEYS.has(k)) && !c.logprobs && empty_box(c.delta) && empty_box(c.message));
 }
 
 /**
  * A pass-through for an SSE body. Works on bytes: an event is everything up to and
  * including the blank line that ends it.
  * @param strip_usage  drop usage-only events (the client did not ask for usage)
- * @param summary      take summary blocks out of choice 0's text
- * @param scanner      create_summary_scanner() to use (lets the caller read result());
- *                     a fresh one when not given
+ * @param summary      take summary blocks out of every choice's text fields
+ * @param scanner      create_summary_scanner() to use for choice 0's content (lets the
+ *                     caller read result()); a fresh one when not given
  */
 function create_sse_filter({ strip_usage = false, summary = true, scanner = null } = {}) {
-  const scan = summary ? (scanner || create_summary_scanner()) : null;
+  const scanners = summary ? create_scanners(scanner) : null;
   let pending = Buffer.alloc(0);
   let template = null;
+
+  /** Release what every scanner (of one choice, or all) still holds, as events of their own. */
+  function release(transform, index = null) {
+    for (const [i, field, s] of scanners.list(index)) {
+      const tail = s.finish();
+      if (tail) transform.push(text_event(template, i, field, tail));
+    }
+  }
 
   function take(event_buf, transform) {
     const event_text = event_buf.toString("utf8");
     if (strip_usage && is_usage_only(event_text)) return;
-    if (!scan) { transform.push(event_buf); return; }
+    if (!scanners) { transform.push(event_buf); return; }
     const { data, chunk, broken } = parse_chunk(event_text);
     if (broken) {
       // An event that does not parse (most often the last one, cut off with the stream)
       // cannot be read by the client either; while a block is open, or when it may hold
       // a marker, it is not sent at all.
-      if (scan.holding() || mentions_open(event_text)) return;
+      if (scanners.holding() || mentions_open(event_text)) return;
       transform.push(event_buf);
       return;
     }
     if (data === "[DONE]") {
-      const tail = scan.finish();
-      if (tail) transform.push(text_event(template, tail));
+      release(transform);
       transform.push(event_buf);
       return;
     }
-    const choice = chunk && Array.isArray(chunk.choices) ? chunk.choices.find((c) => (c?.index ?? 0) === 0) : null;
-    if (!choice) { transform.push(event_buf); return; }
+    if (!chunk || !Array.isArray(chunk.choices) || !chunk.choices.length) { transform.push(event_buf); return; }
     template = chunk;
-    const delta = choice.delta && typeof choice.delta === "object" ? choice.delta : null;
-    const had_text = delta && typeof delta.content === "string";
-    let text = had_text ? scan.push(delta.content) : "";
-    if (choice.finish_reason) text += scan.finish();
-    if (had_text ? text === delta.content : !text) { transform.push(event_buf); return; }
-    // the text changed: write the event again with only its text replaced
-    const fresh = JSON.parse(JSON.stringify(chunk));
-    const fc = fresh.choices.find((c) => (c?.index ?? 0) === 0);
-    fc.delta = { ...(fc.delta || {}), content: text };
-    const nothing_else = !text && fresh.choices.length === 1 && !fc.finish_reason && !fresh.usage
-      && Object.keys(fc.delta).every((k) => k === "content");
-    if (nothing_else) return;
-    transform.push(Buffer.from(rewrite_event(event_text, fresh)));
+    // `chunk` is this event's own parse: changed in place, and written again only if it did
+    let changed = false;
+    for (const choice of chunk.choices) {
+      if (!choice || typeof choice !== "object") continue;
+      const index = Number.isInteger(choice.index) ? choice.index : 0;
+      let here = false;
+      for (const name of ["delta", "message"]) {
+        const box = choice[name];
+        if (box && typeof box === "object" && !Array.isArray(box)) here = scan_box(box, index, scanners) || here;
+      }
+      if (choice.finish_reason) {
+        for (const [, field, s] of scanners.list(index)) {
+          const tail = s.finish();
+          if (!tail) continue;
+          const box = choice.delta && typeof choice.delta === "object" ? choice.delta
+            : choice.message && typeof choice.message === "object" ? choice.message : (choice.delta = {});
+          append_text(box, field, tail);
+          here = true;
+        }
+      }
+      // token log-probabilities spell out the text: a choice whose text changed loses them
+      if (here && choice.logprobs) choice.logprobs = null;
+      changed = changed || here;
+    }
+    if (!changed) { transform.push(event_buf); return; }
+    if (says_nothing(chunk)) return;
+    transform.push(Buffer.from(rewrite_event(event_text, chunk)));
   }
 
   return new Transform({
@@ -258,12 +427,9 @@ function create_sse_filter({ strip_usage = false, summary = true, scanner = null
     flush(done) {
       if (pending.length) take(pending, this);
       pending = Buffer.alloc(0);
-      if (scan) {
-        // the stream ended without [DONE] or a finish_reason: release what was held back
-        // (it was not a marker); an open block is dropped
-        const tail = scan.finish();
-        if (tail) this.push(text_event(template, tail));
-      }
+      // the stream ended without [DONE] or a finish_reason: release what was held back
+      // (it was not a block); an open block is dropped
+      if (scanners) release(this);
       done();
     },
   });
@@ -277,12 +443,13 @@ function create_usage_strip() {
 // ———— Plain JSON ————
 
 /**
- * A pass-through for a non-streamed answer: read whole, choice 0's message text scanned.
- * An answer that was not changed goes out as the bytes that came in. One that does not
- * parse (cut short) is sent as it came, up to any opening marker it may hold.
+ * A pass-through for a non-streamed answer: read whole, every choice's message text fields
+ * scanned (choice 0's content with `scanner` when given). An answer that was not changed
+ * goes out as the bytes that came in. One that does not parse (cut short) is sent as it
+ * came, up to any opening marker it may hold.
  */
 function create_json_filter({ scanner = null } = {}) {
-  const scan = scanner || create_summary_scanner();
+  const scanners = create_scanners(scanner);
   const parts = [];
   return new Transform({
     transform(chunk, _enc, done) { parts.push(Buffer.from(chunk)); done(); },
@@ -291,9 +458,8 @@ function create_json_filter({ scanner = null } = {}) {
       const raw = raw_buf.toString("utf8");
       let body = null;
       try { body = JSON.parse(raw); } catch { body = null; }
-      const message = body?.choices?.find?.((c) => (c?.index ?? 0) === 0)?.message;
-      if (!message) {
-        if (body || !mentions_open(raw)) this.push(raw_buf);
+      if (!body) {
+        if (!mentions_open(raw)) this.push(raw_buf);
         else {
           const at = Math.min(...[raw.indexOf("【"), raw.search(/\\u3010/i)].filter((i) => i >= 0));
           this.push(Buffer.from(raw.slice(0, at)));
@@ -301,15 +467,12 @@ function create_json_filter({ scanner = null } = {}) {
         return done();
       }
       let changed = false;
-      if (typeof message.content === "string") {
-        const shown = scan.push(message.content) + scan.finish();
-        if (shown !== message.content) { message.content = shown; changed = true; }
-      } else if (Array.isArray(message.content)) {
-        const texts = message.content.filter((p) => p && typeof p === "object" && typeof p.text === "string");
-        texts.forEach((p, i) => {
-          const shown = scan.push(p.text) + (i === texts.length - 1 ? scan.finish() : "");
-          if (shown !== p.text) { p.text = shown; changed = true; }
-        });
+      for (const choice of Array.isArray(body.choices) ? body.choices : []) {
+        const box = choice && typeof choice === "object" ? choice.message : null;
+        if (!box || typeof box !== "object" || Array.isArray(box)) continue;
+        const here = scan_box(box, Number.isInteger(choice.index) ? choice.index : 0, scanners, { whole: true });
+        if (here && choice.logprobs) choice.logprobs = null;
+        changed = changed || here;
       }
       this.push(changed ? Buffer.from(JSON.stringify(body)) : raw_buf);
       done();

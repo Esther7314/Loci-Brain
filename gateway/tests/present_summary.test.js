@@ -76,12 +76,46 @@ test("scanner: a block at a line start is taken out and captured; the rest passe
     "the very start of the reply is a line start");
 });
 
-test("scanner: the marker in the middle of a line is text; a near miss is released whole", () => {
-  for (const text of [`我说的${OPEN}不是记号${CLOSE}`, "第一行\n【窗口不是摘要】", "【窗口摘", "\n【", "【【窗口摘要】x"]) {
+test("scanner: a near miss or a mention is released whole, and captures nothing", () => {
+  for (const text of [
+    "第一行\n【窗口不是摘要】", "【窗口摘", "\n【", "【【窗口摘要】x", "窗口摘要这几个字", "我在写窗口摘要】",
+    `我说的「${OPEN}」不是记号`, `用 \`${OPEN}\` 包起来`, `书名号《${OPEN}》`, `那个${OPEN}」是什么`,
+    `用${OPEN}…${CLOSE}包起来`, `空的${OPEN}${CLOSE}也一样`, `${OPEN} …… ${CLOSE}`, `收尾的${CLOSE}单独出现`,
+  ]) {
     const got = split_summary(text);
     assert.strictEqual(got.visible, text, JSON.stringify(text));
-    assert.strictEqual(got.summary, null);
+    assert.deepStrictEqual([got.summary, got.half], [null, false], JSON.stringify(text));
   }
+});
+
+test("🔴 scanner: the opening marker counts anywhere — mid-sentence, after spaces, inside markdown", () => {
+  const cases = [
+    [`好的。${OPEN}ta 累了${SENTINEL}${CLOSE}晚安。`, "好的。晚安。"],
+    [`好的。 ${OPEN}ta 累了${SENTINEL}${CLOSE}`, "好的。 "],
+    [` ${OPEN}ta 累了${SENTINEL}${CLOSE}\n晚安。`, "\n晚安。"],
+    [`嗯\n**${OPEN}**\nta 累了${SENTINEL}\n**${CLOSE}**\n晚安。`, "嗯\n\n晚安。"],
+    [`嗯\n> ${OPEN}ta 累了${SENTINEL}${CLOSE}\n晚安。`, "嗯\n\n晚安。"],
+    [`嗯\n### ${OPEN}\nta 累了${SENTINEL}\n${CLOSE} \n晚安。`, "嗯\n\n晚安。"],
+    [`嗯\n　- ${OPEN}ta 累了${SENTINEL}${CLOSE}`, "嗯\n"],
+  ];
+  for (const [text, visible] of cases) {
+    const got = split_summary(text);
+    assert.strictEqual(got.visible, visible, JSON.stringify(text));
+    assert.strictEqual(got.summary, `ta 累了${SENTINEL}`, JSON.stringify(text));
+    for (let size = 1; size <= 5; size++) {
+      const s = create_summary_scanner();
+      let out = "";
+      for (let i = 0; i < text.length; i += size) out += s.push(text.slice(i, i + size));
+      out += s.finish();
+      assert.strictEqual(out, visible, `${JSON.stringify(text)} cut every ${size}`);
+    }
+  }
+  // decoration that turns out not to belong to a marker is released as it was
+  assert.strictEqual(split_summary("- 一\n**粗** 体\n> 引用\n  缩进").visible, "- 一\n**粗** 体\n> 引用\n  缩进");
+  assert.strictEqual(split_summary(`x\n${OPEN}a${CLOSE}** 后面还有话`).visible, "x\n** 后面还有话");
+  // mid-sentence and never closed: dropped, never captured
+  const half = split_summary(`好的。${OPEN}写到一半${SENTINEL}`);
+  assert.deepStrictEqual(half, { visible: "好的。", summary: null, half: true });
 });
 
 test("scanner: a block that never closes is dropped and counted as half, never captured", () => {
@@ -127,9 +161,9 @@ test("SSE filter: the block never reaches the client, cut every way, inside mult
 test("SSE filter: events it does not touch go out as the bytes that came in", async () => {
   const body = sse_of("没有摘要的一句话，\n第二行也没有。", 4);
   assert.strictEqual(await through(create_sse_filter(), every_byte(body)), body);
-  const mid_line = sse_of(`我说的${OPEN}不是记号`, 3);
-  const out = await through(create_sse_filter(), [mid_line]);
-  assert.strictEqual(out, mid_line, "the marker mid-line is text: every byte as sent");
+  const quoted = sse_of(`我说的「${OPEN}」不是记号`, 3);
+  const out = await through(create_sse_filter(), [quoted]);
+  assert.strictEqual(out, quoted, "a quoted marker is a mention: every byte as sent");
   const crlf = sse_of("一句。", 2).replace(/\n/g, "\r\n");
   assert.strictEqual(await through(create_sse_filter(), [crlf]), crlf);
 });
@@ -157,6 +191,77 @@ test("SSE filter: a stream cut inside the block, with or without a half event, l
     assert.strictEqual(scanner.result().summary, null, "a half block is never captured");
     assert.strictEqual(scanner.result().half, true);
   }
+});
+
+/** Every text a client could read from an SSE body, any field, any choice, logprobs included. */
+function all_text_of_sse(body) {
+  let text = "";
+  for (const block of body.split(/\r?\n\r?\n/)) {
+    const line = block.split(/\r?\n/).find((l) => l.startsWith("data:"));
+    if (!line || line.slice(5).trim() === "[DONE]") continue;
+    text += JSON.stringify(JSON.parse(line.slice(5).trim()));
+  }
+  return text;
+}
+
+test("🔴 SSE filter: a block written mid-sentence or in markdown never reaches the client, split anywhere", async () => {
+  for (const text of [`好的。${OPEN}ta 累了${SENTINEL}${CLOSE}晚安。`, `好的。\n**${OPEN}**\nta 累了${SENTINEL}\n**${CLOSE}**\n晚安。`]) {
+    for (const size of [1, 2, 4, 40]) {
+      const body = sse_of(text, size);
+      for (const chunks of [[body], every_byte(body)]) {
+        const scanner = create_summary_scanner();
+        const out = await through(create_sse_filter({ scanner }), chunks);
+        assert.ok(!out.includes("91b4") && !out.includes("窗口摘要"), `pieces of ${size}`);
+        assert.strictEqual(text_of_sse(out).replace(/\n+/g, "\n"), "好的。" + (text.includes("**") ? "\n" : "") + "晚安。");
+        assert.strictEqual(scanner.result().summary, `ta 累了${SENTINEL}`);
+      }
+    }
+  }
+});
+
+test("🔴 SSE filter: thinking fields, message-shaped chunks and every other choice are scanned too, never captured", async () => {
+  const chunk = (choices) => ev({ id: "c1", object: "chat.completion.chunk", choices });
+  const pieces = (s, size) => { const out = []; for (let i = 0; i < s.length; i += size) out.push(s.slice(i, i + size)); return out; };
+  const thought = `先想想。\n${OPEN}思考里的${SENTINEL}${CLOSE}\n想好了。`;
+  const said = `嗯。${OPEN}别的选项里的${SENTINEL}${CLOSE}`;
+  let body = "";
+  for (const p of pieces(thought, 2)) body += chunk([{ index: 0, delta: { reasoning_content: p } }]);
+  for (const p of pieces(thought, 3)) body += chunk([{ index: 0, delta: { reasoning: p } }]);
+  for (const p of pieces(said, 2)) body += chunk([{ index: 0, delta: { content: p } }, { index: 1, delta: { content: p } }]);
+  for (const p of pieces(said, 5)) body += chunk([{ index: 2, message: { role: "assistant", content: p } }]);
+  body += chunk([{ index: 3, delta: { content: said }, logprobs: { content: [{ token: SENTINEL, logprob: -0.1 }] } }]);
+  body += chunk([0, 1, 2, 3].map((index) => ({ index, delta: {}, finish_reason: "stop" }))) + DONE;
+  for (const chunks of [[body], every_byte(body)]) {
+    const scanner = create_summary_scanner();
+    const out = await through(create_sse_filter({ scanner }), chunks);
+    assert.ok(!all_text_of_sse(out).includes("91b4"), "no field of any choice carries the block");
+    assert.ok(!out.includes("窗口摘要"));
+    assert.strictEqual(scanner.result().summary, `别的选项里的${SENTINEL}`, "only choice 0's content is the reply");
+    let reasoning = "";
+    let reasoning2 = "";
+    for (const block of out.split("\n\n")) {
+      if (!block.startsWith("data: {")) continue;
+      for (const c of JSON.parse(block.slice(6)).choices) {
+        if (typeof c.delta?.reasoning_content === "string") reasoning += c.delta.reasoning_content;
+        if (typeof c.delta?.reasoning === "string") reasoning2 += c.delta.reasoning;
+      }
+    }
+    assert.strictEqual(reasoning, "先想想。\n\n想好了。");
+    assert.strictEqual(reasoning2, "先想想。\n\n想好了。");
+  }
+  // a JSON answer: every choice, the thinking beside the content too
+  const reply = JSON.stringify({ id: "x", object: "chat.completion", choices: [
+    { index: 0, message: { role: "assistant", content: said, reasoning_content: thought }, finish_reason: "stop" },
+    { index: 1, message: { role: "assistant", content: [{ type: "text", text: said }] }, logprobs: { content: [{ token: SENTINEL }] } },
+  ] });
+  const scanner = create_summary_scanner();
+  const out = await through(create_json_filter({ scanner }), every_byte(reply));
+  assert.ok(!out.includes("91b4") && !out.includes("窗口摘要"));
+  const got = JSON.parse(out);
+  assert.deepStrictEqual([got.choices[0].message.content, got.choices[0].message.reasoning_content, got.choices[1].message.content[0].text],
+    ["嗯。", "先想想。\n\n想好了。", "嗯。"]);
+  assert.strictEqual(got.choices[1].logprobs, null);
+  assert.strictEqual(scanner.result().summary, `别的选项里的${SENTINEL}`);
 });
 
 test("SSE filter: the usage chunk is still stripped when asked, and the summary filter can be off", async () => {

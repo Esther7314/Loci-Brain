@@ -408,6 +408,82 @@ test("prefix: the last chat request byte for byte, tools included; each wake is 
   assert.deepStrictEqual(t.last_sent.wakes, [], "a new turn of hers is a new snapshot");
 });
 
+// ———— 🔴 a wake that folds the window (the blind review's scenario) ————
+
+const FOLD_SENTINEL = "哨兵·WAKE-FOLD-c7e1-不许出门";
+const OPEN = "【窗口摘要】";
+const CLOSE = "【/窗口摘要】";
+const client_text = (sse) => sse.split("\n\n").filter((b) => b.startsWith("data: {"))
+  .map((b) => JSON.parse(b.slice(6)).choices?.[0]?.delta?.content || "").join("");
+/** Every place a block must never reach once a wake has run. */
+function assert_nowhere(g, what) {
+  const held = fs.existsSync(path.join(g.data_root, "held.json")) ? fs.readFileSync(path.join(g.data_root, "held.json"), "utf8") : "";
+  assert.ok(!held.includes(what) && !held.includes("窗口摘要"), "held.json (the away prefix and the push read it)");
+  assert.ok(!day_text(g.data_root).includes(what) && !day_text(g.data_root).includes("窗口摘要"), "the day store");
+  assert.ok(!JSON.stringify([g.wake.status(), g.present.wake.health(), g.present.window_status()]).includes(what), "status");
+  assert.ok(!log_lines(g.data_root).some((l) => JSON.stringify(l).includes(what)), "the log");
+  for (const t of g.present.threads.list()) {
+    assert.ok(!JSON.stringify(t.last_sent?.wakes || []).includes(what), "the ledger's wake pairs");
+    assert.ok(!String(t.last_sent?.reply || "").includes(what), "the snapshot's reply");
+  }
+}
+
+test("🔴 a wake that folds: the block reaches no store and no client; the window flips with it as the carry", { timeout: 30000 }, async () => {
+  up.plan((body, { wake }) => ({ text: wake ? `刚才想到你了。${OPEN}醒着收的：ta 去上课了。${FOLD_SENTINEL}${CLOSE}` : "好，去吧。" }));
+  const g = await boot();
+  await g.say(HELLO);
+  const before_window = g.present.threads.list()[0].window.name;
+
+  const [r] = await run_until(g, at("2026-10-07T11:00:00"));
+  assert.deepStrictEqual([r.ran, r.result], [true, "spoke"]);
+  assert.deepStrictEqual(held_items(g.data_root).map((h) => h.text), ["刚才想到你了。"], "held: his words without the block");
+  assert.deepStrictEqual(day_lines(g.data_root).filter((l) => l.woke).map((l) => l.text), ["刚才想到你了。"]);
+  assert_nowhere(g, FOLD_SENTINEL);
+
+  // the fold did what a fold in a chat turn does
+  const t = g.present.threads.list()[0];
+  assert.notStrictEqual(t.window.name, before_window, "the window flipped");
+  assert.strictEqual(t.window.opened_by.how, "self");
+  assert.ok(t.window.carry.includes(FOLD_SENTINEL) && t.window.carry.includes("醒着收的"), "the carry is the block");
+  assert.ok(!t.window.carry.includes(OPEN) && !t.window.carry.includes(CLOSE));
+  assert.ok(!t.last_sent.request.messages.some((m) => String(m.content).startsWith("〔系统提醒")), "the snapshot was rebuilt for the new window");
+
+  // her next streamed answer: the away prefix carries his words, never the block
+  up.plan(() => ({ text: "欢迎回来。" }));
+  const next = await g.say([...HELLO, { role: "assistant", content: "好，去吧。" }, { role: "user", content: "下课啦。" }]);
+  assert.ok(!next.text.includes(FOLD_SENTINEL) && !next.text.includes("窗口摘要"), "no block in client-bound bytes");
+  assert.ok(client_text(next.text).includes("刚才想到你了。") && client_text(next.text).endsWith("欢迎回来。"));
+  assert.ok(up.chats()[0].body.messages.some((m) => m.role === "system" && String(m.content).includes(FOLD_SENTINEL)),
+    "upstream gets the carry: the one place the block belongs");
+  assert_nowhere(g, FOLD_SENTINEL);
+});
+
+test("a wake that only folds says nothing; with compress off a block is still taken out, and nothing flips", { timeout: 30000 }, async () => {
+  up.plan((body, { wake }) => ({ text: wake ? `\n**${OPEN}**\n只收不说。${FOLD_SENTINEL}\n**${CLOSE}**\n` : "好，去吧。" }));
+  const g = await boot();
+  await g.say(HELLO);
+  const first = g.present.threads.list()[0].window.name;
+  const [r] = await run_until(g, at("2026-10-07T11:00:00"));
+  assert.strictEqual(r.result, "silent", "a fold with no words around it is silence");
+  assert.deepStrictEqual(held_items(g.data_root), []);
+  assert.strictEqual(day_lines(g.data_root).filter((l) => l.woke).length, 0);
+  const second = g.present.threads.list()[0].window;
+  assert.notStrictEqual(second.name, first, "it still folded");
+  assert.ok(second.carry.includes(FOLD_SENTINEL));
+  assert_nowhere(g, FOLD_SENTINEL);
+
+  // compress off: the block is taken out all the same, and the window stays
+  const settings = JSON.parse(fs.readFileSync(path.join(g.data_root, "present.json"), "utf8"));
+  fs.writeFileSync(path.join(g.data_root, "present.json"), JSON.stringify({ ...settings, compress: { on: false } }));
+  up.plan((body, { wake }) => ({ text: wake ? `又想你了。 ${OPEN}关着也写了${FOLD_SENTINEL}-2${CLOSE}` : "嗯。" }));
+  const [r2] = await run_until(g, at("2026-10-07T12:00:00"));
+  assert.strictEqual(r2.result, "spoke");
+  assert.deepStrictEqual(held_items(g.data_root).map((h) => h.text), ["又想你了。 "]);
+  assert.strictEqual(g.present.threads.list()[0].window.name, second.name, "compress off: no flip");
+  assert.ok(!g.present.threads.list()[0].window.carry.includes(`${FOLD_SENTINEL}-2`));
+  assert_nowhere(g, `${FOLD_SENTINEL}-2`);
+});
+
 test("she arrives mid-wake: aborted on the spot, nothing written, not a failure", { timeout: 30000 }, async () => {
   up.plan((body, { wake }) => (wake ? { hang: true } : { text: "嗯嗯。" }));
   const g = await boot();
