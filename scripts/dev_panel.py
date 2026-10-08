@@ -42,7 +42,27 @@ data folder inside the throwaway folder, wired to this server the way the config
 `hosts: gateway` example wires a real one (fresh keys each run). Its upstream is
 https://api.deepseek.com/v1 with no key, so nothing it does costs anything: no chat goes
 through it, wake and the night's report wait for a key that never comes. A hosts table
-means the panel must be locked, so --gateway implies --locked.
+means the panel must be locked, so --gateway implies --locked. The gateway's own address,
+its key for /present and the clock files (below) are written to `replay.json` in the
+throwaway folder, for scripts/replay_week.py.
+
+Two more switches, for replaying a chat through the gateway (scripts/replay_week.py):
+
+    --upstream URL   the gateway's upstream, and Loci's side model too (slicing, tags,
+                     dreams), with the placeholder key `replay-placeholder-key` and model `stand-in`.
+                     Meant for replay_week.py's stand-in, which swaps in the real key and
+                     model; this script never holds a real key. Pointed straight at a
+                     provider, the placeholder key is refused and nothing costs anything.
+                     Loci's config also names the sample's people (阿青, 小满).
+    --clock ISO      a fake clock for the whole run, starting at ISO (with an offset): the
+                     sample is seeded at that time, the server runs under exam/clock.py and
+                     the gateway under LOCI_GATEWAY_TEST_CLOCK. Two files in the throwaway
+                     folder hold the time, `clock.iso` (Loci) and `clock.ms` (the gateway);
+                     whoever moves the clock rewrites both. What exam/clock.py does not
+                     patch reads the real clock: the usage log behind recall's timeline,
+                     the seeded searches included.
+
+Both processes count the day in Asia/Shanghai (LOCI_TZ), where the sample's people live.
 
 Public surface: run as a script. `seed(store, base_dir)` fills a store and
 `seed_regrow_muse_trace(store, base_dir)` adds the regrow/fold, muse and trace pages'
@@ -62,11 +82,19 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(ROOT, "src")
 MARKER = ".loci-panel-dev"
 DEFAULT_PORT = 18761
+DEFAULT_UPSTREAM = "https://api.deepseek.com/v1"
+ZONE = "Asia/Shanghai"
+# What Loci's side model is configured with under --upstream: placeholders the replay's
+# stand-in replaces, never a real key.
+STAND_IN_KEY = "replay-placeholder-key"
+STAND_IN_MODEL = "stand-in"
+HANDLE = "replay.json"
 
 
 # ---------------------------------------------------------------------------
@@ -114,13 +142,14 @@ def _child_env(paths: dict, port: int, hook_token: str) -> dict:
         "LOCI_BIND_HOST": "127.0.0.1",
         "LOCI_TRANSPORT": "streamable-http",
         "LOCI_HOOK_TOKEN": hook_token,
+        "LOCI_TZ": ZONE,
         "PYTHONIOENCODING": "utf-8",
         "PYTHONUTF8": "1",
     })
     return env
 
 
-def _write_config(paths: dict, gateway_url: str = "") -> None:
+def _write_config(paths: dict, gateway_url: str = "", upstream: str = "") -> None:
     # JSON is YAML: written without a YAML library, read back by the server's.
     cfg = {
         "transport": "streamable-http",
@@ -129,6 +158,10 @@ def _write_config(paths: dict, gateway_url: str = "") -> None:
         "embedding": {"enabled": False},
         "dehydration": {"api_key": ""},
     }
+    if upstream:
+        cfg["dehydration"] = {"base_url": upstream, "api_key": STAND_IN_KEY,
+                              "model": STAND_IN_MODEL}
+        cfg.update({"human": "阿青", "owner_name": "阿青", "ai_name": "小满"})
     if gateway_url:
         # legacy stays listed: the breath handed out below comes with the hook token
         gw = {"system": "gateway", "instance": "gateway"}
@@ -572,6 +605,11 @@ def _seed_child(base: str) -> int:
         print("refused: LOCI_BUCKETS_DIR does not point at the throwaway library", file=sys.stderr)
         return 2
     sys.path.insert(0, SRC)
+    clock_file = os.environ.get("EXAM_CLOCK_FILE", "")
+    if clock_file:          # --clock: the sample is seeded at the fake time
+        sys.path.insert(0, ROOT)
+        from exam import clock
+        clock.install(clock_file)
     from core import runtime as rt
     from core import schema
     from core.bucket_manager import BucketManager
@@ -637,11 +675,27 @@ def main() -> int:
     ap.add_argument("--keep", action="store_true", help="leave the folder behind on exit")
     ap.add_argument("--gateway", action="store_true",
                     help="also run the gateway, so the present page is connected (implies --locked)")
+    ap.add_argument("--upstream", default="",
+                    help="the gateway's upstream and Loci's side model, with a placeholder key "
+                         "(for scripts/replay_week.py's stand-in)")
+    ap.add_argument("--clock", default="",
+                    help="run on a fake clock starting at this ISO time with an offset, "
+                         "e.g. 2026-10-14T08:00:00+08:00")
     ap.add_argument("--seed-into", help=argparse.SUPPRESS)
     args = ap.parse_args()
 
     if args.seed_into:
         return _seed_child(args.seed_into)
+    start_ms = None
+    if args.clock:
+        try:
+            start = datetime.fromisoformat(args.clock)
+        except ValueError:
+            start = None
+        if start is None or start.tzinfo is None:
+            print(f"refused: --clock needs an ISO time with an offset, got {args.clock!r}", file=sys.stderr)
+            return 2
+        start_ms = int(start.timestamp() * 1000)
 
     if args.dir:
         base = os.path.realpath(args.dir)
@@ -663,10 +717,18 @@ def main() -> int:
     port = _free_port(args.port)
     gw_port = _free_port(0) if args.gateway else 0
     gw_url = f"http://127.0.0.1:{gw_port}" if args.gateway else ""
-    _write_config(paths, gw_url)
+    _write_config(paths, gw_url, args.upstream)
 
     hook = secrets.token_hex(16)
     env = _child_env(paths, port, hook)
+    clock = None
+    if start_ms is not None:
+        clock = {"iso": os.path.join(base, "clock.iso"), "ms": os.path.join(base, "clock.ms")}
+        with open(clock["iso"], "w", encoding="utf-8") as f:
+            f.write(start.isoformat())
+        with open(clock["ms"], "w", encoding="utf-8") as f:
+            f.write(str(start_ms))
+        env["EXAM_CLOCK_FILE"] = clock["iso"]
     password = secrets.token_urlsafe(9) if args.locked or args.gateway else ""
     gw_env = None
     if args.gateway:
@@ -675,12 +737,25 @@ def main() -> int:
         gw_env = {k: v for k, v in os.environ.items() if not k.upper().startswith("LOCI_")}
         gw_env.update({
             "PORT": str(gw_port),
-            "LOCI_UPSTREAM": "https://api.deepseek.com/v1",
+            "LOCI_UPSTREAM": args.upstream or DEFAULT_UPSTREAM,
             "LOCI_MCP": f"http://127.0.0.1:{port}/mcp",
             "LOCI_GATEWAY_DATA": os.path.join(base, "gateway"),
             "LOCI_GATEWAY_TOKEN": fetch_token,
             "LOCI_HOOK_TOKEN": host_token,
+            "LOCI_TZ": ZONE,
         })
+        if args.upstream:
+            gw_env.update({"LOCI_OWNER_NAME": "阿青", "LOCI_AI_NAME": "小满"})
+        if clock:
+            gw_env["LOCI_GATEWAY_TEST_CLOCK"] = clock["ms"]
+        # For scripts/replay_week.py: where the gateway is, its key for /present (a fresh
+        # random one, gone with this folder) and the clock files. No model key is in it.
+        with open(os.path.join(base, HANDLE), "w", encoding="utf-8") as f:
+            json.dump({"loci": f"http://127.0.0.1:{port}", "gateway": gw_url,
+                       "gateway_token": fetch_token, "upstream": gw_env["LOCI_UPSTREAM"],
+                       "zone": ZONE, "clock": clock,
+                       "gateway_data": gw_env["LOCI_GATEWAY_DATA"],
+                       "buckets": paths["buckets"]}, f, indent=1)
 
     try:
         if fresh:
@@ -694,7 +769,10 @@ def main() -> int:
                 return 1
 
         log = open(os.path.join(paths["logs"], "server.out.txt"), "w", encoding="utf-8")
-        server = subprocess.Popen([sys.executable, os.path.join(SRC, "server.py")], env=env,
+        # Under --clock the server starts through exam/serve.py, which installs the fake
+        # clock first (and builds BM25 before the first search; its other seams stay off).
+        entry = os.path.join(ROOT, "exam", "serve.py") if clock else os.path.join(SRC, "server.py")
+        server = subprocess.Popen([sys.executable, entry], env=env,
                                   cwd=base, stdout=log, stderr=subprocess.STDOUT)
         gateway = None
         if gw_env:
@@ -716,7 +794,11 @@ def main() -> int:
             print(f"Loci panel (throwaway library): http://127.0.0.1:{port}/loci", flush=True)
             print(f"library: {paths['buckets']}", flush=True)
             if gateway:
-                print(f"gateway: {gw_url} (no upstream key: nothing it does costs anything)", flush=True)
+                print(f"gateway: {gw_url} (upstream {gw_env['LOCI_UPSTREAM']}; "
+                      "it holds no key of its own)", flush=True)
+                print(f"replay handle: {os.path.join(base, HANDLE)}", flush=True)
+            if clock:
+                print(f"fake clock from {start.isoformat()}: {clock['iso']} and {clock['ms']}", flush=True)
             if password:
                 print(f"panel password: {password}  (security question 第一只猫叫什么 -> 团子)", flush=True)
             print("Ctrl+C stops it.", flush=True)
