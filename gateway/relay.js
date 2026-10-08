@@ -80,6 +80,9 @@ function create_relay({ upstream, present = null }) {
     let outgoing = body;
     let present_ctx = null;
     if (is_chat(req, body)) {
+      // Her request stops a wake in flight before anything else (present/wake.js).
+      try { present?.owner_arrived?.(); }
+      catch (err) { console.error(`[gateway] present failed to stop a wake: ${err?.message || err}`); }
       if (present) {
         try {
           const prepared = await present.prepare({

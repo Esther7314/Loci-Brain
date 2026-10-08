@@ -39,8 +39,9 @@ const NOT_BUILT = { ok: false, state: "not_built" };
  * @param threads          threads.js instance (which conversation was last active)
  * @param window_status    present/index.js window_status (a window as numbers and names)
  * @param context_windows  context_window.js instance (the window size when there is no thread)
+ * @param wake             wake.js instance (status.wake is its status(): counts, times, reasons)
  */
-function create_present_api({ name, settings, prompts, threads, window_status, context_windows }) {
+function create_present_api({ name, settings, prompts, threads, window_status, context_windows, wake }) {
   function latest_thread() {
     let best = null;
     for (const t of threads.list()) if (!best || (t.last_at || 0) > (best.last_at || 0)) best = t;
@@ -67,16 +68,11 @@ function create_present_api({ name, settings, prompts, threads, window_status, c
     };
   }
 
-  function status(values, wake_values) {
+  function status(values) {
     return {
       compress: compress_status(),
       report: { state: "not_built", day: null, at: null, text: null, error: null, gave_up: null, next_flip: values.report.flip },
-      wake: {
-        state: "not_built",
-        last: null, next_at: null,
-        next_why: wake_values === null ? "settings_unreadable" : (wake_values.on ? null : "off"),
-        today: null, held: null,
-      },
+      wake: wake.status(),
       push: { state: "not_built", last: null },
     };
   }
@@ -88,7 +84,7 @@ function create_present_api({ name, settings, prompts, threads, window_status, c
       connected: true,
       settings: settings.view(loaded.values),
       settings_state: { state: loaded.state, errors: loaded.errors },
-      status: status(loaded.values, settings.for_wake()),
+      status: status(loaded.values),
     };
   }
 

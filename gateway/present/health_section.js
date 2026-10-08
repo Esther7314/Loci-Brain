@@ -11,6 +11,8 @@
 //   · recording — when the newest line was written to the day store
 //   · settings  — whether present.json reads (ok · defaults · invalid · unreadable)
 //   · doors     — whether /present/* and /loci/source can be entered at all
+//   · wake      — when a wake last ran to an answer, failures since, how many things he
+//                 said are held for her (wake.js health())
 // Nothing in this section reads the private thread ledger's contents.
 // ============================================================
 
@@ -48,7 +50,7 @@ function build_present_health({ present, doors }) {
       ? { last_line_at: newest.at, seconds_ago: Math.max(0, Math.round((now - newest.t) / 1000)) }
       : { last_line_at: null, seconds_ago: null },
     report: not_built(),
-    wake: not_built({ held: null }),
+    wake: present.wake.health(),
     compress: not_built(),
     push: not_built(),
     settings: { state: loaded.state, errors: loaded.errors },

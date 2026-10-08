@@ -29,6 +29,12 @@
 //   remember_owner({ headers, model })
 //       Called once upstream accepted a chat request: its credential headers and model
 //       become what the gateway's own turns borrow (own_turn.js; memory only).
+//   owner_arrived()
+//       Called first thing for every chat request: a wake in flight is aborted (wake.js).
+//
+// heartbeat_tasks is what server.js hangs on its one beat, in order: wake (wake.js).
+// A finished answer also hands its request, as it went upstream, to wake.remember_turn:
+// the snapshot a wake's prefix is copied from (private, in the thread ledger).
 //
 // Nothing here can block the chat: Loci down or slow costs this turn its card or dream
 // (cue 3 s, poke 8 s), a hook that throws costs the turn its present work, and the relay
@@ -61,6 +67,7 @@ const { create_context_windows } = require("./context_window.js");
 const { with_usage, create_sse_filter, create_json_filter, split_summary } = require("./stream_filter.js");
 const { estimate_prompt, measure } = require("./fill.js");
 const { create_own_turn } = require("./own_turn.js");
+const { create_wake } = require("./wake.js");
 const win = require("./window.js");
 const compress = require("./compress.js");
 const { local_stamp } = require("./clock.js");
@@ -103,6 +110,8 @@ function create_present({
   // the gateway's own paid turns; the relay hands it each accepted request's credential (memory only)
   const own_turn = create_own_turn({ env, data_root, upstream, loci_address: loci, clock, zone, log,
                                      read_own: () => settings.load().values.own });
+  const wake = create_wake({ data_root, threads, day_store, settings, prompts, own_turn, clock, zone, log,
+                             loci_address: loci, poke_state });
 
   /** Poke delivery decides whether and what; the window decides where. */
   async function ask_poke(request_id) {
@@ -183,6 +192,7 @@ function create_present({
 
     const ctx = {
       seen, thread: thread.id, window: w.name, strip, model: body.model ? String(body.model) : null,
+      sent: forward,   // what goes upstream: wake's snapshot once the answer finishes
       estimate: estimate_prompt(forward),
       deliver: built.replayed.filter((o) => o.kind === "cue" && !o.delivered).map((o) => o.turn),
     };
@@ -268,6 +278,8 @@ function create_present({
       catch (err) { log(`[gateway] present: recording usage failed: ${err?.message || err}`); }
       try { after_summary(thread_id, ctx, split, reply.tools); }
       catch (err) { log(`[gateway] present: flipping the window failed: ${err?.message || err}`); }
+      try { wake.remember_turn(thread_id, ctx.sent, reply); }
+      catch (err) { log(`[gateway] present: keeping the wake snapshot failed: ${err?.message || err}`); }
     });
     // the client always gets the answer through the filter: the summary block never
     // reaches it, whether or not anyone asked for one
@@ -326,10 +338,12 @@ function create_present({
     prepare,
     on_response,
     remember_owner: own_turn.remember_owner,
+    owner_arrived: wake.owner_arrived,
     own_turn,
+    wake,
     banner_lines,
     window_status,
-    heartbeat_tasks: [],
+    heartbeat_tasks: [{ name: "wake", run: () => wake.tick() }],
     cue_timeout_ms,
     day_store,
     threads,

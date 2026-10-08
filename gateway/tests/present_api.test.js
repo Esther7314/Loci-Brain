@@ -182,8 +182,11 @@ test("GET /present: host, connected, every default, honest placeholders", { time
   assert.deepStrictEqual(s.compress.context, { tokens: 1000000, source: "default" });
   assert.strictEqual(s.report.state, "not_built");
   assert.strictEqual(s.report.text, null);
-  assert.strictEqual(s.wake.state, "not_built");
+  assert.strictEqual(s.wake.state, "off");
   assert.strictEqual(s.wake.next_why, "off");
+  assert.strictEqual(s.wake.next_why_words, "自动唤醒关着");
+  assert.deepStrictEqual([s.wake.last, s.wake.next_at, s.wake.held], [null, null, 0]);
+  assert.deepStrictEqual(s.wake.today, { woke: 0, spoke: 0, paid_failures: 0, dry_run: 0 });
   assert.strictEqual(s.push.state, "not_built");
   assert.strictEqual(s.push.last, null);
 });
@@ -201,7 +204,9 @@ test("POST /present: a good patch is kept, the Bark code is never echoed", { tim
   assert.deepStrictEqual(r.json.status.compress.context, { tokens: 200000, source: "user" });
   assert.strictEqual(r.json.settings.wake.on, true);
   assert.strictEqual(r.json.settings.wake.held_cap, 3);
-  assert.strictEqual(r.json.status.wake.next_why, null);
+  // on, with a key, but the planted thread holds no answered request to wake into
+  assert.strictEqual(r.json.status.wake.state, "on");
+  assert.strictEqual(r.json.status.wake.next_why, "no_thread");
   assert.deepStrictEqual(r.json.settings.push, { bark_set: true, bark_hint: "https://api.day.app/••••7Q", text: "full" });
   assert.ok(!r.text.includes("AbCdEfGh7Q"));
   const again = await call("GET", "/present");
@@ -367,12 +372,12 @@ test("/health: a present section that says when each part last succeeded", { tim
   assert.strictEqual(r.status, 200);
   const p = r.json.present;
   assert.deepStrictEqual(p.recording, { last_line_at: "2026-10-07T20:00:00+08:00", seconds_ago: 1800 });
-  for (const part of ["report", "wake", "compress", "push"]) {
+  for (const part of ["report", "compress", "push"]) {
     assert.strictEqual(p[part].state, "not_built", part);
     assert.strictEqual(p[part].last_ok_seconds_ago, null, part);
     assert.strictEqual(p[part].failures_since_ok, null, part);
   }
-  assert.strictEqual(p.wake.held, null);
+  assert.deepStrictEqual(p.wake, { state: p.wake.state, last_ok_at: null, last_ok_seconds_ago: null, failures_since_ok: 0, held: 0 });
   assert.strictEqual(p.settings.state, "ok");
   assert.deepStrictEqual(p.doors, { present_api: "open", loci_source: "open", bind: "127.0.0.1", passphrase_required: false });
   assert.ok(r.json.verdict, "the rest of /health is unchanged");

@@ -318,6 +318,17 @@ async function attach_once({
     poke = state.poke || null;
   }
 
+  // ---- `dreamsDelivered` in this state file: the ids of dreams already handed over,
+  //      here or by a wake (present/wake.js reads and writes the same list). One of them
+  //      is never handed over again, in any layer: this message only sends dream/wake
+  //      for it (above). A dream handed over here goes onto the list. ----
+  const dreams_delivered = Array.isArray(state.dreamsDelivered) ? state.dreamsDelivered.map(String) : [];
+  if (poke?.dream && poke.dream.id != null && dreams_delivered.includes(String(poke.dream.id))) {
+    poke = { ...poke, dream: null };
+  }
+  const delivering_dream = poke?.dream && poke.dream.id != null ? String(poke.dream.id) : null;
+  const delivered_after = delivering_dream ? [...dreams_delivered, delivering_dream].slice(-32) : dreams_delivered;
+
   // If the idle gate opened at all, arm for the next sentence to decay — even when
   // nothing came back (poke is null): wake silently returns 200 with no full layer, so
   // arming one extra time has no side effects.
@@ -328,6 +339,7 @@ async function attach_once({
   write_json(statePath, {
     poke, fetchedAt: now.toISOString(),
     lastUserMessageTime: now.toISOString(), wakePending,
+    ...(delivered_after.length ? { dreamsDelivered: delivered_after } : {}),
   });
 
   if (poke && (poke.dream || poke.musePending > 0)) {

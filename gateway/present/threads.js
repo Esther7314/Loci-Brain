@@ -74,7 +74,8 @@
 // `branch` is the conversation as the client currently shows it, as day-store line ids.
 // `window` belongs to present/window.js (mark, carry, overlays, usage); this module keeps
 // it in the same file and never reads it. A fork starts without one — present/index.js
-// decides what the fork inherits.
+// decides what the fork inherits. `last_sent` belongs to present/wake.js the same way:
+// the last answered request as it went upstream, the snapshot a wake's prefix copies.
 // A thread file that cannot be read after three tries is left alone: never matched,
 // never overwritten (a file that will not parse is not an empty thread).
 // ============================================================
