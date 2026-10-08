@@ -19,7 +19,7 @@ What this file deliberately does not do:
 
 Exports: dispatch() -> str
 
-🔴 **There is no parameterised retrieval underneath.** `server.py` always calls
+🔴 **There is no parameterised retrieval underneath.** `server_tools/breath.py` always calls
    `_t_breath.dispatch()` with no arguments, and the tool schema force-empties its
    parameters with `extra="forbid"`, so nothing can be pushed in from outside
    either. **A road with no entrance makes the next person reading this code (me)

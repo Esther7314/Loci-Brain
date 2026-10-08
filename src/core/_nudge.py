@@ -10,7 +10,7 @@ suggestion: it is a tap on his shoulder about that cluster, told in one fixed li
 as the panel shows it (core/profile.entry_label).
 
 When he hears it: the next Loci tool he calls carries the line at the end of its reply
-(server._run_with_notice, every tool, every op) — the same rule breath's questions are
+(server_call._run_with_notice, every tool, every op) — the same rule breath's questions are
 asked by (tools/breath/awaken.stamp_asked): handing it out is saying it, and it is stamped
 `seen_at` in the same step, under the file's lease, so two calls at once never both say
 it. Said once, it is never said again; poking the same cluster after that changes

@@ -108,7 +108,7 @@ async def _dispatch(
     kind = (kind or "").strip().lower()
 
     # There is no `importance` / `meaning`: passing one is rejected by parameter
-    #    validation (extra="forbid" on the tool face, the grow block in server.py),
+    #    validation (extra="forbid" on the tool face, server_tools/grow.py),
     #    which is cleaner than keeping a pair of fake parameters around.
     if kind in ("event", "mind", "big"):
         global _sweep_started

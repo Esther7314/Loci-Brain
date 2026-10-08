@@ -471,7 +471,7 @@ def record_error(
 # The design: during one MCP tool call, business code (bucket_manager, tools/_common
 # and friends) may raise a W/I notice at any depth. Those notices have to reach the end
 # of the MCP return value so the model can see them. A per-task list is kept in
-# contextvars; server.py's _with_notice wrapper pops it when the tool returns and
+# contextvars; server_call._with_notice pops it when the tool returns and
 # appends it. Note that contextvars are isolated per task under asyncio, so notices
 # never bleed from one call into another.
 
@@ -499,7 +499,7 @@ def push_warning(code: str, detail: str = "", *, extra: dict | None = None) -> N
 
 
 def pop_warnings() -> list[str]:
-    """Called by server.py's _with_notice before a tool returns, to take this call's notices."""
+    """Called by server_call._with_notice before a tool returns, to take this call's notices."""
     cur = _warnings_var.get()
     if cur is None:
         return []

@@ -17,7 +17,7 @@ between two vectors, one is recall's relevance floor on its 0–100 combined sco
     slice_guess         0.65  a slice's guess at what was already written that day
                               (web/host_api, the grow page)
     recall_floor        35    recall's relevance floor: what scores below it is counted
-                              in one line, not shown (tools/recall/core.py)
+                              in one line, not shown (tools/recall/_search.py)
 
 Every reader asks `value(key)` at the moment it decides, so an edit on the panel
 (`POST /api/config` with `thresholds:`) applies to the next call with no restart. With no

@@ -5,17 +5,14 @@
 // be open-sourced alongside Loci, which is why the extraction changed **not one line of
 // logic** — only where the paths land.
 //
-// One file, two jobs, plus the MCP client both of them use. The shell in this directory
-// (server.js) wires neither: breathing is the AI's own hand (server.js says why), and on
-// the chat path the relevance reminder gave way to Loci's cue cards (present/cue.js).
-// The MCP client stays for the turns the gateway runs on its own (wake, the daily
-// report), and both jobs stay for anyone wiring this module into a gateway of their own:
-//   · breath paste        first turn of a window: call breath() once and paste the
-//                         whole thing into the system prompt (the prefix region)
+// One file, one job, plus the MCP client it uses. The shell in this directory (server.js)
+// does not wire the job: on the chat path the relevance reminder gave way to Loci's cue
+// cards (present/cue.js). The MCP client stays for the turns the gateway runs on its own
+// (wake, the daily report), and the job stays for anyone wiring this module into a
+// gateway of their own:
 //   · relevance reminder  strong = keyword hit / weak = local heuristic; calls recall
 //                         once, and only when triggered. **Reports how many, never
-//                         what** — pinned at the true tail, a different position from
-//                         the breath paste.
+//                         what** — pinned at the true tail.
 //
 // 🔴 Why the reminder has to sit at the true tail: the position it needs is "after the
 //    latest user message, at the very end of the whole messages array" — as close as
@@ -24,10 +21,8 @@
 //    in with attach_at_true_tail() once the request body is assembled.
 // ============================================================
 //
-// Two boundaries shaped this file, and the shape is the whole point:
-//   ① The breath paste is **its own module file**, never mixed into the gateway's
-//      existing files — the gateway keeps one line of wiring and nothing more.
-//   ② The gateway-side code does not live together with the host application's code.
+// One boundary shaped this file, and the shape is the whole point:
+//   The gateway-side code does not live together with the host application's code.
 //      It is a standalone module with **zero imports from the host project**: nothing
 //      under the host's server/ or chat/ trees is required from here.
 //      It looks a lot like the host's own MCP client (the same handshake and call
@@ -38,14 +33,7 @@
 // `http://127.0.0.1:18002/mcp`, no token, by house rule). There is not one line of
 // Loci's own code in this file, and it touches none.
 //
-// Two jobs, both done in a single call (the gateway pokes both every round):
-//   · Breath paste — on the first turn of a window, one HTTP call to breath(), and the
-//     whole thing (the full waking screen breath() returns, nothing picked over, nothing
-//     trimmed) goes into the system prompt / context. Later turns in the same window do
-//     not call Loci again, they just re-paste the cached copy. (The messages array will
-//     not remember what was pasted last round for us — the messages arriving each round
-//     are replayed from the conversation archive and carry none of this layer's
-//     patches.)
+// The job, in a single call (a gateway pokes it every round):
 //   · Relevance reminder — **only runs when triggered**: strong = keyword hit (reusing
 //     the existing word list), weak = a local heuristic (not real tokenisation, not
 //     vectors — see the comment on weak_triggered) that filters out interjections and
@@ -61,8 +49,8 @@
 //     cached, nothing accumulated (the gateway rebuilds messages per request, so last
 //     round's reminder line can never carry over by itself).
 //     🔴 The insertion point is **the true tail of the whole messages array** (after
-//     the latest user message), not "before the latest user message" the way the breath
-//     paste goes in — closest to the moment the model speaks, highest hit rate. But
+//     the latest user message) — closest to the moment the model speaks, highest hit
+//     rate. But
 //     **this module does not do the inserting**: build_relevance_notice only puts the
 //     computed patch into its return value (record.patch), and the actual push onto
 //     outgoingBody.messages happens in server.js, once the outgoing body is assembled.
@@ -73,9 +61,8 @@
 //     continuation. Insert there and the line is either swallowed or the whole request
 //     400s. Details in ①②③ of build_relevance_notice's own doc comment.
 //
-// Failure (Loci not running, a timeout) blocks the chat in neither job: the half that
-// failed quietly does nothing, and the caller (the gateway) forwards exactly as it
-// would have.
+// Failure (Loci not running, a timeout) never blocks the chat: the reminder quietly does
+// nothing, and the caller (the gateway) forwards exactly as it would have.
 // ============================================================
 
 const fs = require("fs");
@@ -87,13 +74,7 @@ const data_root = process.env.LOCI_GATEWAY_DATA || path.join(__dirname, "data");
 // LOCI_MCP: the same env var name the host's own MCP client reads; acceptance tests
 // point it at a fake Loci.
 const DEFAULT_ADDRESS = process.env.LOCI_MCP || "http://127.0.0.1:18002/mcp";
-const DEFAULT_STATE_PATH = path.join(data_root, "state", "auto-breath-window.json");
 const DEFAULT_LOG_PATH = path.join(data_root, "logs", "memory-actions.jsonl");
-
-// 🔴 Diagnostic code on the host side (upstreamDebugRecord in its gateway server,
-//    isVolatile in its messages module) recognises "this is pasted memory" by this
-//    exact literal — change the string and both go silently blind. Not one character.
-const MARKER = "[Loci memory context]";
 
 // Strong trigger = the sentence contains a word that **says outright** it is digging
 // up the past.
@@ -134,14 +115,6 @@ const STRONG_WORDS = read_strong_words();
 // change, which means one env var and nowhere else.
 const DEFAULT_MIN_SCORE = 50;
 
-function read_json(file, fallback = {}) {
-  try { return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : fallback; }
-  catch { return fallback; }
-}
-function write_json(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
-}
 function log_line(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.appendFileSync(file, `${JSON.stringify(value)}\n`);
@@ -255,100 +228,6 @@ function make_client({ address = DEFAULT_ADDRESS, timeout_ms = 10000, headers = 
   return { call_tool, list_tools };
 }
 
-// ——— Breath paste ———
-
-function insert_before_latest_user(messages, patch) {
-  let latest_user_index = messages.length;
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    if (messages[i]?.role === "user") { latest_user_index = i; break; }
-  }
-  // Sit up front alongside the system messages (the old cache's insertSystemPatch rule:
-  // right after whatever system messages already exist). The real ordering is sorted out
-  // again by the host's moveSystemPatchesBeforeLatestUser; all that matters here is not
-  // landing after the latest user message.
-  let insert_at = 0;
-  while (insert_at < messages.length && messages[insert_at]?.role === "system" && insert_at < latest_user_index) insert_at += 1;
-  messages.splice(insert_at, 0, patch);
-}
-
-function build_patch_text(breathText, generatedAt) {
-  return [
-    MARKER,
-    `本轮 breath 于 ${generatedAt}（gateway 主动 HTTP 调，非工具调用）生成，一样不挑不裁。`,
-    "",
-    breathText,
-  ].join("\n");
-}
-
-/**
- * Breath paste: on the first turn of a window, call breath() once and paste the whole
- * thing into messages; later turns in the same window just re-paste the cache.
- *
- * @param messages    the messages array going upstream this round (**modified in
- *                    place**, the same contract the old applyStartupBreathMemory had —
- *                    the caller does not assign the result back)
- * @param newWindow   whether this is the first turn of a new window. The gateway has
- *                    already worked that signal out and passes it in; this module does
- *                    not re-decide "what counts as a window", because that decision
- *                    belongs in exactly one place
- * @param statePath   where the current window's breath text is cached (so a process
- *                    restart does not mean calling Loci again)
- * @param logPath     shares the one memory-actions.jsonl with the old cache; no second
- *                    log file
- * @param 地址/超时毫秒 only for acceptance tests pointing at a fake Loci; the defaults
- *                    are what runs normally
- */
-async function attach_once({
-  messages,
-  requestId,
-  now = new Date(),
-  newWindow = false,
-  statePath = DEFAULT_STATE_PATH,
-  logPath = DEFAULT_LOG_PATH,
-  地址: address = DEFAULT_ADDRESS,
-  超时毫秒: timeout_ms = 10000,
-} = {}) {
-  // cacheHit / cacheWritten exist to keep the old field names that downstream
-  // diagnostics read (breathMeta / pruneCompletedStartupBreathToolChains on the host
-  // side), with the meanings carried across unchanged: cacheHit = this round did not
-  // call Loci again and pasted the old cached text; cacheWritten = this round really
-  // called, and succeeded.
-  const result = { patchInjected: false, calledLoci: false, cacheHit: false, cacheWritten: false, windowId: null, breathChars: 0, error: null };
-  const cache = read_json(statePath, {});
-  let breathText = cache.breathText || "";
-  let windowId = cache.windowId || null;
-
-  if (newWindow || !breathText) {
-    result.calledLoci = true;
-    try {
-      const client = make_client({ address, timeout_ms });
-      const text = await client.call_tool("breath", {});
-      windowId = `window-${now.toISOString()}`;
-      breathText = String(text || "");
-      write_json(statePath, { windowId, breathText, fetchedAt: now.toISOString() });
-      log_line(logPath, { time: now.toISOString(), request_id: requestId, actor: "gateway/auto_paste", action: "breath_fetch", status: "ok", window_id: windowId, result_chars: breathText.length });
-      result.cacheWritten = true;
-    } catch (err) {
-      result.error = String(err?.message || err);
-      log_line(logPath, { time: now.toISOString(), request_id: requestId, actor: "gateway/auto_paste", action: "breath_fetch", status: "error", error: result.error, fallback_to_stale_cache: Boolean(breathText) });
-      // 🔴 A failure never blocks the chat: if there is an old cache, paste the old
-      //    text (better than nothing); if there is none, skip this round. Loci being
-      //    down or slow must never hold up what the user just said.
-    }
-  }
-
-  if (breathText) {
-    const patch = { role: "system", content: build_patch_text(breathText, cache.fetchedAt || now.toISOString()) };
-    insert_before_latest_user(Array.isArray(messages) ? messages : [], patch);
-    result.patchInjected = true;
-    result.breathChars = breathText.length;
-    // No fresh call to Loci this round, only a re-paste of the old cached text — which is exactly what "cache hit" means.
-    result.cacheHit = !result.cacheWritten;
-  }
-  result.windowId = windowId;
-  return result;
-}
-
 // ——— Relevance reminder (only runs when triggered; injects counts, never text) ———
 
 function latestUserText(messages) {
@@ -414,7 +293,7 @@ function weak_triggered(text) {
  * MCP `recall` tool, which returns a block of prose meant for a human; there is no
  * separate "give me the scores as JSON" endpoint, and adding one to Loci was out of
  * scope here. The format is copied from the default view of `_render_search` in
- * `src/tools/recall/core.py` (currently "time + score by default, the same for a bare
+ * `src/tools/recall/_search.py` (currently "time + score by default, the same for a bare
  * query, 🧠 badge = mind, room codes withdrawn"):
  *   `{score:5.1f}  [🧠]{摘要}  ({短id})  {MM-DD}`
  * The score on that line is on a **0~100** scale (Loci's own `RELEVANCE_FLOOR` defaults
@@ -482,7 +361,7 @@ function attach_at_true_tail(messages, patch) {
  * **this function never touches messages itself** — and on 0 hits record.patch is simply
  * undefined.
  *
- * 🔴 Why it does not insert itself the way the breath paste does: the position it needs
+ * 🔴 Why it does not insert itself: the position it needs
  * is "after the latest user message, at the true tail of the whole messages array", but
  * the internal `messages` inside server.js (the copy used for the rolling summary and
  * for tool-chain validation) has to clear three stages before it actually goes out, and
@@ -591,13 +470,10 @@ async function build_relevance_notice({
 }
 
 module.exports = {
-  MARKER,
   DEFAULT_ADDRESS,
-  DEFAULT_STATE_PATH,
   DEFAULT_LOG_PATH,
   STRONG_WORDS,
   DEFAULT_MIN_SCORE,
-  attach_once,
   build_relevance_notice,
   // attach_at_true_tail: this is what server.js uses to actually push record.patch once
   // outgoingBody is assembled (not _internal — it is a gesture production code needs,
@@ -609,7 +485,6 @@ module.exports = {
 //    other people type by hand after require()** — drop them and their code breaks on
 //    the spot, on a name they cannot type. One line each costs nothing.
   默认地址: DEFAULT_ADDRESS,
-  默认状态档: DEFAULT_STATE_PATH,
   默认日志档: DEFAULT_LOG_PATH,
   强档关键词: STRONG_WORDS,
   默认最低分: DEFAULT_MIN_SCORE,
@@ -624,9 +499,7 @@ module.exports = {
   computeReminder: build_relevance_notice,
   // appendToTail(messages, patch) — the last step, once the request body is assembled
   appendToTail: attach_at_true_tail,
-  paste: attach_once,
-  MARKER_LINE: MARKER,
   // DEFAULT_ADDRESS / DEFAULT_MIN_SCORE / STRONG_WORDS are the formal names now, exported above.
 
-  _internal: { make_client, latestUserText, strong_hits, weak_triggered, parse_score_line, build_patch_text, build_notice_line },
+  _internal: { make_client, latestUserText, strong_hits, weak_triggered, parse_score_line, build_notice_line },
 };

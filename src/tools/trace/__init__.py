@@ -13,7 +13,7 @@ core.py sees the call (tools/_slices.py): with bucket_id the slice is appended t
 that memory's sources as one record; `slice_span` re-cuts it and `drop_slice` drops it, both
 without a bucket.
 
-Exports: dispatch(...) -> str (parameters match the trace tool in server.py)
+Exports: dispatch(...) -> str (parameters match the trace tool in server_tools/trace.py)
 ========================================
 """
 

@@ -128,7 +128,7 @@ CLEARED = "cleared"              # a source_gone record's word once the body was
 HELD_WORD = "held"               # a source_held record's word, and a held source's
 
 # The line a read by id puts above an entry carrying an open source_restored record
-# (tools/recall/core.py, tools/recall/original.py); `{q}` is its id.
+# (tools/recall/_read_by_id.py, tools/recall/original.py); `{q}` is its id.
 RESTORED_READ_LINE = ("⚠️依据的来源撤回或删除过、现在恢复了；这条是从站在它上面的记忆派生的，还没复核，"
                       "复核前别的路上都不出现。看过照留就 trace(bucket_id=\"{q}\", "
                       "invalidation=\"confirmed\")，要改就 regrow 重写，不要了就 trace(bucket_id=\"{q}\", delete=True)。")

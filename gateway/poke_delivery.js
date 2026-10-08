@@ -102,7 +102,7 @@ const DEFAULT_LOG_PATH = path.join(data_root, "logs", "memory-actions.jsonl");
 // it; the default here only covers this module being called or tested on its own.
 const DEFAULT_IDLE_MINUTES = 210;
 
-// Diagnostics and tests recognise this literal — sister marker to auto_attach.js's [Loci memory context].
+// Diagnostics and tests recognise this literal.
 const MARKER = "[Loci poke]";
 
 function read_json(file, fallback = {}) {

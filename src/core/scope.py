@@ -17,7 +17,7 @@ A request carries three things from its host, never from the model:
 
 Over HTTP every request carries its own; under stdio `LOCI_SCOPE` (and the optional
 `LOCI_HOST_TOKEN`) are read once when the process starts. The request layer
-(src/server.py `_with_notice`, web/panel_auth for the hook routes) resolves them once per
+(src/server_call.py `_with_notice`, web/panel_auth for the hook routes) resolves them once per
 call into a `RequestScope` and sets it for that call; tools read it and hand core a
 `ScopeView`, which the gate (core/visibility.visible_for) asks. Nothing in core reads the
 contextvar.

@@ -747,7 +747,7 @@ def _set_status(c: _Call, edit: _Edit) -> str | None:
       *which bucket* closed something (a bucket_id or "manual"/"llm_judge"). This one
       says *which person* closed it; one name for both would fold two meanings into
       one word.
-    closed_by is absent from the trace tool signature server.py exposes to me — only
+    closed_by is absent from the trace tool signature server_tools/trace.py exposes to me — only
     the close button's route in web/loci.py, clicked by hand, passes a closed_by naming
     the user. Calling trace myself over MCP can never reach it, so by construction it
     only ever records a close made by a person. It does not also hard-code "closed by
@@ -956,7 +956,7 @@ def _reopen(bucket: dict, edit: _Edit) -> None:
 def _stamp_asked(c: _Call, edit: _Edit) -> None:
     """The "last asked" timestamp. Only web/loci.py passes mark_asked=True, and only at
     the moment the question is actually shown to the user — like closed_by, it is absent
-    from the trace tool signature in server.py, so I cannot stamp this out of thin air."""
+    from the trace tool signature in server_tools/trace.py, so I cannot stamp this out of thin air."""
     if c.mark_asked:
         from core._when import now as _now_local
         edit.updates["last_asked"] = _now_local().isoformat()

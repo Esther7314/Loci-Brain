@@ -24,16 +24,12 @@
 // The gateway's own turns (wake, the day report, forced packing) go upstream through
 // present/own_turn.js, on the one heartbeat below.
 //
-// ⛔ **This shell does not call breath() on the AI's behalf.** auto_attach.js also
-//    carries a function that pastes a whole breath() into the system prompt on the
-//    first turn of a window (`attach_once`), and here it is **deliberately left
-//    unwired**: "breathe before you speak" is a hand **the AI has to reach out with
-//    itself**, and it lives in the system prompt (docs/系统提示-英文.md, or
-//    docs/系统提示-中文.md for the Chinese version). Have the
-//    gateway paste it in and the AI is no longer "remembering to open its eyes" —
-//    it is "being handed a summary". Those are two entirely different things.
-//    If you do want the gateway to do it for you, the function is right there in the
-//    module: wire it up in one line.
+// ⛔ **This shell does not call breath() on the AI's behalf.** "Breathe before you
+//    speak" is a hand **the AI has to reach out with itself**, and it lives in the
+//    system prompt (docs/系统提示-英文.md, or docs/系统提示-中文.md for the Chinese
+//    version). Have the gateway paste it in and the AI is no longer "remembering to
+//    open its eyes" — it is "being handed a summary". Those are two entirely different
+//    things.
 //
 // 🔴 Three boundaries (do not lose them when you edit):
 //   · **A failure never blocks the chat.** Any poke that comes up empty — a timeout,

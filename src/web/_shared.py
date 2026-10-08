@@ -263,8 +263,8 @@ def replace_embedding_engine(engine) -> None:
             logger.warning("Failed to refresh embedding outbox engine", exc_info=True)
 
 
-# --- Injection slots for server.py-level helpers: they stay defined in server.py and only
-#     a reference is held here ---
+# --- Injection slots for helpers defined in server.py (fire_webhook) and server_call.py
+#     (the deletion-notice shims); only a reference is held here ---
 # These functions read and write server.py globals such as the webhook state, so moving
 # them would cascade. They are injected instead. server.py calls init_runtime(...) to fill
 # them in once each has been defined.

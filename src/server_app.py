@@ -220,7 +220,7 @@ class MCPAuthMiddleware:
     and a host with a ceiling is refused while MCP auth is off or the table says the
     deployment is not locked (`Hosts.unsafe`). The host's name goes down in the ASGI scope
     (`scope["loci.host"]`, "" for none): the tools read it from the request in their own
-    call (src/server.py `_with_notice`) — a contextvar set here would not reach them, since
+    call (src/server_call.py `_with_notice`) — a contextvar set here would not reach them, since
     a stateful session runs its tools in the session's own task."""
 
     def __init__(
