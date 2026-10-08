@@ -192,7 +192,8 @@ def test_a_cue_written_before_the_dream_does_not_count_as_kept(store):
 # ───────────────────────── three natural days ─────────────────────────
 
 def _copy_from(days_ago: int, did: str):
-    woven = (W.now() - timedelta(days=days_ago)).replace(hour=1, minute=0, second=0)
+    # Midnight of that day, so today's copy is never in the future, whatever the hour.
+    woven = (W.now() - timedelta(days=days_ago)).replace(hour=0, minute=0, second=0, microsecond=0)
     A.keep({"id": did, "织于": woven.isoformat(timespec="seconds"), "完整": f"{did} 的梦",
             "碎片": "x"}, state=A.GONE, at=woven)
 
