@@ -89,6 +89,9 @@ CJK = re.compile(r"[⺀-鿿豈-﫿＀-￯]")
 # What the gateway's own turns may cost (gateway/present/settings.js own.tool_rounds).
 DEFAULT_TOOL_ROUNDS = 6
 
+# Seconds to wait before each retry of a request the upstream answered 429.
+RETRY_WAITS = (5, 15, 30, 60)
+
 
 # ---------------------------------------------------------------------------
 # The fixture
@@ -346,6 +349,7 @@ class StandIn:
         self.turns = {t.index: t for t in turns}
         self.replies = replies
         self.upstream = upstream.rstrip("/")
+        self.upstream_lock = threading.Lock()
         self._key = key
         self.model = model
         self.clock = clock or Clock(None)
@@ -445,29 +449,40 @@ class StandIn:
                     return self._json(503, {"error": "the replay's stand-in has no upstream key"})
                 outer.counts["forwarded"] += 1
                 kind = f"turn {turn.index + 1}" if turn is not None else "own turn / side model"
-                try:
-                    resp = urllib.request.urlopen(req, timeout=600)   # noqa: S310 — the URL is the operator's
-                except urllib.error.HTTPError as e:
-                    resp = e
-                except (urllib.error.URLError, OSError) as e:
-                    outer.log(f"  stand-in: forwarding failed ({type(e).__name__})")
-                    return self._json(502, {"error": f"the stand-in could not reach upstream: {type(e).__name__}"})
-                status = getattr(resp, "status", None) or resp.code
-                outer.log(f"  stand-in: {kind} forwarded → {status}")
-                if turn is not None:
-                    outer.clock.set(turn.reply_at)
-                self.send_response(status)
-                self.send_header("Content-Type", resp.headers.get("Content-Type", "application/json"))
-                self.end_headers()
-                try:
-                    while True:
-                        piece = resp.read1(65536) if hasattr(resp, "read1") else resp.read(65536)
-                        if not piece:
+                # One request upstream at a time, and a 429 waited out (RETRY_WAITS): a free or
+                # low tier allows one request in flight, and the side model and an own turn
+                # would otherwise collide.
+                with outer.upstream_lock:
+                    for wait in (*RETRY_WAITS, None):
+                        try:
+                            resp = urllib.request.urlopen(req, timeout=600)   # noqa: S310 — the URL is the operator's
+                        except urllib.error.HTTPError as e:
+                            resp = e
+                        except (urllib.error.URLError, OSError) as e:
+                            outer.log(f"  stand-in: forwarding failed ({type(e).__name__})")
+                            return self._json(502, {"error": f"the stand-in could not reach upstream: {type(e).__name__}"})
+                        status = getattr(resp, "status", None) or resp.code
+                        if status != 429 or wait is None:
                             break
-                        self.wfile.write(piece)
-                        self.wfile.flush()
-                finally:
-                    resp.close()
+                        resp.close()
+                        outer.log(f"  stand-in: {kind} → 429, waiting {wait}s")
+                        time.sleep(wait)
+                        req = outer._forward_request(path, body)
+                    outer.log(f"  stand-in: {kind} forwarded → {status}")
+                    if turn is not None:
+                        outer.clock.set(turn.reply_at)
+                    self.send_response(status)
+                    self.send_header("Content-Type", resp.headers.get("Content-Type", "application/json"))
+                    self.end_headers()
+                    try:
+                        while True:
+                            piece = resp.read1(65536) if hasattr(resp, "read1") else resp.read(65536)
+                            if not piece:
+                                break
+                            self.wfile.write(piece)
+                            self.wfile.flush()
+                    finally:
+                        resp.close()
 
         return Handler
 
