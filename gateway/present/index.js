@@ -12,15 +12,20 @@
 //         ② a new line of hers (not a resend, not a tool turn) → poke delivery (dreams /
 //            muse, behind its idle gate) and Loci's cue, side by side, each with its own
 //            timeout; what they hand back becomes an overlay on her line (window.js)
+//         ②b the last turn's fill crossed a reminder line not yet offered in this
+//            window → his reminder goes at the tail of her line (compress.js)
 //         ③ assembly: client system + carry + lines from the mark on, overlays replayed
 //         ④ a streamed request asks for usage (stream_filter.js)
 //       `body: null` means "forward the client's body as it is".
 //   on_response(ctx, { status, headers, stream }) → the stream to pipe to the client, or null
 //       Once upstream accepted the request (2xx): the cards placed in it are confirmed to
 //       Loci (/cue/delivered, once per turn), and the answer is read as it passes: the
-//       reply is written after the turn when it finishes, and its usage becomes the fill.
-//       When the gateway asked for usage on the client's behalf, the client gets a stream
-//       with the usage chunk taken out; otherwise null (pipe upstream's stream as it is).
+//       reply is written after the turn when it finishes (the text the client saw, the
+//       summary block taken out), its usage becomes the fill, and a closed summary block
+//       flips the window once the turn has ended (compress.js; Loci hears /cue/dropped).
+//       The client gets the answer through stream_filter.js: the summary block never
+//       reaches it, and the usage chunk does not either when the gateway asked for it on
+//       the client's behalf. null (non-2xx) = pipe upstream's answer as it is.
 //   remember_owner({ headers, model })
 //       Called once upstream accepted a chat request: its credential headers and model
 //       become what the gateway's own turns borrow (own_turn.js; memory only).
@@ -53,10 +58,14 @@ const { create_settings } = require("./settings.js");
 const { create_prompts } = require("./prompts.js");
 const { create_cue, DEFAULT_TIMEOUT_MS: CUE_TIMEOUT_MS } = require("./cue.js");
 const { create_context_windows } = require("./context_window.js");
-const { with_usage, create_usage_strip } = require("./stream_filter.js");
+const { with_usage, create_sse_filter, create_json_filter, split_summary } = require("./stream_filter.js");
 const { estimate_prompt, measure } = require("./fill.js");
 const { create_own_turn } = require("./own_turn.js");
 const win = require("./window.js");
+const compress = require("./compress.js");
+const { local_stamp } = require("./clock.js");
+
+const HOW_WORDS = { self: "他自己压的", forced: "到了强制线", manual: "你按的", day: "日报换窗" };
 
 const POKE_TIMEOUT_MS = 8000;
 
@@ -155,6 +164,14 @@ function create_present({
       }
     } else if (turn) notes.push("卡重放");
 
+    // the water level: a reminder line crossed and not yet offered in this window goes at
+    // the tail of her line (compress.js); a resend replays the one already made
+    if (turn && w.name === window_name) {
+      const offered = compress.offer_reminder({ w, turn, values: settings.load().values.compress,
+                                                card: () => prompts.current("compress") });
+      if (offered) notes.push(`压缩提醒(${offered.line})`);
+    }
+
     // ③ assembly — ④ usage
     const ids = win.map_ids(body.messages, thread.branch, seen.cursor);
     const built = win.assemble(body.messages, ids, w);
@@ -198,10 +215,40 @@ function create_present({
     threads.save(thread.id);
   }
 
+  /**
+   * After a finished reply: a closed summary block is kept for the flip; the flip happens
+   * once the turn has ended (a reply without tool calls). See compress.js.
+   */
+  function after_summary(thread_id, ctx, split, tools) {
+    const thread = threads.get(thread_id);
+    if (!thread || !thread.window || thread.window.name !== ctx.window) return;
+    const w = thread.window;
+    const values = settings.load().values.compress;
+    if (split.half) console.log(`[gateway] present ${thread.id} a summary block that never closed was left out (not kept)`);
+    if (split.summary) {
+      if (values.on !== true) {
+        console.log(`[gateway] present ${thread.id} a summary block came while compress is off: left out, no flip`);
+        return;
+      }
+      w.summary_pending = split.summary;
+    }
+    if (!w.summary_pending) return;
+    if (tools && tools.length) { threads.save(thread.id); return; }
+    const flip = compress.self_flip({ thread, summary: w.summary_pending, keep_raw: values.keep_raw,
+                                      at: local_stamp(clock.now(), zone).iso, now: clock.now() });
+    threads.save(thread.id);
+    console.log(`[gateway] present ${thread.id} window ${flip.old_name} → ${flip.name} (he folded it himself), mark ${flip.mark}`);
+    cue.dropped({ window: flip.old_name, all: true })
+      .catch((err) => log(`[gateway] present: /cue/dropped failed: ${err?.message || err}`));
+  }
+
   function on_response(ctx, { status, headers, stream }) {
     if (!ctx || status < 200 || status >= 300) return null;
     confirm_delivered(ctx);
-    capture_reply(stream, headers, (reply) => {
+    capture_reply(stream, headers, (raw_reply) => {
+      // what the day store keeps is what the client saw: the summary block taken out
+      const split = split_summary(raw_reply.text);
+      const reply = { ...raw_reply, text: split.visible };
       let thread_id = ctx.thread;
       try {
         const done = threads.record_reply(ctx.seen, reply);
@@ -219,9 +266,15 @@ function create_present({
       } catch (err) { log(`[gateway] present: writing the reply failed: ${err?.message || err}`); }
       try { record_usage(thread_id, ctx, reply.usage); }
       catch (err) { log(`[gateway] present: recording usage failed: ${err?.message || err}`); }
+      try { after_summary(thread_id, ctx, split, reply.tools); }
+      catch (err) { log(`[gateway] present: flipping the window failed: ${err?.message || err}`); }
     });
+    // the client always gets the answer through the filter: the summary block never
+    // reaches it, whether or not anyone asked for one
     const is_sse = /text\/event-stream/i.test(String(headers?.["content-type"] || ""));
-    return ctx.strip && is_sse ? stream.pipe(create_usage_strip()) : null;
+    const filter = is_sse ? create_sse_filter({ strip_usage: ctx.strip }) : create_json_filter();
+    stream.on("error", () => filter.destroy());
+    return stream.pipe(filter);
   }
 
   /** What the panel may see of a window: numbers and names, never the carry or an overlay's text. */
@@ -229,9 +282,16 @@ function create_present({
     const thread = thread_id ? threads.get(thread_id)
       : threads.list().slice().sort((a, b) => b.last_at - a.last_at)[0] || null;
     if (!thread) return null;
-    const w = thread.window || null;
-    const u = w?.usage || null;
+    const w = thread.window && typeof thread.window === "object" ? thread.window : null;
+    const u = w && w.usage && typeof w.usage === "object" ? w.usage : null;
     const size = windows.resolve(u?.model || w?.model || null);
+    const branch = Array.isArray(thread.branch) ? thread.branch : [];
+    let kept_raw = null;
+    if (w) {
+      const at = w.mark ? branch.findIndex((e) => e.id === w.mark) : 0;
+      kept_raw = at >= 0 ? branch.length - at : null;
+    }
+    const opened = w && w.opened_by && typeof w.opened_by === "object" ? w.opened_by : null;
     return {
       thread: thread.id,
       window: w ? w.name : null,
@@ -244,6 +304,10 @@ function create_present({
       fill_pct: u ? u.fill_pct : null,
       context_tokens: u ? u.context_tokens : size.tokens,
       context_source: u ? u.context_source : size.source,
+      kept_raw,
+      // time and way only: what the panel shows as compress.last
+      last: opened && opened.how
+        ? { at: opened.at ?? null, how: String(opened.how), how_words: HOW_WORDS[opened.how] || null } : null,
     };
   }
 

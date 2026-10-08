@@ -22,6 +22,9 @@
 // usage, comes right before `[DONE]`. A plan can send `usage: null` to play a provider
 // that never reports usage, or `usage_in_last_choice: true` to play one that puts usage
 // on the finishing chunk instead of a chunk of its own.
+//
+// A streamed plan can also break off mid-answer (`cut_inside` + `cut`), the way a dropped
+// connection or a provider that gives up looks from the gateway's side.
 // ============================================================
 
 const http = require("node:http");
@@ -60,8 +63,27 @@ async function start_fake_upstream({ 端口: port }) {
     if (body?.stream === true) {
       const asked = body?.stream_options?.include_usage === true && usage !== null;
       const events = [{ choices: [{ index: 0, delta: { role: "assistant" } }] }];
-      // the text arrives in pieces, cut inside a multi-byte character's string on purpose
-      for (let i = 0; i < text.length; i += 3) events.push({ choices: [{ index: 0, delta: { content: text.slice(i, i + 3) } }] });
+      // the text arrives in pieces (3 characters unless the plan says `piece`), so a
+      // marker in it is split across events
+      const piece = plan.piece || 3;
+      for (let i = 0; i < text.length; i += piece) events.push({ choices: [{ index: 0, delta: { content: text.slice(i, i + piece) } }] });
+      if (plan.cut_inside) {
+        // upstream breaks off right after the event whose text reaches `cut_inside`:
+        // `cut: "end"` ends the body cleanly (no finish, no [DONE]), otherwise the
+        // connection is destroyed mid-answer
+        let so_far = "";
+        let upto = events.length;
+        for (let i = 1; i < events.length; i++) {
+          so_far += events[i].choices[0].delta.content;
+          if (so_far.includes(plan.cut_inside)) { upto = i + 1; break; }
+        }
+        const payload = events.slice(0, upto).map((e) => `data: ${JSON.stringify(e)}\n\n`).join("");
+        sent.push(payload);
+        without_usage_chunk.push(payload);
+        res.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8" });
+        res.write(payload);
+        return setTimeout(() => (plan.cut === "end" ? res.end() : res.destroy()), 30);
+      }
       tools.forEach((name, i) => events.push({ choices: [{ index: 0, delta: { tool_calls: [{ index: i, id: `call_${i}`, type: "function", function: { name, arguments: "{\"q\":1}" } }] } }] }));
       events.push({ choices: [{ index: 0, delta: {}, finish_reason: tools.length ? "tool_calls" : "stop" }] });
       let usage_event = null;
@@ -156,8 +178,9 @@ async function start_fake_upstream({ 端口: port }) {
     最后一笔() { return received[received.length - 1]; },
     设压缩(on) { compress = Boolean(on); },
     /**
-     * script(body) → { status?, text?, tools?: [names], error? }; streamed as SSE when the
-     * request asked for stream:true. Pass null to go back to the fixed answer.
+     * script(body) → { status?, text?, tools?: [names], error?, usage?, piece?,
+     * cut_inside?, cut? }; streamed as SSE when the request asked for stream:true. Pass
+     * null to go back to the fixed answer.
      */
     reply_with(fn) { script = fn; },
     /** The exact text of every scripted answer sent so far, in order. */

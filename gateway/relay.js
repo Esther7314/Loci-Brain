@@ -10,8 +10,8 @@
 //      delivery for a dream / muse line, and hands back the copy to forward — carry,
 //      window, overlays replayed, usage asked for
 //   ④ forward · ⑤ the present layer listens to the answer as it passes through and hands
-//      back the stream the client gets (upstream's bytes, less the usage chunk the client
-//      did not ask for)
+//      back the stream the client gets (upstream's bytes, less his summary block and the
+//      usage chunk the client did not ask for)
 //
 // The present hooks are fenced: a hook that throws costs this round its present work and
 // one console line, never the chat — the client's own body is forwarded as it came.
@@ -144,6 +144,13 @@ function create_relay({ upstream, present = null }) {
     res.writeHead(resp.status, resp_headers);
     if (resp.body) {
       const stream = Readable.fromWeb(resp.body);
+      // Upstream cut the answer off mid-way: the client's connection is cut too, so it
+      // knows the answer is incomplete. Without a listener the error would take the whole
+      // gateway down.
+      stream.on("error", (err) => {
+        console.error(`[gateway] ${req.method} ${req.url} → upstream cut the answer off: ${err?.message || err}`);
+        res.destroy();
+      });
       // The present layer listens alongside the pipe and may hand back the stream the client gets.
       let to_client = stream;
       if (present && present_ctx) {

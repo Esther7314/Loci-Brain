@@ -16,10 +16,16 @@
 //   POST /present/prompts    { key, text } | { key, reset: true } → { ok: true, item }
 // Any other path or method under /present is a 404.
 //
+// status.compress is the most recently active conversation's window, from
+// present/index.js window_status(): thread, fill_pct, used_tokens, estimated, kept_raw
+// (raw lines from the mark on), context {tokens, source}, and last {at, how, how_words}
+// (how the window was opened; null for a conversation's first window).
+//
 // 🔴 No reply here carries a single character of what he compressed (the carry), the
-//    overlay, or the last request sent upstream: those live in the private thread ledger
-//    and nothing in this file reads them. A status that is not built yet says so
-//    (`state: "not_built"`, nulls) instead of making something up.
+//    overlay, or the last request sent upstream: they live in the private thread ledger,
+//    and window_status() hands this file numbers, names and a time, never text. A status
+//    that is not built yet says so (`state: "not_built"`, nulls) instead of making
+//    something up.
 // ============================================================
 
 const { read_json, send_json } = require("./http_io.js");
@@ -27,28 +33,43 @@ const { read_json, send_json } = require("./http_io.js");
 const NOT_BUILT = { ok: false, state: "not_built" };
 
 /**
- * @param name      LOCI_GATEWAY_NAME (the host name the reply carries)
- * @param settings  settings.js instance
- * @param prompts   prompts.js instance
- * @param threads   threads.js instance (which conversation was last active)
+ * @param name             LOCI_GATEWAY_NAME (the host name the reply carries)
+ * @param settings         settings.js instance
+ * @param prompts          prompts.js instance
+ * @param threads          threads.js instance (which conversation was last active)
+ * @param window_status    present/index.js window_status (a window as numbers and names)
+ * @param context_windows  context_window.js instance (the window size when there is no thread)
  */
-function create_present_api({ name, settings, prompts, threads }) {
+function create_present_api({ name, settings, prompts, threads, window_status, context_windows }) {
   function latest_thread() {
     let best = null;
     for (const t of threads.list()) if (!best || (t.last_at || 0) > (best.last_at || 0)) best = t;
     return best ? best.id : null;
   }
 
-  function status(values, wake_values) {
-    const own_tokens = values.compress.context_tokens;
+  /** The most recent conversation's window, as numbers, names and a time: never its text. */
+  function compress_status() {
+    const id = latest_thread();
+    const w = id ? window_status(id) : null;
+    if (!w) {
+      return { state: "no_thread", thread: null, fill_pct: null, used_tokens: null, estimated: null,
+               kept_raw: null, last: null, context: context_windows.resolve(null) };
+    }
     return {
-      compress: {
-        state: "not_built",
-        thread: latest_thread(),
-        fill_pct: null, used_tokens: null, estimated: null, kept_raw: null,
-        context: { tokens: own_tokens, source: own_tokens ? "user" : "not_built" },
-        last: null,
-      },
+      state: "ok",
+      thread: w.thread,
+      fill_pct: w.fill_pct,
+      used_tokens: w.used_tokens,
+      estimated: w.estimated,
+      kept_raw: w.kept_raw,
+      last: w.last,
+      context: { tokens: w.context_tokens, source: w.context_source },
+    };
+  }
+
+  function status(values, wake_values) {
+    return {
+      compress: compress_status(),
       report: { state: "not_built", day: null, at: null, text: null, error: null, gave_up: null, next_flip: values.report.flip },
       wake: {
         state: "not_built",

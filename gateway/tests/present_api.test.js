@@ -172,10 +172,14 @@ test("GET /present: host, connected, every default, honest placeholders", { time
   assert.deepStrictEqual(r.json.settings_state, { state: "defaults", errors: [] });
   assert.ok(!r.text.includes("sk-fixed-upstream-key"), "the fixed key is never echoed");
   const s = r.json.status;
-  assert.strictEqual(s.compress.state, "not_built");
+  // the planted ledger holds no window the gateway can read: numbers unknown, said as null
+  assert.strictEqual(s.compress.state, "ok");
   assert.strictEqual(s.compress.thread, THREAD);
   assert.strictEqual(s.compress.fill_pct, null);
-  assert.deepStrictEqual(s.compress.context, { tokens: null, source: "not_built" });
+  assert.strictEqual(s.compress.used_tokens, null);
+  assert.strictEqual(s.compress.kept_raw, null);
+  assert.strictEqual(s.compress.last, null);
+  assert.deepStrictEqual(s.compress.context, { tokens: 1000000, source: "default" });
   assert.strictEqual(s.report.state, "not_built");
   assert.strictEqual(s.report.text, null);
   assert.strictEqual(s.wake.state, "not_built");
