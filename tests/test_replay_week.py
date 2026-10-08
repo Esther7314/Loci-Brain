@@ -7,12 +7,15 @@ scripts/replay_week.py pushes scripts/fixtures/week_chat.json through a dev gate
 is checked here needs no gateway: the fixture passes the replay's own checks and keeps to
 the sample library's people, the plan has a night after every day and the away stretch,
 and the stand-in answers a scripted turn itself while everything else goes upstream with
-the real key and model and none of the caller's credential.
+the real key and model and none of the caller's credential — or, as the stub, is answered
+in the shape its caller reads; a request whose caller left while it waited for a slot is
+never answered.
 """
 
 import json
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from datetime import timedelta
@@ -144,5 +147,89 @@ def test_without_a_key_nothing_is_sent(fx):
             _post(stand_in.port, {}, {"model": "m", "messages": [{"role": "user", "content": "x"}]})
         assert e.value.code == 503
         assert stand_in.counts["refused"] == 1 and stand_in.counts["forwarded"] == 0
+    finally:
+        stand_in.stop()
+
+
+def _side(system, user):
+    return {"model": "stand-in", "messages": [{"role": "system", "content": system},
+                                              {"role": "user", "content": user}]}
+
+
+def test_the_stub_answers_each_side_call_in_the_shape_its_caller_reads():
+    from datetime import date
+    from core import _dream, _slicer
+    from core import dehydrator as DH
+    from core.import_memory import IMPORT_DRAFT_PROMPT
+
+    user = "下面是 3 行聊天原文，行号在方括号里：\n[1] 早\n[2] 早啊\n[3] 吃了吗"
+    assert _slicer.parse_slices(R.stub_answer(_side(_slicer.SLICER_PROMPT, user)), 3) == [(1, 3, "一段日常聊天")]
+    drafted = json.loads(R.stub_answer(_side(IMPORT_DRAFT_PROMPT, user)))
+    assert drafted["slices"][0]["draft"]
+
+    system, ask = DH.backfill_request("阿青说牙又疼了。\n约了周六。",
+                                      {"room": "EVENT/SELF", "created_day": date(2026, 10, 14)})
+    answer = DH.parse_backfill(R.stub_answer(_side(system, ask)), "阿青说牙又疼了。")
+    assert answer is not None and answer.summary == "阿青说牙又疼了。"
+
+    dream = _dream.parse_dream(R.stub_answer(_side(_dream.DREAM_PROMPT, "素材")))
+    assert dream["完整"] and dream["碎片"]
+    assert json.loads(R.stub_answer(_side(DH.CUT_PROMPT, "x"))) == {"cuts": []}
+
+
+def test_the_stubs_own_turn_grows_once_then_talks():
+    tools = [{"type": "function", "function": {"name": "loci__grow"}},
+             {"type": "function", "function": {"name": "loci__recall"}}]
+    first = {"messages": [{"role": "user", "content": "【写日报】"}], "tools": tools}
+    call = R._stub_grow_call(first)
+    assert call["function"]["name"] == "loci__grow"
+    assert json.loads(call["function"]["arguments"])["kind"] == "event"
+    after = {"messages": first["messages"] + [{"role": "assistant", "tool_calls": [call]},
+                                              {"role": "tool", "content": "ok"}], "tools": tools}
+    assert R._stub_grow_call(after) is None and R.stub_answer(after)
+    pack = {"messages": [{"role": "user", "content": "收进【窗口摘要】…【/窗口摘要】"}],
+            "tools": tools[1:]}
+    assert R._stub_grow_call(pack) is None
+    said = R.stub_answer(pack)
+    assert "【窗口摘要】" in said and "【/窗口摘要】" in said
+
+
+def test_a_stub_stand_in_answers_without_a_key_and_counts(fx):
+    stand_in = R.StandIn(R.turns_of(fx), replies="scripted", key="", model="", upstream="",
+                         stub=True, listen=0, log=lambda _l: None).start()
+    try:
+        got = _post(stand_in.port, {}, _side("你是记忆系统的回填器。", "【正文】\n阿青考完了。"))
+        assert json.loads(got["choices"][0]["message"]["content"])["summary"] == "阿青考完了。"
+        assert stand_in.counts["stubbed"] == 1 and stand_in.counts["refused"] == 0
+        assert stand_in.kinds == {R.request_kind(_side("你是记忆系统的回填器。", "")): 1}
+    finally:
+        stand_in.stop()
+
+
+def test_a_request_whose_caller_left_while_queued_is_not_answered(fx):
+    """One slot, a slow answer in it: a second caller that gives up while it waits for the
+    slot is dropped — upstream it would still be paid for, and nobody would read it."""
+    stand_in = R.StandIn(R.turns_of(fx), replies="scripted", key="", model="", upstream="",
+                         stub=True, stub_delay=1.0, concurrency=1, listen=0,
+                         log=lambda _l: None).start()
+
+    def ask(timeout):
+        req = urllib.request.Request(f"http://127.0.0.1:{stand_in.port}/v1/chat/completions",
+                                     method="POST", data=json.dumps(_side("x", "y")).encode(),
+                                     headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.status
+        except OSError:
+            return None
+
+    try:
+        first = threading.Thread(target=ask, args=(10,))
+        first.start()
+        time.sleep(0.2)
+        assert ask(0.3) is None
+        first.join()
+        time.sleep(0.3)
+        assert stand_in.counts["stubbed"] == 1 and stand_in.counts["abandoned"] == 1
     finally:
         stand_in.stop()

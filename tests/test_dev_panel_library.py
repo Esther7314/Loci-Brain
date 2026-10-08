@@ -7,6 +7,7 @@ scripts/dev_panel.py seeds its throwaway library in a child process before the s
 ever starts. The library it leaves has to be what a server-made library is: stamped with
 the current version before its first memory, so that its export package
 (core/export_package.py) is one this version's importer (core/package_import.py) takes.
+Under --upstream it also leaves Loci's startup sweep nothing to send the side model.
 """
 
 import asyncio
@@ -48,16 +49,20 @@ class _FakeEmbedding:
             c.commit()
 
 
-@pytest.fixture
-def seeded():
+def _dev_panel():
+    sys.path.insert(0, str(SCRIPT.parent))
+    try:
+        import dev_panel as DP
+    finally:
+        sys.path.remove(str(SCRIPT.parent))
+    return DP
+
+
+def _seed(extra_env: dict | None = None):
     """A library seeded the way the runner seeds it: its child, with its environment."""
     base = os.path.realpath(tempfile.mkdtemp(prefix="loci-panel-dev-test-"))
     try:
-        sys.path.insert(0, str(SCRIPT.parent))
-        try:
-            import dev_panel as DP
-        finally:
-            sys.path.remove(str(SCRIPT.parent))
+        DP = _dev_panel()
         with open(os.path.join(base, DP.MARKER), "w", encoding="utf-8") as f:
             f.write("test\n")
         paths = DP._layout(base)
@@ -65,7 +70,7 @@ def seeded():
             os.makedirs(d, exist_ok=True)
         DP._write_config(paths)
         done = subprocess.run([sys.executable, str(SCRIPT), "--seed-into", base],
-                              env=DP._child_env(paths, 0, "x" * 32), cwd=base,
+                              env={**DP._child_env(paths, 0, "x" * 32), **(extra_env or {})}, cwd=base,
                               capture_output=True, text=True, encoding="utf-8",
                               errors="replace", timeout=300)
         assert done.returncode == 0, done.stdout + done.stderr
@@ -73,6 +78,46 @@ def seeded():
     finally:
         import shutil
         shutil.rmtree(base, ignore_errors=True)
+
+
+@pytest.fixture
+def seeded():
+    yield from _seed()
+
+
+def _live_entries(buckets: Path) -> list[dict]:
+    """Each live entry's front matter (the archive left out, as the startup sweep leaves it)."""
+    import yaml
+    out = []
+    for f in buckets.rglob("*.md"):
+        if "archive" in f.relative_to(buckets).parts:
+            continue
+        text = f.read_text(encoding="utf-8")
+        if text.startswith("---"):
+            out.append(yaml.safe_load(text.split("---", 2)[1]) or {})
+    return out
+
+
+def _waiting(entries: list[dict]) -> list[dict]:
+    """What the startup sweep takes (tools/grow/rooms_path.backfill_sweep): a room and no
+    summary."""
+    return [m for m in entries if m.get("room") and not m.get("summary")]
+
+
+def test_under_upstream_the_sample_leaves_the_startup_sweep_nothing(seeded):
+    """Without a side model the sample's entries keep their blanks (the panel shows them
+    so). With one (--upstream) they arrive with the stand-ins a backfill with no usable
+    answer writes, stamped `fallback`: the server's sweep, set off by a replay's first
+    grow, would otherwise send the side model one call per sample entry."""
+    plain = _live_entries(seeded)
+    assert len(_waiting(plain)) >= 40
+
+    for buckets in _seed({_dev_panel().FILL_BLANKS_ENV: "1"}):
+        filled = _live_entries(buckets)
+        assert len(filled) == len(plain)
+        assert _waiting(filled) == []
+        stamped = [m for m in filled if m.get("summary_source") == "fallback"]
+        assert len(stamped) == len(_waiting(plain))
 
 
 def test_the_sample_library_is_stamped_current(seeded):

@@ -196,15 +196,29 @@ async def _backfill_one(bucket_id: str, text: str, kind: str) -> str:
     return BACKFILLED if written else NOT_WRITTEN
 
 
+# Side-model calls one backfill batch has in flight at once. A grow's own batch (a few
+# items) runs at once; the startup sweep over a whole library's unfinished entries runs
+# this many at a time. Sent all together, a sweep's calls queue at the provider (or are
+# refused 429) and the later ones run out their timeout while queued — and each of those
+# is retried (Dehydrator._chat), so the burst multiplies instead of draining.
+BACKFILL_CONCURRENCY = 4
+
+
 async def _backfill_batch(pairs: list[tuple[str, str, str]]) -> None:
-    """Concurrent backfill (each entry in pairs = (bucket_id, text, kind)). Run
-    serially, 5 items x one side-model call (about 14s each) would take over 70s.
-    _chat is read-only and side-effect free, so the calls can run concurrently
-    (the same precedent as the [LENTO PATCH] in grow_items), each update writes its
-    own bucket under a per-bucket lock, and the names table is written under its
-    own lock, so they do not collide."""
+    """Concurrent backfill (each entry in pairs = (bucket_id, text, kind)), at most
+    BACKFILL_CONCURRENCY at a time. Run serially, 5 items x one side-model call (about
+    14s each) would take over 70s. _chat is read-only and side-effect free, so the calls
+    can run concurrently (the same precedent as the [LENTO PATCH] in grow_items), each
+    update writes its own bucket under a per-bucket lock, and the names table is written
+    under its own lock, so they do not collide."""
+    slots = asyncio.Semaphore(BACKFILL_CONCURRENCY)
+
+    async def one(bucket_id: str, text: str, kind: str) -> str:
+        async with slots:
+            return await _backfill_one(bucket_id, text, kind)
+
     await asyncio.gather(
-        *(_backfill_one(bucket_id, text, kind) for bucket_id, text, kind in pairs),
+        *(one(bucket_id, text, kind) for bucket_id, text, kind in pairs),
         return_exceptions=True,
     )
     # A backfill write updates its entry in the parse cache in place; this read only

@@ -29,7 +29,8 @@ What it deliberately does not do:
 Exports: the Dehydrator class (dehydrate / merge / digest), the default prompt strings,
          BackfillAnswer · backfill_request · parse_backfill · backfill_kinds,
          RUNS_ON · runs_local · endpoint · thinking_on (where the side model runs and
-         what it is called with: the local Ollama or the configured provider)
+         what it is called with: the local Ollama or the configured provider),
+         openai_client (the OpenAI-compatible client, with no retries of its own)
 ========================================
 """
 
@@ -665,6 +666,15 @@ def endpoint(dehy_cfg: dict, config: dict | None = None) -> tuple[str, str, str]
     return api_format, base_url, api_key
 
 
+def openai_client(api_key: str, base_url: str, timeout: float) -> AsyncOpenAI:
+    """The side model's OpenAI-compatible client. `max_retries=0`: Dehydrator._chat is
+    the one place a failed call is retried (_RETRY_MAX_ATTEMPTS, with backoff). The SDK's
+    own retries (two by default, on timeouts, 429 and 5xx alike) would run inside each of
+    those attempts, so a side model slower than `timeout` would be sent every call
+    3 × 3 = 9 times — each one paid, none of them read."""
+    return AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=timeout, max_retries=0)
+
+
 def thinking_on(dehy_cfg: dict) -> bool:
     """`dehydration.thinking`: let a model that thinks before answering do so. Off by
     default: tagging and merging are mechanical and need no thinking."""
@@ -723,11 +733,7 @@ class Dehydrator:
         # --- Initialize OpenAI-compatible client (only for openai_compat format) ---
         self.client: Optional[AsyncOpenAI] = None
         if self.api_available and self.api_format == "openai_compat":
-            self.client = AsyncOpenAI(
-                api_key=self.api_key,
-                base_url=self.base_url,
-                timeout=self.timeout_seconds,
-            )
+            self.client = openai_client(self.api_key, self.base_url, self.timeout_seconds)
 
         # --- SQLite dehydration cache: content hash -> summary ---
         db_path = os.path.join(config["buckets_dir"], "dehydration_cache.db")

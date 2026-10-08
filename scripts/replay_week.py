@@ -26,6 +26,11 @@ The stand-in (127.0.0.1:--listen) is the gateway's upstream and Loci's side mode
     · everything else — the gateway's own turns (day report, wake, pack) and Loci's side
       model (slicing the night's lines, tags, dreams) — goes to the real upstream with the
       real key and model swapped in
+    · with --stub nothing goes anywhere: everything that is not a scripted turn is
+      answered here, at once (or after --stub-delay seconds, like a slow model), with the
+      smallest answer its caller accepts (stub_answer; an own turn's first round grows one
+      memory, as a day report does). It costs nothing and needs no key: a dry run of the
+      plumbing, and a count of who asks for what (the tally printed at the end).
     🔴 The real key lives in this process's memory only. It is read from an environment
        variable (never an argument: argv shows up in process lists), sent only to
        --upstream, and never written or logged; dev_panel.py gives the gateway and Loci a
@@ -60,13 +65,15 @@ Running (each command in its own terminal; the dry run prints them with the righ
     next one starts on a fresh panel.
 
 Public surface: run as a script. `load_fixture`, `problems`, `turns_of`, `build_plan`,
-`estimate` and `StandIn` are imported by tests/test_replay_week.py.
+`estimate`, `request_kind`, `stub_answer` and `StandIn` are imported by
+tests/test_replay_week.py.
 """
 
 import argparse
 import json
 import os
 import re
+import socket
 import sys
 import threading
 import time
@@ -102,6 +109,80 @@ def request_kind(body: dict) -> str:
 
 # Seconds to wait before each retry of a request the upstream answered 429.
 RETRY_WAITS = (5, 15, 30, 60)
+
+_NUMBERED_LINE = re.compile(r"^\[(\d+)\]", re.M)
+_PACK_OPEN, _PACK_CLOSE = "【窗口摘要】", "【/窗口摘要】"
+
+
+def _text_of(msg: dict) -> str:
+    c = msg.get("content")
+    if isinstance(c, str):
+        return c
+    if isinstance(c, list):
+        return "".join(str(p.get("text") or "") for p in c if isinstance(p, dict))
+    return str(c or "")
+
+
+def _stub_grow_call(body: dict) -> dict | None:
+    """An own turn's first round, when Loci's grow is among its tools: one grow call
+    keeping one event, the way a real model's day report keeps what the day held (and so
+    sets off what a first grow sets off in Loci). None on later rounds and without grow."""
+    if any(m.get("role") == "tool" for m in body.get("messages") or []):
+        return None
+    names = [str((t.get("function") or {}).get("name") or "") for t in body.get("tools") or []]
+    name = next((n for n in names if n == "grow" or re.search(r"[_.:/-]grow$", n)), None)
+    if name is None:
+        return None
+    args = {"kind": "event", "items": [{"room": "EVENT/SELF", "text": "阿青今天考完试，去吃了甜品。",
+                                        "v": 0.7, "a": 0.4}]}
+    return {"id": "call_stub_grow", "type": "function",
+            "function": {"name": name, "arguments": json.dumps(args, ensure_ascii=False)}}
+
+
+def stub_answer(body: dict) -> str:
+    """`--stub`: the smallest answer each caller accepts, made here, for free. Told apart by
+    the request itself:
+      · an own turn (tools offered): on its first round one grow call when grow is offered
+        (_stub_grow_call; this returns "" then), after that a short line; a block the
+        gateway keeps as a window summary when the turn talks about one
+        (gateway/present/prompts.js)
+      · the slicer (core/_slicer, and an import's drafts): one slice over all the numbered
+        lines it was given (with a draft when the prompt asks for one)
+      · the backfill (core/dehydrator.backfill_request): a name and a summary from the body
+      · a dream (core/_dream.parse_dream): both layers and v/a
+      · the cut and digest prompts (core/dehydrator): no cuts, no entries
+      · anything else asking for JSON: {}; the rest: a short line"""
+    msgs = body.get("messages") or []
+    if body.get("tools"):
+        if _stub_grow_call(body) is not None:
+            return ""
+        if any(_PACK_OPEN in _text_of(m) for m in msgs):
+            return f"好。\n{_PACK_OPEN}\n今天聊了一些日常，没有要紧的事。\n{_PACK_CLOSE}"
+        return "今天聊了一些日常，没有要紧的事。"
+    system = next((_text_of(m) for m in msgs if m.get("role") == "system"), "")
+    user = next((_text_of(m) for m in msgs if m.get("role") == "user"), "")
+    if '"slices"' in system:
+        n = max((int(x) for x in _NUMBERED_LINE.findall(user)), default=0)
+        if n < 1:
+            return json.dumps({"slices": []})
+        piece = {"from": 1, "to": n, "gist": "一段日常聊天"}
+        if '"draft"' in system:
+            piece["draft"] = "聊了一段日常。"
+        return json.dumps({"slices": [piece]}, ensure_ascii=False)
+    if "回填器" in system:
+        text = user.split("【正文】", 1)[-1].strip()
+        first = text.splitlines()[0] if text else "一条记忆"
+        return json.dumps({"name": first[:10], "summary": first[:60]}, ensure_ascii=False)
+    if "完整" in system and "碎片" in system:
+        return json.dumps({"完整": "梦里是一条没有尽头的走廊。", "碎片": "走廊", "v": 0.5, "a": 0.4},
+                          ensure_ascii=False)
+    if '"cuts"' in system:
+        return json.dumps({"cuts": []})
+    if "JSON 数组" in system:
+        return "[]"
+    if "JSON" in system:
+        return "{}"
+    return "好。"
 
 
 # ---------------------------------------------------------------------------
@@ -350,24 +431,46 @@ class Clock:
 # The stand-in upstream
 # ---------------------------------------------------------------------------
 
+def _caller_left(sock) -> bool:
+    """Has the caller closed its end? Its request has been read whole, so the socket has
+    nothing more to say while the caller waits: readable now means closed (an empty peek)
+    or reset."""
+    try:
+        sock.setblocking(False)
+        try:
+            return sock.recv(1, socket.MSG_PEEK) == b""
+        finally:
+            sock.setblocking(True)
+    except BlockingIOError:
+        return False
+    except OSError:
+        return True
+
+
 class StandIn:
     """The gateway's upstream and Loci's side model. Scripted chat turns are answered here;
-    everything else is forwarded to `upstream` with `key` and `model` swapped in.
+    everything else is forwarded to `upstream` with `key` and `model` swapped in — or, with
+    `stub`, answered here too (stub_answer), after `stub_delay` seconds, and nothing is sent
+    anywhere. Either way at most `concurrency` are in hand at once, and a request whose
+    caller left while it waited for a slot is dropped (counted `abandoned`).
     Logs a request's method, path, status and which way it went — never a header or a body."""
 
     def __init__(self, turns: list[Turn], *, replies: str, upstream: str, key: str, model: str,
                  clock: Clock | None = None, listen: int = DEFAULT_LISTEN, concurrency: int = 4,
-                 log=print):
+                 stub: bool = False, stub_delay: float = 0.0, log=print):
         self.turns = {t.index: t for t in turns}
         self.replies = replies
         self.upstream = upstream.rstrip("/")
         self.upstream_lock = threading.BoundedSemaphore(concurrency)
         self._key = key
         self.model = model
+        self.stub = stub
+        self.stub_delay = stub_delay
         self.clock = clock or Clock(None)
         self.log = log
-        self.counts = {"scripted": 0, "forwarded": 0, "refused": 0}
-        self.kinds: dict[str, int] = {}      # forwarded requests by what asked (request_kind)
+        self.counts = {"scripted": 0, "forwarded": 0, "stubbed": 0, "abandoned": 0, "refused": 0}
+        self.kinds: dict[str, int] = {}      # forwarded, stubbed and abandoned requests by what asked (request_kind)
+        self.tally_lock = threading.Lock()
         self.server = ThreadingHTTPServer(("127.0.0.1", listen), self._handler())
         self.server.daemon_threads = True
         self.port = self.server.server_address[1]
@@ -383,21 +486,43 @@ class StandIn:
 
     # -- answering --
 
-    def _scripted(self, turn: Turn, body: dict) -> tuple[int, dict, bytes]:
-        self.clock.set(turn.reply_at)
+    @staticmethod
+    def _completion(text: str, body: dict, rid: str) -> tuple[int, dict, bytes]:
+        """`text` as a chat completion, streamed when the request asked for a stream."""
         created = int(time.time())
         model = body.get("model") or "stand-in"
         if body.get("stream"):
-            chunk = {"id": f"replay-{turn.index}", "object": "chat.completion.chunk", "created": created,
-                     "model": model, "choices": [{"index": 0, "delta": {"role": "assistant", "content": turn.reply},
+            chunk = {"id": rid, "object": "chat.completion.chunk", "created": created,
+                     "model": model, "choices": [{"index": 0, "delta": {"role": "assistant", "content": text},
                                                   "finish_reason": None}]}
             end = dict(chunk, choices=[{"index": 0, "delta": {}, "finish_reason": "stop"}])
             data = "".join(f"data: {json.dumps(c, ensure_ascii=False)}\n\n" for c in (chunk, end)) + "data: [DONE]\n\n"
             return 200, {"Content-Type": "text/event-stream; charset=utf-8"}, data.encode("utf-8")
-        answer = {"id": f"replay-{turn.index}", "object": "chat.completion", "created": created, "model": model,
-                  "choices": [{"index": 0, "message": {"role": "assistant", "content": turn.reply},
-                               "finish_reason": "stop"}]}
+        answer = {"id": rid, "object": "chat.completion", "created": created, "model": model,
+                  "choices": [{"index": 0, "message": {"role": "assistant", "content": text},
+                               "finish_reason": "stop"}],
+                  "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}}
         return 200, {"Content-Type": "application/json; charset=utf-8"}, json.dumps(answer, ensure_ascii=False).encode("utf-8")
+
+    @staticmethod
+    def _tool_call(call: dict, body: dict) -> tuple[int, dict, bytes]:
+        """One tool call as a plain JSON completion (the gateway reads JSON as well as a
+        stream)."""
+        answer = {"id": "replay-stub", "object": "chat.completion", "created": int(time.time()),
+                  "model": body.get("model") or "stand-in",
+                  "choices": [{"index": 0, "message": {"role": "assistant", "content": None,
+                                                       "tool_calls": [call]},
+                               "finish_reason": "tool_calls"}]}
+        return 200, {"Content-Type": "application/json; charset=utf-8"}, json.dumps(answer, ensure_ascii=False).encode("utf-8")
+
+    def _scripted(self, turn: Turn, body: dict) -> tuple[int, dict, bytes]:
+        self.clock.set(turn.reply_at)
+        return self._completion(turn.reply, body, f"replay-{turn.index}")
+
+    def _tally(self, way: str, kind: str) -> None:
+        with self.tally_lock:
+            self.counts[way] += 1
+            self.kinds[kind] = self.kinds.get(kind, 0) + 1
 
     def _forward_request(self, path: str, body: dict):
         """The request as it goes to the real upstream: the real model and key, nothing of
@@ -455,18 +580,39 @@ class StandIn:
                     outer.counts["scripted"] += 1
                     outer.log(f"  stand-in: turn {turn.index + 1} answered from the fixture")
                     return self._send(*outer._scripted(turn, body))
-                req = outer._forward_request(path, body)
-                if req is None:
-                    outer.counts["refused"] += 1
-                    outer.log("  stand-in: refused a request (no upstream key: nothing is sent anywhere)")
-                    return self._json(503, {"error": "the replay's stand-in has no upstream key"})
-                outer.counts["forwarded"] += 1
                 kind = f"turn {turn.index + 1}" if turn is not None else request_kind(body)
-                outer.kinds[kind] = outer.kinds.get(kind, 0) + 1
-                # At most `concurrency` requests upstream at once, and a 429 waited out
-                # (RETRY_WAITS): a free or low tier allows few requests in flight. Too few slots
-                # and a caller with a short timeout (the side model) gives up while queued.
+                req = None
+                if not outer.stub:
+                    req = outer._forward_request(path, body)
+                    if req is None:
+                        outer.counts["refused"] += 1
+                        outer.log("  stand-in: refused a request (no upstream key: nothing is sent anywhere)")
+                        return self._json(503, {"error": "the replay's stand-in has no upstream key"})
+                # At most `concurrency` requests upstream at once (a stub answer holds a slot
+                # too, like the model it stands for), and a 429 waited out (RETRY_WAITS): a
+                # free or low tier allows few requests in flight. A caller that gave up while
+                # its request waited for a slot (its own timeout) has left; its request is
+                # not sent: nobody would read the answer, and it would still be paid for.
                 with outer.upstream_lock:
+                    if _caller_left(self.connection):
+                        outer._tally("abandoned", kind)
+                        outer.log(f"  stand-in: {kind} — the caller left while it waited for a slot; not sent")
+                        return None
+                    if outer.stub:
+                        outer._tally("stubbed", kind)
+                        if outer.stub_delay > 0:
+                            time.sleep(outer.stub_delay)
+                        if turn is not None:
+                            outer.clock.set(turn.reply_at)
+                        call = _stub_grow_call(body) if body.get("tools") else None
+                        reply = (outer._tool_call(call, body) if call is not None
+                                 else outer._completion(stub_answer(body), body, "replay-stub"))
+                        try:
+                            return self._send(*reply)
+                        except OSError:       # the caller gave up waiting (its timeout)
+                            outer.log(f"  stand-in: {kind} — the caller left before the stub answered")
+                            return None
+                    outer._tally("forwarded", kind)
                     for wait in (*RETRY_WAITS, None):
                         try:
                             resp = urllib.request.urlopen(req, timeout=600)   # noqa: S310 — the URL is the operator's
@@ -481,6 +627,9 @@ class StandIn:
                         resp.close()
                         outer.log(f"  stand-in: {kind} → 429, waiting {wait}s")
                         time.sleep(wait)
+                        if _caller_left(self.connection):
+                            outer.log(f"  stand-in: {kind} — the caller left during the 429 wait; not sent again")
+                            return None
                         req = outer._forward_request(path, body)
                     outer.log(f"  stand-in: {kind} forwarded → {status}")
                     if turn is not None:
@@ -685,8 +834,13 @@ def replay(fx: dict, handle: dict, args, key: str) -> int:
     turns = turns_of(fx, shift)
     plan = build_plan(fx, bool(clock.files), shift)
     stand_in = StandIn(turns, replies=args.replies, upstream=args.upstream, key=key, model=args.model,
-                       clock=clock, listen=args.listen, concurrency=max(1, args.concurrency)).start()
-    print(f"stand-in upstream on http://127.0.0.1:{stand_in.port}/v1 → {args.upstream} (model {args.model})")
+                       clock=clock, listen=args.listen, concurrency=max(1, args.concurrency),
+                       stub=args.stub, stub_delay=max(0.0, args.stub_delay)).start()
+    if args.stub:
+        print(f"stand-in upstream on http://127.0.0.1:{stand_in.port}/v1 → stub answers"
+              + (f" after {args.stub_delay:g} s" if args.stub_delay > 0 else "") + " (nothing is sent anywhere)")
+    else:
+        print(f"stand-in upstream on http://127.0.0.1:{stand_in.port}/v1 → {args.upstream} (model {args.model})")
     if handle.get("upstream", "").rstrip("/") != f"http://127.0.0.1:{stand_in.port}/v1":
         print(f"note: the gateway's upstream is {handle.get('upstream')}, not this stand-in: "
               "start dev_panel.py with --upstream pointing here", file=sys.stderr)
@@ -797,6 +951,11 @@ def main() -> int:
     ap.add_argument("--wait", type=float, default=2400, help="seconds to wait for one night's report or one wake")
     ap.add_argument("--days", type=int, default=0,
                     help="replay only the first N days (and the night after them); try 1 first")
+    ap.add_argument("--stub", action="store_true",
+                    help="answer every request the fixture does not here, for free, with the smallest "
+                         "valid answer (no key, nothing sent anywhere); the tally still counts them")
+    ap.add_argument("--stub-delay", type=float, default=0.0,
+                    help="(with --stub) seconds to wait before each stub answer, like a slow model")
     args = ap.parse_args()
 
     fx = load_fixture(args.fixture)
@@ -818,8 +977,10 @@ def main() -> int:
     except OSError as e:
         print(f"refused: no replay.json in {args.panel_dir} ({e}); start dev_panel.py --gateway", file=sys.stderr)
         return 2
-    key = os.environ.get(args.key_env, "").strip()
-    if not (key and args.upstream and args.model):
+    if args.stub:
+        args.model = args.model or "stand-in"
+    key = "" if args.stub else os.environ.get(args.key_env, "").strip()
+    if not args.stub and not (key and args.upstream and args.model):
         print(f"refused: the replay needs the upstream URL, model and key ({args.key_env}); "
               "without them every own turn is refused at the stand-in. Use --dry-run to look first.",
               file=sys.stderr)

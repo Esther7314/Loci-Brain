@@ -665,12 +665,8 @@ def register(mcp) -> None:
             sh.dehydrator.api_available = bool(sh.dehydrator.api_key)
             # Rebuild OpenAI-compat client whenever key or url changes
             if sh.dehydrator.api_available and sh.dehydrator.api_format == "openai_compat":
-                from openai import AsyncOpenAI
-                sh.dehydrator.client = AsyncOpenAI(
-                    api_key=sh.dehydrator.api_key,
-                    base_url=sh.dehydrator.base_url,
-                    timeout=sh.dehydrator.timeout_seconds,
-                )
+                sh.dehydrator.client = _dehy.openai_client(
+                    sh.dehydrator.api_key, sh.dehydrator.base_url, sh.dehydrator.timeout_seconds)
             else:
                 sh.dehydrator.client = None
 

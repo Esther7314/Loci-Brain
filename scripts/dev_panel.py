@@ -50,6 +50,9 @@ Two more switches, for replaying a chat through the gateway (scripts/replay_week
 
     --upstream URL   the gateway's upstream, and Loci's side model too (slicing, tags,
                      dreams), with the placeholder key `replay-placeholder-key` and model `stand-in`.
+                     The sample's entries arrive with stand-in names and summaries quoted
+                     from their bodies (stamped `fallback`, fill_blanks), so Loci's startup
+                     sweep does not send the side model one backfill per sample entry.
                      Meant for replay_week.py's stand-in, which swaps in the real key and
                      model; this script never holds a real key. Pointed straight at a
                      provider, the placeholder key is refused and nothing costs anything.
@@ -64,14 +67,15 @@ Two more switches, for replaying a chat through the gateway (scripts/replay_week
 
 Both processes count the day in Asia/Shanghai (LOCI_TZ), where the sample's people live.
 
-Public surface: run as a script. `seed(store, base_dir)` fills a store and
+Public surface: run as a script. `seed(store, base_dir)` fills a store,
 `seed_regrow_muse_trace(store, base_dir)` adds the regrow/fold, muse and trace pages'
-sample (the child's work).
+sample and, under --upstream, `fill_blanks()` stamps the sample's blanks (the child's work).
 """
 
 import argparse
 import asyncio
 import json
+import logging
 import os
 import secrets
 import shutil
@@ -95,6 +99,9 @@ ZONE = "Asia/Shanghai"
 STAND_IN_KEY = "replay-placeholder-key"
 STAND_IN_MODEL = "stand-in"
 HANDLE = "replay.json"
+# Set for the seeding child under --upstream: the sample arrives with its blanks filled
+# (fill_blanks).
+FILL_BLANKS_ENV = "DEV_PANEL_FILL_BLANKS"
 
 
 # ---------------------------------------------------------------------------
@@ -594,6 +601,30 @@ async def seed_dreams_and_names(store, base_dir: str, ids: dict) -> None:
                            subjects=["阿青", who])
 
 
+async def fill_blanks() -> int:
+    """Under --upstream: give every sample entry still waiting for its backfill the
+    stand-ins a backfill writes when the side model has nothing usable to say — a name and
+    a summary quoted from the body, stamped `fallback` (tools/grow/_backfill.py). It runs
+    the startup sweep itself with a side model that answers nothing, so the server's own
+    sweep, started by the first grow, finds nothing left: a replay pays for the week's
+    memories, not for tagging the sample (one call per entry, some fifty)."""
+    from core import runtime as rt
+    from tools.grow import rooms_path
+
+    class Silent:
+        api_available = True
+
+        async def _chat(self, *args, **kwargs) -> str:
+            return ""
+
+    before = rt.dehydrator, rt.logger
+    rt.dehydrator, rt.logger = Silent(), logging.getLogger("dev_panel.seed")
+    try:
+        return await rooms_path.backfill_sweep()
+    finally:
+        rt.dehydrator, rt.logger = before
+
+
 def _seed_child(base: str) -> int:
     """`--seed-into`: fill the library at `base` (this process's environment already points
     every path there)."""
@@ -623,8 +654,9 @@ def _seed_child(base: str) -> int:
     store = BucketManager(cfg)
     rt.bucket_mgr, rt.config = store, cfg
 
-    async def no_backfill(pairs):     # no side model here: nothing fills tags afterwards
+    async def no_backfill(pairs):     # no side model while seeding
         return None
+    real_backfill = rooms_path._backfill_batch
     rooms_path._backfill_batch = no_backfill
 
     if os.environ.get("DEV_PANEL_PASSWORD"):
@@ -636,6 +668,9 @@ def _seed_child(base: str) -> int:
     async def both():
         ids = await seed(store, paths["buckets"])
         ids.update(await seed_regrow_muse_trace(store, paths["buckets"]))
+        if os.environ.get(FILL_BLANKS_ENV):
+            rooms_path._backfill_batch = real_backfill
+            await fill_blanks()
         return ids
     ids = asyncio.run(both())
     print(json.dumps(ids, ensure_ascii=False))
@@ -759,7 +794,9 @@ def main() -> int:
 
     try:
         if fresh:
-            seed_env = dict(env, DEV_PANEL_PASSWORD=password) if password else env
+            seed_env = dict(env, DEV_PANEL_PASSWORD=password) if password else dict(env)
+            if args.upstream:
+                seed_env[FILL_BLANKS_ENV] = "1"
             done = subprocess.run([sys.executable, os.path.abspath(__file__), "--seed-into", base],
                                   env=seed_env, cwd=base, capture_output=True, text=True,
                                   encoding="utf-8", errors="replace")
