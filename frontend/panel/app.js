@@ -17,17 +17,20 @@
       ApiError with the server's own words in `.message`; show them with errorLine(e).
    3. Renders with ui.js: subbar({tabs, tip, aside}) for the row under the header,
       group(label, {tip}, …subs) → sub(title, {tip}, …rows) → row({text, why, open,
-      right, layout}) for the canvas's .grp/.subs/.item/.txt/.why system; srcLink,
+      right, layout}) for the canvas's .grp/.subs/.item/.txt/.why system; idTag (a
+      row's id at its right), numberSubs (01 02 … before the sub-titles),
       moreLine, tip, btn, sw, radio, inp, num, customBox for the rest. A group or sub
       with nothing in it returns null and is simply not shown — an empty block does not
-      appear. Words come from the page's board or from the API's *_words; never make
+      appear. Colours, type and spacing are the tokens on :root in panel.css; use them
+      rather than raw values. Words come from the page's board or from the API's *_words; never make
       Chinese up.
    4. Opens the detail window: openDetail(id) from detail.js on any row of a memory
-      (row({open: () => openDetail(id)})); openDetail(id, {layer: "source"}) for a 来源
-      link. After the window wrote something and closed, the page is rendered again.
+      (row({open: () => openDetail(id)})); openDetail(id, {layer: "source"}) opens it
+      on its 来源. After the window wrote something and closed, the page is rendered again.
    5. Pages a list: pagedList({load: (q) => api.get(path, q), item: (it) => row(…)}).
-      5 to a page, ‹ 1 / N › under the list, the first page's as_of kept across pages;
-      it resolves to {el, total, reply, reload} — total 0 means leave the block out.
+      5 to a page unless `limit` says more, ‹ 1 / N › under the list, the first page's
+      as_of kept across pages; it resolves to {el, nav, total, reply, reload} — total 0
+      means leave the block out.
 
    Layout: web per the 1280 boards, phone per the 440 boards from 640px down
    (panel.css). Check both widths, and that nothing scrolls sideways at 440.

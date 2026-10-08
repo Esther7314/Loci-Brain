@@ -3,10 +3,10 @@
 
    Built as DOM nodes, never as HTML strings: a memory's text is data and is only ever
    set as text. The class names are the design canvas's own (.grp / .gl / .subs / .st /
-   .item / .txt / .c / .why / .src / .tip / .pg / .btn …), so a board and the page it
+   .item / .txt / .c / .why / .rid / .tip / .pg / .btn …), so a board and the page it
    became can be read side by side; panel.css holds their values.
 
-   The words on these pieces are the canvas's (翻页 ‹ ›, 来源, 还有 N 条, 自定义设置);
+   The words on these pieces are the canvas's (翻页 ‹ ›, 还有 N 条, 自定义设置);
    a page passes in everything else, from its board or from the API's *_words.
    ========================================================== */
 
@@ -97,9 +97,10 @@ export function clock(iso) {
 
 // ---------------------------------------------------------------- header and tabs
 
-/** The header: the big name and the ten pages. `nav` is [{id, label, href}]; `current`
- *  the id of the page shown. Web: the pages wrap beside the name. Phone: one row under it
- *  that scrolls sideways, the current page scrolled into view. */
+/** The header: the name and the ten pages between two hairlines. `nav` is
+ *  [{id, label, href}]; `current` the id of the page shown. Web: the pages spread evenly
+ *  on one row beside the name (sliding sideways when the window is too narrow). Phone:
+ *  one row under the name that slides sideways, the current page scrolled into view. */
 export function header(nav, current) {
   const links = nav.map((p) => h("a", {
     href: p.href, class: p.id === current ? "on" : null,
@@ -119,15 +120,16 @@ export function header(nav, current) {
   return h("header", { class: "mast" }, h("div", { class: "brand" }, "Loci brain"), bar);
 }
 
-/** The row under the header. `tabs`: [{label, href, on}] (a page's sub-tabs, the current
- *  one underlined), or a node in their place (a line of words: its i sits close after it);
- *  `tip`: the i after them; `aside`: what sits
+/** The row under the header. `tabs`: [{label, href, on}] (a page's sub-tabs, shown as a
+ *  breadcrumb, breath / surface, the current one darker), or a node in their place (a
+ *  line of words: its i sits close after it); `tip`: the i after them; `aside`: what sits
  *  at the right (a date line, a page's secondary entry) — under the tabs on the phone. */
 export function subbar({ tabs, tip: tipText, aside } = {}) {
   const left = Array.isArray(tabs)
-    ? h("div", { class: "nav tabs" }, tabs.map((t) => h("a", {
-      href: t.href, class: t.on ? "on" : null, "aria-current": t.on ? "page" : null, text: t.label,
-    })), tipText ? tip(tipText) : null)
+    ? h("div", { class: "nav tabs" }, tabs.map((t, i) => [
+      i ? h("span", { class: "sep", "aria-hidden": "true", text: "/" }) : null,
+      h("a", { href: t.href, class: t.on ? "on" : null, "aria-current": t.on ? "page" : null, text: t.label }),
+    ]), tipText ? tip(tipText) : null)
     : h("div", { class: `nav tabs${tipText ? " line" : ""}` }, tabs || null, tipText ? tip(tipText) : null);
   return h("div", { class: "subbar" }, left, aside || null);
 }
@@ -168,7 +170,8 @@ export function group(label, { tip: tipText } = {}, ...subs) {
     h("div", { class: "subs" }, kept));
 }
 
-/** A sub-block: its title (with an i) and its rows. Null when it has no rows. */
+/** A sub-block: its title (with an i) and its rows. Null when it has no rows. A page
+ *  that numbers its blocks (01 档案, 02 原则 …) passes them through numberSubs. */
 export function sub(title, { tip: tipText } = {}, ...children) {
   const kept = children.flat().filter(Boolean);
   if (!kept.length) return null;
@@ -177,11 +180,23 @@ export function sub(title, { tip: tipText } = {}, ...children) {
     kept);
 }
 
+/** Number the sub-blocks a page shows, in order, 01 02 …: each of `blocks` is a sub()
+ *  (null when it is not shown, and then not counted). Returns the blocks. */
+export function numberSubs(blocks) {
+  let n = 0;
+  for (const b of blocks) {
+    const st = b && b.querySelector(".sth > .st");
+    if (st) st.prepend(h("span", { class: "sn", text: String(++n).padStart(2, "0") }));
+  }
+  return blocks;
+}
+
 /** One row. `text` the line (cut to one line; `whole: true` shows it all); `why` the
  *  small words under it (a string, or a list shown side by side); `open` what clicking
  *  the line does (usually the detail window); `right` what sits at its right — under it
- *  on the phone (a 来源 link, a date, buttons); `layout` "start" (breath and surface:
- *  140px, aligned to the top), "wide" (300px of buttons) or "" (170px, centred). */
+ *  on the phone (a date, buttons), except a "start" row's; `layout` "start" (breath and
+ *  surface: the id, as wide as it is, beside it on the phone too), "wide" (300px of
+ *  buttons) or "" (170px). */
 export function row({ text, why, open, right, layout = "", whole = false, lead }) {
   const whys = (Array.isArray(why) ? why : [why]).filter((w) => w !== undefined && w !== null && w !== "");
   const line = h("span", { class: whole ? "c2" : "c" });
@@ -193,10 +208,11 @@ export function row({ text, why, open, right, layout = "", whole = false, lead }
   return h("div", { class: `item${layout ? ` ${layout}` : ""}` }, txt, right || h("span"));
 }
 
-/** 「来源 a1b2c3」 at a row's right, 「来源 a1b2c3 ›」 under it on the phone. */
-export function srcLink(short, open) {
-  const a = h("a", { class: "src" }, `来源 ${short}`, h("span", { class: "only-phone", text: " ›" }));
-  return clickable(a, open);
+/** A row's id at its right: the handle recall takes (`short`: a 12-hex id's first six,
+ *  a readable id whole), lowercase as it is stored, because recall matches it as
+ *  written. The # in front is drawn by panel.css, so a copy carries the id alone. */
+export function idTag(short) {
+  return short ? h("span", { class: "rid", text: short }) : h("span");
 }
 
 /** 「还有 N 条」 under a list cut short. */
@@ -216,7 +232,8 @@ export function errorLine(err) {
 
 // ---------------------------------------------------------------- paging
 
-/** A list read one page at a time (5 to a page), with ‹ 1 / N › under it.
+/** A list read one page at a time (`limit` to a page, 5 unless the page asks for more),
+ *  with ‹ 1 / N › under it.
  *
  *  `load(query)` reads one page: query is {offset, limit, as_of}; it returns the reply
  *  {items, total, offset, limit, next_offset, as_of}. The first page's `as_of` is sent
@@ -226,7 +243,8 @@ export function errorLine(err) {
  *
  *  Resolves to {el, total, reply, reload(), again()} once the first page is in; it rejects
  *  when the first page cannot be read, so the page decides what to show. With one page
- *  only, the ‹ › line is left out. `again()` reads the page shown once more, as of now —
+ *  only, the ‹ › line is left out. `nav` is that line: a page may move it elsewhere (surface
+ *  puts it at the page's foot) and it keeps working. `again()` reads the page shown once more, as of now —
  *  after a write took a row off it (one page back when that one is now empty). */
 export async function pagedList({ load, item, items, limit = 5 }) {
   const rows = h("div", { class: "rows" });
@@ -262,6 +280,7 @@ export async function pagedList({ load, item, items, limit = 5 }) {
   const first = await go(0);
   return {
     el,
+    nav,
     total: first.total || 0,
     reply: first,
     reload: () => { state.asOf = null; return go(0); },

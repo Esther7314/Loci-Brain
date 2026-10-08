@@ -2,7 +2,7 @@
    detail.js — the detail window: one memory, what it led to, where it came from
 
    Any row anywhere opens it with `openDetail(id)`; `openDetail(id, {layer: "source"})`
-   opens it straight on its 来源 layer (breath's 「来源 a1b2c3」 links). A pending slice
+   opens it straight on its 来源 layer. A pending slice
    (grow's 等着写的) opens on its 原话 with `openSliceSource(sliceId)`: the same layer over
    GET /api/loci/grow/slices/{id}/source, 看原话 asking `?fetch=1`. Web: a window over
    the dimmed page. Phone: a card rising from the bottom.

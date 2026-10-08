@@ -1,29 +1,33 @@
 /* ==========================================================
    pages/breath.js — breath and surface, the two sub-tabs of the first page
 
-   #/breath          (boards Main, breath-phone) GET /api/loci/breath/last: the last
+   #/breath          (Figma frame breath——breath) GET /api/loci/breath/last: the last
                      breath actually handed out — what it named, never a breath computed
-                     now — with titles read now. Three groups:
+                     now — with titles read now. Three groups, their blocks numbered in
+                     order as shown (01 档案 …):
                        核心  档案 (the name page, whole) · 原则 (the pinned rules)
                        最近  近三天 (the card, `recent.text`, as the model reads it,
-                             rendered now from the entries that breath named; an entry
-                             that changed since and is left off it (`in_card` false) is a
-                             row under it saying what became of it; no entries at all:
-                             这三天没存东西; see core/breath_snapshot.py) · 惦记的事 (each
-                             with why it is there now, 还有 N 条, the slices and imported
-                             stretches still waiting)
+                             rendered now from the entries that breath named, shown flat
+                             like the rows; an entry that changed since and is left off it
+                             (`in_card` false) is a row under it saying what became of it;
+                             no entries at all: 这三天没存东西; see core/breath_snapshot.py)
+                             · 惦记的事 (each with why it is there now, 还有 N 条, the
+                             slices and imported stretches still waiting)
                        旧事  忽然想起 (how each came up) · 依据变了的 (only when there is
                              any; each with why, one phrase per reason, in breath's words)
+                     Every row shows its id at the right (idTag): the handle the card
+                     itself prints and recall takes, so what is read here can be searched.
                      「最近一次 · <when>」 at the right; the scope line beside it when it
                      was handed out under a narrower one; 「最早的一条记在 <day>」 at the
                      bottom. Nothing handed out yet: the API's `note`.
-   #/breath/surface  (boards surface-web, surface-phone) GET /api/loci/awake, paged: the
-                     awake pool now, every reason each entry is awake (reasons[].text),
-                     its day at the right (first in the reasons row on the phone).
+   #/breath/surface  (Figma frame breath——surface) GET /api/loci/awake, paged
+                     SURFACE_PAGE to a page: the awake pool now, each entry with its day
+                     and every reason it is awake (reasons[].text) under it, its id at the
+                     right; the ‹ › line at the page's foot.
    ========================================================== */
 
 import * as api from "../api.js";
-import { h, subbar, group, sub, row, srcLink, moreLine, note, pagedList, dayTime } from "../ui.js";
+import { h, subbar, group, sub, numberSubs, row, idTag, moreLine, note, pagedList, dayTime } from "../ui.js";
 import { href } from "../router.js";
 import { openDetail } from "../detail.js";
 
@@ -40,6 +44,10 @@ const TIPS = {
 
 const EMPTY_RECENT = "这三天没存东西";
 const OFF_CARD = "这几条后来变了，没算进上面的卡";
+
+// surface's rows to a page: about a desktop screen of them (each row is a line and its
+// reasons under it); the API takes up to 50 (core/paging.PAGE_MAX).
+const SURFACE_PAGE = 15;
 
 // The panel reads its whole library; this is the line every panel request carries
 // (contract §一.4), and the only one breath's date line leaves out.
@@ -65,7 +73,11 @@ function whyOf(it, ...why) {
 }
 
 const open = (id) => () => openDetail(id);
-const openSource = (id) => () => openDetail(id, { layer: "source" });
+
+/** One breath or surface row: its line, the small words under it, its id at the right. */
+function entryRow(it, { why, whole = false } = {}) {
+  return row({ text: lineOf(it), whole, why, open: open(it.id), right: idTag(it.short), layout: "start" });
+}
 
 async function renderBreath(view) {
   const out = await api.get("/api/loci/breath/last");
@@ -79,70 +91,61 @@ async function renderBreath(view) {
   view.append(subbar({ tabs: tabs("breath"), tip: TIP_TABS, aside: h("span", { class: "why", text: when.join(" · ") }) }));
 
   const core = b.core || {};
-  const facts = core.facts
-    ? row({ text: lineOf(core.facts), whole: !!core.facts.text, why: whyOf(core.facts), open: open(core.facts.id),
-      right: srcLink(core.facts.short, openSource(core.facts.id)), layout: "start" })
-    : null;
-  const rules = (core.rules || []).map((r) => row({ text: lineOf(r), why: whyOf(r), open: open(r.id),
-    right: srcLink(r.short, openSource(r.id)), layout: "start" }));
+  const facts = core.facts ? entryRow(core.facts, { whole: !!core.facts.text, why: whyOf(core.facts) }) : null;
+  const rules = (core.rules || []).map((r) => entryRow(r, { why: whyOf(r) }));
 
   const rec = b.recent || {};
   const recentItems = rec.items || [];
   const card = rec.text
-    ? h("p", { class: "c2", style: "padding-top: 6px", text: rec.text })
-    : recentItems.length ? null : h("p", { class: "why", style: "margin: 0; padding-top: 6px", text: EMPTY_RECENT });
-  const offCard = recentItems.filter((it) => it.in_card === false).map((it) => row({ text: lineOf(it),
-    why: whyOf(it, it.date), open: open(it.id), layout: "start" }));
+    ? h("p", { class: "c2 flat", text: rec.text })
+    : recentItems.length ? null : h("p", { class: "why flat", style: { margin: "0" }, text: EMPTY_RECENT });
+  const offCard = recentItems.filter((it) => it.in_card === false).map((it) => entryRow(it, { why: whyOf(it, it.date) }));
   const recent = [card, offCard.length ? h("p", { class: "more", text: OFF_CARD }) : null, offCard];
 
   const plan = b.prospective || {};
-  const planRows = (plan.items || []).map((it) => row({ text: lineOf(it),
-    why: whyOf(it, it.reason && it.reason.words), open: open(it.id), layout: "start" }));
-  const asks = (plan.questions || []).map((q) => row({ text: lineOf(q), why: whyOf(q), open: open(q.id), layout: "start" }));
+  const planRows = (plan.items || []).map((it) => entryRow(it, { why: whyOf(it, it.reason && it.reason.words) }));
+  const asks = (plan.questions || []).map((q) => entryRow(q, { why: whyOf(q) }));
   const waiting = [
     plan.slices_pending > 0 ? `宿主那边 ${plan.slices_pending} 段切片等着收` : "",
     plan.imports_pending > 0 ? `导入的 ${plan.imports_pending} 段等着核` : "",
   ].filter(Boolean).join(" · ");
 
-  const sudden = ((b.involuntary || {}).items || []).map((it) => row({ text: lineOf(it), why: whyOf(it, it.why),
-    open: open(it.id), layout: "start" }));
+  const sudden = ((b.involuntary || {}).items || []).map((it) => entryRow(it, { why: whyOf(it, it.why) }));
   const moved = b.invalidation || {};
-  const movedRows = (moved.items || []).map((it) => row({ text: lineOf(it), why: whyOf(it, ...(it.why || [])), open: open(it.id),
-    right: srcLink(it.short, openSource(it.id)), layout: "start" }));
+  const movedRows = (moved.items || []).map((it) => entryRow(it, { why: whyOf(it, ...(it.why || [])) }));
 
   const planBlock = planRows.length || asks.length || waiting
     ? sub("惦记的事", { tip: TIPS.plan }, planRows, asks, moreLine(plan.more),
       waiting ? h("p", { class: "more", text: waiting }) : null)
     : null;
 
+  const [factsBlock, rulesBlock, recentBlock, , suddenBlock, movedBlock] = numberSubs([
+    sub("档案", { tip: TIPS.facts }, facts),
+    sub("原则", { tip: TIPS.rules }, rules, moreLine(core.rules_more)),
+    sub("近三天", { tip: TIPS.recent }, recent),
+    planBlock,
+    sub("忽然想起", { tip: TIPS.sudden }, sudden),
+    movedRows.length ? sub("依据变了的", { tip: TIPS.moved }, movedRows, moreLine(moved.more)) : null,
+  ]);
+
   view.append(h("main", { class: "sections" },
-    group("核心", {},
-      sub("档案", { tip: TIPS.facts }, facts),
-      sub("原则", { tip: TIPS.rules }, rules, moreLine(core.rules_more))),
-    group("最近", {},
-      sub("近三天", { tip: TIPS.recent }, recent),
-      planBlock),
-    group("旧事", {},
-      sub("忽然想起", { tip: TIPS.sudden }, sudden),
-      movedRows.length ? sub("依据变了的", { tip: TIPS.moved }, movedRows, moreLine(moved.more)) : null)));
+    group("核心", {}, factsBlock, rulesBlock),
+    group("最近", {}, recentBlock, planBlock),
+    group("旧事", {}, suddenBlock, movedBlock)));
   if (b.earliest) view.append(h("p", { class: "why foot", text: `最早的一条记在 ${b.earliest}` }));
 }
 
 async function renderSurface(view) {
+  view.classList.add("fill");
   view.append(subbar({ tabs: tabs("surface"), tip: TIP_SURFACE }));
   const list = await pagedList({
     load: (q) => api.get("/api/loci/awake", q),
-    item: (it) => row({
-      text: lineOf(it),
-      why: [it.date ? h("span", { class: "only-phone", text: it.date }) : null,
-        ...(it.reasons || []).map((r) => r.text)],
-      open: open(it.id),
-      right: h("span", { class: "dt", text: it.date || "" }),
-      layout: "start",
-    }),
+    limit: SURFACE_PAGE,
+    item: (it) => entryRow(it, { why: [it.date, ...(it.reasons || []).map((r) => r.text)] }),
   });
   if (!list.total) return;
-  view.append(h("main", { class: "sections" }, group("醒着", {}, list.el)));
+  list.nav.classList.add("end");
+  view.append(h("main", { class: "sections" }, group("醒着", {}, list.el)), list.nav);
 }
 
 export default {
