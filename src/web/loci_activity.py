@@ -14,6 +14,8 @@ recall's timeline, usage, grow, muse, the missing vectors, and 「现在补」
                                            (`?host=` one host's; any host's without it),
                                            else local midnight (core/grow_view.day_cut)
     GET  /api/loci/grow/slices          -> every batch of slices, with states (core/grow_view)
+    GET  /api/loci/grow/slices/{id}/source -> one slice's 原话: its source with the
+                                           registry's state; `?fetch=1` its lines
     GET  /api/loci/muse                 -> clusters or unnamed days (core/muse_view)
     POST /api/loci/muse/nudge           -> 「戳一下」 on a cluster (core/_nudge)
     GET  /api/loci/dreams               -> the last three natural days' dreams, from the
@@ -173,9 +175,43 @@ async def api_loci_grow_slices(request: Request) -> Response:
         out = _gv.slice_batches(sh.bucket_mgr.slices,
                                 await sh.bucket_mgr.list_all(include_archive=True),
                                 hosts=_pa.hosts(), threshold=threshold, offset=offset,
-                                limit=limit, as_of=as_of)
+                                limit=limit, as_of=as_of,
+                                registry=getattr(sh.bucket_mgr, "sources", None))
     except Exception as e:                       # noqa: BLE001
         return _failed("grow/slices", e)
+    return JSONResponse({**out, "scope": _scope_line(request)})
+
+
+async def api_loci_grow_slice_source(request: Request) -> Response:
+    """One slice's 原话 (core/grow_view.slice_source); `?fetch=1` asks for its lines
+    (core/detail.fetched: a host's from the host serving them, an import's from Loci's
+    own copy; nothing fetched is kept or logged)."""
+    from core import _originals as _O
+    from core import detail as _D
+    from core import grow_view as _gv
+    from core import scope as _scope
+    from . import panel_auth as _pa
+    sid = str(request.path_params.get("slice_id") or "").strip()
+    pending = getattr(sh.bucket_mgr, "slices", None)
+    registry = getattr(sh.bucket_mgr, "sources", None)
+    gone = JSONResponse({"error": f"没有这一段：{sid}"}, status_code=404)
+    if not sid or pending is None:
+        return gone
+    try:
+        if (request.query_params.get("fetch") or "").strip() in ("1", "true", "yes"):
+            record = _gv.slice_record(pending, sid)
+            if record is None:
+                return gone
+            out = await _D.fetched(record, store=sh.bucket_mgr, hosts=_O.deployment_hosts(),
+                                   registry=registry, settings=_O.settings_from(sh.config),
+                                   request=_scope.current_request())
+        else:
+            out = _gv.slice_source(pending, sid, registry=registry,
+                                   hosts=_O.deployment_hosts(), label_hosts=_pa.hosts())
+            if out is None:
+                return gone
+    except Exception as e:                       # noqa: BLE001
+        return _failed("grow/slices/source", e)
     return JSONResponse({**out, "scope": _scope_line(request)})
 
 
@@ -240,7 +276,8 @@ async def api_loci_dreams(request: Request) -> Response:
         out = _da.panel_view(_da.load(sh.bucket_mgr.base_dir),
                              await sh.bucket_mgr.list_all(include_archive=False),
                              lambda: list(sh.bucket_mgr.ledger_mirror.iter_events()),
-                             now=now, offset=offset, limit=limit, as_of=as_of)
+                             now=now, offset=offset, limit=limit, as_of=as_of,
+                             scope=await _library_view())
     except Exception as e:                       # noqa: BLE001
         return _failed("dreams", e)
     return JSONResponse({**out, "scope": _scope_line(request)})

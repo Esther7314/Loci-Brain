@@ -53,6 +53,8 @@ What lives here:
   the tools and the engine pieces above read it at call time.
 - `names.py`: the names table — normalising subjects, which spellings are one name, what
   kind each name is. The tools, the summariser, cue cards and the export package read it.
+- `prompts.py`: the side model's prompts the owner may rewrite from the panel (backfill,
+  dream) — the shipped text, the library's rewrite, and what a rewrite must keep.
 - `similarity.py` / `starfield.py` / `census.py` / `health.py`: what the panel's reads
   compute — suspected duplicates and their pair cache, the starfield, the room and subject
   counts, the health check and the settings page's top block. The web builders read the

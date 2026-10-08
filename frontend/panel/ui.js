@@ -313,33 +313,37 @@ export function num(attrs = {}) {
 }
 
 /** A prompt card (grow, dream, present's 高级设置): its title, 「改过 <day>」 when it was
- *  changed, the prompt in a box the full width, what is better left alone and why, and
- *  恢复默认 · 保存 under the box. `card` is one of GET /api/loci/prompts:
- *  {key, title, text, changed, notes[]}; `title` the board's words for it. `onSave(text)`
- *  and `onReset()` write and resolve to the server's reply; a failure shows its words. */
-export function promptCard({ title, card, label, onSave, onReset }) {
+ *  rewritten, the prompt in a box the full width, the server's 不建议改 lines as they
+ *  come, and 恢复默认 · 保存 under the box. `card` is one item of GET /api/loci/prompts:
+ *  {key, text, default, edited, changed, changed_at, notes[]}; `title` and `label` the
+ *  board's words for it, `changedWords(day)` its 改过 line. `onSave(text)` and
+ *  `onReset()` write; while one runs both buttons wait, and a failure shows the server's
+ *  words under them. `extra` goes after the buttons (dream's 样文). */
+export function promptCard({ title, card, label, onSave, onReset, changedWords = (day) => `改过 ${day}`, extra }) {
   const id = `prompt-${card.key}`;
   const area = h("textarea", { class: "prompt", id, rows: "11" });
   area.value = card.text ?? "";
   const status = h("div");
-  const changed = typeof card.changed === "string" && card.changed ? `改过 ${card.changed}` : "";
-  const notes = (card.notes || []).map((n) => {
-    const words = typeof n === "string" ? n : [n.part, n.why].filter(Boolean).join(" —— ");
-    return words ? h("p", { class: "why", style: { margin: "12px 0 0" }, text: `不建议改：${words}` }) : null;
-  });
+  const changed = card.edited && card.changed ? changedWords(card.changed) : "";
+  const notes = (card.notes || []).map((n) => h("p", { class: "why", style: { margin: "12px 0 0" }, text: n }));
+  const reset = btn("恢复默认");
+  const keep = btn("保存", { dark: true });
   const run = (fn) => async () => {
     fill(status);
+    reset.disabled = keep.disabled = true;
     try { await fn(); } catch (e) { fill(status, errorLine(e)); }
+    reset.disabled = keep.disabled = false;
   };
+  reset.addEventListener("click", run(() => onReset()));
+  keep.addEventListener("click", run(() => onSave(area.value)));
   return h("div", null,
     h("h3", { class: "st", style: { marginBottom: "6px" }, text: title }),
     changed ? h("p", { class: "why", style: { margin: "0 0 12px" }, text: changed }) : null,
     h("label", { for: id, class: "sr", text: label || title }),
     area, notes,
-    h("div", { class: "acts", style: { marginTop: "20px" } },
-      btn("恢复默认", { onClick: run(() => onReset()) }),
-      btn("保存", { dark: true, onClick: run(() => onSave(area.value)) })),
-    status);
+    h("div", { class: "acts", style: { marginTop: "20px" } }, reset, keep),
+    status,
+    extra || null);
 }
 
 /** 「自定义设置」: folded, only its link; open, a grey box with the link on top. */

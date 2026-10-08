@@ -13,9 +13,10 @@ filters first, so the number on the panel is the number the model sees on waking
 **Read-only; nothing is written to disk.**
 
 The names page and the name card (contract 「面板接口」 §四, §五 name) count over the same
-listing: `names_page` (the names the table knows, by kind, most mentioned first),
-`pending_names` (the names it does not know yet, each with the entry it first appeared
-in, newest first), `name_card` (one name: what the table says, its card, the entries it
+listing: `names_page` (the names the table knows and gives a kind, by kind, most
+mentioned first), `pending_names` (the names it does not know yet or knows without a
+kind, each with the entry it first appeared in and what it looks like, newest first),
+`name_card` (one name: what the table says, its card, the entries it
 appears in). Their lists page the way every panel list does (core/paging.py), counting
 only entries written before `as_of` so a page does not shift while it is read
 (`written_before`).
@@ -196,14 +197,21 @@ def _memory_line(b: dict) -> dict:
             "text": entry_label(meta, str(b.get("content") or ""))}
 
 
+def _recognised(row: dict) -> bool:
+    """A name is recognised once the table knows it and says what it is. One the table
+    knows without a kind (aliases alone, or a name merged into before kinds existed) is
+    still waiting to be told what it is, so it waits on the pending page."""
+    return bool(row["canonical"] and row["kind"])
+
+
 def names_page(all_buckets: list, *, kind: str = "", offset: int = 0,
                limit: int = PAGE_LIMIT, as_of: datetime | None = None) -> dict:
-    """The names page: the names the table knows that appear in the store, most
+    """The names page: the recognised names (`_recognised`) that appear in the store, most
     mentioned first, filtered to one `kind` when given; the kinds with how many names
     each; how many names wait to be recognised."""
     rows = subjects(written_before(all_buckets, as_of))["names"]
-    known = [r for r in rows if r["canonical"]]
-    kinds = Counter(r["kind"] for r in known if r["kind"])
+    known = [r for r in rows if _recognised(r)]
+    kinds = Counter(r["kind"] for r in known)
     items = []
     for r in known:
         if kind and r["kind"] != kind:
@@ -214,21 +222,38 @@ def names_page(all_buckets: list, *, kind: str = "", offset: int = 0,
     return {"kinds": [{"kind": k, "n": n} for k, n in
                       sorted(kinds.items(), key=lambda kv: (-kv[1], kv[0]))],
             **page(items, offset, limit, as_of),
-            "pending_count": sum(1 for r in rows if not r["canonical"])}
+            "pending_count": sum(1 for r in rows if not _recognised(r))}
+
+
+def _guess(row: dict, guesses: dict | None) -> str | None:
+    """What a waiting name looks like: the kind the side model said when the table could
+    not take it (core/name_guesses); for a name the table knows without a kind but hangs
+    in a work or a group (present_in / member_of), a person — characters and members are
+    people in this table. None when nothing says."""
+    from . import name_guesses as _G
+    said = _G.guess_of(guesses or {}, row["name"])
+    if said:
+        return said
+    if row["canonical"] and (row["present_in"] or row["member_of"]):
+        return subj.KIND_PERSON
+    return None
 
 
 def pending_names(all_buckets: list, *, offset: int = 0, limit: int = PAGE_LIMIT,
-                  as_of: datetime | None = None) -> dict:
-    """The names the table does not know yet, the most recently first seen on top, each
-    with the entry it first appeared in."""
+                  as_of: datetime | None = None, guesses: dict | None = None) -> dict:
+    """The names waiting to be recognised (`_recognised`), the most recently first seen on
+    top, each with the entry it first appeared in, whether the table already lists it
+    (`in_table`), and `guess`: what it looks like (`_guess`), or None. `guesses` is
+    core/name_guesses.load()."""
     listing = written_before(all_buckets, as_of)
     by_id = {str((b.get("metadata") or {}).get("id") or b.get("id") or ""): b for b in listing}
-    rows = [r for r in subjects(listing)["names"] if not r["canonical"]]
+    rows = [r for r in subjects(listing)["names"] if not _recognised(r)]
     rows.sort(key=lambda r: (r["first"], r["name"]), reverse=True)
     items = []
     for r in rows:
         b = by_id.get(r["first_bucket"])
         items.append({"name": r["name"], "n": r["n"], "pronoun": r["pronoun"],
+                      "in_table": bool(r["canonical"]), "guess": _guess(r, guesses),
                       "first": _memory_line(b) if b else None})
     return page(items, offset, limit, as_of)
 

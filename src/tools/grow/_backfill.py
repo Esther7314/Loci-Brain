@@ -367,11 +367,15 @@ def _backfilled_names(fills: dict) -> list[str]:
 def _record_kinds(bucket_id: str, pairs: list) -> None:
     """Write what the side model said each name is into the names table, in the two ways
     the backfill may: a name the table does not have is added with its kind, a name it
-    has without a kind gets one. A kind already there, a name the table lists under
-    several entries, and a name that is no subject at all (a pronoun, a word marked
-    "not a person") are left alone."""
+    has without a kind gets one. A kind already there and a name that is no subject at
+    all (a pronoun, a word marked "not a person") are left alone. A kind the table cannot
+    take — the name is listed under several entries, or the write failed — is kept as a
+    guess for the names page (core/name_guesses), never written into the table."""
     for name, kind in pairs:
-        if not kind or not _S.canonical(name) or len(_S.candidates(name)) > 1:
+        if not kind or not _S.canonical(name):
+            continue
+        if len(_S.candidates(name)) > 1:
+            _keep_guess(bucket_id, name, kind)
             continue
         rec = _S.record_of(name)
         if rec is not None and rec.instance_of:
@@ -380,6 +384,20 @@ def _record_kinds(bucket_id: str, pairs: list) -> None:
             _S.set_kind(rec.name if rec is not None else name, kind)
         except (ValueError, OSError) as e:
             rt.logger.warning(f"backfill {bucket_id}: 「{name}」的种类没写进人名表: {e}")
+            _keep_guess(bucket_id, name, kind)
+
+
+def _keep_guess(bucket_id: str, name: str, kind: str) -> None:
+    from core import _when
+    from core import name_guesses as _G
+    base = str(getattr(rt.bucket_mgr, "base_dir", "") or (rt.config or {}).get("buckets_dir")
+               or "")
+    if not base:
+        return
+    try:
+        _G.record(base, name, kind, _when.now())
+    except OSError as e:
+        rt.logger.warning(f"backfill {bucket_id}: 「{name}」看着像什么没记下: {e}")
 
 
 def _backfill_updates(meta: dict, answer: BackfillAnswer | None, came_back_empty: bool,

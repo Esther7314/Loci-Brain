@@ -31,13 +31,14 @@ same thing.
   source_view(...)       来源: the host sources it was formed from with their registry
                          state and whether the original can be asked for, the memories it
                          stands on, and two sentences — how it is known and whether its
-                         ground still holds.
+                         ground still holds. `original_row` is one source as it lists it
+                         (grow's slices show a slice's source the same way).
   fetch_original(...)    one source's original, asked of its host (core/_originals.fetch)
                          for a person reading the window: nothing fetched is stored or
                          logged, and no use is recorded (it is not the model reading).
-                         Lines Loci holds itself (an import) carry who said them and when;
-                         a host's lines carry neither, since the fourth joint's answer has
-                         no such fields.
+                         Lines Loci holds itself (an import) carry who said them and when
+                         from the import's rows; a host's lines, when the host says
+                         (`speaker`, `at`). `fetched` is the same for one source record.
   entry_view(...)        the window's body: the entry verbatim, its metadata, and the
                          fields above. An entry whose text a source change clears
                          (`clearing_due`) is shown as the clearing leaves it, from the
@@ -46,10 +47,10 @@ same thing.
 Every timestamp leaves as local ISO 8601 with its offset (core/_when); a day alone as
 YYYY-MM-DD.
 
-Exports: TAG_WORDS · HOLD_WORDS · FIX_KINDS · NEW_VERSION · MARK · human_tags · date_of ·
-         local_stamp · state_words · clearing_due · edit_actions · content_fix ·
+Exports: TAG_WORDS · HOLD_WORDS · BLOCKED_STATES · source_state_words · FIX_KINDS ·
+         NEW_VERSION · MARK · human_tags · date_of · local_stamp · state_words · clearing_due · edit_actions · content_fix ·
          disputed_view · lineage · related_counts · source_layer_of ·
-         source_view · fetch_original · entry_view
+         source_view · original_row · fetch_original · fetched · entry_view
 ========================================
 """
 
@@ -322,7 +323,13 @@ _SOURCE_STATE_WORDS = {
     _src.ACTIVE: "在", _src.UNREADABLE: "宿主那边读不到了", _src.WITHDRAWN: "已撤回",
     _src.DELETED: "已删除", _src.HELD: "宿主说撤回或删了，等确认",
 }
-_BLOCKED = (_src.WITHDRAWN, _src.DELETED, _src.HELD)
+# The registry states under which nothing of a source is shown or asked for.
+BLOCKED_STATES = (_src.WITHDRAWN, _src.DELETED, _src.HELD)
+
+
+def source_state_words(state: str) -> str:
+    """A source's registry state in words."""
+    return _SOURCE_STATE_WORDS.get(state, state)
 
 
 def source_layer_of(meta: dict) -> str:
@@ -347,7 +354,7 @@ def _import_rows(base_dir: str, sid) -> tuple[dict, dict]:
     return meta, {str(r.get("id")): r for r in store.lines(sid.instance, sid.container)}
 
 
-def _original_row(index: int, rec: dict, meta: dict, *, registry, hosts) -> dict:
+def original_row(index: int, rec: dict, meta: dict, *, registry, hosts) -> dict:
     """One source as the 来源 layer lists it. `at` is the day the entry was formed from it
     (for an import, the day its first line was said); `span.count` is None for a run whose
     lines the host has not registered. `span.first_at` / `span.last_at` are when its first
@@ -377,8 +384,8 @@ def _original_row(index: int, rec: dict, meta: dict, *, registry, hosts) -> dict
             "span": {"first": sid.id, "last": sid.through or sid.id, "count": count,
                      "first_at": first, "last_at": last},
             "at": at, "state": state,
-            "state_words": _SOURCE_STATE_WORDS.get(state, state),
-            "can_fetch": reachable and order_known and state not in _BLOCKED}
+            "state_words": source_state_words(state),
+            "can_fetch": reachable and order_known and state not in BLOCKED_STATES}
 
 
 def how_known(meta: dict, originals: list[dict], derived_n: int) -> str:
@@ -431,7 +438,7 @@ def source_view(meta: dict, *, registry, hosts, scope=None, lookup: dict | None 
     m = meta or {}
     bid = str(m.get("id") or "")
     records = _O.source_records_of(m)
-    originals = [_original_row(i, rec, m, registry=registry, hosts=hosts)
+    originals = [original_row(i, rec, m, registry=registry, hosts=hosts)
                  for i, rec in enumerate(records)]
     derived_from = []
     for pid in read_from_ids(m):
@@ -491,11 +498,19 @@ async def fetch_original(meta: dict, index: int, *, store, hosts, registry, sett
     Each line given is {id, who, at, text, cut?}: `who` / `at` from the import's own rows
     for lines Loci holds, else the host's `speaker` / `at` (local ISO 8601); null when
     unknown. A missing line is {id, missing, missing_words}."""
-    from .import_memory import speaker_label   # lazy: import_memory imports _originals
     records = _O.source_records_of(meta or {})
     if not 0 <= index < len(records):
         raise IndexError(index)
-    rec = records[index]
+    return await fetched(records[index], store=store, hosts=hosts, registry=registry,
+                         settings=settings, request=request)
+
+
+async def fetched(rec: dict, *, store, hosts, registry, settings, request=None) -> dict:
+    """One source record's original, asked of its host, in the lines `fetch_original`
+    describes: the 来源 layer's 看原话 and a pending slice's 原话 (core/grow_view) both
+    read it. Nothing of a source the registry holds as withdrawn, deleted or held is
+    asked for or given (core/_originals.fetch)."""
+    from .import_memory import speaker_label   # lazy: import_memory imports _originals
     answer = await _O.fetch(rec, hosts=hosts, request=request, settings=settings,
                             registry=registry)
     await _O.hold_what_hosts_said([answer], store)

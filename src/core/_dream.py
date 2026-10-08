@@ -227,6 +227,7 @@ from utils import parse_bool
 from . import _dream_archive as _archive   # the panel's copy; written here, never read here
 from . import _holds as _H
 from . import _muse as M
+from . import prompts as _prompts
 from . import _sources as _src
 from . import scope as _scope
 from . import visibility as _V    # the one gate: what may be put in front of the model
@@ -252,7 +253,9 @@ from . import _when as _w
 # form of words somebody dashed off. Three lines in it have not been tried against real
 # dreams yet: 很久以前的 and 读过听过的 (the cold share and the quote share) and 线索 (the
 # thread candidates handed out with the dream, plan 一·六) — no examples there either.
-DREAM_PROMPT = """你不是叙述者。你是梦的发生过程。
+# This is the shipped text: the owner may rewrite it from dream's 高级设置, and the weave
+# takes core/prompts.current("dream"), which keeps the JSON line's five keys.
+DREAM_PROMPT ="""你不是叙述者。你是梦的发生过程。
 
 你不知道自己是谁，不知道自己在哪里。你正在经历一些事。
 这些事不需要连贯。画面来了就来了，断了就断了。
@@ -340,6 +343,11 @@ DREAM_DEFAULTS: dict = {
     "oneline_minutes": 60,   # how long the one-sentence layer lives (deleted afterwards)
     "oneline_turns": 30,
     "recall_delay_minutes": 10,   # how far one recall pushes the start point (halved each time: it can never reach forever)
+    # ---- Delivery ----
+    # The panel's 「醒来的时候递给他」: on, the host's wake is handed the dream
+    # (web/loci_dream.build_poke); off, it is not, and the dream waits for him to fetch it
+    # himself (/api/dream/current).
+    "deliver_on_wake": True,
     # ---- Nightmares (⏳ thresholds still open: settle them after some real dreams) ----
     "nightmare_v": 0.3,      # v below this
     "nightmare_a": 0.7,      # and a above this
@@ -357,13 +365,17 @@ FILE_PREFIX = "梦_"                  # our own dream files; the `.md` files nig
 
 def dream_config(cfg: dict | None = None) -> dict:
     """Factory values plus the `dream:` section of config.yaml. Config is the single
-    source of truth; the copy in code is only the fallback."""
+    source of truth; the copy in code is only the fallback. A switch is read as a bool
+    (`bool("false")` would be True); one that does not read keeps its default."""
     out = dict(DREAM_DEFAULTS)
     src = (cfg or {}).get("dream") if isinstance(cfg, dict) else None
     if isinstance(src, dict):
         for k, v in src.items():
             if k in out and v is not None:
-                out[k] = type(out[k])(v)
+                if isinstance(out[k], bool):
+                    out[k] = parse_bool(v, default=out[k])
+                else:
+                    out[k] = type(out[k])(v)
     return out
 
 
@@ -1064,8 +1076,9 @@ async def call_model(ingredients: dict, c: dict) -> dict:
     #    night. Only after three failures does it count as "no dream came out tonight",
     #    and that still fails loudly.
     last_error: Exception | None = None
+    system = _prompts.current(_prompts.DREAM)
     for _ in range(3):
-        raw = await chat(DREAM_PROMPT, build_user_message(ingredients, c),
+        raw = await chat(system, build_user_message(ingredients, c),
                          max_tokens=int(c["max_tokens"]),
                          temperature=float(c["temperature"]))
         try:

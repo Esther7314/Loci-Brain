@@ -2,7 +2,9 @@
    detail.js — the detail window: one memory, what it led to, where it came from
 
    Any row anywhere opens it with `openDetail(id)`; `openDetail(id, {layer: "source"})`
-   opens it straight on its 来源 layer (breath's 「来源 a1b2c3」 links). Web: a window over
+   opens it straight on its 来源 layer (breath's 「来源 a1b2c3」 links). A pending slice
+   (grow's 等着写的) opens on its 原话 with `openSliceSource(sliceId)`: the same layer over
+   GET /api/loci/grow/slices/{id}/source, 看原话 asking `?fetch=1`. Web: a window over
    the dimmed page. Phone: a card rising from the bottom.
 
    Three layers, one window (boards detail-*, source-*):
@@ -65,6 +67,13 @@ export function openDetail(id, { layer } = {}) {
   if (!id) return;
   if (!current) current = makeWindow();
   current.show(String(id), layer === "source" ? "source" : "entry");
+}
+
+/** Open the window on a pending slice's 原话 (grow's 等着写的). */
+export function openSliceSource(sliceId) {
+  if (!sliceId) return;
+  if (!current) current = makeWindow();
+  current.showSlice(String(sliceId));
 }
 
 /** Close the window if one is open. */
@@ -331,9 +340,52 @@ function makeWindow() {
     scrim.scrollTop = 0;
   }
 
-  function originalBlock(o) {
+  // ------------------------------------------------------------ a slice's 原话
+
+  /** A pending slice's 原话, laid out as the 来源 layer: what it says under the title,
+   *  its source (where it stands, 第 a–b 行, N 句, 看原话 when the lines can be asked
+   *  for, asking `?fetch=1`), and whether the source still holds. A source withdrawn,
+   *  deleted or held shows the API's words for that and nothing of the lines. */
+  async function showSlice(sliceId) {
+    closeMenu();
+    state.id = "";
+    const head = h("div", { class: "head", style: { gap: "4px" } }, h("h1", { id: "st", text: "来源" }), closeBtn());
+    dlg.setAttribute("aria-labelledby", "st");
+    let s;
+    try {
+      s = await api.get(`/api/loci/grow/slices/${api.seg(sliceId)}/source`);
+    } catch (e) {
+      if (e.status === 401) { close(); return; }
+      fill(dlg, h("div", { class: "grab", "aria-hidden": "true" }), head, errorLine(e));
+      return;
+    }
+    // No back arrow here, so the line under the title starts at the title's edge.
+    const subline = h("p", { class: "why sub", style: { marginLeft: "0" },
+      text: s.draft || s.gist || s.source_words || s.state_words || "" });
+    const o = s.original;
+    const parts = [];
+    if (o) {
+      const lines = s.span && s.span.from_line != null
+        ? (s.span.from_line === s.span.to_line ? `第 ${s.span.from_line} 行` : `第 ${s.span.from_line}–${s.span.to_line} 行`)
+        : null;
+      const where = { ...o, host: s.label || o.host, lines };
+      parts.push(h("section", { class: "said" }, h("h2", { class: "h", text: "原话" }),
+        originalBlock(where, () => api.get(`/api/loci/grow/slices/${api.seg(sliceId)}/source`, { fetch: 1 }))),
+      h("section", { style: { marginTop: "18px" } }, h("h2", { class: "h", text: "来源还成立吗" }),
+        h("div", { class: "row ruled" }, h("span", { class: "t", text: o.state_words }))));
+    } else {
+      parts.push(h("p", { class: "why", style: { margin: "18px 0 0" }, text: s.state_words || "" }));
+    }
+    fill(dlg, h("div", { class: "grab", "aria-hidden": "true" }), head, subline, parts);
+    dlg.focus({ preventScroll: true });
+    scrim.scrollTop = 0;
+  }
+
+  /** One source: its facts, 看原话 when `o.can_fetch` (`ask()` reads the lines; the entry's
+   *  own source route by default). */
+  function originalBlock(o, ask) {
     const lines = h("div", { class: "lines" });
-    const facts = [o.host, saidWhen(o), o.span && o.span.count ? `${o.span.count} 句` : null,
+    const facts = [o.host, saidWhen(o), o.lines, o.span && o.span.count ? `${o.span.count} 句` : null,
       o.state !== "active" ? o.state_words : null].filter(Boolean).map((t) => h("span", { text: t }));
     const said = h("div");
     let fetchBtn = null;
@@ -342,7 +394,7 @@ function makeWindow() {
       fetchBtn.addEventListener("click", async () => {
         fetchBtn.disabled = true;
         try {
-          const got = await api.get(`/api/loci/source/${api.seg(state.id)}`, { fetch: o.index });
+          const got = ask ? await ask() : await api.get(`/api/loci/source/${api.seg(state.id)}`, { fetch: o.index });
           fill(lines, (got.lines || []).map(lineRow));
           fill(said, got.outcome !== "given" || got.partial ? h("p", { class: "why", style: { margin: "0" }, text: got.outcome_words }) : null);
           if (got.outcome === "given" && !got.partial) fetchBtn.remove(); else fetchBtn.disabled = false;
@@ -377,7 +429,7 @@ function makeWindow() {
     return h("div", { class: "line" }, h("span", { class: "why", text: who }), h("span", { class: "t", text: ln.text || "" }));
   }
 
-  return { show, close };
+  return { show, showSlice, close };
 }
 
 function round(x) {

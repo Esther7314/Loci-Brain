@@ -64,9 +64,9 @@ of what the panel can reach.
                                          (`?cursor=…&limit=`) and never sees those numbers
                                          (hook key; core/_ledger.py)
 
-🔴 THE WRITE SURFACE — sixteen POST routes here and five in the page blocks below
-(entry/fix, names/action, trace, muse/nudge, embedding/backfill), and every one of them writes
-something.
+🔴 THE WRITE SURFACE — sixteen POST routes here and six in the page blocks below
+(entry/fix, names/action, trace, muse/nudge, embedding/backfill, prompts), and every one of
+them writes something.
 
     POST /api/loci/similar/action     -> a human verdict on a suspected duplicate: keep
                                          both (writes _state/similar_kept.json: ids and
@@ -139,9 +139,11 @@ assembled and worded in core/detail.py and core/census.py. Both POSTs write:
                                          it stands on, how it is known; `?fetch=<n>` asks the
                                          host for source n's original (nothing stored or
                                          logged)
-    GET  /api/loci/names              -> the names the table knows, by kind; paged
-    GET  /api/loci/names/pending      -> the names it does not know yet, each with the
-                                         entry it first appeared in; paged
+    GET  /api/loci/names              -> the names the table knows and gives a kind, by
+                                         kind; paged
+    GET  /api/loci/names/pending      -> the names it does not know yet or knows without a
+                                         kind, each with the entry it first appeared in and
+                                         what it looks like (`guess`); paged
     GET  /api/loci/names/{name}       -> one name's card and the entries it appears in
     POST /api/loci/entry/fix          -> 字写错了 (trace old_str/new_str) · 内容错了 (an
                                          event: a new version marked 人改的; a MIND entry:
@@ -196,6 +198,11 @@ reads too (panel_auth.HOST_READ_PATHS); the rest are the panel's alone. Two of t
     GET  /api/loci/grow/slices        -> every batch of slices, handled and replaced ones
                                          included, each slice with its state and the guesses
                                          at or above the guess line
+    GET  /api/loci/grow/slices/{id}/source -> one slice's 原话: its source with the
+                                         registry's state and whether its lines can be
+                                         asked for; `?fetch=1` asks (a host's lines of the
+                                         host, an import's from Loci's own copy; nothing of
+                                         a withdrawn, deleted or held source)
     GET  /api/loci/muse               -> `?part=clusters` the thoughts that look like one
                                          thing / `?part=days` the stretches without a name,
                                          each with its evidence and member ids
@@ -203,14 +210,27 @@ reads too (panel_auth.HOST_READ_PATHS); the rest are the panel's alone. Two of t
                                          reply tells the model once (core/_nudge.py;
                                          writes _state/muse_nudges.json, not the ledger)
     GET  /api/loci/dreams             -> the last three natural days' dreams, whole text,
-                                         state and thread candidates, from the panel's own
-                                         copy no road of the model reads
+                                         state and thread candidates (a kept one with the
+                                         ids of the entries carrying it), from the panel's
+                                         own copy no road of the model reads
                                          (core/_dream_archive.py)
     GET  /api/loci/embedding/missing  -> the memories with no vector and why (queued, keeps
                                          failing, not queued), from the embedding outbox
     POST /api/loci/embedding/backfill -> 「现在补」: queue what has no vector and make every
                                          waiting item due now (EmbeddingOutbox.reconcile +
                                          retry_now; writes the outbox file, not the ledger)
+
+The prompt cards on grow's and dream's 高级设置 (web/loci_prompts.py, core/prompts.py).
+The POST writes:
+
+    GET  /api/loci/prompts            -> each side-model prompt the owner may rewrite
+                                         (backfill, dream): the text, the shipped default,
+                                         whether and on which day it was rewritten, and
+                                         what is better left alone
+    POST /api/loci/prompts            -> {key, text} keeps a rewrite (refused, 400, when a
+                                         piece the parser reads is gone); {key, reset:
+                                         true} goes back to the shipped text (writes
+                                         _state/prompts.json, not the ledger)
 
 Host reads (panel_auth.HOST_READ_PATHS, panel contract §六): breath/last, awake, hanging,
 names, names/{name}, recall, rooms, bucket, lineage, source, turns and usage answer a
@@ -242,7 +262,8 @@ core/health.py, core/profile.py):
                           muse/nudge, dreams, embedding/missing, embedding/backfill
                           (core/activity.py, core/grow_view.py, core/muse_view.py,
                           core/_nudge.py, core/_dream_archive.py, core/vector_view.py)
-    web/host_api.py       /api/v2/* (a host's credential, not the panel's)
+    web/loci_prompts.py   prompts (core/prompts.py)
+    web/host_api.py      /api/v2/* (a host's credential, not the panel's)
     web/library_api.py    export, export/originals, import-package, embedding/migration
     web/loci_version.py   version
     web/_guards.py        the same-origin write check and the hook-scope refusals
@@ -376,6 +397,8 @@ def register(mcp) -> None:
     mcp.custom_route("/api/loci/usage", methods=["GET"])(_act.api_loci_usage)
     mcp.custom_route("/api/loci/grow/today", methods=["GET"])(_act.api_loci_grow_today)
     mcp.custom_route("/api/loci/grow/slices", methods=["GET"])(_act.api_loci_grow_slices)
+    mcp.custom_route("/api/loci/grow/slices/{slice_id}/source", methods=["GET"])(
+        _act.api_loci_grow_slice_source)
     mcp.custom_route("/api/loci/muse", methods=["GET"])(_act.api_loci_muse)
     mcp.custom_route("/api/loci/muse/nudge", methods=["POST"])(_act.api_loci_muse_nudge)
     mcp.custom_route("/api/loci/dreams", methods=["GET"])(_act.api_loci_dreams)
@@ -383,4 +406,11 @@ def register(mcp) -> None:
         _act.api_loci_embedding_missing)
     mcp.custom_route("/api/loci/embedding/backfill", methods=["POST"])(
         _act.api_loci_embedding_backfill)
+
+    # ---------------------------------------------------------
+    # The prompt cards on grow's and dream's 高级设置 (web/loci_prompts.py).
+    # ---------------------------------------------------------
+    from . import loci_prompts as _prompts
+    mcp.custom_route("/api/loci/prompts", methods=["GET"])(_prompts.api_loci_prompts)
+    mcp.custom_route("/api/loci/prompts", methods=["POST"])(_prompts.api_loci_prompts_save)
 

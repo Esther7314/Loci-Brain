@@ -1,7 +1,8 @@
 /* ==========================================================
    pages/name.js — the names the table knows, and the ones waiting to be recognised
 
-   #/name?kind=<kind>  (board name) GET /api/loci/names: only the names the table knows.
+   #/name?kind=<kind>  (board name) GET /api/loci/names: only the names the table knows
+                       and gives a kind (one it knows without a kind waits under 待认).
                        The kinds row on top (the person kind, 人名, first and chosen when
                        the address names none; a kind shows only when a name has it; on
                        the phone the row slides sideways). One row per name: the name,
@@ -9,13 +10,15 @@
                        first, paged. A row opens the name card (namecard.js). At the
                        right of the kinds: 「待认 N ›」 (pending_count) with its i.
    #/name/pending      (board name-pending) GET /api/loci/names/pending: the names the
-                       table does not know yet, newest first seen on top, paged. Each row:
-                       the name and 「第一次出现在：<the entry's title>」 (the row opens that
-                       entry in the detail window), and three buttons, each one
+                       table does not know yet or knows without a kind, newest first seen
+                       on top, paged. Each row: the name, 「第一次出现在：<the entry's
+                       title>」 (the row opens that entry in the detail window) and, when
+                       the API has a `guess`, 「看着像 <kind>」; then the buttons, each one
                        POST /api/loci/names/action:
                          不是名字    not_person
                          跟谁是一个  merge — a box (with the known names as suggestions),
                                     取消 · 保存
+                         是 <kind>  set_kind with the guess, in one click (only with a guess)
                          是… ▾      set_kind — the kinds as a menu, + 新类别 a box for a new
                                     one (a drop-down on the web, a sheet on the phone)
                        A name recognised leaves the page: the page is read again, with the
@@ -108,9 +111,10 @@ function kindMenu(anchor, kinds, { onPick, onNew, onClose }) {
 
 function pendingRow(it, ctx) {
   const first = it.first;
-  const why = first
-    ? h("span", null, "第一次出现在：", h("span", { class: "lnk", text: first.text || `#${first.short}` }))
-    : null;
+  const why = [
+    first ? h("span", null, "第一次出现在：", h("span", { class: "lnk", text: first.text || `#${first.short}` })) : null,
+    it.guess ? `看着像 ${kindLabel(it.guess)}` : null,
+  ];
   const slot = h("div", { class: "namebox" });
   const actsBox = h("span", { class: "acts" });
   const item = row({
@@ -177,7 +181,12 @@ function pendingRow(it, ctx) {
     });
     item.append(...menu.nodes);
   });
-  fill(actsBox, notName, same, isBtn);
+  let guessed = null;
+  if (it.guess) {
+    guessed = btn(`是 ${kindLabel(it.guess)}`, { dark: true });
+    guessed.addEventListener("click", () => act({ action: "set_kind", kind: it.guess }, guessed));
+  }
+  fill(actsBox, notName, same, guessed, isBtn);
   return item;
 }
 

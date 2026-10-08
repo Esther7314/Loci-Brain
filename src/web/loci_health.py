@@ -3,7 +3,8 @@
 web/loci_health.py — the health check, the settings page's top block, pulse and the log tail
 ========================================
 
-    GET  /api/loci/health             -> this project's own health check (not the upstream diagnostics endpoint)
+    GET  /api/loci/health             -> this project's own health check (not the upstream diagnostics endpoint):
+                                         every check, and the setting page's five rows over them
     GET  /api/loci/setup              -> the settings page's top block: five status rows, each saying what breaks if it is left unset
     GET  /api/logs                    -> the tail of server.log
     GET  /api/loci/pulse              -> health check: how many entries, how much space, are the engines alive
@@ -66,8 +67,10 @@ async def build_setup() -> dict:
 
 async def build_health() -> dict:
     """Our own health check (core/health.health), over the library and config this process
-    serves; `sh.data_dir_persistence` says whether the data directory survives a rebuild."""
-    return await _health.health(sh.bucket_mgr, sh.config, sh.data_dir_persistence)
+    serves; `sh.data_dir_persistence` says whether the data directory survives a rebuild,
+    `sh.version` is the version this process started with."""
+    return await _health.health(sh.bucket_mgr, sh.config, sh.data_dir_persistence,
+                                running=str(getattr(sh, "version", "") or ""))
 
 
 async def api_loci_health(request: Request) -> Response:

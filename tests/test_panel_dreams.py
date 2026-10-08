@@ -116,7 +116,7 @@ def test_the_copy_keeps_the_whole_text_through_waking_and_fading(store, monkeypa
     assert row["id"] == did and row["state"] == "waiting" and row["state_words"] == "还没送到"
     assert PHRASE in row["text"] and row["whole"] is True
     assert row["night"] == W.now().date().isoformat()
-    assert row["kept"] == [{"meet": MEET, "recall": "答应小周的事", "kept": False}]
+    assert row["kept"] == [{"meet": MEET, "recall": "答应小周的事", "kept": False, "ids": []}]
     assert page["total"] == 1 and page["next_offset"] is None and page["scope"]
 
     D.degrade_on_wake()
@@ -140,7 +140,42 @@ def test_a_candidate_is_kept_once_a_cue_saying_it_is_written_after_the_dream(sto
     call = routes(monkeypatch)
     assert call("GET", "/api/loci/dreams").json["items"][0]["kept"][0]["kept"] is False
     assert run(store.update(want, cue={"condition": MEET, "phrasings": []}))
-    assert call("GET", "/api/loci/dreams").json["items"][0]["kept"][0]["kept"] is True
+    kept = call("GET", "/api/loci/dreams").json["items"][0]["kept"][0]
+    # The entry carrying the thread is what the panel opens.
+    assert kept["kept"] is True and kept["ids"] == [want]
+
+
+class _View:
+    """A request's view as the read gate asks it: everything in scope, and the registry
+    saying a source behind `blocked` is withdrawn."""
+
+    def __init__(self, blocked=()):
+        self.blocked = set(blocked)
+
+    def permits(self, meta):
+        return True
+
+    def source_blocked(self, meta):
+        return meta.get("id") in self.blocked
+
+
+def test_a_kept_thread_names_the_entries_carrying_it_and_never_one_on_a_withdrawn_source():
+    rec = {"id": "d1", "woven_at": (W.now() - timedelta(hours=1)).isoformat(),
+           "candidates": [{"meet": MEET, "recall": "x"}, {"meet": "别的", "recall": "y"}]}
+    events = [{"event_type": "TraceUpdated", "trace_id": t, "recorded_at": W.now().isoformat(),
+               "payload": {"changed_fields": ["cue"]}} for t in ("e1", "e2")]
+    lib = [{"id": "e1", "metadata": {"id": "e1", "created": "2026-10-01T10:00:00+08:00",
+                                     "cue": {"condition": MEET}}},
+           {"id": "e2", "metadata": {"id": "e2", "created": "2026-10-02T10:00:00+08:00",
+                                     "cue": {"condition": f"又看到{MEET}"}}}]
+    kept, other = A.kept_candidates(rec, lib, events, _View())
+    assert kept["kept"] is True and kept["ids"] == ["e2", "e1"]     # newest written first
+    assert other == {"meet": "别的", "recall": "y", "kept": False, "ids": []}
+    # The registry says what e2 rests on is withdrawn: not opened, not counted.
+    kept, _ = A.kept_candidates(rec, lib, events, _View(blocked={"e2"}))
+    assert kept["ids"] == ["e1"]
+    kept, _ = A.kept_candidates(rec, lib, events, _View(blocked={"e1", "e2"}))
+    assert kept["kept"] is False and kept["ids"] == []
 
 
 def test_a_cue_written_before_the_dream_does_not_count_as_kept(store):

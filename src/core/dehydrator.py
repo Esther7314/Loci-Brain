@@ -51,6 +51,7 @@ from openai import AsyncOpenAI
 from utils import clean_llm_json, count_tokens_approx, positive_float
 
 from . import names as _names
+from . import prompts as _prompts
 from .provider_detect import (
     is_gemini_native_host,
     strip_native_resource_prefix,
@@ -343,6 +344,9 @@ MERGE_PROMPT = """你是一个信息合并专家。请将旧记忆与新内容�
 #   subjects who or what — people and things (a game, a book, a group), each with a kind.
 #
 # `{kinds}` is filled in per call (see backfill_kinds); everything else is literal JSON.
+# This is the shipped text: the owner may rewrite it from grow's 高级设置, and the call
+# takes core/prompts.current("backfill"), which keeps `{kinds}` and every key
+# parse_backfill reads.
 BACKFILL_PROMPT = """你是记忆系统的回填器。下面是一条刚存下的记忆：正文是主模型写的，一个字都不能改；你只读这段话，把能从字面上读出来的格子填上。
 
 总规则：
@@ -423,9 +427,10 @@ def backfill_request(content: str, context: dict, kinds=None) -> tuple[str, str]
     """The (system, user) pair for one backfill call. `context` describes the entry as it
     is on disk: room, telic, created_day (a date), cue_condition, and `existing` —
     {slot: value} for the slots the main model already filled, which the model is told
-    to leave alone."""
+    to leave alone. The system text is the library's prompt (core/prompts: the owner's
+    rewrite when there is one, BACKFILL_PROMPT otherwise)."""
     kinds = tuple(kinds or backfill_kinds())
-    system = BACKFILL_PROMPT.replace("{kinds}", " / ".join(kinds))
+    system = _prompts.current(_prompts.BACKFILL).replace("{kinds}", " / ".join(kinds))
     day = context.get("created_day")
     lines = ["【这条记忆】",
              f"房间：{context.get('room') or '（没写）'}"]

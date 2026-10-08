@@ -79,6 +79,37 @@ def test_the_sample_library_is_stamped_current(seeded):
     assert schema.library_version(seeded) == schema.CURRENT_VERSION
 
 
+def test_its_imported_lines_are_stored_as_an_upload_stores_them(seeded, monkeypatch):
+    """The sample's imports are readable the way a real upload's are: a run over its lines
+    says how many and can be read, and the drafts' slices open on their lines."""
+    from core import _originals as O
+    from core import detail as D
+    from core import grow_view as GV
+    from core import runtime as rt
+
+    monkeypatch.setenv("LOCI_ALIAS_TABLE", str(seeded / "aliases.yaml"))
+    store = BucketManager({"buckets_dir": str(seeded)})
+    monkeypatch.setattr(rt, "bucket_mgr", store)
+    monkeypatch.setattr(rt, "config", {"buckets_dir": str(seeded)})
+    hosts = O.deployment_hosts()
+    runs = []
+    for b in asyncio.run(store.list_all(include_archive=False)):
+        for rec in (b.get("metadata") or {}).get("sources") or []:
+            if rec.get("system") == "import" and rec.get("through"):
+                runs.append(D.original_row(0, rec, b["metadata"], registry=store.sources,
+                                           hosts=hosts))
+    assert runs and all(r["can_fetch"] and r["span"]["count"] for r in runs), runs
+    drafts = [s for b in store.slices.batches() if b["import"] for s in b["slices"]]
+    assert drafts
+    for s in drafts:
+        out = GV.slice_source(store.slices, s["slice_id"], registry=store.sources, hosts=hosts)
+        assert out["original"]["can_fetch"] is True, out
+        got = asyncio.run(D.fetched(GV.slice_record(store.slices, s["slice_id"]), store=store,
+                                    hosts=hosts, registry=store.sources,
+                                    settings=O.Settings()))
+        assert got["outcome"] == "given" and got["lines"], got
+
+
 def test_its_export_is_taken_by_the_importer(seeded, tmp_path, monkeypatch):
     from core import runtime as rt
 

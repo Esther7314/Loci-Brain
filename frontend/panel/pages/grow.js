@@ -12,17 +12,21 @@
                     line (「<host> · N 段」, 「来自导入 · <title> · N 段」); one row per slice:
                     what it says (an imported one: its draft), 第 a–b 行, 「好像已经记过：」
                     with the memory it guessed (opens it), and its state at the right —
-                    「写成记忆了 ›」 opens the memory it became. Read only: the panel never
-                    handles a slice for the model.
+                    「写成记忆了 ›」 opens the memory it became. A row opens its 原话 in the
+                    detail window (openSliceSource: GET /api/loci/grow/slices/{id}/source,
+                    看原话 asks `?fetch=1`). A slice whose source is withdrawn, deleted or
+                    held shows the API's `source_words` in place of what it says. Read
+                    only: the panel never handles a slice for the model.
    #/grow/settings  (board grow-settings) the side model's tagging prompt (key
                     `backfill`): GET /api/loci/prompts, POST /api/loci/prompts {key, text}
-                    to save, {key, reset: true} for 恢复默认.
+                    to save, {key, reset: true} for 恢复默认; the card drawn again from
+                    the reply's `item`, a refusal in the server's words under the buttons.
    ========================================================== */
 
 import * as api from "../api.js";
 import { h, subbar, row, note, pagedList, clock, clickable, promptCard, errorLine } from "../ui.js";
 import { href } from "../router.js";
-import { openDetail } from "../detail.js";
+import { openDetail, openSliceSource } from "../detail.js";
 
 const TIP_SLICES = "每天夜里写日报的时候，副模型把这一天的聊天切成一小段一小段，每段配一句「在说什么」。导入时打的草稿也在这儿。这些还不是记忆，等他有空一段段看，自己决定写不写、怎么写。";
 const PROMPT_KEY = "backfill";
@@ -62,12 +66,13 @@ function linesOf(span) {
 
 function sliceRow(s) {
   const guesses = (s.guesses || []).map((g) => h("span", null, "好像已经记过：",
-    clickable(h("span", { class: "lnk", text: g.text || `#${g.short}` }), () => openDetail(g.id))));
+    clickable(h("span", { class: "lnk", text: g.text || `#${g.short}` }), (e) => { e.stopPropagation(); openDetail(g.id); })));
   const went = (s.by || [])[0];
   const right = went
     ? clickable(h("span", { class: "r", text: `${s.state_words} ›` }), () => openDetail(went))
     : h("span", { class: "r", text: s.state_words || "" });
-  return row({ text: s.draft || s.gist, why: [linesOf(s.span), ...guesses], right });
+  return row({ text: s.draft || s.gist || s.source_words || "", why: [linesOf(s.span), ...guesses], right,
+    open: () => openSliceSource(s.slice_id) });
 }
 
 function batchGroup(b) {
@@ -100,26 +105,19 @@ async function renderSettings(view) {
   view.append(h("main", { class: "sections" },
     h("section", { class: "grp" }, h("div", { class: "glw" }, h("h2", { class: "gl", text: "提示词" })), body)));
 
-  const show = async () => {
-    let cards;
-    try {
-      const out = await api.get("/api/loci/prompts");
-      cards = Array.isArray(out) ? out : (out && (out.items || out.prompts)) || [];
-    } catch (e) {
-      body.replaceChildren(e && e.status === 404 ? note("还没接上", "empty") : errorLine(e));
-      return;
-    }
-    const card = cards.find((c) => c.key === PROMPT_KEY);
-    if (!card) { body.replaceChildren(note("还没接上", "empty")); return; }
-    body.replaceChildren(promptCard({
-      title: "给副模型打标签的提示词",
-      label: "打标签的提示词",
-      card,
-      onSave: async (text) => { await api.post("/api/loci/prompts", { key: PROMPT_KEY, text }); await show(); },
-      onReset: async () => { await api.post("/api/loci/prompts", { key: PROMPT_KEY, reset: true }); await show(); },
-    }));
-  };
-  await show();
+  const draw = (card) => body.replaceChildren(promptCard({
+    title: "给副模型打标签的提示词",
+    label: "打标签的提示词",
+    card,
+    onSave: async (text) => draw((await api.post("/api/loci/prompts", { key: PROMPT_KEY, text })).item),
+    onReset: async () => draw((await api.post("/api/loci/prompts", { key: PROMPT_KEY, reset: true })).item),
+  }));
+  try {
+    const card = ((await api.get("/api/loci/prompts")).items || []).find((c) => c.key === PROMPT_KEY);
+    if (card) draw(card);
+  } catch (e) {
+    body.replaceChildren(errorLine(e));
+  }
 }
 
 export default {

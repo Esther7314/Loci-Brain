@@ -132,12 +132,15 @@ _DREAM_NUMBERS = (
 # A dream fades to its fragment first, then to its one line (core/_dream.layer_of tests
 # the one-line limits first), so a one-line limit must not come before its fragment one.
 _DREAM_ORDER = (("fragment_minutes", "oneline_minutes"), ("fragment_turns", "oneline_turns"))
+# dream-settings 「提醒」: 醒来的时候递给他. /api/loci/poke reads it
+# (web/loci_dream.build_poke).
+_DREAM_SWITCH = "deliver_on_wake"
 
 
 def _dream_view(config: Mapping) -> dict:
-    """The rules as they run now, and their defaults for 恢复默认."""
+    """The rules and the delivery switch as they run now, and their defaults for 恢复默认."""
     from core import _dream as D
-    keys = [k for k, _lo, _hi in _DREAM_NUMBERS]
+    keys = [k for k, _lo, _hi in _DREAM_NUMBERS] + [_DREAM_SWITCH]
     live = D.dream_config(dict(config))
     out = {k: live[k] for k in keys}
     out["defaults"] = {k: D.DREAM_DEFAULTS[k] for k in keys}
@@ -146,12 +149,15 @@ def _dream_view(config: Mapping) -> dict:
 
 def _dream_changes(payload, config: Mapping) -> tuple[dict, str]:
     """(the `dream` values a request sets, why the request is refused or ""). Numbers are
-    clamped into range and one that is not a number is skipped, as for `muse`; the fading
-    order is checked against the rules as they would run with the change."""
+    clamped into range and one that is not a number is skipped, as for `muse`; the switch
+    is read as a bool; the fading order is checked against the rules as they would run
+    with the change."""
     from core import _dream as D
     out: dict = {}
     if not isinstance(payload, dict):
         return out, ""
+    if _DREAM_SWITCH in payload:
+        out[_DREAM_SWITCH] = _parse_bool(payload[_DREAM_SWITCH])
     for key, lo, hi in _DREAM_NUMBERS:
         if key not in payload or isinstance(payload[key], bool):
             continue

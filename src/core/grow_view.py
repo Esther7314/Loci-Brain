@@ -15,13 +15,20 @@ waiting to be written
                  already handled or replaced — newest first, each slice with its state
                  and the guesses at or above the guess line that it was already recorded
                  (「好像已经记过」). Read only: the panel never handles a slice for the model.
+                 A slice whose source the registry reads as withdrawn, deleted or held
+                 shows nothing it was cut from.
+  slice_source   one slice's 原话, as the detail window's 来源 layer lists a source: its
+                 source record with the registry's state and whether the original can be
+                 asked for; the lines themselves come from core/detail.fetched over
+                 `slice_record` (a host's asked of the host, an import's from Loci's own
+                 copy), only when the panel asks.
 
 A batch's label: an imported conversation's is 「来自导入 · <its title>」; a host's is
 「<the host registering its lines> · N 段」 (core/scope.Hosts.registrar_for), or the
 source's system when no host registers it.
 
 Exports: SINCE_REPORT · SINCE_MIDNIGHT · SLICE_STATE_WORDS · day_cut · written_since ·
-         slice_batches
+         slice_batches · slice_record · slice_source
 ========================================
 """
 
@@ -113,7 +120,16 @@ def written_since(buckets: Iterable[dict], since: datetime, *, now: datetime, of
 def _batch_label(batch: dict, hosts, n: int) -> str:
     origin = batch.get("import")
     if origin:
-        return "来自导入 · " + (str(origin.get("title") or "").strip() or "没有标题")
+        return _from_import(origin)
+    return f"{_host_name(batch, hosts)} · {n} 段"
+
+
+def _from_import(origin: dict) -> str:
+    return "来自导入 · " + (str(origin.get("title") or "").strip() or "没有标题")
+
+
+def _host_name(batch: dict, hosts) -> str:
+    """The host registering the batch's lines, or the source's system."""
     source = batch.get("source") or {}
     host = None
     if hosts is not None:
@@ -121,8 +137,7 @@ def _batch_label(batch: dict, hosts, n: int) -> str:
             host = hosts.registrar_for(source)
         except Exception:          # a source the registry cannot read: say its system
             host = None
-    name = host.name if host is not None else str(source.get("system") or "宿主")
-    return f"{name} · {n} 段"
+    return host.name if host is not None else str(source.get("system") or "宿主")
 
 
 def _slice_line(s: dict, lib: dict, threshold: float, imported: bool) -> dict:
@@ -152,10 +167,24 @@ def _slice_line(s: dict, lib: dict, threshold: float, imported: bool) -> dict:
     return out
 
 
+def _source_blocked(pending, registry, slice_id: str) -> str:
+    """The registry's state of the slice's source when it is one under which nothing of
+    it is shown (withdrawn, deleted, held); "" otherwise or without a registry."""
+    if registry is None:
+        return ""
+    record = slice_record(pending, slice_id)
+    if record is None:
+        return ""
+    state = registry.read_state(record)
+    return state if state in _detail.BLOCKED_STATES else ""
+
+
 def slice_batches(pending, buckets: Iterable[dict], *, hosts, threshold: float,
-                  offset: int, limit: int, as_of: datetime) -> dict:
+                  offset: int, limit: int, as_of: datetime, registry=None) -> dict:
     """Every batch the pending store holds, newest first, paged by batch:
-    {batch_id, day, label, import, recorded_at, slices: [...]}."""
+    {batch_id, day, label, import, recorded_at, slices: [...]}. A slice whose source the
+    registry reads as withdrawn, deleted or held shows no gist or draft, and says so in
+    `source_words`."""
     lib = index(buckets)
     rows = []
     for b in pending.batches(include_closed=True):
@@ -164,9 +193,75 @@ def slice_batches(pending, buckets: Iterable[dict], *, hosts, threshold: float,
             continue
         imported = bool(b.get("import"))
         slices = [_slice_line(s, lib, threshold, imported) for s in b["slices"]]
+        for line in slices:
+            gone = _source_blocked(pending, registry, line["slice_id"])
+            if gone:
+                line["gist"] = ""
+                line.pop("draft", None)
+                line["source_words"] = _detail.source_state_words(gone)
         current = sum(1 for s in slices if s["state"] != _sl.REPLACED)
         rows.append({"batch_id": b["batch_id"], "day": b.get("day"),
                      "label": _batch_label(b, hosts, current),
                      "import": b.get("import"), "recorded_at": stamp(at),
                      "slices": slices})
     return page(rows, offset, limit, as_of)
+
+
+def _find_slice(pending, slice_id: str) -> tuple[dict, dict] | None:
+    sid = str(slice_id or "").strip()
+    for b in pending.batches(include_closed=True):
+        for s in b["slices"]:
+            if s["slice_id"] == sid:
+                return b, s
+    return None
+
+
+def slice_record(pending, slice_id: str) -> dict | None:
+    """The one source record the slice stands for now (PendingSlices.record_for), or None
+    when it is unknown or its span no longer reads against its batch's lines (a slice a
+    resend replaced)."""
+    if _find_slice(pending, slice_id) is None:
+        return None
+    try:
+        return pending.record_for(slice_id)
+    except (KeyError, IndexError):
+        return None
+
+
+def slice_source(pending, slice_id: str, *, registry, hosts, label_hosts=None) -> dict | None:
+    """The 原话 of one slice, as the detail window's 来源 layer lists a source: the slice
+    (what it says, 第 a–b 行, its state) and `original` — its source record as
+    core/detail.original_row gives it (host, span, registry state in words, `can_fetch`).
+    None when the slice is unknown.
+
+    Loci keeps no text of a host's lines (core/_slicer.py): their original is asked of the
+    host serving them, line by line, only when the panel asks (`?fetch=1`, core/detail.
+    fetched), and nothing of it is kept. An imported conversation's lines Loci holds
+    itself. When the registry reads the source as withdrawn, deleted or held, nothing
+    the slice was cut from is shown — its gist and draft included — and `original` says
+    why; `original` is None for a slice whose lines are no longer there (replaced)."""
+    found = _find_slice(pending, slice_id)
+    if found is None:
+        return None
+    batch, s = found
+    imported = bool(batch.get("import"))
+    record = slice_record(pending, slice_id)
+    original = None
+    if record is not None:
+        original = _detail.original_row(0, record, {"created": batch.get("recorded_at")},
+                                        registry=registry, hosts=hosts)
+        original["at"] = batch.get("day") or original["at"]
+    blocked = original is not None and original["state"] in _detail.BLOCKED_STATES
+    line = _slice_line(s, {}, 1.0, imported)
+    out = {"slice_id": line["slice_id"], "batch_id": batch["batch_id"],
+           "day": batch.get("day"),
+           "label": _from_import(batch["import"]) if imported else _host_name(batch, label_hosts),
+           "import": batch.get("import"),
+           "gist": "" if blocked else line["gist"], "span": line["span"],
+           "state": line["state"], "how": line["how"], "by": line["by"],
+           "state_words": line["state_words"], "original": original}
+    if line.get("draft") and not blocked:
+        out["draft"] = line["draft"]
+    if blocked:
+        out["source_words"] = original["state_words"]
+    return out

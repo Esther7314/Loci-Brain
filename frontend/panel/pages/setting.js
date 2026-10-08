@@ -30,14 +30,15 @@
      导出      GET /api/loci/export · GET /api/loci/export/originals, saved as files
      阈值      GET/POST /api/config `surfacing.awake_*`, `surfacing.hold_review_days`
                (条子默认挂几天) and `thresholds` (with its retune words)
-     体检      GET /api/loci/health · 日志 GET /api/logs (newest shown first)
+     体检      GET /api/loci/health: the board's five rows (`groups`, the worst of each row's
+               checks); a row opens the checks under it · 日志 GET /api/logs (newest first)
      版本      GET /api/loci/version, 检查更新 with ?check=1; 一键更新 has no route: off
 
    Words are the board's, or the API's own (messages, errors, why_words, say, words).
    ========================================================== */
 
 import * as api from "../api.js";
-import { h, fill, subbar, group, row, tip, btn, sw, inp, num, customBox, errorLine, pagedList } from "../ui.js";
+import { h, fill, subbar, group, row, tip, btn, sw, inp, num, customBox, errorLine, pagedList, clickable } from "../ui.js";
 import { openDetail } from "../detail.js";
 
 const TIP = {
@@ -1040,11 +1041,30 @@ async function healthBlock(logs) {
     b.addEventListener("click", () => logs.scrollIntoView({ behavior: "smooth", block: "start" }));
     return b;
   };
-  return h("div", null, (r.checks || []).map((c) => {
+  const checkRow = (c, withLook) => {
     const bad = c.status === "warn" || c.status === "error";
     return setRow({ text: c.label, why: bad && c.action ? c.action : null, wide: true, stack: true,
       right: h("span", { class: "acts", style: { flexWrap: "nowrap" } },
-        h("span", { class: "r wrap", style: bad ? { color: "var(--ink)" } : null, text: c.message }), bad ? look() : null) });
+        h("span", { class: "r wrap", style: bad ? { color: "var(--ink)" } : null, text: c.message }),
+        bad && withLook ? look() : null) });
+  };
+  const checks = r.checks || [];
+  if (!r.groups) return h("div", null, checks.map((c) => checkRow(c, true)));
+  const byKey = Object.fromEntries(checks.map((c) => [c.key, c]));
+  // The board's five rows; a row opens the checks under it (`checks`) in place.
+  return h("div", null, r.groups.map((g) => {
+    const details = h("div", { class: "panel health-detail", hidden: true },
+      (g.checks || []).map((k) => byKey[k]).filter(Boolean).map((c) => checkRow(c, false)));
+    const head = checkRow(g, true);
+    const name = head.querySelector(".txt");
+    if (name && (g.checks || []).length) {
+      clickable(name, () => {
+        details.hidden = !details.hidden;
+        name.setAttribute("aria-expanded", String(!details.hidden));
+      });
+      name.setAttribute("aria-expanded", "false");
+    }
+    return h("div", null, head, details);
   }));
 }
 

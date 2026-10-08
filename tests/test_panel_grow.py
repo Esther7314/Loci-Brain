@@ -9,6 +9,10 @@ the future), else at local midnight. GET /api/loci/grow/slices: every batch the
 pending store holds, open, handled and replaced slices alike, each with its state in
 words and only the guesses at or above the guess line; an imported conversation's batch
 is labelled by its title and its open slices wait to be checked.
+GET /api/loci/grow/slices/{id}/source: one slice's 原话 laid out as the 来源 layer lists a
+source; `?fetch=1` asks for the lines — a host's of the host serving them (Loci keeps no
+text of them), an import's from Loci's own copy. A slice whose source the registry reads
+as withdrawn, deleted or held shows nothing it was cut from, here and on the list.
 """
 
 import asyncio
@@ -178,6 +182,8 @@ def slices(panel):
                      "guesses": [{"id": a, "score": 0.81}, {"id": "ffffffffffff",
                                                              "score": 0.5}]},
                     {"first": "m4", "last": "m6", "gist": "说到晚饭", "guesses": []}])
+        # As a host's batch handed over (core/_slicer.take_batch): its order registered.
+        store.sources.record_order(SRC, [i for i, _fp in lines], batch_id="b_host")
         imp, _r = await store.slices.record_batch(
             batch_id="b_imp", source={"system": "import", "instance": "loci",
                                       "container": "imp_1"},
@@ -245,6 +251,106 @@ def test_slices_page_by_batch_with_as_of(slices):
 def test_no_slices_is_an_empty_page(panel):
     status, out = panel["get"]("/api/loci/grow/slices")
     assert status == 200 and out["items"] == [] and out["total"] == 0
+
+
+# ── one slice's 原话 ─────────────────────────────────────────────────────────
+
+def _slice_source(panel, sid, **query):
+    from starlette.requests import Request
+    from web import loci_activity as A
+    req = Request({"type": "http", "method": "GET", "path": "/", "headers": [],
+                   "path_params": {"slice_id": sid},
+                   "query_string": urlencode(query).encode()})
+    resp = run(A.api_loci_grow_slice_source(req))
+    return resp.status_code, json.loads(resp.body)
+
+
+def test_a_hosts_slice_says_where_its_lines_are_and_asks_the_host_for_them(slices, monkeypatch):
+    import dataclasses
+    from core import _originals as O
+    from core import _sources as SR
+    status, out = _slice_source(slices, slices["second"])
+    assert status == 200, out
+    assert (out["slice_id"], out["gist"], out["label"], out["day"]) == (
+        slices["second"], "说到晚饭", "lento", "2026-10-06")
+    assert out["span"]["from_line"] == 4 and out["state_words"] == "等他看"
+    o = out["original"]
+    assert o["record"].startswith("lento:home/p#m4..m6")
+    assert o["span"]["count"] == 3 and o["state"] == "active" and o["state_words"] == "在"
+    # No host is declared to serve lento:home: Loci keeps no text of a host's lines.
+    assert o["host"] is None and o["can_fetch"] is False
+    status, got = _slice_source(slices, slices["second"], fetch=1)
+    assert status == 200 and got["outcome"] == "no_host" and got["lines"] == []
+    assert got["outcome_words"] == "原话在宿主那边，这儿没配谁给原话"
+
+    asked = []
+
+    async def host(record, **kw):
+        asked.append(record)
+        answer = O.parse_answer(json.dumps({"v": 1, "status": "given", "lines": [
+            {"id": "m4", "revision": None, "text": "晚饭吃什么", "speaker": "小周"},
+            {"id": "m5", "revision": None, "missing": "unavailable"},
+            {"id": "m6", "revision": None, "text": "面吧"}]}).encode(), record, O.Settings())
+        return dataclasses.replace(answer, source=SR.record_string(record), host="lento")
+    monkeypatch.setattr(O, "fetch", host)
+    status, got = _slice_source(slices, slices["second"], fetch=1)
+    assert status == 200 and got["outcome"] == "given" and got["partial"] is True
+    assert got["lines"][0] == {"id": "m4", "who": "小周", "at": None, "text": "晚饭吃什么"}
+    assert got["lines"][1]["missing_words"] == "这一行暂时取不到"
+    assert asked[0]["id"] == "m4" and asked[0]["through"] == "m6"
+    assert _slice_source(slices, "sl_nope")[0] == 404
+    assert _slice_source(slices, "sl_nope", fetch=1)[0] == 404
+
+
+def test_an_imported_slice_reads_the_lines_loci_holds(panel):
+    from core.import_memory import ImportStore
+    store = panel["store"]
+    batch = "imp_0123456789ab"
+    where = {"system": "import", "instance": batch, "container": "c0001"}
+    rows = [{"id": f"l000{i}", "role": "user" if i % 2 else "assistant",
+             "at": f"2026-10-05T0{i}:00:00+08:00", "text": f"第{i}句"} for i in range(1, 4)]
+    ImportStore(store.base_dir).create(
+        {"batch": batch, "same_self": True, "human": "小周", "title": "旧聊天",
+         "conversations": [{"container": "c0001"}]}, {"c0001": rows})
+    store.sources.record_order(where, [r["id"] for r in rows], batch_id=batch)
+    out, _r = run(store.slices.record_batch(
+        batch_id="b_imp2", source=where, day="2026-10-05", revision=None,
+        lines=[(r["id"], f"sha256:{i:064x}") for i, r in enumerate(rows)],
+        slices=[{"first": "l0001", "last": "l0003", "gist": "约了周六", "draft": "约好周六见",
+                 "guesses": []}],
+        origin={"batch": batch, "same_self": True, "title": "旧聊天"}))
+    sid = out["slices"][0]["slice_id"]
+    status, got = _slice_source(panel, sid)
+    assert status == 200, got
+    assert got["label"] == "来自导入 · 旧聊天" and got["draft"] == "约好周六见"
+    o = got["original"]
+    assert (o["host"], o["can_fetch"], o["span"]["count"]) == ("loci", True, 3)
+    assert o["span"]["first_at"] == "2026-10-05T01:00:00+08:00"
+    status, lines = _slice_source(panel, sid, fetch=1)
+    assert status == 200 and lines["outcome"] == "given", lines
+    assert [(ln["who"], ln["at"], ln["text"]) for ln in lines["lines"]] == [
+        ("小周", "2026-10-05T01:00:00+08:00", "第1句"),
+        ("我", "2026-10-05T02:00:00+08:00", "第2句"),
+        ("小周", "2026-10-05T03:00:00+08:00", "第3句")]
+
+
+def test_a_slice_on_a_held_source_shows_nothing_it_was_cut_from(slices):
+    from core import _source_change as SC
+    store = slices["store"]
+    run(SC.hold(store, "lento:home/p#m5", "withdrawn", "lento"))
+    status, out = _slice_source(slices, slices["second"])
+    assert status == 200
+    assert out["gist"] == "" and out["source_words"] == "宿主说撤回或删了，等确认"
+    assert out["original"]["state"] == "held" and out["original"]["can_fetch"] is False
+    status, got = _slice_source(slices, slices["second"], fetch=1)
+    assert got["outcome"] == "not_allowed" and got["lines"] == []
+    # The list says the same: no gist, the words in its place.
+    _s, page = slices["get"]("/api/loci/grow/slices")
+    host = next(b for b in page["items"] if b["batch_id"] == "b_host")
+    held = next(s for s in host["slices"] if s["slice_id"] == slices["second"])
+    assert held["gist"] == "" and held["source_words"] == "宿主说撤回或删了，等确认"
+    other = next(s for s in host["slices"] if s["slice_id"] == slices["first"])
+    assert other["gist"] == "牙又疼了，约了周末" and "source_words" not in other
 
 
 def test_a_host_registering_the_lines_names_the_batch():

@@ -135,7 +135,8 @@ async def build_poke(query: str = "", when: str = "", room: str = "",
     A dream with an ingredient that may no longer be seen (archived, deleted, put out of
     mind, hung with an avoid hold since) is left out of `dreams` this round —
     `core._dream.withheld_ingredients()`. Left out is a shape the bridge already reads:
-    no dream is the ordinary daytime answer.
+    no dream is the ordinary daytime answer. With the panel's 「醒来的时候递给他」 off
+    (`deliver_on_wake` in config.yaml's `dream:` section) `dreams` is always empty.
 
     `muse_pending`: how many are waiting, thought clusters and day groups together — the
     count the threshold counts — reusing `build_muse_pending()` directly (one cached
@@ -160,7 +161,11 @@ async def build_poke(query: str = "", when: str = "", room: str = "",
     try:
         c = _D._c()
         now = _D._w.now()
-        for rec in await _D.handable_dreams(_D.load_dreams()):
+        # 「醒来的时候递给他」 off: the host's wake is handed no dream, so it neither
+        # delivers one nor sends the wake signal after it. The dream is left as it is for
+        # him to fetch himself (/api/dream/current).
+        records = await _D.handable_dreams(_D.load_dreams()) if c["deliver_on_wake"] else []
+        for rec in records:
             layer = _D.layer_of(rec, now, c)
             if layer == "没了":
                 continue          # something past its time does not play dead — but this gate is pure computation and deletes no files

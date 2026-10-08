@@ -140,13 +140,33 @@ def _free_port(wanted: int) -> int:
 # The sample library (runs in the child, with the temp environment)
 # ---------------------------------------------------------------------------
 
+def store_import(store, base_dir: str, meta: dict, lines: dict) -> None:
+    """An imported conversation stored the way an upload stores one (core/import_memory.
+    ImportEngine.take): its lines in the import's store and each conversation's order
+    registered with the source registry, so a run over its lines is readable."""
+    from core.import_memory import ImportStore
+    from core.scope import IMPORT_SYSTEM
+    ImportStore(base_dir).create(meta, lines)
+    for container, rows in lines.items():
+        store.sources.record_order(
+            {"system": IMPORT_SYSTEM, "instance": meta["batch"], "container": container},
+            [r["id"] for r in rows], batch_id=meta["batch"])
+
+
+async def host_batch(store, *, batch_id: str, source: dict, lines: list, **kw):
+    """A host's slices batch as a handed-over batch is kept (core/_slicer.take_batch): the
+    batch and its slices in the pending store, the lines' order in the source registry."""
+    out = await store.slices.record_batch(batch_id=batch_id, source=source, lines=lines, **kw)
+    store.sources.record_order(source, [i for i, _fp in lines], batch_id=batch_id)
+    return out
+
+
 async def seed(store, base_dir: str) -> dict:
     """Fill `store` with the sample. Returns the ids worth knowing."""
     from datetime import timedelta
     from core import _when as W
     from core import _invalidation as I
     from core import names as N
-    from core.import_memory import ImportStore
     from core.profile import _PROFILE_TAG
 
     today = W.now()
@@ -188,15 +208,17 @@ async def seed(store, base_dir: str) -> dict:
         subjects=["小林"], tags=["找工作"])
 
     batch = "imp_" + secrets.token_hex(6)
-    ImportStore(base_dir).create(
+    said = ["周六去海边吧，好久没看海了", "好，周六去。", "要不要带相机？", "带上，上次的照片都糊了。",
+            "那早点出发，七点？", "七点起不来，八点吧。", "行，八点，我来叫你。", "说好了啊。",
+            "最近睡得不好，半夜老醒。", "几点醒的？", "三四点，醒了就睡不着。", "睡前别看手机了。",
+            "试试吧。", "今晚早点睡。"]
+    start = today - timedelta(days=2)
+    store_import(store, base_dir,
         {"batch": batch, "same_self": True, "human": "阿青", "title": "chat-export.json",
          "conversations": [{"container": "c0001"}]},
-        {"c0001": [
-            {"id": "l0001", "role": "user", "at": (today - timedelta(days=2)).isoformat(),
-             "text": "周六去海边吧，好久没看海了"},
-            {"id": "l0002", "role": "assistant", "at": (today - timedelta(days=2, minutes=-1)).isoformat(),
-             "text": "好，周六去。"},
-        ]})
+        {"c0001": [{"id": f"l{i + 1:04d}", "role": "user" if i % 2 == 0 else "assistant",
+                    "at": (start + timedelta(minutes=i)).isoformat(), "text": t}
+                   for i, t in enumerate(said)]})
     ids["beach"] = await store.create(
         "阿青说周六想去海边，好久没看海了。", room="EVENT/SELF", name="阿青想去看海",
         subjects=["阿青"], tags=["海边"],
@@ -218,8 +240,8 @@ async def seed(store, base_dir: str) -> dict:
 
     src = {"system": "lento", "instance": "home", "container": "p"}
     lines = [(f"m_{i:04d}", f"sha256:{i:064x}") for i in range(1, 7)]
-    await store.slices.record_batch(
-        batch_id="b_" + secrets.token_hex(6), source=src, day=day(-1), revision=None,
+    await host_batch(
+        store, batch_id="b_" + secrets.token_hex(6), source=src, day=day(-1), revision=None,
         lines=lines, host="lento", report_at=(today - timedelta(hours=6)).isoformat(timespec="seconds"),
         slices=[
             {"first": "m_0001", "last": "m_0003", "gist": "阿青说牙又疼了，约了周六",
@@ -237,11 +259,10 @@ async def seed_said_span(store, base_dir: str) -> dict:
     last), so the 来源 layer has a 「日期 几点 – 几点」 to show."""
     from datetime import timedelta
     from core import _when as W
-    from core.import_memory import ImportStore
 
     start = W.now() - timedelta(days=1, hours=3)
     batch = "imp_" + secrets.token_hex(6)
-    ImportStore(base_dir).create(
+    store_import(store, base_dir,
         {"batch": batch, "same_self": True, "human": "阿青", "title": "chat-export.json",
          "conversations": [{"container": "c0002"}]},
         {"c0002": [
@@ -293,8 +314,8 @@ async def seed_grow_and_recall(store, ids: dict, import_batch: str) -> None:
     # A host batch of 90 lines from the day before yesterday, its slices handled.
     src = {"system": "lento", "instance": "home", "container": "p"}
     lines = [(f"n_{i:04d}", f"sha256:{i + 1000:064x}") for i in range(1, 91)]
-    older, _r = await store.slices.record_batch(
-        batch_id="b_" + secrets.token_hex(6), source=src,
+    older, _r = await host_batch(
+        store, batch_id="b_" + secrets.token_hex(6), source=src,
         day=(today - timedelta(days=2)).strftime("%Y-%m-%d"), revision=None, lines=lines,
         host="lento", slices=[
             {"first": "n_0012", "last": "n_0040", "gist": "阿青说起小林的面试，有点替他紧张",
@@ -310,17 +331,20 @@ async def seed_grow_and_recall(store, ids: dict, import_batch: str) -> None:
     await store.slices.close(skipped, "drop", [])
 
     # The imported conversation's drafts, waiting to be checked.
-    imp_lines = [(f"l{i:04d}", f"sha256:{i + 5000:064x}") for i in range(1, 53)]
+    from core import _slicer as SL
+    from core.import_memory import ImportStore
+    conv = ImportStore(store.base_dir).lines(import_batch, "c0001")
+    imp_lines = [(r["id"], SL.fingerprint_of(r.get("text") or "")) for r in conv]
     await store.slices.record_batch(
         batch_id="b_" + secrets.token_hex(6),
-        source={"system": "import", "instance": "loci", "container": import_batch},
+        source={"system": "import", "instance": import_batch, "container": "c0001"},
         day=(today - timedelta(days=2)).strftime("%Y-%m-%d"), revision=None,
         lines=imp_lines, origin={"batch": import_batch, "same_self": True,
                                  "title": "chat-export.json"},
         slices=[
-            {"first": "l0001", "last": "l0030", "gist": "约周六去海边",
+            {"first": "l0001", "last": "l0008", "gist": "约周六去海边",
              "draft": "阿青说周六想去海边，好久没看海了。", "guesses": []},
-            {"first": "l0031", "last": "l0052", "gist": "说到最近睡得不好",
+            {"first": "l0009", "last": "l0014", "gist": "说到最近睡得不好",
              "draft": "阿青这阵子睡得不好，半夜总醒。", "guesses": []},
         ])
 
@@ -460,8 +484,8 @@ async def seed_dreams_and_names(store, base_dir: str, ids: dict) -> None:
     """The dream and name pages' sample: three nights' dreams in the panel's copy (one
     waiting, one fading, one gone; two of the last night's thread candidates, one of them
     kept by the 考完去海边 cue written after it), and names enough to page — known people,
-    a game and a character in it, a card filed for 小林, and six names the table does not
-    know yet."""
+    a game and a character in it, a card filed for 小林, and six names waiting to be
+    recognised (two of them looking like a person)."""
     from datetime import timedelta
     from core import _dream_archive as DA
     from core import _when as W
@@ -496,6 +520,11 @@ async def seed_dreams_and_names(store, base_dir: str, ids: dict) -> None:
     N.add_alias("康纳", "RK800")
     N.add_alias("小林", "林林")
     N.link_name("小林", "member_of", "读书会")
+    # Two waiting names that look like something: 小鹿 hangs in a group with no kind of its
+    # own, and the side model said 汉克 is a person when the table could not take it.
+    N.link_name("小鹿", "member_of", "读书会")
+    from core import name_guesses as G
+    G.record(base_dir, "汉克", N.KIND_PERSON, now)
     await store.create("老周说周末去钓鱼，问要不要一起。", room="EVENT/WORLD", name="老周约钓鱼",
                        subjects=["老周", "小雨"])
     await store.create("小雨寄来一盒桂花糕。", room="EVENT/WORLD", name="小雨寄桂花糕",

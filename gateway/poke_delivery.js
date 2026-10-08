@@ -199,7 +199,7 @@ function build_patch_text(poke) {
   }
   if (poke.musePending > 0) {
     if (parts.length > 1) parts.push("");
-    parts.push(`〔发呆〕没成团的想法攒了 ${poke.musePending} 团，该发呆了（muse()）`);
+    parts.push(`〔发呆〕有 ${poke.musePending} 团日子和想法还没整理，该发呆了（muse()）`);
   }
   return parts.join("\n");
 }

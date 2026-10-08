@@ -296,28 +296,36 @@ def _cues_written_since(events, since: datetime) -> set[str]:
     return out
 
 
-def kept_candidates(rec: dict, all_buckets: list, events) -> list[dict]:
-    """The copy's thread candidates, each with `kept`: a live entry now carries a cue
-    saying what the candidate meets, written after the dream was woven."""
+def kept_candidates(rec: dict, all_buckets: list, events, scope=None) -> list[dict]:
+    """The copy's thread candidates, each with `kept`: an entry the panel lists now (the
+    `list` road under `scope`, the request's view: live, current, nothing it rests on
+    withdrawn, deleted or held) carries a cue saying what the candidate meets, written
+    after the dream was woven; and `ids`, those entries, newest written first — the ones
+    the panel opens."""
     from . import visibility as _V
     candidates = [c for c in rec.get("candidates") or [] if isinstance(c, dict)]
     if not candidates:
         return []
     woven = _w.parse_stamp(rec.get("woven_at"))
     written = _cues_written_since(events, woven) if woven is not None else set()
-    cues: list[dict] = []
+    cues: list[tuple[str, str, dict]] = []
     for b in all_buckets or []:
         meta = b.get("metadata") or {}
         bid = str(meta.get("id") or b.get("id") or "")
         cue = meta.get("cue")
-        if bid in written and isinstance(cue, dict) and _V.state_of(meta) == _V.LIVE:
-            cues.append(cue)
-    return [{"meet": c.get("meet") or "", "recall": c.get("recall") or "",
-             "kept": any(_matches(c.get("meet") or "", cue) for cue in cues)}
-            for c in candidates]
+        if (bid in written and isinstance(cue, dict)
+                and _V.visible_for(meta, scope, road=_V.LIST).shown):
+            cues.append((str(meta.get("created") or ""), bid, cue))
+    cues.sort(key=lambda x: x[0], reverse=True)
+    out = []
+    for c in candidates:
+        ids = [bid for _at, bid, cue in cues if _matches(c.get("meet") or "", cue)]
+        out.append({"meet": c.get("meet") or "", "recall": c.get("recall") or "",
+                    "kept": bool(ids), "ids": ids})
+    return out
 
 
-def _row(rec: dict, all_buckets: list, events) -> dict:
+def _row(rec: dict, all_buckets: list, events, scope=None) -> dict:
     cleared = bool(rec.get("cleared"))
     state = rec.get("state") if rec.get("state") in _ORDER else WAITING
     return {"id": rec.get("id"), "night": rec.get("night"), "state": state,
@@ -329,7 +337,7 @@ def _row(rec: dict, all_buckets: list, events) -> dict:
             "degraded_at": _stamp(rec.get("degraded_at")),
             "gone_at": _stamp(rec.get("gone_at")),
             "cleared": cleared,
-            "kept": [] if cleared else kept_candidates(rec, all_buckets, events)}
+            "kept": [] if cleared else kept_candidates(rec, all_buckets, events, scope)}
 
 
 def _stamp(value) -> str | None:
@@ -338,11 +346,12 @@ def _stamp(value) -> str | None:
 
 
 def panel_view(records: list[dict], all_buckets: list, events, *, now: datetime,
-               offset: int, limit: int, as_of: datetime) -> dict:
+               offset: int, limit: int, as_of: datetime, scope=None) -> dict:
     """The dream page: one row per copy of the last three natural days, newest first,
     paged. A copy woven after `as_of` is left out (a dream since the first page).
     `events`: the ledger lines (for `kept`), or a callable giving them — read only when a
-    copy has candidates to judge."""
+    copy has candidates to judge. `scope`: the request's view (the registry's word on
+    what the entries carrying a kept thread rest on)."""
     today = _today(now)
     rows = [r for r in records or []
             if not _aged_out(r, today) and not past(_w.parse_stamp(r.get("woven_at")), as_of)]
@@ -351,4 +360,4 @@ def panel_view(records: list[dict], all_buckets: list, events, *, now: datetime,
         events = events() if any(r.get("candidates") and not r.get("cleared")
                                  for r in rows) else []
     events = list(events or [])
-    return page([_row(r, all_buckets, events) for r in rows], offset, limit, as_of)
+    return page([_row(r, all_buckets, events, scope) for r in rows], offset, limit, as_of)

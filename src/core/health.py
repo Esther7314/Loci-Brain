@@ -11,11 +11,13 @@ engines it was given, the panel lock's state) and turn the dict into JSON.
 health(): **whether the memory itself is doing well** — is everything still there, can
    it be found, are the two external dependencies reachable, could anything lost be
    recovered. Not release compliance (that is the upstream /api/system/diagnostics).
+   Its rows are gathered into the setting page's five 体检 rows (`groups`), the worst
+   state of a row's checks winning; every check stays in `checks`.
 setup(): the settings page's top block — every silent failure made visible, each row
    saying what goes wrong if it is left as it is.
 
-Exports: health(bucket_mgr, config, persistence) · setup(config, bucket_mgr,
-         embedding_engine, panel, in_docker) · PanelLock
+Exports: health(bucket_mgr, config, persistence, running) · groups(rows) · HEALTH_GROUPS ·
+         setup(config, bucket_mgr, embedding_engine, panel, in_docker) · PanelLock
 ========================================
 """
 
@@ -411,6 +413,39 @@ def check_dreams(c: _Checks, g: _Ground) -> None:
           f"{n} 个还在（时间到了自己会没）" if n else "空的（攒不到线就一夜无梦，正常）")
 
 
+# ---- The source registry ----
+def check_source_registry(c: _Checks, g: _Ground) -> None:
+    """The source registry and the pending slices read: what a host's change to its
+    material (POST /api/v2/source/change) is recorded in and checked against, and where a
+    day's slices wait. A registry that cannot be read means no read can be checked against
+    a withdrawal."""
+    registry = getattr(g.bucket_mgr, "sources", None)
+    if registry is None:
+        c.add("source_registry", "来源登记", "error", "来源登记没起来 —— 撤回、删除查不了",
+              "看日志里启动时 sources 那几行")
+        return
+    blocking = len(registry.blocking_containers())
+    registry.stamp()
+    slices = getattr(g.bucket_mgr, "slices", None)
+    waiting = slices.pending_count() if slices is not None else 0
+    c.add("source_registry", "来源登记", "ok",
+          "读得出" + (f"；{blocking} 处有撤回、删除或挂着的来源" if blocking else "")
+          + (f"；{waiting} 段切片等着写" if waiting else ""))
+
+
+# ---- The copy that runs ----
+def check_running_version(c: _Checks, g: _Ground, running: str) -> None:
+    """The version this process started with against the code on disk now: code updated
+    under a running process is not used until it restarts."""
+    on_disk = get_version()
+    if running == on_disk:
+        c.add("running_version", "跑着的这份", "ok", f"跟代码一致（v{running}）")
+    else:
+        c.add("running_version", "跑着的这份", "warn",
+              f"跑着的是 v{running}，代码已经是 v{on_disk} —— 重启以后才用上新代码",
+              "重启 Loci")
+
+
 async def _read_buckets(c: _Checks, g: _Ground) -> None:
     """The base ingredient. A failure here must not take down the whole check; the
     independent items (config, disk) still run."""
@@ -441,13 +476,16 @@ def _sort_visible(c: _Checks, g: _Ground) -> None:
               "在「日志」里搜这几条的 id，多半是早期写入留下的")
 
 
-async def health(bucket_mgr, config, persistence: Callable[[str], dict]) -> dict:
-    """**Our own health check**: {ok, summary: {status: count}, checks: [rows]}, each row
-    {key, label, status, message, action}.
+async def health(bucket_mgr, config, persistence: Callable[[str], dict],
+                 running: str = "") -> dict:
+    """**Our own health check**: {ok, summary: {status: count}, checks: [rows], groups:
+    [the setting page's five rows, `groups`]}, each check row {key, label, status,
+    message, action}.
 
     `config` is the configuration as handed in (possibly not a dict: a check reads around
     it); `persistence(buckets_dir)` says whether the data directory is on persistent
-    storage ({persistent, note}).
+    storage ({persistent, note}); `running` is the version this process started with
+    (checked against the code on disk; no row without it).
     """
     c = _Checks()
     cfg = config if isinstance(config, dict) else {}
@@ -475,6 +513,11 @@ async def health(bucket_mgr, config, persistence: Callable[[str], dict]) -> dict
     await c.need_buckets("periods", "时期", check_periods, g)
     await c.need_buckets("from_links", "from 链", check_orphans, g)
     await c.guard("dreams", "盘上的梦", check_dreams, g, "确认 buckets/night_fall/dreams 目录在")
+    await c.guard("source_registry", "来源登记", check_source_registry, g,
+                  "看 buckets/_sources 目录在不在、读不读得动")
+    if running:
+        await c.guard("running_version", "跑着的这份",
+                      lambda cc, gg: check_running_version(cc, gg, running), g)
 
     # Besides ok/warn/error the health check **has a fourth state, `note`** — "you have not
     #    started yet", "this one is optional": neutral statements, not problems.
@@ -484,7 +527,59 @@ async def health(bucket_mgr, config, persistence: Callable[[str], dict]) -> dict
     for row in c.rows:
         st = str(row.get("status") or "").lower() or "unknown"
         summary[st] = summary.get(st, 0) + 1
-    return {"ok": summary["error"] == 0, "summary": summary, "checks": c.rows}
+    return {"ok": summary["error"] == 0, "summary": summary, "checks": c.rows,
+            "groups": groups(c.rows)}
+
+
+# The setting page's 体检 has five rows (the canvas): each gathers checks by key. A check
+# no row names is the library's own and falls under the first row, so none is left out.
+# (key, label, words when all is well — None: the one check's own message —, check keys)
+HEALTH_GROUPS = (
+    ("alive", "Loci 活着没", "正常", ()),
+    ("side_model", "副模型", None, ("dehydration",)),
+    ("embedding", "向量模型", None, ("embedding", "vector_coverage", "reembed")),
+    ("sources", "来源登记和变化口", "正常", ("source_registry",)),
+    ("running", "跑着的这份", "跟代码一致", ("running_version", "schema")),
+)
+# Worst wins. `note` is said, not a problem, so it ranks just above ok; an unknown state
+# ranks with error (it is nothing the panel can call well).
+_RANK = {"ok": 0, "note": 1, "warn": 2, "error": 3}
+NOT_CHECKED = "没查"
+
+
+def groups(rows: list[dict]) -> list[dict]:
+    """The checks in the setting page's five rows (`HEALTH_GROUPS`): {key, label, status,
+    message, action, checks}. `status` is the worst of its checks' (none: "unknown",
+    `message` 没查); `message` the row's words when all is well, else the worst check's
+    message (with its label when the row gathers several, and how many more are not
+    well); `action` that check's; `checks` the keys of the rows under it, in order — the
+    details stay in `checks` of the reply."""
+    named = {k for _key, _label, _ok, keys in HEALTH_GROUPS for k in keys}
+    out = []
+    for key, label, ok_words, keys in HEALTH_GROUPS:
+        members = [r for r in rows if (r.get("key") in keys) or (not keys and r.get("key")
+                                                                  not in named)]
+        if not members:
+            out.append({"key": key, "label": label, "status": "unknown",
+                        "message": NOT_CHECKED, "action": "", "checks": []})
+            continue
+        rank = lambda r: _RANK.get(str(r.get("status") or ""), 3)    # noqa: E731
+        worst = max(members, key=rank)
+        status = str(worst.get("status") or "unknown")
+        bad = [r for r in members if rank(r) >= _RANK["warn"]]
+        if not bad:
+            message = ok_words if ok_words is not None else str(members[0].get("message") or "")
+            action = ""
+        else:
+            message = str(worst.get("message") or "")
+            if len(members) > 1:
+                message = f"{worst.get('label')}：{message}"
+            if len(bad) > 1:
+                message += f"（还有 {len(bad) - 1} 处）"
+            action = str(worst.get("action") or "")
+        out.append({"key": key, "label": label, "status": status, "message": message,
+                    "action": action, "checks": [r.get("key") for r in members]})
+    return out
 
 
 # ============================================================

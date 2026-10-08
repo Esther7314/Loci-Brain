@@ -98,6 +98,7 @@ from . import import_memory as _imports
 from . import names as _names
 from . import fields as _fields
 from . import schema as _schema
+from . import prompts as _prompts
 from . import similar_kept as _similar_kept
 from . import visibility as _V
 from .scope import IMPORT_SYSTEM
@@ -130,11 +131,14 @@ class StateFile:
     """One kind of library state the package carries. `path` is under the library folder;
     a `*` matches within one part of it (`night_fall/dreams/x_*.json`, `a/*/*.jsonl`).
     `scrub` takes the file's bytes and a `_Scrub` (the ids left out of the package, the
-    source registry, the file's path) and returns what may travel (None: nothing)."""
+    source registry, the file's path) and returns what may travel (None: nothing).
+    `not_merged` is why a FRESH file is not restored into a library that has entries,
+    when the general reason (it names that library's entries and windows) is not it."""
     path: str
     merge: str
     what: str
     scrub: Optional[Callable[[bytes, "_Scrub"], Optional[bytes]]] = None
+    not_merged: str = ""
 
 
 @dataclass(frozen=True)
@@ -301,6 +305,12 @@ STATE_FILES: tuple[StateFile, ...] = (
     StateFile(f"_state/{_similar_kept.FILE}", FRESH,
               "suspected-duplicate pairs kept on the panel (ids and version markers)",
               _scrub_similar_kept),
+    # The owner's rewrites of the side model's prompts move with her library; merged into
+    # a living library they would change how that library tags and dreams.
+    StateFile(f"_state/{_prompts.FILE}", FRESH,
+              "the side model's prompts as the owner rewrote them on the panel",
+              not_merged="it would change how this library's side model tags and dreams; "
+                         "restored only into a library with no entries"),
     StateFile(f"night_fall/dreams/{_dream.FILE_PREFIX}*.json", FRESH, "dream records",
               _scrub_dream),
 )
@@ -326,6 +336,9 @@ _LEFT_BEHIND: tuple[tuple[str, str], ...] = (
     ("_state/thresholds_model.json", "the embedding model this installation's similarity "
                                      "lines were last looked at with; the lines themselves "
                                      "are config"),
+    ("_state/name_guesses.json", "what the side model said a name is when the names table "
+                                 "could not take it: hints for the names page, said again "
+                                 "by the next backfill"),
     ("_state/dream_archive/*", "the panel's copy of the last three days' dreams: for the "
                                "panel alone, never a road back to a dream"),
     ("embeddings.db.backup", "the vectors before a model switch"),
@@ -1009,6 +1022,7 @@ def restore_library_state(store, members: dict[str, str], *, fresh: bool,
                 report["not_merged"].append({
                     "path": rel, "what": spec.what,
                     "why": ("the library already has its own" if _has_content(dest) else
+                            spec.not_merged or
                             "it names entries and windows of the library the package came "
                             "from; restored only into a library with no entries")})
         except Exception as exc:                      # noqa: BLE001 - one file, reported

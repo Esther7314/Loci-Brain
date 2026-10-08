@@ -181,6 +181,31 @@ def test_an_imported_line_carries_who_said_it_and_when(store, routes, tmp_path):
                              "text": "周六去海边吧"}]
 
 
+def test_a_run_of_imported_lines_says_how_many_and_can_be_read(store, routes, tmp_path):
+    rows = [{"id": f"l000{i}", "role": "user", "at": f"2026-10-06T0{i}:00:00Z",
+             "text": f"第{i}句"} for i in range(1, 4)]
+    ImportStore(tmp_path).create(
+        {"batch": BATCH, "same_self": True, "human": "小周",
+         "conversations": [{"container": "c0001"}]}, {"c0001": rows})
+    rec = {"system": "import", "instance": BATCH, "container": "c0001", "id": "l0001",
+           "through": "l0003"}
+    bid = run(store.create("小周说了三句。", room="EVENT/SELF", sources=[rec]))
+    # Before its order is registered nothing says which lines the run holds, so a
+    # withdrawal of one inside it could not be told: no count, nothing asked.
+    [row] = source(routes, bid)[1]["originals"]
+    assert row["span"]["count"] is None and row["can_fetch"] is False
+    # An upload registers each conversation's order (core/import_memory.ImportEngine.take).
+    store.sources.record_order({"system": "import", "instance": BATCH, "container": "c0001"},
+                               [r["id"] for r in rows], batch_id=BATCH)
+    [row] = source(routes, bid)[1]["originals"]
+    assert (row["host"], row["span"]["count"], row["can_fetch"]) == ("loci", 3, True)
+    assert row["span"]["first_at"] == "2026-10-06T09:00:00+08:00"
+    assert row["span"]["last_at"] == "2026-10-06T11:00:00+08:00"
+    status, out = source(routes, bid, "fetch=0")
+    assert status == 200 and out["outcome"] == "given", out
+    assert [ln["text"] for ln in out["lines"]] == ["第1句", "第2句", "第3句"]
+
+
 def _answer(lines) -> bytes:
     return json.dumps({"v": 1, "status": "given", "lines": lines}).encode("utf-8")
 

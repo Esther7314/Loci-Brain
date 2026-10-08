@@ -5,9 +5,12 @@ tests/test_panel_names_page.py — the names page and the name card
 /names/{name}, POST /api/loci/names/action).
 
 WHAT IS AGREED
-    The page lists only the names the table knows, by kind, most mentioned first, and
-    counts how many wait; the pending page lists the others, each with the entry it first
-    appeared in, and a name leaves it once a button is pressed. The card says what the
+    The page lists only the names the table knows and gives a kind, by kind, most
+    mentioned first, and counts how many wait; the pending page lists the others (a name
+    the table knows without a kind among them), each with the entry it first appeared in
+    and what it looks like when something says (the side model's kind the table could not
+    take; a person for a name hanging in a work or a group), and a name leaves it once a
+    button is pressed. The card says what the
     table says, the MIND entry filed as its card, and the entries naming it (after the
     table's normalising), paged. Every list pages by offset / limit / as_of: an entry
     written after `as_of` does not shift the pages. The buttons write aliases.yaml only —
@@ -18,6 +21,7 @@ WHAT IS AGREED
 import asyncio
 import json
 from datetime import datetime, timedelta
+from pathlib import Path
 from urllib.parse import quote
 
 import pytest
@@ -234,3 +238,47 @@ def test_the_fixed_names_paths_are_matched_before_a_name(routes):
     order = [path for path, _method in routes]
     assert order.index("/api/loci/names/pending") < order.index("/api/loci/names/{name}")
     assert order.index("/api/loci/names/action") < order.index("/api/loci/names/{name}")
+
+
+# ───────────────────────── a name the table knows without a kind; what it looks like ──
+
+def test_a_name_the_table_knows_without_a_kind_waits_with_the_pending(store, routes, tmp_path):
+    # 老周 is in the table with an alias only, 小周 hangs in a group: neither says what it is.
+    table = tmp_path / "aliases.yaml"
+    table.write_text(TABLE + "老周:\n  aliases: [周叔]\n小周:\n  member_of: [读书会]\n",
+                     encoding="utf-8")
+    S._cache = None
+    entry(store, "周叔来电话。", ["周叔"])
+    entry(store, "小周说读书会改到周六。", ["小周"])
+    entry(store, "小林面完第二轮。", ["小林"])
+    _, page = get(routes, "/api/loci/names")
+    assert [r["name"] for r in page["items"]] == ["小林"]
+    assert page["kinds"] == [{"kind": "人", "n": 1}]
+    assert page["pending_count"] == 2
+    _, pending = get(routes, "/api/loci/names/pending")
+    rows = {r["name"]: r for r in pending["items"]}
+    assert set(rows) == {"老周", "小周"}
+    assert rows["老周"]["in_table"] is True and rows["老周"]["guess"] is None
+    # A member of a group is a person in this table.
+    assert rows["小周"]["guess"] == "人"
+    # Told what it is, it leaves the pending page for the names page.
+    assert post(routes, "/api/loci/names/action",
+                {"action": "set_kind", "name": "老周", "kind": "人"})[0] == 200
+    _, pending = get(routes, "/api/loci/names/pending")
+    assert [r["name"] for r in pending["items"]] == ["小周"]
+    _, page = get(routes, "/api/loci/names")
+    assert {r["name"] for r in page["items"]} == {"小林", "老周"}
+
+
+def test_a_pending_name_carries_what_the_side_model_said_it_is(store, routes):
+    from core import name_guesses as G
+    entry(store, "阿哲今天又加班。", ["阿哲"])
+    entry(store, "老周来电话。", ["老周"])
+    G.record(store.base_dir, "阿哲", "人", W.now())
+    _, pending = get(routes, "/api/loci/names/pending")
+    rows = {r["name"]: r for r in pending["items"]}
+    assert rows["阿哲"]["guess"] == "人" and rows["阿哲"]["in_table"] is False
+    assert rows["老周"]["guess"] is None
+    # Only a hash of the spelling is kept, never the name.
+    raw = (Path(store.base_dir) / "_state" / G.FILE).read_text(encoding="utf-8")
+    assert "阿哲" not in raw

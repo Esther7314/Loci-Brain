@@ -324,6 +324,25 @@ def test_the_table_gains_new_names_and_missing_kinds_only(backfill, table):
     assert _table(table).startswith("# a hand-written table\n"), "the owner's comments stay"
 
 
+def test_a_kind_the_table_cannot_take_is_kept_as_a_guess(backfill, table, tmp_path,
+                                                          monkeypatch):
+    from core import name_guesses as G
+    table.write_text(TABLE + "Leon:\n  aliases: [莱昂]\nLeon (Detroit):\n  aliases: [莱昂]\n",
+                     encoding="utf-8")
+    S._cache = None
+    before = _table(table)
+    monkeypatch.setattr(rt, "config", {"buckets_dir": str(tmp_path)})
+    backfill(event(), {"summary": "s", "subjects": [
+        {"name": "莱昂", "kind": "人"},        # claimed by two entries: which one is not said
+        {"name": "小王", "kind": "人"}]})
+    S._cache = None
+    guesses = G.load(str(tmp_path))
+    assert G.guess_of(guesses, "莱昂") == "人"
+    assert G.guess_of(guesses, "小王") == "", "a kind the table took is no guess"
+    assert S.kind_of("小王") == "人"
+    assert _table(table).startswith(before), "the shared spelling's entries are untouched"
+
+
 def test_a_malformed_kind_leaves_the_table_and_the_subjects_alone(backfill, table):
     before = _table(table)
     store, _, log = backfill(event(), {"summary": "s", "subjects": [
