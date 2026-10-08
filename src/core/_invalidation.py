@@ -109,7 +109,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 
-from utils import now_iso, read_from_ids
+from utils import now_iso, panel_actor, read_from_ids
 
 from . import _sources as _src
 from . import visibility as _V
@@ -215,12 +215,12 @@ def why_words(item: dict) -> list[str]:
 
     why: list[str] = []
     if item.get("edited"):
-        why.append("人在面板上改过，你还没看")
+        why.append(f"{panel_actor()}在面板上改过，你还没看")
     for r in item.get("disputed") or []:
         note = str(r.get("text") or "")
         if len(note) > NOTE_SHOWN:
             note = note[:NOTE_SHOWN] + "…"
-        why.append(f"人在面板上说这条不对（{str(r.get('at') or '')[5:10]}）"
+        why.append(f"{panel_actor()}在面板上说这条不对（{str(r.get('at') or '')[5:10]}）"
                    + (f"：「{note}」" if note else ""))
     for r in item.get("overturned") or []:
         why.append(f"它站着的 {short_id(r['of'])} 被 {short_id(r['by'])} 推翻了（{r['at'][5:10]}）")

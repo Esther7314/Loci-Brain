@@ -55,6 +55,7 @@ from core import _usage
 from core import visibility as _V      # the gate's `recent` road for 近三天
 from core import _when as _w         # "today" as the user lives it (local timezone)
 from core import breath_snapshot as _snap
+from utils import panel_actor
 from core import scope as _scope
 from core.profile import (_PROFILE_TAG, breath_settings, door_note, involuntary,
                           owed_names, prospective, reason_words, short_id)
@@ -265,9 +266,9 @@ def _invalidation_lines(block: dict) -> list[str]:
     out.append('   └ 重写就 regrow（新版不带记号）；收起来就 trace(delete=True)；'
                '看过了照留就 trace(bucket_id=…, invalidation="confirmed")')
     if edited:
-        out.append("   └ 人改的认同也可以 fold（folds=[那几条], text=…）；不认同就说出来")
+        out.append(f"   └ {panel_actor()}改的认同也可以 fold（folds=[那几条], text=…）；不认同就说出来")
     if disputed:
-        out.append("   └ 人说不对的是你自己的判断：认同就 regrow 改写，不认同就照留，也可以说出来")
+        out.append(f"   └ {panel_actor()}说不对的是你自己的判断：认同就 regrow 改写，不认同就照留，也可以说出来")
     return out
 
 

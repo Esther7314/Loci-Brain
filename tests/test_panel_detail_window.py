@@ -366,6 +366,20 @@ def test_her_mark_with_no_note_says_so_plainly(store, routes):
     assert line.endswith("人在面板上说这条不对（10-07）"), line
 
 
+def test_the_model_is_told_her_name_when_the_setting_page_has_one(store, routes, monkeypatch):
+    import utils
+    from core import _invalidation as I
+    from tools.breath import awaken as A
+    monkeypatch.setattr(utils, "get_owner_name", lambda: "阿青")
+    view = run(store.create("小周周末更想待在家里。", room="MIND/VIEWS"))
+    status, _ = fix(routes, {"id": view, "kind": "content", "text": "不是紧张，是累了"})
+    assert status == 200
+    [it] = I.block(run(store.list_all()), store.sources)
+    lines = A._invalidation_lines({"items": [it], "more": 0})
+    assert "阿青在面板上说这条不对（10-07）：「不是紧张，是累了」" in lines[0], lines
+    assert "阿青说不对的是你自己的判断" in lines[-1], lines
+
+
 def test_delete_is_soft_and_recorded_and_an_archived_entry_takes_no_fix(store, routes):
     bid = event(store, "一条要收起来的。")
     status, out = fix(routes, {"id": bid, "kind": "delete"})

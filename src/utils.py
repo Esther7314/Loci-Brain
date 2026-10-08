@@ -1013,6 +1013,12 @@ def get_owner_name() -> str:
             or os.environ.get("LOCI_OWNER_NAME", "").strip())
 
 
+def panel_actor() -> str:
+    """Who the model is told acted on the panel ("阿青在面板上说这条不对"): the owner's
+    name from the setting page's 称呼 (get_owner_name), else 「人」."""
+    return get_owner_name() or "人"
+
+
 def get_owner_count() -> int:
     """Total number of people sharing this deployment.
 

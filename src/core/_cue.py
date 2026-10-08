@@ -101,7 +101,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
-from utils import get_ai_name, get_owner_name, is_closed, parse_bool, read_from_ids
+from utils import get_ai_name, get_owner_name, is_closed, panel_actor, parse_bool, read_from_ids
 
 from . import _holds as _H
 from . import _invalidation as _I
@@ -594,9 +594,9 @@ class _Library:
     def _review_text(it: dict) -> str:
         why: list[str] = []
         if it["edited"]:
-            why.append("人在面板上改过")
+            why.append(f"{panel_actor()}在面板上改过")
         if it.get("disputed"):
-            why.append("人在面板上说这条不对")
+            why.append(f"{panel_actor()}在面板上说这条不对")
         for r in it["overturned"]:
             why.append(f"它站着的 {short_id(r['of'])} 被 {short_id(r['by'])} 推翻了")
         for r in it["revised"]:

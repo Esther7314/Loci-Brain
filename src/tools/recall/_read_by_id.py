@@ -18,7 +18,8 @@ from core import _bigevent as _big    # a big event: one sentence laid over a st
 from core import _sources as _src     # outside material: source records and their registry state
 from core import _usage              # the usage log: what a lookup handed back
 from core import runtime as rt
-from utils import HAD_PRIMARY_SOURCE, WAS_DERIVED_FROM, WAS_QUOTED_FROM, WAS_REVISION_OF, read_prov
+from utils import (HAD_PRIMARY_SOURCE, WAS_DERIVED_FROM, WAS_QUOTED_FROM, WAS_REVISION_OF,
+                   panel_actor, read_prov)
 from .._common import read_scope
 
 from ._words import _HANDLE_TAG_RE
@@ -250,7 +251,7 @@ async def read_by_id(q: str) -> str:
         from core._invalidation import disputed_open, NOTE
         for rec in disputed_open(meta):
             note = str(rec.get(NOTE) or "")
-            lines.append(f"⚠️人在面板上说这条不对（{str(rec.get('at') or '')[:10]}）"
+            lines.append(f"⚠️{panel_actor()}在面板上说这条不对（{str(rec.get('at') or '')[:10]}）"
                          + (f"：「{note}」" if note else "")
                          + f"——认同就 regrow 改写；不认同就照留 trace(bucket_id=\"{q}\", "
                            "invalidation=\"confirmed\")，也可以说出来。")
