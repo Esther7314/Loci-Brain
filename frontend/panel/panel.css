@@ -7,9 +7,10 @@
    header, the rows, the i, the pager — is a token or a shared class here, so a page drawn
    later inherits the look by using the same classes.
 
-   Layout: web per the 1280 boards; the phone layout switches on at 640px. On the phone a
-   group's label moves above its content, and whatever sits right of a row (buttons,
-   dates) moves under the row; a row's id stays at its right.
+   Layout: web per the 1280 boards, stretched to the window's width; the phone layout
+   switches on at 640px. On the phone a group's label moves above its content, and
+   whatever sits right of a row (buttons, dates) moves under the row; a row's id stays
+   at its right.
 
    Klein blue is kept for the dot inside 钉着; red is for deleting and for errors.
    ========================================================== */
@@ -59,7 +60,7 @@
   --s-6: 32px;
   --s-7: 48px;
   --s-8: 64px;
-  --gutter: var(--s-6);                   /* the page's side margin */
+  --gutter: clamp(32px, 4vw, 96px);       /* the page's side margin: wider on a wide screen */
   --row-pad: var(--s-2);                  /* above and below a row's words */
   --gl-w: 56px;                           /* the group-label column; a page sets its own when it needs more */
   --gl-gap: var(--s-6);                   /* between the group label and its content */
@@ -79,7 +80,7 @@ a:hover { color: var(--ink-solid); }
 /* ---------------- the page frame ---------------- */
 /* A column as tall as the window, so a page can put something at its foot (surface's
    pager). The ink-wash sits behind the content, right of centre. */
-.frame { position: relative; isolation: isolate; display: flex; flex-direction: column; min-height: 100vh; max-width: 1280px; margin: 0 auto; padding: var(--s-5) var(--gutter) var(--s-8); box-sizing: border-box; }
+.frame { position: relative; isolation: isolate; display: flex; flex-direction: column; min-height: 100vh; margin: 0 auto; padding: var(--s-5) var(--gutter) var(--s-8); box-sizing: border-box; }
 .frame::before { content: ''; position: absolute; z-index: -1; left: calc(56% + 40px); top: 200px; width: 420px; height: 600px; border-radius: 999px; background: var(--wash); filter: blur(60px); opacity: 0.08; pointer-events: none; }
 .outlet.fill { flex: 1 0 auto; display: flex; flex-direction: column; }
 
