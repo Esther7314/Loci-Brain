@@ -321,7 +321,7 @@ test("prompt cards: defaults, a rewrite, back to the default, a reset", { timeou
     assert.strictEqual(c.changed, null);
     assert.ok(c.title && c.notes.length >= 2);
   }
-  assert.ok(r.json.items[2].text.startsWith("现在是你的自由时间。"));
+  assert.ok(r.json.items[2].text.startsWith("现在是你自己的时间。"));
 
   const NEW = "现在是你自己的时间。想说就说，不想说就不说。";
   const w = await call("POST", "/present/prompts", { body: { key: "wake", text: NEW } });
