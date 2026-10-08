@@ -393,9 +393,9 @@ BACKFILL_PROMPT = """你是记忆系统的回填器。下面是一条刚存下�
 }"""
 
 # The kinds the prompt offers. A kind the side model returns has to be one of these or
-# one the names table already uses: an unknown word would be written into the table as
-# the name's kind and stay there (the backfill never changes a kind it finds), so a new
-# kind is the owner's to introduce on the panel.
+# one the names table already uses: an unknown word would be offered on the names page as
+# the guess, and one 「是 X」 would make it a kind in the table, so a new kind is the
+# owner's to introduce on the panel, not the side model's.
 BACKFILL_KINDS = ("人", "游戏", "书", "群", "影视", "作品", "动物", "组织")
 _WEEKDAY_NAMES = "一二三四五六日"
 _EVIDENTIALS = ("inference", "assumption")

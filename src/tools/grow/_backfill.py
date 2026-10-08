@@ -365,12 +365,14 @@ def _backfilled_names(fills: dict) -> list[str]:
 
 
 def _record_kinds(bucket_id: str, pairs: list) -> None:
-    """Write what the side model said each name is into the names table, in the two ways
-    the backfill may: a name the table does not have is added with its kind, a name it
-    has without a kind gets one. A kind already there and a name that is no subject at
-    all (a pronoun, a word marked "not a person") are left alone. A kind the table cannot
-    take — the name is listed under several entries, or the write failed — is kept as a
-    guess for the names page (core/name_guesses), never written into the table."""
+    """Keep what the side model said each name is as a guess for the names page
+    (core/name_guesses), for a name the table does not have and for one it has without a
+    kind. The table itself is never written here: every new name waits in 待认 with its
+    guess (「看着像 X」) until the owner confirms it (「是 X」, set_kind), so a kind the
+    model got wrong does not settle in the table unseen. A kind already in the table and a
+    name that is no subject at all (a pronoun, a word marked "not a person") are left
+    alone. A guess for a kindless entry is kept under the entry's own name, which is the
+    name the 待认 row shows."""
     for name, kind in pairs:
         if not kind or not _S.canonical(name):
             continue
@@ -380,11 +382,7 @@ def _record_kinds(bucket_id: str, pairs: list) -> None:
         rec = _S.record_of(name)
         if rec is not None and rec.instance_of:
             continue
-        try:
-            _S.set_kind(rec.name if rec is not None else name, kind)
-        except (ValueError, OSError) as e:
-            rt.logger.warning(f"backfill {bucket_id}: 「{name}」的种类没写进人名表: {e}")
-            _keep_guess(bucket_id, name, kind)
+        _keep_guess(bucket_id, rec.name if rec is not None else name, kind)
 
 
 def _keep_guess(bucket_id: str, name: str, kind: str) -> None:

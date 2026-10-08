@@ -1,13 +1,12 @@
 """
 ========================================
-core/name_guesses.py — what the side model said a name is, when the names table could not take it
+core/name_guesses.py — what the side model said a name is, waiting for the owner
 ========================================
 
 The backfill asks the side model what each name in an entry is (core/dehydrator, subjects
-`{name, kind}`) and files the kind into the names table in the two ways it may
-(tools/grow/_backfill._record_kinds). When it cannot — the spelling is claimed by several
-entries of the table, or the table could not be written — the kind is kept here as a
-guess, so the names page can say 「看着像 <kind>」 on that name while it waits to be
+`{name, kind}`) and keeps the kind here as a guess (tools/grow/_backfill._record_kinds)
+for a name the table does not have, one it has without a kind, and a spelling several
+entries of the table claim — so the names page can say 「看着像 <kind>」 on that name while it waits to be
 recognised (core/census.pending_names). A guess never reaches the table by itself: only a
 click on the names page does that.
 

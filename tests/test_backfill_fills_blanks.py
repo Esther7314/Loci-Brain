@@ -307,25 +307,30 @@ def _table(path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_the_table_gains_new_names_and_missing_kinds_only(backfill, table):
+def test_the_side_model_s_kinds_wait_as_guesses_and_the_table_is_untouched(
+        backfill, table, tmp_path, monkeypatch):
+    from core import name_guesses as G
+    monkeypatch.setattr(rt, "config", {"buckets_dir": str(tmp_path)})
+    before = _table(table)
     backfill(event(), {"summary": "s", "subjects": [
-        {"name": "小王", "kind": "人"},        # not in the table: added with its kind
-        {"name": "张哥", "kind": "人"},        # an alias of a kindless entry: that entry gets it
-        {"name": "小李", "kind": "游戏"},      # already a person: never changed
+        {"name": "小王", "kind": "人"},        # not in the table: a guess, not an entry
+        {"name": "张哥", "kind": "人"},        # an alias of a kindless entry: the entry's guess
+        {"name": "小李", "kind": "游戏"},      # already a person: no guess
         {"name": "沙丘", "kind": "影视"},
-        {"name": "老周", "kind": ""},          # no kind: nothing to write
+        {"name": "老周", "kind": ""},          # no kind: nothing to keep
     ]})
     S._cache = None
-    assert S.kind_of("小王") == "人"
-    assert S.kind_of("小张") == "人"
-    assert S.kind_of("小李") == "人"
-    assert S.kind_of("沙丘") == "影视"
-    assert S.record_of("老周") is None
-    assert _table(table).startswith("# a hand-written table\n"), "the owner's comments stay"
+    assert _table(table) == before, "the table waits for the owner's 「是 X」"
+    assert S.record_of("小王") is None and S.kind_of("小张") in ("", None)
+    guesses = G.load(str(tmp_path))
+    assert G.guess_of(guesses, "小王") == "人"
+    assert G.guess_of(guesses, "小张") == "人"
+    assert G.guess_of(guesses, "沙丘") == "影视"
+    assert G.guess_of(guesses, "小李") == ""
+    assert G.guess_of(guesses, "老周") == ""
 
 
-def test_a_kind_the_table_cannot_take_is_kept_as_a_guess(backfill, table, tmp_path,
-                                                          monkeypatch):
+def test_a_shared_spelling_is_kept_as_a_guess_too(backfill, table, tmp_path, monkeypatch):
     from core import name_guesses as G
     table.write_text(TABLE + "Leon:\n  aliases: [莱昂]\nLeon (Detroit):\n  aliases: [莱昂]\n",
                      encoding="utf-8")
@@ -338,9 +343,8 @@ def test_a_kind_the_table_cannot_take_is_kept_as_a_guess(backfill, table, tmp_pa
     S._cache = None
     guesses = G.load(str(tmp_path))
     assert G.guess_of(guesses, "莱昂") == "人"
-    assert G.guess_of(guesses, "小王") == "", "a kind the table took is no guess"
-    assert S.kind_of("小王") == "人"
-    assert _table(table).startswith(before), "the shared spelling's entries are untouched"
+    assert G.guess_of(guesses, "小王") == "人"
+    assert _table(table) == before, "the shared spelling's entries are untouched"
 
 
 def test_a_malformed_kind_leaves_the_table_and_the_subjects_alone(backfill, table):

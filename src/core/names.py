@@ -30,8 +30,8 @@ Tags come in three kinds, and subjects are **the new third kind**:
    the WORLD branch.
 
 The names table: `aliases.yaml` in the data volume (hand-maintained; the backfill
-may only add a name it does not have, with a kind, or give a kind to a name that has
-none — tools/grow/_backfill._record_kinds). Whether a name is a person or a game is
+never writes it: what the side model says a name is waits as a guess in 待认 until the
+owner confirms it — tools/grow/_backfill._record_kinds). Whether a name is a person or a game is
 the table's call, not the field's: subjects holds names, and the table says what each
 one is.
 
@@ -452,10 +452,10 @@ def normalize_bound(names) -> tuple[list[str], str]:
 # ============================================================
 # The same rule as muse/fold: the system's job is to lay things out; which one
 # changes is decided by a human click.
-# These write paths hang off the panel's "who is in here" screen. The one automatic
-# caller is the backfill, through set_kind only, and only for a name the table does not
-# have or a name with no kind yet (tools/grow/_backfill._record_kinds): it never changes
-# a kind, an alias or a link.
+# These write paths hang off the panel's "who is in here" screen. Nothing automatic
+# calls them: the backfill keeps what the side model says a name is as a guess
+# (core/name_guesses, tools/grow/_backfill._record_kinds), and the owner's 「是 X」 on
+# the names page is what writes it here.
 #
 # 🔴 Why **text edits** rather than rewriting the whole file with
 #    yaml.safe_dump:
