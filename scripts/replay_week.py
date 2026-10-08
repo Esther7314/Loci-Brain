@@ -345,11 +345,12 @@ class StandIn:
     Logs a request's method, path, status and which way it went — never a header or a body."""
 
     def __init__(self, turns: list[Turn], *, replies: str, upstream: str, key: str, model: str,
-                 clock: Clock | None = None, listen: int = DEFAULT_LISTEN, log=print):
+                 clock: Clock | None = None, listen: int = DEFAULT_LISTEN, concurrency: int = 4,
+                 log=print):
         self.turns = {t.index: t for t in turns}
         self.replies = replies
         self.upstream = upstream.rstrip("/")
-        self.upstream_lock = threading.Lock()
+        self.upstream_lock = threading.BoundedSemaphore(concurrency)
         self._key = key
         self.model = model
         self.clock = clock or Clock(None)
@@ -449,9 +450,9 @@ class StandIn:
                     return self._json(503, {"error": "the replay's stand-in has no upstream key"})
                 outer.counts["forwarded"] += 1
                 kind = f"turn {turn.index + 1}" if turn is not None else "own turn / side model"
-                # One request upstream at a time, and a 429 waited out (RETRY_WAITS): a free or
-                # low tier allows one request in flight, and the side model and an own turn
-                # would otherwise collide.
+                # At most `concurrency` requests upstream at once, and a 429 waited out
+                # (RETRY_WAITS): a free or low tier allows few requests in flight. Too few slots
+                # and a caller with a short timeout (the side model) gives up while queued.
                 with outer.upstream_lock:
                     for wait in (*RETRY_WAITS, None):
                         try:
@@ -671,7 +672,7 @@ def replay(fx: dict, handle: dict, args, key: str) -> int:
     turns = turns_of(fx, shift)
     plan = build_plan(fx, bool(clock.files), shift)
     stand_in = StandIn(turns, replies=args.replies, upstream=args.upstream, key=key, model=args.model,
-                       clock=clock, listen=args.listen).start()
+                       clock=clock, listen=args.listen, concurrency=max(1, args.concurrency)).start()
     print(f"stand-in upstream on http://127.0.0.1:{stand_in.port}/v1 → {args.upstream} (model {args.model})")
     if handle.get("upstream", "").rstrip("/") != f"http://127.0.0.1:{stand_in.port}/v1":
         print(f"note: the gateway's upstream is {handle.get('upstream')}, not this stand-in: "
@@ -775,6 +776,8 @@ def main() -> int:
                          "small enough and a long day forces packs of its own, each a paid own turn")
     ap.add_argument("--keep-raw", type=int, default=10,
                     help="raw lines a flip or a pack keeps (small, so a pack folds most of a day)")
+    ap.add_argument("--concurrency", type=int, default=4,
+                    help="requests in flight to the real upstream at once (1 for a tier that allows one)")
     ap.add_argument("--wake-cap", type=int, default=3, help="wakes per day at most (each is a paid own turn)")
     ap.add_argument("--wait", type=float, default=900, help="seconds to wait for one night's report or one wake")
     ap.add_argument("--days", type=int, default=0,
