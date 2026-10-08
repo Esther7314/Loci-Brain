@@ -158,7 +158,7 @@ async def api_loci_similar_action(request: Request) -> Response:
         # 1. Both ends must be buckets that really exist and are visible on this page.
         if a not in info or b not in info:
             return JSONResponse(
-                {"error": "这一对里有一端不在相似度页上（可能已归档、已换版或是情绪种子）"},
+                {"error": "这一对里有一端不在「疑似重复」里（可能已归档、已换版或是情绪种子）"},
                 status_code=409)
         # 2. This pair must actually have been computed (order does not matter).
         if not _sim.has_pair(data, a, b):
@@ -209,7 +209,7 @@ async def _keep(a: str, b: str) -> Response:
         info = data.get("info", {})
         if a not in info or b not in info:
             return JSONResponse(
-                {"error": "这一对里有一端不在相似度页上（可能已归档、已换版或是情绪种子）"},
+                {"error": "这一对里有一端不在「疑似重复」里（可能已归档、已换版或是情绪种子）"},
                 status_code=409)
         if not _sim.has_pair(data, a, b):
             return JSONResponse({"error": "这一对不在当前的相似结果里"}, status_code=409)

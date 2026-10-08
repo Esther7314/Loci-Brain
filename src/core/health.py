@@ -191,7 +191,9 @@ def check_reembed(c: _Checks, g: _Ground) -> None:
         c.add("reembed", "换向量模型", "error",
               f"换到 {target} 的重算没完成：{st.get('message') or st.get('error') or '中途停了'}"
               "；旧模型和旧向量照用",
-              "在「设置 → 引擎」接着算，或者放弃这一次" if st.get("resumable") else "")
+              "面板上没有这两个按钮：接着算是 POST /api/loci/embedding/migration "
+              "{\"action\": \"resume\"}，放弃这一次是同一个口 {\"action\": \"abandon\"}"
+              if st.get("resumable") else "")
 
 
 def check_literal(c: _Checks, g: _Ground) -> None:
@@ -273,7 +275,7 @@ def check_fresh(c: _Checks, g: _Ground) -> None:
     else:
         c.add("recent_writes", "最近七天", "warn",
               "一条都没存 —— 要么最近没聊，要么写入坏了",
-              "去「日志」看看 grow 有没有报错")
+              "看看下面的日志里 grow 有没有报错")
 
 
 # ---- Open wants nobody is bound by ----
@@ -295,7 +297,7 @@ def check_unbound_wants(c: _Checks, g: _Ground) -> None:
         c.add("unbound_wants", "没人认领的想要", "error",
               f"{len(ids)} 条还开着的想要没有 bound（谁该做），也没有日子或条件，"
               f"「惦记的事」里永远看不到它们：{'、'.join(ids)}",
-              "给每条补上 bound：面板上改，或 trace(bucket_id=…, bound=[\"谁\"])")
+              "给每条补上 bound：trace(bucket_id=…, bound=[\"谁\"])（面板上没有改 bound 的地方）")
     else:
         c.add("unbound_wants", "没人认领的想要", "ok", "开着的想要都有人认领，或有日子、有条件")
 
@@ -393,7 +395,7 @@ async def check_orphans(c: _Checks, g: _Ground) -> None:
     if gone:
         c.add("from_links", "断掉的 from 链", "warn",
               f"{gone} 条记忆的来源哪儿都找不到了",
-              "这才是真断了：多半那条源被物理删过。星空里它们少一根线")
+              "这才是真断了：多半那条源被物理删过，拿 id 也查不回来")
     elif not sunk:
         c.add("from_links", "from 链", "ok", "每条 from 都指得到")
     if sunk:
@@ -463,6 +465,7 @@ async def _read_buckets(c: _Checks, g: _Ground) -> None:
 
 def _sort_visible(c: _Checks, g: _Ground) -> None:
     bad_meta = 0
+    bad_ids: list[str] = []
     for m in g.metas:
         # try per entry: one bad metadata record (a domain that is an integer, say) must not
         # silence the whole health check
@@ -471,9 +474,13 @@ def _sort_visible(c: _Checks, g: _Ground) -> None:
                 g.visible.append(m)
         except Exception:
             bad_meta += 1
+            if len(bad_ids) < 5:
+                bad_ids.append(str((m.get("id") if isinstance(m, dict) else None) or "?"))
     if bad_meta:
         c.add("meta_shape", "元数据形状", "error", f"{bad_meta} 条记忆的元数据读不动（字段类型不对）",
-              "在「日志」里搜这几条的 id，多半是早期写入留下的")
+              f"打开这几条的记忆文件看看元数据：{'、'.join(bad_ids)}"
+              + ("……" if bad_meta > len(bad_ids) else "")
+              + "。多半是早期写入或手改留下的")
 
 
 async def health(bucket_mgr, config, persistence: Callable[[str], dict],
@@ -684,7 +691,7 @@ def setup_aliases(r: _Rows) -> str:
           (apath + "（" + str(len(table)) + " 条写法）") if a_exists else ("还没有：" + apath),
           "同一个人的几种写法会被当成几个人。「老张」和「张三」各算一个，"
           "按人找记忆就永远只找到一半。",
-          "面板「整理 → 人名表」上点一下就是往这张表里写")
+          "面板 name 页（和它的「待认的」）上点的按钮，就是往这张表里写")
     return apath
 
 

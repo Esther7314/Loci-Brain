@@ -1064,7 +1064,7 @@ def register(mcp) -> None:
         return JSONResponse({
             "ok": False,
             "error": "调用返回空向量：检查 model 名 / base_url / key 是否匹配该 provider"
-                     "（如硅基流动 base_url=https://api.siliconflow.cn/v1、model=BAAI/bge-m3）。详见错误面板 OB-E001。",
+                     "（如硅基流动 base_url=https://api.siliconflow.cn/v1、model=BAAI/bge-m3）。详情在日志里 OB-E001 那一行（本页「体检」下面）。",
         })
 
 

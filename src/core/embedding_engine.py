@@ -109,7 +109,7 @@ def _humanize_api_error(
     """Translate the common exceptions of an OpenAI-compatible backend into a readable
     hint, appended to the end of the OB-E001 detail.
 
-    The point is that the error panel should say plainly what to do about a 401/400/404 or
+    The point is that the logged error should say plainly what to do about a 401/400/404 or
     a timeout, especially when the wrong cross-border provider has been picked (a US VPS
     timing out against a domestic domain, an international endpoint that does not carry a
     given model, a key that does not belong to the provider).
@@ -257,7 +257,7 @@ class APIEmbeddingEngine(BaseEmbeddingEngine):
                     return list(vec)
             # A 2xx response arrived but carries no usable vector. Returning [] silently is
             # not acceptable: "the call succeeded and produced nothing" would then happen
-            # without a sound. Record OB-E001 so the error panel can see it.
+            # without a sound. Record OB-E001 so it reaches the server log.
             self._record_e001(
                 f"backend={self.backend_name} model={self.model} 返回空向量"
                 f"（base_url={self.base_url}，检查 model 名 / base_url / key 是否匹配该 provider）"
@@ -650,7 +650,7 @@ class EmbeddingEngine:
                 (
                     f"embeddings.db meta mismatch: "
                     f"db(model={old_name},dim={old_dim}) vs current(model={cur_name},dim={cur_dim}). "
-                    f"Run /api/embedding/migrate to re-index."
+                    f"Re-index from the panel: setting -> 模型, save the current embedding model again."
                 ),
             )
 
@@ -716,7 +716,7 @@ class EmbeddingEngine:
            form that works across backends — Ollama, an OpenAI-compatible API, anything
            else — without this function needing to know which one it is talking to.
 
-        The `why not` string is the same humanized hint the error panel uses, so a 404
+        The `why not` string is the same humanized hint OB-E001 carries, so a 404
         already reads as "that model does not exist on this provider" rather than as a
         status code.
         """

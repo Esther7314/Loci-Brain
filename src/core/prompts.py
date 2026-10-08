@@ -82,7 +82,7 @@ PROMPTS: dict[str, Prompt] = {
                   '"internally_generated"', '"evidential"', '"cue_phrasings"',
                   '"looks_like_promise"'),
         note=("不建议改：最后「输出格式」那一段，还有 `{kinds}` 这个占位 —— 程序按这些键名读结果，"
-              "改了名字或删了键，那一格就再也填不上；`{kinds}` 会换成你在「名字」页用的类别。"),
+              "改了名字或删了键，那一格就再也填不上；`{kinds}` 会换成你在面板 name 页用的类别。"),
     ),
     DREAM: Prompt(
         key=DREAM,

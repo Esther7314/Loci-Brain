@@ -87,7 +87,7 @@ class MediaStore:
         source = Path(raw_path).expanduser()
         if not source.is_file():
             raise MediaPersistenceError(
-                f"媒体临时路径在 OB 服务器上不可读：{raw_path}。"
+                f"媒体临时路径在 Loci 服务器上不可读：{raw_path}。"
                 "请改传 data_base64，不能把客户端临时路径直接写进记忆。"
             )
         size = source.stat().st_size

@@ -757,7 +757,7 @@ def _set_status(c: _Call, edit: _Edit) -> str | None:
     if c.status:
         s = c.status.strip().lower()
         if s == "want":
-            return ('status 不再有 "want"：想不想要是 direction_of_fit="telic"，'
+            return ('status 没有 "want"：想不想要是 direction_of_fit="telic"，'
                     'status 只管关没关。重新打开写 status="active"。')
         if s not in ("active", "resolved", "abandoned"):
             return (f'status 无效：{c.status}。"active"（还开着）/ "resolved"（做完了）'
@@ -1013,10 +1013,9 @@ def _patch_refusal(bucket_id: str, patch_result: dict) -> str:
         return f"未找到记忆桶: {bucket_id}"
     if patch_error == "old_str_not_found":
         return (
-            "未找到 old_str，正文未修改。请从 Dashboard 或对应记忆类型的读取入口"
-            "核对当前原文；普通记忆也可用 "
-            f'breath_advanced(query="{bucket_id}", max_results=1, '
-            "max_tokens=20000) 按完整 bucket_id 读取。复制连续且逐字一致的片段后重试。"
+            "未找到 old_str，正文未修改。先用 "
+            f'recall(query="{bucket_id}") 按完整 bucket_id 逐字读出当前正文，'
+            "再复制一段连续且逐字一致的原文重试。"
         )
     if patch_error == "old_str_ambiguous":
         return (

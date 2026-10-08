@@ -504,7 +504,7 @@ class BucketManager(
             if bucket["metadata"].get("pinned") or bucket["metadata"].get("protected"):
                 return {
                     "ok": False,
-                    "error": "这是 pinned 核心准则，不能同时设为 anchor（两者互斥）。要改成坐标系请先 trace(pinned=0)。",
+                    "error": "这是 pinned 核心准则，不能同时设为 anchor（两者互斥）；先 trace(bucket_id, pinned=0) 取消钉选。",
                     "count": await self.count_anchors(),
                     "limit": self.ANCHOR_LIMIT,
                 }
@@ -512,7 +512,7 @@ class BucketManager(
             if count >= self.ANCHOR_LIMIT:
                 return {
                     "ok": False,
-                    "error": f"anchor 已达上限 {self.ANCHOR_LIMIT}。请先 release 一条再 anchor 新的。",
+                    "error": f"anchor 已达上限 {self.ANCHOR_LIMIT}，这一条没设上。",
                     "count": count,
                     "limit": self.ANCHOR_LIMIT,
                 }

@@ -892,7 +892,7 @@ def mark_not_person(name) -> bool:
         if rec.instance_of != KIND_PERSON:
             return False
         raise ValueError(f"表里写着「{rec.name}」是人（instance_of: 人）——"
-                         "是写错了就改它的种类，别再记一遍「不是人」")
+                         "是写错了就改它的种类，别再记一遍「不是名字」")
     # This comment is written **only the first time** the block is created. The
     # panel screen says nothing at all about a marked-out name (hidden means
     # hidden; listing it again would mean it was never hidden), so "how to undo
@@ -900,7 +900,7 @@ def mark_not_person(name) -> bool:
     # anyway.
     why = _NL.join([
         "下面这些不是别名，是「这几个词根本不是人」——",
-        "面板「人名表」那一屏上点「这不是人」写进来的。",
+        "面板 name 页「待认的」里点「不是名字」写进来的。",
         "它们不再摆出来、以后也不再抽；历史那些条一个字节都没动。",
         "想反悔：把对应那一行删掉就回来了。",
     ])
@@ -937,7 +937,7 @@ def add_alias(canon, alias) -> bool:
     if owner and owner.name != key:
         where = ("它自己就是表里的一个名字" if owner.name.lower() == alias.lower()
                  else f"它已经挂在「{owner.name}」底下了")
-        raise ValueError(f"「{alias}」{where}；要把两个并成一个，用「跟谁是一个人」")
+        raise ValueError(f"「{alias}」{where}；要把两个并成一个，在面板 name 页用「并到别的名字」")
     with _lock:
         new, changed = _insert_under(_read_table_text(), key, alias)
         if changed:

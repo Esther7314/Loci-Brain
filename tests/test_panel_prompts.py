@@ -26,7 +26,7 @@ from core import runtime as rt
 from tools.grow import _backfill as BF
 
 BACKFILL_NOTE = ("不建议改：最后「输出格式」那一段，还有 `{kinds}` 这个占位 —— 程序按这些键名读结果，"
-                 "改了名字或删了键，那一格就再也填不上；`{kinds}` 会换成你在「名字」页用的类别。")
+                 "改了名字或删了键，那一格就再也填不上；`{kinds}` 会换成你在面板 name 页用的类别。")
 DREAM_NOTE = ("不建议改：最后「只返回 JSON」那一行 —— 程序靠「完整」「碎片」「v」「a」「线索」"
               "这几个名字拆出梦的全文、碎片、情绪和线索，改了名字，梦就存不进去。")
 

@@ -62,7 +62,7 @@ from core import runtime as rt
 
 # --- Bucket and quota defaults ---
 _DEFAULT_MAX_BUCKET_BYTES = 50 * 1024  # 50 KB ceiling per bucket (above that, split it up with grow)
-_DEFAULT_MAX_PINNED = 20               # ceiling on pinned buckets (a principle, not a technical limit: importance must stay scarce); kept in sync with limits.max_pinned in config.example.yaml
+_DEFAULT_MAX_PINNED = 20               # ceiling on pinned buckets (a principle, not a technical limit: importance must stay scarce); kept in sync with limits.max_pinned in config.default.yaml
 _DEFAULT_MAX_GROW_INPUT_BYTES = 2 * 1024 * 1024
 _DEFAULT_MAX_QUERY_BYTES = 16 * 1024
 _DEFAULT_MAX_METADATA_BYTES = 16 * 1024
@@ -585,10 +585,9 @@ async def repair_pinned_desync(bucket_mgr, apply: bool = False) -> dict:
 async def check_pinned_quota() -> str | None:
     """Returns a message string once the pinned ceiling is reached, else None.
 
-    (store_pinned uses this for a hard rejection in strict mode; the newer
-    "automatic degradation" path should use enforce_pinned_quota instead, which
-    returns (False, msg) at the ceiling so the caller falls back to an ordinary
-    bucket.)"""
+    (trace's pin uses this for a hard refusal. enforce_pinned_quota is the
+    degrading variant: it returns False at the ceiling so the caller can fall back
+    to an ordinary bucket.)"""
     cap = max_pinned()
     if cap <= 0:
         return None
@@ -645,8 +644,9 @@ def is_importance_audit_candidate(
 def occupies_high_importance_quota_slot(metadata: dict | None) -> bool:
     """Whether one logical bucket occupies the ordinary importance>=9 pool.
 
-    This intentionally matches the auditable ``breath_advanced(importance_min=9)``
-    candidate scope, then additionally excludes pinned/protected buckets because
+    This intentionally matches the importance audit's candidate scope
+    (``is_importance_audit_candidate`` at importance 9), then additionally excludes
+    pinned/protected buckets because
     those have their own quota.  Explicit unpinned ``permanent`` buckets remain
     ordinary candidates and therefore still count.
     """

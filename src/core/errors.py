@@ -2,23 +2,23 @@
 Loci Brain — Unified Error Code System
 ==========================================================
 
-Design principles (from rule.md §1.5):
+Design principles:
     "When it comes to producing and finding errors, anything that can be said out loud
      is never swallowed."
-    "An error has to be visible to the person on the dashboard AND to the model at the
-     MCP return value."
+    "An error has to be visible to the person (the server log, which the panel's
+     setting page shows under 体检) AND to the model at the MCP return value."
 
 Four severity levels:
     F (Fatal)   — refuse to start + terminal output + write error.log
-    E (Error)   — dashboard dialog + appended to the MCP return + last 15 log lines
-    W (Warning) — appended to the MCP return + the dashboard log panel
+    E (Error)   — the server log + appended to the MCP return + last 15 log lines
+    W (Warning) — the server log + appended to the MCP return
     I (Info)    — appended to the MCP return (a light note, e.g. an automatic downgrade)
 
 What this module owns:
     1. ERROR_CODES: the error-code registry (level, description, suggested action)
     2. format_error(): rendering to the standard string form
     3. record_error(): persist to errors.jsonl + the in-memory buffer
-    4. recent_errors(): what the /api/errors/recent endpoint reads
+    4. recent_errors(): reads errors.jsonl back, newest first
     5. log_buffer: a ring buffer holding the last N log lines (everything that went
        through stderr included)
     6. attach_log_buffer_handler(): installs BufferHandler on the root logger
@@ -56,7 +56,7 @@ class ErrorSpec:
     suggestion_en: str = ""
 
 
-# The registry — when changing or adding an entry, keep rule.md §11 in sync
+# The registry: every code a caller records or formats, with what the reader can do about it
 ERROR_CODES: dict[str, ErrorSpec] = {
     # ---- Fatal: refuse to start ----
     "OB-F001": ErrorSpec(
@@ -67,16 +67,6 @@ ERROR_CODES: dict[str, ErrorSpec] = {
         suggestion_zh=(
             "设置环境变量 LOCI_EMBED_API_KEY（或在 config.yaml 中填写 embedding.api_key）。\n"
             "若暂时不需要语义检索，可在 config.yaml 中设置 embedding.enabled=false 跳过。"
-        ),
-    ),
-    "OB-F002": ErrorSpec(
-        code="OB-F002",
-        level="F",
-        title_zh="config.yaml 损坏或缺失",
-        title_en="config.yaml missing or malformed",
-        suggestion_zh=(
-            "检查项目根目录是否存在 config.yaml；如缺失，从 config.example.yaml 复制一份。"
-            "如已存在，运行 `python -c \"import yaml; yaml.safe_load(open('config.yaml'))\"` 看是否能解析。"
         ),
     ),
     "OB-F003": ErrorSpec(
@@ -99,7 +89,7 @@ ERROR_CODES: dict[str, ErrorSpec] = {
         ),
     ),
 
-    # ---- Error: dashboard dialog + appended to the MCP return ----
+    # ---- Error: the server log + appended to the MCP return ----
     "OB-E001": ErrorSpec(
         code="OB-E001",
         level="E",
@@ -107,8 +97,8 @@ ERROR_CODES: dict[str, ErrorSpec] = {
         title_en="Embedding API call failed",
         suggestion_zh=(
             "检查网络可达性、LOCI_EMBED_API_KEY 是否有效、配额是否耗尽。"
-            "本次写入仍会保存到 buckets，向量由后台自动重试；也可调用 "
-            "/api/embedding/backfill 手动触发全库对账。"
+            "本次写入仍会保存到 buckets，向量由后台自动重试；不想等的话，"
+            "在面板 setting 页「向量」里点「现在补」。"
         ),
     ),
     "OB-E002": ErrorSpec(
@@ -118,16 +108,6 @@ ERROR_CODES: dict[str, ErrorSpec] = {
         title_en="Disk write failed",
         suggestion_zh=(
             "检查磁盘剩余空间、目录权限；确认未被备份/同步软件锁定（iCloud/Dropbox 等）。"
-        ),
-    ),
-    "OB-E003": ErrorSpec(
-        code="OB-E003",
-        level="E",
-        title_zh="并发冲突超时",
-        title_en="Concurrency lock timeout",
-        suggestion_zh=(
-            "同一 content 的 merge_or_create 长时间未释放锁；通常是上一个调用卡死。"
-            "稍后重试；若反复出现，重启服务或检查 LLM 提供方是否慢响应。"
         ),
     ),
     "OB-E004": ErrorSpec(
@@ -141,7 +121,7 @@ ERROR_CODES: dict[str, ErrorSpec] = {
         ),
     ),
 
-    # ---- Warning: appended to the MCP return + the dashboard log panel ----
+    # ---- Warning: the server log + appended to the MCP return ----
     "OB-W001": ErrorSpec(
         code="OB-W001",
         level="W",
@@ -163,11 +143,9 @@ ERROR_CODES: dict[str, ErrorSpec] = {
         title_en="importance≥9 quota near cap",
         suggestion_zh=(
             "标为 importance≥9 的桶接近上限（硬上限 24）。\n"
-            "⚠️ 2026-08-19 起这条**不是给模型的待办**：importance 已经不在工具面上"
-            "（trace / grow 的 importance 形参 8-18 撤了），"
-            "**没有任何入口能降低任何一条的 importance**。\n"
-            "撑满这个池子的只会是历史条目。要处理去 Dashboard 手动改，"
-            "或者不管——满了之后新的会自动降级（OB-I001），不会拒绝写入。"
+            "⚠️ 这条**不是待办**：工具和面板都没有改 importance 的入口，"
+            "**谁也降不了哪一条的 importance**。\n"
+            "不用管——满了之后再进来的会自动降成 8（OB-I001），不会拒绝写入。"
         ),
     ),
     "OB-W004": ErrorSpec(
@@ -186,9 +164,9 @@ ERROR_CODES: dict[str, ErrorSpec] = {
         title_zh="embeddings.db 中的模型/维度与当前后端不一致",
         title_en="embeddings.db model/dim mismatch with current backend",
         suggestion_zh=(
-            "过往写入的向量与当前模型不同维，搜索会退化为 0 分。"
-            "请在 Dashboard 设置页点击「切换模型」，或调用 POST /api/embedding/migrate 重建索引。"
-            "迁移期间搜索降级为关键词模式，不会丢文件。"
+            "库里的向量是别的模型算的，跟现在的模型比不了，按意思找的搜索会失灵。"
+            "在面板 setting 页「模型」里把现在用的向量模型再保存一次，"
+            "确认后会按它把全部向量重算一遍；记忆文件不受影响。"
         ),
     ),
 
@@ -201,9 +179,8 @@ ERROR_CODES: dict[str, ErrorSpec] = {
         suggestion_zh=(
             "★ 这是系统自作主张帮你做的事 ★\n"
             "importance≥9 的桶已达硬上限 24，这一条被自动降级为 importance=8。\n"
-            "⚠️ 2026-08-19 起**不必也无法手动善后**：importance 的入口 8-18 整个撤了"
-            "（连带 breath_advanced 也没了），这条只是告诉你「盘上高分条目满了」。\n"
-            "真要重排，去 Dashboard。"
+            "⚠️ **不必也无法手动善后**：工具和面板都没有改 importance 的入口，"
+            "这条只是告诉你「盘上高分条目满了」。"
         ),
     ),
     "OB-I002": ErrorSpec(
@@ -212,7 +189,7 @@ ERROR_CODES: dict[str, ErrorSpec] = {
         title_zh="pinned 已自动退出（pinned 配额超标）",
         title_en="pinned auto-unset (pinned quota exceeded)",
         suggestion_zh=(
-            "★ 这是 OB 自作主张帮你做的事 ★\n"
+            "★ 这是系统自作主张帮你做的事 ★\n"
             "pinned 桶已达硬上限（默认 20，可在 config.limits.max_pinned 调整），本次未钉成功（保留为普通桶）。\n"
             "建议：用 breath 看一遍当前 pinned 列表，把不再属于「永久核心准则」的"
             "用 trace(bucket_id, pinned=0) 取消，再来钉这条。"
@@ -224,7 +201,7 @@ ERROR_CODES: dict[str, ErrorSpec] = {
 # 2. In-memory Log Ring Buffer
 # ============================================================
 
-_LOG_BUFFER_MAX = 500     # the whole ring buffer; the dashboard's "recent logs" reads it
+_LOG_BUFFER_MAX = 500     # the whole ring buffer; an E-level error carries its tail
 _LOG_TAIL_FOR_ERROR = 15  # how many recent log lines ride along with an E-level error (per spec)
 
 _log_buffer: collections.deque[str] = collections.deque(maxlen=_LOG_BUFFER_MAX)
@@ -359,8 +336,7 @@ def recent_errors(limit: int = 50, min_level: str = "W") -> list[dict]:
 
 
 def clear_errors_log() -> int:
-    """Truncate errors.jsonl and return how many lines it held (drives the dashboard's
-    "mark as read" button)."""
+    """Truncate errors.jsonl and return how many lines it held."""
     if not _errors_path or not os.path.exists(_errors_path):
         return 0
     try:
@@ -403,7 +379,7 @@ def format_error(
         return (
             f"❌ [{code}] 未注册错误码\n"
             f"详情：{detail}\n"
-            f"建议：在 src/errors.py ERROR_CODES 注册该码或修正调用处。"
+            f"建议：在 src/core/errors.py 的 ERROR_CODES 注册该码或修正调用处。"
         )
     prefix = _LEVEL_PREFIX.get(spec.level, "•")
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
