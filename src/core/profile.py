@@ -46,11 +46,12 @@ comes due.
 
 Exports: door_note(all_buckets, now) / event_pool(all_buckets, now=None) /
          edited_by_user(all_buckets) / BreathSettings / breath_settings(config) /
+         RECENT_WINDOW_DAYS / days_words(n) / near_days(n) /
          due_day(meta, today) / awake_reasons(meta, now, …) / is_accessible(meta, now, …) /
          is_open_promise(meta) / written_days_ago(meta, today) / due_now(meta, now) /
          prospective(all_buckets, now, …) / involuntary(all_buckets, now, …) /
          label_of(e) / entry_label(meta, content) / short_id(bucket_id) / owed_names(bound) /
-         reason_words(reason) / AWAKE_WORDS / awake_words(key, meta, today) /
+         reason_words(reason) / AWAKE_WORDS / awake_words(key, meta, today, …) /
          awake_pool(all_buckets, now, …) / hanging(all_buckets, now, …) / DONE · DROP ·
          WITHDRAW
 ========================================
@@ -472,6 +473,7 @@ class BreathSettings:
     backfill_mark_days: int = 3       # a backfilled date says 「补的」 for its first days listed
     involuntary_lines: int = 2        # 忽然想起: one linked to the last few days, the rest random
     invalidation_lines: int = 5       # 依据变了的 shows this many; the rest are counted
+    recent_window_days: int = 3       # 近三天: recall's overview over this many days, one card
 
 
 _SETTING_KEYS = {
@@ -484,21 +486,55 @@ _SETTING_KEYS = {
     "backfill_mark_days": "prospective_backfill_mark_days",
     "involuntary_lines": "involuntary_lines",
     "invalidation_lines": "invalidation_lines",
+    "recent_window_days": "breath_recent_days",
 }
+
+# breath's recent block covers at least a day and at most a month: the card is one cell
+# of recall's overview, and past a month it says little about "the last few days".
+# web/config_api.py takes `breath_recent_days` within the same range.
+RECENT_WINDOW_DAYS = (1, 30)
+_SETTING_RANGES = {"recent_window_days": RECENT_WINDOW_DAYS}
 
 
 def breath_settings(config) -> BreathSettings:
     """`surfacing.<key>` from the host's config; the default for a key that is absent or
-    unreadable, never below 0."""
+    unreadable, never below 0, and kept within its range for a key that has one
+    (`_SETTING_RANGES`)."""
     sf = (config or {}).get("surfacing") or {}
     values = {}
     for f in fields(BreathSettings):
         raw = sf.get(_SETTING_KEYS[f.name], f.default)
+        lo, hi = _SETTING_RANGES.get(f.name, (0, None))
         try:
-            values[f.name] = max(0, int(raw))
+            val = max(lo, int(raw))
         except (TypeError, ValueError):
-            values[f.name] = f.default
+            val = f.default
+        values[f.name] = val if hi is None else min(hi, val)
     return BreathSettings(**values)
+
+
+_CN_DIGITS = "零一二三四五六七八九"
+
+
+def days_words(n: int) -> str:
+    """A count of days as the words around it read: Chinese numerals up to thirty (两 for
+    2: 这两天, 近两天), the digits with a space on each side beyond (近 45 天)."""
+    n = int(n)
+    if n == 2:
+        return "两"
+    if 0 <= n <= 30:
+        tens, ones = divmod(n, 10)
+        if tens == 0:
+            return _CN_DIGITS[ones]
+        head = "" if tens == 1 else _CN_DIGITS[tens]
+        return f"{head}十{_CN_DIGITS[ones] if ones else ''}"
+    return f" {n} "
+
+
+def near_days(n: int) -> str:
+    """「近三天」 for a window of n days: breath's recent block title, and the awake
+    reason for something written that recently."""
+    return f"近{days_words(n)}天"
 
 
 _YEARLY = "FREQ=YEARLY"
@@ -562,17 +598,22 @@ HOLD = "hold"           # a hold that holds today
 
 # The words each reason is said with on the panel. A date that has passed says how long
 # ago instead (`awake_words`).
+# `recent` names the window `awake_recent_days` sets (`awake_words`: 「近五天写的」);
+# these are its words at the default.
 AWAKE_WORDS = {PROMISED: "答应了没做", DATED: "日子快到了", RECENT: "近三天写的",
                CUED: "刚被线索碰上", HOLD: "自己是条子"}
 
 
-def awake_words(key: str, meta: dict, today: date) -> str:
+def awake_words(key: str, meta: dict, today: date, *,
+                settings: BreathSettings | None = None) -> str:
     """The words for one awake reason of this entry: `AWAKE_WORDS`, except a date already
-    past, which says 「过了 N 天」."""
+    past, which says 「过了 N 天」, and `recent`, which names `settings.recent_days`."""
     if key == DATED:
         due = due_day(meta, today)
         if due is not None and due < today:
             return f"过了 {(today - due).days} 天"
+    if key == RECENT:
+        return f"{near_days((settings or BreathSettings()).recent_days)}写的"
     return AWAKE_WORDS.get(key, key)
 
 
@@ -943,7 +984,8 @@ def awake_pool(all_buckets: list, now: datetime, *, settings: BreathSettings | N
         row = {"id": bid, "short": short_id(bid),
                "text": entry_label(meta, str(b.get("content") or "")),
                "date": shown.isoformat() if shown else None, "at": _stamp(meta),
-               "reasons": [{"key": k, "text": awake_words(k, meta, today)} for k in keys]}
+               "reasons": [{"key": k, "text": awake_words(k, meta, today, settings=s)}
+                           for k in keys]}
         if DATED in keys and due is not None:
             dated.append((abs((due - today).days), due, row))
         else:

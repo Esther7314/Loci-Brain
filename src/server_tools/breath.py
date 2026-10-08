@@ -40,8 +40,9 @@ async def breath() -> str:
                    promise has no time yet, or has hung so long it may not count any more.
                    Questions to answer sit under it: a hold whose review day has come, a
                    line that reads like a promise you never marked.
-    · 近三天       the last three days collapsed into a single card, in plain words rather
-                   than machine readings.
+    · 近三天       the last few days collapsed into a single card, in plain words rather
+                   than machine readings. Three days unless set otherwise; the title
+                   names the window (近七天 covers seven).
     · 忽然想起     two older things coming back on their own — one because something from
                    the last few days shares a name or a scene with it, one at random.
     · 依据变了的   entries whose ground moved: corrected by a person on the panel, or

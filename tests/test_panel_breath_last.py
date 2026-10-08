@@ -286,14 +286,14 @@ def test_an_entry_on_a_withdrawn_source_is_off_the_card_without_its_words(store,
     [gone] = [it for it in page["recent"]["items"] if it["id"] == sister]
     assert gone["in_card"] is False and gone["text"] is None
     assert gone["state_words"] == "依据的来源撤回或删除了，正文不给"
-    card = run(recent_card(S.recent_rows(kept, rows)))
+    card = run(recent_card(S.recent_rows(kept, rows), S.recent_days(kept)))
     assert "called sister" not in card and "baked bread" in card
 
 
 def test_nothing_in_the_three_days_gives_an_empty_card(store, tmp_path, monkeypatch):
     run(A.surface_awaken())
     recent = routes(monkeypatch)("GET", "/api/loci/breath/last").json["breath"]["recent"]
-    assert recent == {"items": [], "text": ""}
+    assert recent == {"days": 3, "title": "近三天", "items": [], "text": ""}
 
 
 # ── 依据变了的: why each item is there ──────────────────────────────────────

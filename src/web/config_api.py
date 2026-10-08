@@ -67,11 +67,14 @@ _MAX_ENV_VALUE_CHARS = 8192
 # the last N days · a date N days ahead · a strong-reminder card delivered in the last N
 # days; 0 turns that reason off. `hold_review_days` is how long a hold set aside with no
 # date waits before breath asks about it (core/_holds.review_days; 0 = never asks).
+# `breath_recent_days` is how many days breath's recent block (近三天) covers, within
+# core/profile.RECENT_WINDOW_DAYS; the panel's breath page sets it.
 _SURFACING_INTS = (
     ("awake_recent_days", 0, 365),
     ("awake_date_days", 0, 365),
     ("awake_cue_days", 0, 365),
     ("hold_review_days", 0, 365),
+    ("breath_recent_days", 1, 30),
 )
 
 # muse's reminder (muse-settings 「提醒」): the numbers POST /api/config accepts in `muse`,
@@ -389,6 +392,7 @@ def register(mcp) -> None:
                 "awake_date_days": awake.date_days,
                 "awake_cue_days": awake.cue_days,
                 "hold_review_days": _holds.review_days(sh.config),
+                "breath_recent_days": awake.recent_window_days,
             },
             "muse": _muse_view(sh.config),
             "dream": _dream_view(sh.config),

@@ -88,9 +88,9 @@ through the strong-reminder card with the owner's next message, not through brea
 - review: the one 惦记的事 line that shows a held entry on purpose — a `defer` hold whose
   review day has come, asked about together with what it is hung on. Asked of the hold and
   of the original alike: a `defer` is the thing being asked about, an `avoid` still closes.
-- recent: breath's 近三天 — recall's three-day overview (tools/recall/core.
-  recall_text_and_data with this road), which is the `list` road's set less what waits
-  for a clock time today.
+- recent: breath's 近三天 — recall's overview of the block's window, three days unless
+  set (tools/recall/core.recall_text_and_data with this road), which is the `list` road's
+  set less what waits for a clock time today.
 - sudden: 「忽然想起」 (core/profile.event_pool, which breath's involuntary block draws
   from, and the profile page's list of the same name).
 - edited: the panel edits in 依据变了的 (core/profile.edited_by_user).

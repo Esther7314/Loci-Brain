@@ -170,8 +170,8 @@ matching:
 
 # --- Surfacing / 浮现参数 ---
 # What breath puts in front of the model. The panel's setting page writes the awake_* days
-# and hold_review_days back here.
-# breath 摆什么；面板设置页会回写 awake_* 和 hold_review_days。
+# and hold_review_days back here, its breath page breath_recent_days.
+# breath 摆什么；面板设置页会回写 awake_* 和 hold_review_days，breath 页回写 breath_recent_days。
 surfacing:
   # A "for now" hold (defer, no date) gets a review day this many days after it is written:
   # that day breath asks once whether it is still aside. It does not lift by itself. 0 = never ask.
@@ -199,6 +199,11 @@ surfacing:
   # 依据变了的: how many entries before the rest are counted in one line.
   # 依据变了的摆几条，多的数一行。
   invalidation_lines: 5
+  # breath's recent block: recall's overview of the last this many days, one card, its title
+  # naming the window (近三天, 近七天). 1 to 30. The panel's breath page sets it; it takes
+  # effect from the next breath.
+  # breath 的「近三天」看最近几天（1–30），标题跟着写。面板 breath 页可以调，下一次醒来起算。
+  breath_recent_days: 3
 
 # --- Similarity lines / 多像才算像 ---
 # Five cosine lines and recall's relevance floor (core/thresholds.py). Unset, the defaults

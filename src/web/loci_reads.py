@@ -175,14 +175,16 @@ async def build_profile() -> dict:
                       "room_cn": _room_cn(room), "label": _label(r),
                       "content": r["content"].strip()})
 
-    # The mid-range span (the last three days). This cell was found missing once. The waking
-    # screen has six parts — profile, reminders, **mid-range**, long-range, something coming
-    # back, and dreams — and the profile page has to lay them out the same way to line up.
-    # It uses the same call awaken.py makes (recall over 3d, collapsed into one card) rather
-    # than computing its own.
+    # The mid-range span (breath's recent block, the last `breath_recent_days` days). This
+    # cell was found missing once. The waking screen has six parts — profile, reminders,
+    # **mid-range**, long-range, something coming back, and dreams — and the profile page has
+    # to lay them out the same way to line up. It uses the same call awaken.py makes (recall
+    # over the same window, collapsed into one card) rather than computing its own.
     try:
         from tools.recall.core import recall_core
-        mid = await recall_core(when="3d", room="", tag="", query="", max_cells=1)
+        from core.profile import breath_settings
+        days = breath_settings(sh.config).recent_window_days
+        mid = await recall_core(when=f"{days}d", room="", tag="", query="", max_cells=1)
         if "没有东西" in mid:
             mid = ""
     except Exception as e:

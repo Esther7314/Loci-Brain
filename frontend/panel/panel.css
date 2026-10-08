@@ -571,3 +571,14 @@ select.btn { appearance: none; -webkit-appearance: none; padding-right: 28px; ba
 
   .subbar.one { display: flex; justify-content: space-between; }
 }
+
+/* breath page: 「调」 beside 近三天's label, and the 近 [n] 天 line it opens (pages/breath.js recentAdjust) */
+.adj-lnk { margin-left: var(--s-2); padding: 2px 0 0; border: 0; background: transparent; font: var(--caption); color: var(--small); text-decoration: underline; text-decoration-color: var(--faint); text-underline-offset: 3px; cursor: pointer; }
+.adj-lnk:hover, .adj-lnk[aria-expanded="true"] { color: var(--ink); }
+.adj { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-1) var(--s-3); margin: 0 0 var(--s-2); }
+.adj[hidden] { display: none; }
+.adj > label { display: inline-flex; align-items: center; gap: var(--s-1); }
+.adj .num { width: 52px; height: 28px; padding: 0 6px; border-radius: 14px; font: var(--body); }
+@media (max-width: 640px) {
+  .adj .num { height: 32px; border-radius: 16px; }
+}

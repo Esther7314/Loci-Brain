@@ -7,6 +7,9 @@ core/profile.breath_settings reads. POST /api/config takes them like the neighbo
 surfacing numbers: an integer clamped into range (0 turns that reason off), a value that is
 not a number skipped; the clamped value is what runs and what is written to config.yaml.
 GET /api/config gives back the values breath runs on.
+
+`surfacing.breath_recent_days` — how many days breath's recent block covers, set from the
+panel's breath page — goes the same way, within 1–30 (core/profile.RECENT_WINDOW_DAYS).
 """
 
 import asyncio
@@ -102,6 +105,35 @@ def test_out_of_range_is_clamped_and_the_clamped_value_is_persisted(world):
     saved = yaml.safe_load(world["config_path"].read_text(encoding="utf-8"))["surfacing"]
     assert (saved["awake_recent_days"], saved["awake_cue_days"],
             saved["hold_review_days"]) == (0, 365, 365)
+
+
+def test_the_recent_window_is_given_set_persisted_and_kept_in_range(world):
+    status, out = world["call"]("GET", "/api/config")
+    assert out["surfacing"]["breath_recent_days"] == 3
+
+    status, out = world["call"]("POST", "/api/config", {"persist": True, "surfacing": {
+        "breath_recent_days": 7}})
+    assert status == 200 and "surfacing.breath_recent_days" in out["updated"], out
+    s = breath_settings(world["config"])
+    assert (s.recent_window_days, s.recent_days) == (7, 3)
+    saved = yaml.safe_load(world["config_path"].read_text(encoding="utf-8"))["surfacing"]
+    assert saved["breath_recent_days"] == 7 and "awake_recent_days" not in saved
+    assert world["call"]("GET", "/api/config")[1]["surfacing"]["breath_recent_days"] == 7
+
+    for sent, kept in ((0, 1), (99, 30), ("soon", 30)):
+        status, out = world["call"]("POST", "/api/config", {"persist": True, "surfacing": {
+            "breath_recent_days": sent}})
+        assert status == 200, out
+        assert world["config"]["surfacing"]["breath_recent_days"] == kept
+        saved = yaml.safe_load(world["config_path"].read_text(encoding="utf-8"))["surfacing"]
+        assert saved["breath_recent_days"] == kept
+
+
+def test_the_recent_window_range_is_the_one_breath_reads():
+    from core.profile import RECENT_WINDOW_DAYS
+    from web.config_api import _SURFACING_INTS
+    assert {k: (lo, hi) for k, lo, hi in _SURFACING_INTS}["breath_recent_days"] == \
+        RECENT_WINDOW_DAYS
 
 
 def test_a_value_that_is_not_a_number_is_skipped(world):

@@ -84,9 +84,10 @@ def _delivered_at():
 async def build_breath_last(host: str | None) -> dict:
     """{at, host, scope, breath, hosts}: `host`'s last breath (the most recent of any host
     when None) with its titles read now and 近三天's card (`breath.recent.text`) rendered
-    now from the entries that breath named; {breath: None, note, hosts} when there is
-    none."""
-    from tools.breath.awaken import recent_card   # lazy: the tools layer is the heavier import
+    now from the entries that breath named, over the window it was handed out with
+    (`breath.recent.days`, and its title `breath.recent.title`: 近七天); {breath: None,
+    note, hosts} when there is none."""
+    from tools.breath.awaken import recent_card, recent_title   # lazy: the tools layer is the heavier import
 
     base_dir = str(sh.bucket_mgr.base_dir)
     known = _snap.hosts(base_dir)
@@ -97,7 +98,10 @@ async def build_breath_last(host: str | None) -> dict:
     kept = entry["breath"]
     entry["breath"] = _snap.relabel(kept, all_buckets)
     recent = entry["breath"].setdefault("recent", {})
-    recent["text"] = await recent_card(_snap.recent_rows(kept, all_buckets))
+    days = _snap.recent_days(kept)
+    recent["days"] = days
+    recent["title"] = recent_title(days)
+    recent["text"] = await recent_card(_snap.recent_rows(kept, all_buckets), days)
     return {**entry, "hosts": known}
 
 

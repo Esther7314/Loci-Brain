@@ -6,11 +6,16 @@
                      now — with titles read now. Three groups, their blocks numbered in
                      order as shown (01 档案 …):
                        核心  档案 (the name page, whole) · 原则 (the pinned rules)
-                       最近  近三天 (the card, `recent.text`, rendered now from the
-                             entries that breath named, squeezed for reading here
-                             (squeezeRecent) — the model reads it unsqueezed; an entry
-                             that changed since and is left off it (`in_card` false) is a row
-                             under it saying what became of it; no entries at all: 这三天没存东西; see core/breath_snapshot.py)
+                       最近  近三天 (titled with the window that breath covered,
+                             `recent.title`; the card, `recent.text`, rendered now from the
+                             entries that breath named, over that window, squeezed for
+                             reading here (squeezeRecent) — the model reads it unsqueezed; an
+                             entry that changed since and is left off it (`in_card` false) is
+                             a row under it saying what became of it; no entries at all:
+                             这三天没存东西; see core/breath_snapshot.py). 「调」 beside its
+                             label opens 近 [n] 天: how many days the next breath covers,
+                             `surfacing.breath_recent_days` through POST /api/config
+                             (recentAdjust)
                              · 惦记的事 (each with why it is there now, 还有 N 条, the
                              slices and imported stretches still waiting)
                        旧事  忽然想起 (how each came up) · 依据变了的 (only when there is
@@ -27,7 +32,7 @@
    ========================================================== */
 
 import * as api from "../api.js";
-import { h, subbar, group, sub, numberSubs, row, idTag, moreLine, note, pagedList, dayTime } from "../ui.js";
+import { h, fill, subbar, group, sub, numberSubs, row, idTag, moreLine, note, pagedList, dayTime, num } from "../ui.js";
 import { href } from "../router.js";
 import { openDetail } from "../detail.js";
 
@@ -36,14 +41,19 @@ const TIP_SURFACE = "surface 是醒着的那一池：刚写下的、日子快到
 const TIPS = {
   facts: "名字和称呼。开口之前就得知道、来不及去搜的，才放在这儿。",
   rules: "钉住的准则，他每次醒来都先看到。",
-  recent: "最近三天的一张小卡，让他接上前几天的事。",
   plan: "答应了还没做的、日子快到的、挂着期限的。最底下一行写着还有几段切片、几段导入的草稿等他处理。",
   sudden: "两条旧事自己冒出来：一条是碰上最近说过的词想起来的，一条是随手翻到的。",
   moved: "一条记忆站着的地基变了：原话被改了、撤回了、删了，或者你在面板上纠正过。他看到以后，自己决定重写还是收起来。没有就整块不出现。",
 };
 
-const EMPTY_RECENT = "这三天没存东西";
+const recentTip = (title) => `${title}的一张小卡，让他接上前几天的事。看几天点「调」改，下一次醒来起算。`;
 const OFF_CARD = "这几条后来变了，没算进上面的卡";
+
+// How many days breath's recent block covers: the config key and the range POST
+// /api/config keeps it in (web/config_api._SURFACING_INTS).
+const RECENT_DAYS = "breath_recent_days";
+const RECENT_RANGE = [1, 30];
+const RECENT_NEXT = "下一次醒来起算";
 
 // surface's rows to a page: about a desktop screen of them (each row is a line and its
 // reasons under it); the API takes up to 50 (core/paging.PAGE_MAX).
@@ -78,6 +88,62 @@ function squeezeRecent(text) {
     out.push(line.trim());
   }
   return out.join("\n");
+}
+
+/** 「调」 beside the recent block's label, and the line it opens under the label:
+ *  近 [n] 天 and when it counts from. The box reads the setting from GET /api/config the
+ *  first time it opens and saves through POST /api/config when it changes, kept within
+ *  RECENT_RANGE. The card shown is the last breath's, over that breath's window
+ *  (`shownDays`); a new number shows from the next breath on. */
+function recentAdjust(block, shownDays) {
+  const head = block && block.querySelector(".sth");
+  if (!head) return;
+  const box = num({ "aria-label": "近几天", inputmode: "numeric" });
+  const said = h("span", { class: "why", text: RECENT_NEXT });
+  const line = h("div", { class: "adj", hidden: true },
+    h("label", { class: "why" }, "近", box, "天"), said);
+  const link = h("button", { class: "adj-lnk", type: "button", "aria-expanded": "false", text: "调" });
+  let saved = null;
+  const say = (text, cls = "why") => { said.className = cls; fill(said, text); };
+
+  link.addEventListener("click", async () => {
+    const opening = line.hidden;
+    line.hidden = !opening;
+    link.setAttribute("aria-expanded", String(opening));
+    if (!opening || saved !== null) return;
+    box.disabled = true;
+    try {
+      const cfg = await api.get("/api/config");
+      saved = Number((cfg.surfacing || {})[RECENT_DAYS]);
+      box.value = String(saved);
+      box.disabled = false;
+      box.focus();
+    } catch (e) { say(e && e.message ? e.message : String(e), "err"); }
+  });
+
+  box.addEventListener("change", async () => {
+    const raw = box.value.trim();
+    const v = Number(raw);
+    if (!raw || !Number.isFinite(v)) {
+      box.setAttribute("aria-invalid", "true");
+      say(`填 ${RECENT_RANGE[0]} 到 ${RECENT_RANGE[1]} 之间的天数`, "err");
+      return;
+    }
+    const days = Math.min(RECENT_RANGE[1], Math.max(RECENT_RANGE[0], Math.round(v)));
+    box.removeAttribute("aria-invalid");
+    box.value = String(days);
+    if (days === saved) { say(RECENT_NEXT); return; }
+    box.disabled = true;
+    try {
+      await api.post("/api/config", { surfacing: { [RECENT_DAYS]: days }, persist: true });
+      saved = days;
+      say(days === shownDays ? "存好了" : `存好了，${RECENT_NEXT}；上面这张还是上一次递出去的`);
+    } catch (e) { say(e && e.message ? e.message : String(e), "err"); }
+    box.disabled = false;
+  });
+
+  head.append(link);
+  head.after(line);
 }
 
 function tabs(on) {
@@ -122,10 +188,11 @@ async function renderBreath(view) {
   const rules = (core.rules || []).map((r) => entryRow(r, { why: whyOf(r) }));
 
   const rec = b.recent || {};
+  const recentTitle = rec.title || "近三天";
   const recentItems = rec.items || [];
   const card = rec.text
     ? h("p", { class: "c2 flat", text: squeezeRecent(rec.text) })
-    : recentItems.length ? null : h("p", { class: "why flat", style: { margin: "0" }, text: EMPTY_RECENT });
+    : recentItems.length ? null : h("p", { class: "why flat", style: { margin: "0" }, text: `${recentTitle.replace(/^近/, "这")}没存东西` });
   const offCard = recentItems.filter((it) => it.in_card === false).map((it) => entryRow(it, { why: whyOf(it, it.date) }));
   const recent = [card, offCard.length ? h("p", { class: "more", text: OFF_CARD }) : null, offCard];
 
@@ -149,11 +216,12 @@ async function renderBreath(view) {
   const [factsBlock, rulesBlock, recentBlock, , suddenBlock, movedBlock] = numberSubs([
     sub("档案", { tip: TIPS.facts }, facts),
     sub("原则", { tip: TIPS.rules }, rules, moreLine(core.rules_more)),
-    sub("近三天", { tip: TIPS.recent }, recent),
+    sub(recentTitle, { tip: recentTip(recentTitle) }, recent),
     planBlock,
     sub("忽然想起", { tip: TIPS.sudden }, sudden),
     movedRows.length ? sub("依据变了的", { tip: TIPS.moved }, movedRows, moreLine(moved.more)) : null,
   ]);
+  recentAdjust(recentBlock, rec.days);
 
   view.append(h("main", { class: "sections" },
     group("核心", {}, factsBlock, rulesBlock),

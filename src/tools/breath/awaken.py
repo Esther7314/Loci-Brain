@@ -17,7 +17,9 @@ Five blocks and a line, in this order:
    saying why it is here now (core/profile.prospective); then how many of the host's
    slices wait to be handled, and how many stretches of an imported conversation wait to
    be checked (core/import_memory.py).
-3. 近三天 — the overview from recall(when="3d"), free of charge.
+3. 近三天 — the overview from recall over the last `breath_recent_days` days (3 unless
+   set; the title names the window: 近七天), free of charge. The object carries the
+   window (`recent.days`), so the panel's copy renders its card over the same one.
 4. 忽然想起 (involuntary) — two old things coming back unbidden, each saying how
    (core/profile.involuntary).
 5. 依据变了的 (invalidation) — memories whose ground moved: a panel correction, a
@@ -40,7 +42,8 @@ the last two.
 
 Exports: build_breath() -> dict · render_breath(breath) -> str · stamp_asked(breath) ·
          block_ids(breath) · record_shown(breath, text) · keep_last(breath) ·
-         handed_out(breath, text) · surface_awaken() -> str · recent_card(rows) -> str
+         handed_out(breath, text) · surface_awaken() -> str · recent_title(days) -> str ·
+         recent_card(rows, days) -> str
 ========================================
 """
 
@@ -57,8 +60,8 @@ from core import _when as _w         # "today" as the user lives it (local timez
 from core import breath_snapshot as _snap
 from utils import panel_actor
 from core import scope as _scope
-from core.profile import (_PROFILE_TAG, breath_settings, door_note, involuntary,
-                          owed_names, prospective, reason_words, short_id)
+from core.profile import (_PROFILE_TAG, breath_settings, days_words, door_note, involuntary,
+                          near_days, owed_names, prospective, reason_words, short_id)
 from ..recall.core import entries_of, recall_core, recall_text_and_data
 
 # How many principle lines fit on the note by the door.
@@ -76,12 +79,21 @@ from ..recall.core import entries_of, recall_core, recall_text_and_data
 #    too small, or have I pinned too much.
 _RULES_ON_DOOR = 8
 
-TITLES = {"core": "核心（门口那张纸）", "prospective": "惦记的事", "recent": "近三天",
+# The recent block's title names its window (`recent_title`).
+TITLES = {"core": "核心（门口那张纸）", "prospective": "惦记的事",
           "involuntary": "忽然想起", "invalidation": "依据变了的"}
 
-# 近三天 is recall's overview of this window in this many cells: one card.
-RECENT_WHEN = "3d"
+# 近三天 is recall's overview of the last `days` days in this many cells: one card.
 _RECENT_CELLS = 1
+
+
+def recent_title(days: int) -> str:
+    """The recent block's title for a window of `days`: 近三天, 近七天."""
+    return near_days(days)
+
+
+def _recent_when(days: int) -> str:
+    return f"{int(days)}d"
 
 
 def _rule_text(content: str) -> str:
@@ -152,9 +164,11 @@ async def build_breath() -> dict:
     plan["slices_pending"] = await _slices.pending_seen() - imports
     plan["imports_pending"] = imports
 
-    mid = await recall_text_and_data(when=RECENT_WHEN, room="", tag="", query="",
+    days = settings.recent_window_days
+    mid = await recall_text_and_data(when=_recent_when(days), room="", tag="", query="",
                                      max_cells=_RECENT_CELLS, road=_V.RECENT)
-    recent = {"text": str(mid.get("card") or "") if mid.get("ok") else "",
+    recent = {"days": days,
+              "text": str(mid.get("card") or "") if mid.get("ok") else "",
               "items": [{"id": e["id"], "short": e["short"], "text": e["label"],
                          "date": e["date"]} for e in (mid.get("entries") or [])]}
 
@@ -175,15 +189,16 @@ async def build_breath() -> dict:
     }
 
 
-async def recent_card(rows: list) -> str:
-    """The 近三天 card over the given entries (store buckets), made the way
-    `build_breath` makes it — recall's overview for `RECENT_WHEN` in one cell — but from
-    these entries instead of the window's. The panel's breath page shows the entries a
-    breath named this way, read now (web/loci_mind.build_breath_last). "" for none."""
+async def recent_card(rows: list, days: int) -> str:
+    """The recent block's card over the given entries (store buckets), made the way
+    `build_breath` makes it — recall's overview of the last `days` days in one cell — but
+    from these entries instead of the window's. The panel's breath page shows the entries
+    a breath named this way, over the window that breath was handed out with, read now
+    (web/loci_mind.build_breath_last). "" for none."""
     entries = entries_of(rows)
     if not entries:
         return ""
-    return await recall_core(RECENT_WHEN, "", "", "", max_cells=_RECENT_CELLS,
+    return await recall_core(_recent_when(days), "", "", "", max_cells=_RECENT_CELLS,
                              collected=(entries, "", {}))
 
 
@@ -345,10 +360,11 @@ def render_breath(b: dict) -> str:
         parts.append(f"\n═══ {TITLES['prospective']} ═══")
         parts.extend(lines)
 
-    # ---- 3 近三天: recall's three-day overview (free of charge) ----
-    parts.append(f"\n═══ {TITLES['recent']} ═══")
+    # ---- 3 近三天: recall's overview of the block's window (free of charge) ----
+    days = _snap.recent_days(b)
+    parts.append(f"\n═══ {recent_title(days)} ═══")
     text = b["recent"]["text"]
-    parts.append(text if text and "没有东西" not in text else "（这三天没存东西）")
+    parts.append(text if text and "没有东西" not in text else f"（这{days_words(days)}天没存东西）")
 
     # ---- A long-term block —— not on this screen ----
     # Every memory entry is already a long-term memory, so "long term" was never a block of

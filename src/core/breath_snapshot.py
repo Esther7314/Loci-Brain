@@ -16,11 +16,12 @@ it said. Nothing here has to be cleared when a source is withdrawn.
 
 Two things the model read in that breath are text that is not kept, and are made again
 from the entries when the page is read:
-  · 近三天's card (recall's three-day overview). It names memories by their titles, so
-    keeping it would put this file among the places a source change has to clear. The
-    block's entry ids are kept instead, and the page renders the card from them now
-    (tools/breath/awaken.recent_card over `recent_rows`): the same overview, over the
-    entries that breath named — not a fresh three-day window. An entry the `recent` road
+  · 近三天's card (recall's overview of the block's window). It names memories by their
+    titles, so keeping it would put this file among the places a source change has to
+    clear. The block's entry ids and its window (`recent.days`, `recent_days`) are kept
+    instead, and the page renders the card from them now (tools/breath/awaken.recent_card
+    over `recent_rows`): the same overview over the same window, over the entries that
+    breath named — not a fresh window, and not today's setting. An entry the `recent` road
     no longer gives (deleted, archived, on a withdrawn source, gone, replaced by a newer
     version) is left out of the card; its item says what became of it (`state_words`,
     `in_card` false), never its old words.
@@ -35,7 +36,7 @@ host's request (a direct call).
 
 Exports: FILE · skeleton(breath) · save(base_dir, breath, *, host, scope_line, at) ·
          load(base_dir, host=None) · hosts(base_dir) · relabel(breath, all_buckets, scope=None) ·
-         recent_rows(breath, all_buckets, scope=None)
+         recent_days(breath) · recent_rows(breath, all_buckets, scope=None)
 ========================================
 """
 
@@ -55,6 +56,10 @@ from .ledger_mirror import file_lease
 FILE = "breath_last.json"
 _DIR = "_state"
 _VERSION = 1
+
+# The window of a breath whose recent block does not say one: such a breath was handed
+# out over three days.
+_UNSAID_RECENT_DAYS = 3
 
 
 def _path(base_dir: str) -> Path:
@@ -211,6 +216,19 @@ def _card_state(item: dict, row, scope) -> None:
     words = [_OFF_CARD_WORDS[r] for r in verdict.reasons if r in _OFF_CARD_WORDS]
     if words:
         item["state_words"] = "，".join(words)
+
+
+def recent_days(breath: dict) -> int:
+    """How many days the breath's recent block covered (`recent.days`); three when the
+    breath does not say."""
+    days = ((breath or {}).get("recent") or {}).get("days")
+    if isinstance(days, bool):
+        return _UNSAID_RECENT_DAYS
+    try:
+        days = int(days)
+    except (TypeError, ValueError):
+        return _UNSAID_RECENT_DAYS
+    return days if days >= 1 else _UNSAID_RECENT_DAYS
 
 
 def recent_rows(breath: dict, all_buckets: list, scope=None) -> list:
