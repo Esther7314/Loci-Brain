@@ -23,8 +23,8 @@ host reads too (panel_auth.HOST_READ_PATHS): a host's credential reads them unde
 scope, and `?fetch=` asks the serving host under that scope. The write goes through
 `_write_body` (same origin, JSON) and through the same tools the model uses.
 
-Also here: `correct_event`, the 内容错了 write that POST /api/loci/event/correct shares,
-and the request helper web/loci_names.py reads with (`read_scope_of`).
+Also here: `correct_event`, entry/fix's 内容错了 write, and the request helper
+web/loci_names.py reads with (`read_scope_of`).
 ========================================
 """
 

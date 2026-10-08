@@ -263,16 +263,6 @@ def replace_embedding_engine(engine) -> None:
             logger.warning("Failed to refresh embedding outbox engine", exc_info=True)
 
 
-# --- Injection slots for helpers defined in server.py (fire_webhook) and server_call.py
-#     (the deletion-notice shims); only a reference is held here ---
-# These functions read and write server.py globals such as the webhook state, so moving
-# them would cascade. They are injected instead. server.py calls init_runtime(...) to fill
-# them in once each has been defined.
-fire_webhook = None            # async def(event: str, payload: dict) -> None
-write_deletion_notice = None   # def(names: list) -> None
-pop_deletion_notice = None     # def() -> str
-
-
 # --- Dashboard auth constants ---
 # There is no panel cookie login, and /api/* is not authenticated at this layer.
 # **The password and login rate-limit family is here** because bridge/oauth.py's

@@ -250,5 +250,5 @@ def test_the_export_is_refused_to_another_site():
     assert _guard("/api/loci/export", [("sec-fetch-site", "same-origin")]) == 200
     assert _guard("/api/loci/export", [("origin", "http://127.0.0.1:18001")]) == 200
     assert _guard("/api/loci/export", []) == 200, "a script on the machine, no browser"
-    assert _guard("/api/loci/pulse", [("origin", "https://evil.example")]) == 200, \
+    assert _guard("/api/loci/health", [("origin", "https://evil.example")]) == 200, \
         "other reads keep today's rule"

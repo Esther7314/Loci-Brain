@@ -318,21 +318,12 @@ class BucketManager(
         self.dynamic_dir = os.path.join(self.base_dir, "dynamic")
         self.archive_dir = os.path.join(self.base_dir, "archive")
         self.feel_dir = os.path.join(self.base_dir, "feel")
-        self.fuzzy_threshold = config.get("matching", {}).get("fuzzy_threshold", 50)
         self.max_results = config.get("matching", {}).get("max_results", 5)
 
         # --- Search scoring weights ---
+        # A search score is two terms: semantic (embedding cosine similarity, only when
+        # embedding is enabled) and BM25 keyword matching.
         scoring = config.get("scoring_weights", {})
-        self.w_topic = scoring.get("topic_relevance", 4.0)
-        self.w_emotion = scoring.get("emotion_resonance", 2.0)
-        self.w_time = scoring.get("time_proximity", 1.5)
-        self.w_importance = scoring.get("importance", 1.0)
-        self.content_weight = scoring.get("content_weight", 1.0)  # body×1, per spec
-        # Two additional dimensions, touch and semantic:
-        # touch:    the more it has been deliberately recalled, the higher the score
-        #           (normalised, capped at 10 recalls)
-        # semantic: embedding cosine similarity (only when embedding is enabled)
-        self.w_touch = scoring.get("touch_weight", 1.0)
         self.w_semantic = scoring.get("semantic_weight", 2.5)
         # BM25: TF-IDF weighted keyword matching (rank_bm25 + jieba, both soft dependencies)
         self.w_bm25 = scoring.get("bm25_weight", 1.5)

@@ -129,7 +129,7 @@ class SearchMixin:
         # Narrowing to "the buckets present in embeddings.db" would filter out wholesale any
         # bucket lacking an embedding (the embed key failed at write time, or an old script
         # bulk-imported without backfilling vectors) as soon as the query matched any vector
-        # at all -> breath's retrieval counts would stop agreeing with pulse.
+        # at all -> breath's retrieval counts would stop agreeing with the store's own count.
         # So vector_scores feed Layer 2's semantic dimension and `candidates` is left
         # alone. A bucket with no embedding scores semantic_score=0 and can still be hit on
         # topic/emotion/time/importance.

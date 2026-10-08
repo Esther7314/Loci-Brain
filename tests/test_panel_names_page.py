@@ -15,7 +15,6 @@ WHAT IS AGREED
     table's normalising), paged. Every list pages by offset / limit / as_of: an entry
     written after `as_of` does not shift the pages. The buttons write aliases.yaml only —
     never an entry and never the ledger — and a write from another origin is refused.
-    The old paths (/api/loci/subjects, /subjects/action) keep working.
 """
 
 import asyncio
@@ -221,15 +220,6 @@ def test_the_actions_write_the_table_only_and_refuse_another_origin(store, route
                                                    "kind": "人"})[0] == 400
     # The table is not a memory: the ledger did not move.
     assert len(list(store.ledger_mirror.iter_events())) == n
-
-
-def test_the_old_subjects_paths_keep_working(store, routes):
-    entry(store, "阿哲今天又加班。", ["阿哲"])
-    status, out = get(routes, "/api/loci/subjects")
-    assert status == 200 and out["names"][0]["first_bucket"]
-    status, out = post(routes, "/api/loci/subjects/action",
-                       {"action": "rename", "name": "阿哲", "target": "张哲"})
-    assert status == 200 and out["changed"] is True
 
 
 def test_the_fixed_names_paths_are_matched_before_a_name(routes):

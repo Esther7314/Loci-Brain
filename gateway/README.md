@@ -424,7 +424,6 @@ if (提醒 && 提醒.patch) 自动贴.attach_at_true_tail(body.messages, 提醒.
 老的英文别名还在，指的是同一个函数（向后兼容，新写的直接用正式名）：
 
 ```js
-桥.paste({ ... })                       // = attach_once
 自动贴.computeReminder({ ... })          // = build_relevance_notice
 自动贴.appendToTail(messages, patch)     // = attach_at_true_tail
 ```

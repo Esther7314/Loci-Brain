@@ -9,7 +9,6 @@ request asks to wait). Nothing here writes a memory.
 
     POST /api/import/preflight   preview — read-only, writes nothing
     POST /api/import/upload      store the file as an import source, then draft it
-    GET  /api/import/status      progress of the job (or ?batch=imp_…) — the panel polls it
     GET  /api/import/batches     every import batch and where it stands
     POST /api/import/pause       stop drafting after the current conversation
     POST /api/import/withdraw    withdraw one whole batch: memories resting on it are
@@ -222,26 +221,11 @@ def register(mcp) -> None:
                                 first.get("last", ""))
                 + "\", view=\"original\")；搜词就 recall(query=\"词\", view=\"original\")。")
         if drafting == "background":
-            note += "候选在后台起草，进度看 /api/import/status。"
+            note += "候选在后台起草，进度看 /api/import/batches。"
         elif out.get("failures") or out.get("errors"):
             note += "起草有失败的（见 failures / errors），带 resume=1 重传接着起草。"
         return JSONResponse({"ok": True, **out, "resumed": resumed, "drafting": drafting,
                              "note": note})
-
-    @mcp.custom_route("/api/import/status", methods=["GET"])
-    async def api_import_status(request: Request) -> Response:
-        """Progress. The panel polls it and reads `is_running` to tell whether it has
-        finished; `status` says how drafting came out (a failure is never 「完成」)."""
-        eng = _engine()
-        if eng is None:
-            return JSONResponse({"is_running": False, "status": "engine_not_ready"})
-        try:
-            st = dict(eng.get_status(str(request.query_params.get("batch") or "").strip()))
-            st["is_running"] = bool(eng.is_running)
-            return JSONResponse(st)
-        except Exception as e:                      # noqa: BLE001
-            logger.warning("[import] status failed: " + str(e))
-            return JSONResponse({"error": str(e), "is_running": False}, status_code=500)
 
     @mcp.custom_route("/api/import/batches", methods=["GET"])
     async def api_import_batches(request: Request) -> Response:

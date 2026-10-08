@@ -3,7 +3,6 @@
 web/loci_dream.py — dreams and musing, for the bridge
 ========================================
 
-    GET  /api/muse/pending            -> is it time to muse? (cluster count + age + worth_poking)
     GET  /api/loci/poke               -> dream (delivery) + muse cluster count (nudge) + structured recall scores, all in one read-only call
     POST /api/loci/dream/wake         -> the demotion signal: drop a live "whole" dream
                                          layer down to the fragment layer (idempotent)
@@ -209,37 +208,13 @@ async def build_poke(query: str = "", when: str = "", room: str = "",
 
 
 # ---------------------------------------------------------
-# "Is it time to muse?" — the endpoint the host's wake-up leg asks
-# ---------------------------------------------------------
-async def api_muse_pending(request: Request) -> Response:
-    """Counts and ages, no content. **Deliberately not behind cookie auth.**
-
-    The caller is the gateway's wake-up leg — a separate process with no access to a
-    browser session — not a page the user is looking at. And what it hands back is three
-    numbers and a boolean: **not one character of it is memory.**
-    (On the same port, `/mcp` itself is reachable directly when `mcp_require_auth` is
-     false. This opens no new hole; it simply does not add a gate.)
-    """
-    from starlette.responses import JSONResponse
-    # Counts of the whole library: under a scope a count is a leak, so nothing.
-    withheld = _scope_withholds(request, "发呆")
-    if withheld is not None:
-        return withheld
-    try:
-        return JSONResponse(await build_muse_pending())
-    except Exception as e:
-        logger.warning(f"[loci] muse/pending 失败: {e}")
-        return JSONResponse({"error": str(e)}, status_code=500)
-
-
-# ---------------------------------------------------------
 # The nudge endpoint: dreams (delivery) + muse cluster count (the nudge) + structured
 # recall scores, all answered in one call.
 # The gateway asks once at the start of each window (on the `newWindow` signal, and not
 # again within the window).
 # GET, no side effects — **deliberately not behind cookie auth**, for the same reason as
-# `/api/muse/pending` and `/api/dream/current`: the caller is the bridge, a separate
-# process, not a page the user is looking at.
+# `/api/dream/current`: the caller is the bridge, a separate process, not a page the user
+# is looking at.
 # ---------------------------------------------------------
 async def api_loci_poke(request: Request) -> Response:
     """The read-only nudge endpoint. The store's fingerprint must be identical before and
@@ -276,8 +251,7 @@ async def api_loci_poke(request: Request) -> Response:
 # ---------------------------------------------------------
 # The demotion signal: the only way the whole-dream layer ever ends.
 # Nothing is added to or removed from the MCP tool surface — this is a new write endpoint
-# on a web route, in the same class as /api/loci/poke, /api/muse/pending and
-# /api/dream/current: the caller is the bridge, a process the gateway starts, not a
+# on a web route, in the same class as /api/loci/poke and /api/dream/current: the caller is the bridge, a process the gateway starts, not a
 # browser page. **Deliberately not behind cookie or same-origin auth** — that gate exists
 # to protect buttons on a page from cross-site requests, and a server-to-server request
 # from the bridge has no Origin to speak of.
@@ -338,7 +312,7 @@ async def api_dream_current(request: Request) -> Response:
     something in chat in the middle of the night is the bridge's job — this must not
     become an app that pushes.
 
-    **Deliberately not behind cookie auth**, for the same reason as `/api/muse/pending`:
+    **Deliberately not behind cookie auth**, for the same reason as `/api/loci/poke`:
     the caller is the bridge, a separate process with no browser session, and on the same
     port `/mcp` itself is already reachable without a token.
     """

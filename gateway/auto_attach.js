@@ -480,15 +480,6 @@ module.exports = {
   // not just the tests).
   attach_at_true_tail,
 
-// ── Deprecated aliases: the names these used to have. Gone in the next major. ────────
-// 🔴 Renaming the bindings to English is an internal matter, but these keys are **names
-//    other people type by hand after require()** — drop them and their code breaks on
-//    the spot, on a name they cannot type. One line each costs nothing.
-  默认地址: DEFAULT_ADDRESS,
-  默认日志档: DEFAULT_LOG_PATH,
-  强档关键词: STRONG_WORDS,
-  默认最低分: DEFAULT_MIN_SCORE,
-
 // ── Backward-compatible aliases ──────────────────────────────────────────────────────
 // 🔴 **Aliases only: each one points at the same function as its formal name.** The
 //    formal names are English already, so new code should use those directly —
@@ -499,7 +490,6 @@ module.exports = {
   computeReminder: build_relevance_notice,
   // appendToTail(messages, patch) — the last step, once the request body is assembled
   appendToTail: attach_at_true_tail,
-  // DEFAULT_ADDRESS / DEFAULT_MIN_SCORE / STRONG_WORDS are the formal names now, exported above.
 
   _internal: { make_client, latestUserText, strong_hits, weak_triggered, parse_score_line, build_notice_line },
 };

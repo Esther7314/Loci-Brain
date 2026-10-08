@@ -161,7 +161,7 @@ async def main():
 
     async def tool():
         return "tool output"
-    first = await server._with_notice(tool(), op="pulse")
+    first = await server._with_notice(tool(), op="tool")
     second = await server._with_notice(tool(), op="grow")
     print(json.dumps({"first": first, "second": second}, ensure_ascii=False))
 

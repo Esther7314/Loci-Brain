@@ -170,7 +170,7 @@ MUSE_DEFAULTS: dict = {
     "drift_min_items": 3,        # composition drift: minimum entries in a window before a centroid means anything
     "blank_min_items": 20,       # blank ledger: how many uncovered entries a stretch needs before it is worth noting
     "blank_gap_days": 3,         # blank ledger: a gap this long breaks the stretch in two
-    # ---- The tipping point for "is it time to muse" (read by `/api/muse/pending`;
+    # ---- The tipping point for "is it time to muse" (read by `/api/loci/poke`;
     #      **whether the user is idle, and how to nudge, belongs to the host**) ----
     # 🔴 Loci only exposes the query (count + age). What counts as idle, whether to nudge,
     #    and whether to stay quiet at night are the gateway's business.

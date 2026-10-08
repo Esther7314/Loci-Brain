@@ -1184,9 +1184,8 @@ class Dehydrator:
             name = metadata.get("name", "未命名")
             domains = ", ".join(metadata.get("domain", []))
             valence, arousal = self._clamp_va(metadata)
-            # The icons mean the same thing here as they do in pulse: 📌 is reserved for
-            # pinned or protected core buckets, everything else is distinguished by type,
-            # and an ordinary dynamic bucket gets 💭. Using 📌 unconditionally, as this once
+            # The icons: 📌 is reserved for pinned or protected core buckets, everything
+            # else is distinguished by type, and an ordinary dynamic bucket gets 💭. Using 📌 unconditionally, as this once
             # did, made every entry surfacing in breath look like a core rule, which
             # contradicts the convention in docs/CLAUDE_PROMPT.md that a 📌 marks a rule
             # that was pinned deliberately.

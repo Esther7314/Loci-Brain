@@ -68,9 +68,6 @@ _MAX_ENV_VALUE_CHARS = 8192
 # days; 0 turns that reason off. `hold_review_days` is how long a hold set aside with no
 # date waits before breath asks about it (core/_holds.review_days; 0 = never asks).
 _SURFACING_INTS = (
-    ("breath_max_results", 1, 50),
-    ("breath_max_tokens", 500, 20000),
-    ("feel_max_tokens", 500, 20000),
     ("awake_recent_days", 0, 365),
     ("awake_date_days", 0, 365),
     ("awake_cue_days", 0, 365),
@@ -78,7 +75,7 @@ _SURFACING_INTS = (
 )
 
 # muse's reminder (muse-settings 「提醒」): the numbers POST /api/config accepts in `muse`,
-# (key, lowest, highest), and the switch. /api/muse/pending reads all three
+# (key, lowest, highest), and the switch. /api/loci/poke reads all three
 # (web/loci_dream.build_muse_pending).
 _MUSE_INTS = (
     ("poke_min_clusters", 1, 99),
@@ -388,15 +385,11 @@ def register(mcp) -> None:
                 ],
             },
             "surfacing": {
-                "breath_max_results": int(sh.config.get("surfacing", {}).get("breath_max_results") or 20),
-                "breath_max_tokens": int(sh.config.get("surfacing", {}).get("breath_max_tokens") or 10000),
-                "feel_max_tokens": int(sh.config.get("surfacing", {}).get("feel_max_tokens") or 6000),
                 "awake_recent_days": awake.recent_days,
                 "awake_date_days": awake.date_days,
                 "awake_cue_days": awake.cue_days,
                 "hold_review_days": _holds.review_days(sh.config),
             },
-            "merge_threshold": sh.config.get("merge_threshold", 75),
             "muse": _muse_view(sh.config),
             "dream": _dream_view(sh.config),
             # The similarity lines as they run now, each with its default and range, and
@@ -572,21 +565,6 @@ def register(mcp) -> None:
                         {"error": f"unsupported embedding backend: {backend_raw}"},
                         status_code=400,
                     )
-            sampling_payload = None
-            if isinstance(body.get("surfacing"), dict):
-                candidate = body["surfacing"].get("sampling")
-                if candidate is not None and not isinstance(candidate, dict):
-                    return JSONResponse(
-                        {"error": "surfacing.sampling must be an object"},
-                        status_code=400,
-                    )
-                sampling_payload = candidate
-            sampling_enabled = (
-                _parse_bool(sampling_payload["enabled"])
-                if isinstance(sampling_payload, dict)
-                and "enabled" in sampling_payload
-                else None
-            )
         except ValueError as e:
             return JSONResponse({"error": str(e)}, status_code=400)
 
@@ -761,14 +739,6 @@ def register(mcp) -> None:
                 sh.config[_k] = _v
                 updated.append(_k)
 
-        # --- Merge threshold ---
-        if "merge_threshold" in body:
-            try:
-                sh.config["merge_threshold"] = int(body["merge_threshold"])
-                updated.append("merge_threshold")
-            except (TypeError, ValueError):
-                pass
-
         # The MCP auth switch, the auth mode and the public URL are all start-time
         # snapshots. They are written to config.yaml only, and must not be published early
         # into sh.config — otherwise the OAuth/MCP middleware keeps using its old closure
@@ -804,7 +774,7 @@ def register(mcp) -> None:
                     updated.append(f"surfacing.{key}")
 
         # --- muse's reminder: applied to the running config, so the next
-        # /api/muse/pending reads it ---
+        # /api/loci/poke reads it ---
         if muse_changes:
             section = sh.config.get("muse")
             if not isinstance(section, dict):
@@ -895,12 +865,6 @@ def register(mcp) -> None:
                     if _k in body:
                         save_config[_k] = str(body.get(_k) or "").strip()[:40]
 
-                if "merge_threshold" in body:
-                    try:
-                        save_config["merge_threshold"] = int(body["merge_threshold"])
-                    except (TypeError, ValueError):
-                        pass
-
                 if mcp_auth_value is not None:
                     save_config["mcp_require_auth"] = mcp_auth_value
 
@@ -919,25 +883,6 @@ def register(mcp) -> None:
                         sc_sf = {}
                         save_config["surfacing"] = sc_sf
                     sc_sf.update(surfacing_ints)
-                    if "sampling" in body["surfacing"] and isinstance(body["surfacing"]["sampling"], dict):
-                        sc_samp = sc_sf.setdefault("sampling", {})
-                        if not isinstance(sc_samp, dict):
-                            sc_samp = {}
-                            sc_sf["sampling"] = sc_samp
-                        src_samp = body["surfacing"]["sampling"]
-                        if sampling_enabled is not None:
-                            sc_samp["enabled"] = sampling_enabled
-                        for key in ("top_k", "sample_k"):
-                            if key in src_samp:
-                                try:
-                                    sc_samp[key] = int(src_samp[key])
-                                except (TypeError, ValueError):
-                                    pass
-                        if "temperature" in src_samp:
-                            try:
-                                sc_samp["temperature"] = float(src_samp["temperature"])
-                            except (TypeError, ValueError):
-                                pass
 
                 if muse_changes:
                     sc_muse = save_config.get("muse")

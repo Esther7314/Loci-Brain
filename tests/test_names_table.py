@@ -291,6 +291,12 @@ def test_rename_to_a_new_spelling_creates_the_entry(table):
     assert S.merge_names("SJ", "Sarah Jones") is False
 
 
+def _subjects(mgr) -> dict:
+    """What the names page counts over (core/census.subjects), over the live store."""
+    from core import census
+    return census.subjects(asyncio.run(mgr.list_all(include_archive=False)))
+
+
 def test_the_panel_merge_and_rename_actions_fold_names(table, tmp_path, monkeypatch):
     from starlette.requests import Request
     from core.bucket_manager import BucketManager
@@ -306,7 +312,7 @@ def test_the_panel_merge_and_rename_actions_fold_names(table, tmp_path, monkeypa
                 return fn
             return keep
     W.register(_Mcp())
-    action = routes[("/api/loci/subjects/action", "POST")]
+    action = routes[("/api/loci/names/action", "POST")]
 
     def post(body: dict) -> dict:
         raw = json.dumps(body).encode()
@@ -323,20 +329,19 @@ def test_the_panel_merge_and_rename_actions_fold_names(table, tmp_path, monkeypa
     mgr = BucketManager({"buckets_dir": str(tmp_path / "buckets")})
     monkeypatch.setattr(sh, "bucket_mgr", mgr)
     asyncio.run(mgr.create("x", tags=["t"], subjects=["Michael Chen", "Mike Chen", "Sarah"]))
-    assert len(asyncio.run(W.build_subjects())["names"]) == 3
+    assert len(_subjects(mgr)["names"]) == 3
 
     # The case add_alias refuses: the name being merged is a key of its own.
     out = post({"action": "merge", "name": "Michael Chen", "target": "Mike Chen"})
     assert out["status"] == 200 and out["changed"] is True, out
-    rows = {r["name"]: r for r in asyncio.run(W.build_subjects())["names"]}
+    rows = {r["name"]: r for r in _subjects(mgr)["names"]}
     assert set(rows) == {"Mike Chen", "Sarah"}
     assert rows["Mike Chen"]["n"] == 1 and rows["Mike Chen"]["kind"] == "人"
     assert rows["Mike Chen"]["variants"] == ["Michael Chen"]
 
     out = post({"action": "rename", "name": "Sarah", "target": "Sarah Jones"})
     assert out["status"] == 200 and out["changed"] is True, out
-    assert {r["name"] for r in asyncio.run(W.build_subjects())["names"]} == \
-        {"Mike Chen", "Sarah Jones"}
+    assert {r["name"] for r in _subjects(mgr)["names"]} == {"Mike Chen", "Sarah Jones"}
     out = post({"action": "merge", "name": "Sarah Jones", "target": "Sarah Jones"})
     assert out["status"] == 400
 
@@ -344,15 +349,12 @@ def test_the_panel_merge_and_rename_actions_fold_names(table, tmp_path, monkeypa
 @pytest.mark.parametrize("shape", ["legacy", "mapping"])
 def test_the_panel_names_screen_reads_either_shape(table, tmp_path, monkeypatch, shape):
     from core.bucket_manager import BucketManager
-    from web import _shared as sh
-    from web import loci as W
 
     table(LEGACY if shape == "legacy" else NEW)
     mgr = BucketManager({"buckets_dir": str(tmp_path / "buckets")})
-    monkeypatch.setattr(sh, "bucket_mgr", mgr)
     asyncio.run(mgr.create("x", tags=["t"], subjects=["Mike", "RK800", "teacher"]))
-    out = asyncio.run(W.build_subjects())
-    json.dumps(out)                   # the route returns it as JSON
+    out = _subjects(mgr)
+    json.dumps(out)                   # the names routes return what they build from it as JSON
     rows = {r["name"]: r for r in out["names"]}
     assert out["blocked"] == [{"name": "teacher", "n": 1}]
     if shape == "legacy":

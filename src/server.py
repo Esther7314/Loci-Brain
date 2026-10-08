@@ -13,15 +13,12 @@ Key behaviour:
   server_tools/<tool>.py; the real implementations live under src/tools/<tool>/. This file
   mounts them in the table below, then runs each face's adapt() and the strict-argument
   sweep.
-  `pulse` is implemented under `tools/pulse/` but is not an MCP tool; the panel reaches it
-  through `GET /api/loci/pulse`.
 - Every tool call goes through server_call._with_notice (who is calling, the three log
   phases, notices, OB-E004, the poke line); this file binds it to `mcp` and the store.
 - Every dashboard and HTTP route has been split out into src/web/<domain>.py, each module
   exposing register(mcp). This file only calls web.register_all(mcp) at startup; the
   shared dependencies are in web/_shared.py.
-- Still here: process startup, engine initialization, webhook delivery, and bringing up
-  uvicorn (the HTTP app with its MCP Bearer auth middleware is server_app.py).
+- Still here: process startup, engine initialization, and bringing up uvicorn (the HTTP app with its MCP Bearer auth middleware is server_app.py).
 
 What this does NOT do (the boundary):
 - No business logic for the individual tools; all of that lives under tools/*.
@@ -42,9 +39,6 @@ HTTP routes are in src/web/*.
 import os
 import sys
 import logging
-import time
-
-import httpx
 
 
 # --- Ensure same-directory modules can be imported ---
@@ -74,10 +68,8 @@ from server_tools import trace as _face_trace
 import server_call as _call
 from server_call import (  # noqa: F401 — _with_notice and _run_with_notice are reached on server
     _hosts,
-    _pop_deletion_notice,
     _run_with_notice,
     _with_notice,
-    _write_deletion_notice,
 )
 
 # --- Load config & init logging ---
@@ -131,7 +123,7 @@ except Exception as _e:  # pragma: no cover - defensive
     # No startup check may prevent the service from coming up; log a warning and move on.
     logger.warning(f"[migration] check skipped: {_e}")
 
-# --- Runtime env vars (port + webhook) ---
+# --- Runtime env vars (port + bind host) ---
 # LOCI_PORT: the HTTP/SSE listen port, default 18001.
 # Docker: compose sets LOCI_PORT=8000 explicitly to keep the in-container port at 8000, and
 # a host port mapping of 18001:8000 exposes 18001. Bare metal listens on 18001 directly.
@@ -151,50 +143,8 @@ except (ValueError, TypeError):
 # with LOCI_BIND_HOST=127.0.0.1.
 _BIND_HOST = (os.environ.get("LOCI_BIND_HOST") or "0.0.0.0").strip() or "0.0.0.0"  # nosec B104
 
-# LOCI_HOOK_URL: after breath/dream is called, POST the event as JSON to this URL.
-# LOCI_HOOK_SKIP: set to true/1/yes to skip the push. See ENV_VARS.md.
-# _fire_webhook reads os.environ on every call rather than caching a module constant, so a
-# change to the environment takes effect on the next call with no module global to update.
 
-
-# ============================================================
-# Tunable constants
-# ------------------------------------------------------------
-# No bare magic numbers: every threshold that gets tuned is gathered here.
-# Do not change security-, auth- or performance-related values at runtime; if one is
-# adjusted, run pytest alongside.
-# ============================================================
-
-# --- Webhook / HTTP client timeout ---
-_WEBHOOK_TIMEOUT_SECONDS = 5.0
-
-# --- The panel's password and login rate-limit constants live in web/_shared.py ---
-
-
-async def _fire_webhook(event: str, payload: dict) -> None:
-    """
-    Fire-and-forget POST to LOCI_HOOK_URL with the given event payload.
-    Failures are logged at WARNING level only — never propagated to the caller.
-    """
-    hook_url = os.environ.get("LOCI_HOOK_URL", "").strip()
-    hook_skip = os.environ.get("LOCI_HOOK_SKIP", "").strip().lower() in ("1", "true", "yes", "on")
-    if hook_skip or not hook_url:
-        return
-    if not hook_url.startswith(("http://", "https://")):
-        logger.warning("LOCI_HOOK_URL rejected: only http/https URLs are allowed")
-        return
-    try:
-        body = {
-            "event": event,
-            "timestamp": time.time(),
-            "payload": payload,
-        }
-        async with httpx.AsyncClient(timeout=_WEBHOOK_TIMEOUT_SECONDS) as client:
-            await client.post(hook_url, json=body)
-    except Exception as e:
-        # Webhook credentials commonly live in the URL path/query.  Never put
-        # either the configured URL or httpx's URL-bearing exception text in logs.
-        logger.warning("Webhook push failed (%s): %s", event, type(e).__name__)
+# The panel's password and login rate-limit constants live in web/_shared.py.
 
 # --- Initialize core components ---
 # The unified error-code system. It must be configured before any business initialization,
@@ -301,7 +251,7 @@ _web.register_all(mcp)
 
 
 # =============================================================
-# The panel page and its assets (/loci, /loci/panel/*, /loci/vendor/*) are served by web/loci.py.
+# The panel page and its assets (/loci, /loci/panel/*) are served by web/loci.py.
 # =============================================================
 
 
@@ -310,18 +260,6 @@ _web.register_all(mcp)
 # context, and the poke line from the store.
 # =============================================================
 _call.bind(mcp, bucket_mgr)
-
-
-# _fire_webhook is defined here and the retired hard-delete notice shims in server_call;
-# web/'s hooks and buckets routes need them, so they are injected into web._shared, where
-# the routes reach them as sh.fire_webhook and friends.
-
-
-_wsh.init_runtime(
-    fire_webhook=_fire_webhook,
-    write_deletion_notice=_write_deletion_notice,
-    pop_deletion_notice=_pop_deletion_notice,
-)
 
 
 # =============================================================
@@ -344,7 +282,6 @@ _core_runtime.init(
     embedding_outbox=embedding_outbox,
     import_engine=import_engine,
     logger=logger,
-    fire_webhook=_fire_webhook,
 )
 
 
@@ -370,11 +307,10 @@ trace = mcp.tool()(_face_trace.trace)
 _face_trace.adapt(mcp)
 
 
-# `pulse` is not on the MCP tool surface.
-#    The reasoning: the other tools are all "what am I doing to a memory", and this one
-#    alone is "is this machine healthy" — a health check is not a memory action, and should
-#    not occupy a tool slot. The implementation is in `tools/pulse/`, reached through the
-#    panel's read-only `GET /api/loci/pulse` (see web/loci_health.py).
+# **There is no health-check tool.**
+#    The reasoning: the tools are all "what am I doing to a memory"; "is this machine
+#    healthy" is not a memory action, and should not occupy a tool slot. The machine's
+#    health is the panel's health page (`GET /api/loci/health`, web/loci_health.py).
 
 
 # --- Every registered tool refuses removed parameters ------------------------------------
@@ -421,8 +357,8 @@ except (AttributeError, RuntimeError, TypeError, ValueError) as _strict_all_exc:
 #                      /api/loci/ollama
 #   web/import_api.py  /api/import/*
 #   web/panel_auth.py  /auth/*
-#   web/loci.py        the page (/loci, /loci/panel/*, /loci/vendor/*), /api/loci/*, /api/v2/*, /api/logs,
-#                      /api/dream/current, /api/muse/pending — its header lists every one
+#   web/loci.py        the page (/loci, /loci/panel/*), /api/loci/*, /api/v2/*, /api/logs,
+#                      /api/dream/current — its header lists every one
 # =============================================================
 
 

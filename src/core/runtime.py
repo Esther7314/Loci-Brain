@@ -24,11 +24,11 @@ What this file deliberately does not do:
 - No thread-safety guards: the write happens once, during server.py startup
 
 Exports: init() / config / bucket_mgr / dehydrator / decay_engine /
-         embedding_engine / import_engine / logger / fire_webhook
+         embedding_engine / embedding_outbox / import_engine / logger
 ========================================
 """
 
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any
 
 # --- Shared object references, injected by server.py at startup via init(...) ---
 config: Any = None
@@ -39,9 +39,6 @@ embedding_engine: Any = None
 embedding_outbox: Any = None
 import_engine: Any = None
 logger: Any = None
-
-# --- Shared helper callbacks (also injected by server.py, to avoid a back-import) ---
-fire_webhook: Optional[Callable[[str, dict], Awaitable[None]]] = None
 
 
 def init(**kwargs: Any) -> None:

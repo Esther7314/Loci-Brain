@@ -3,10 +3,11 @@
 core/census.py — counts over the live store: what is in each room, who is in here
 ========================================
 
-Two of the panel's reads are counts over one listing of the live store
+The panel's reads here are counts over one listing of the live store
 (`list_all(include_archive=False)`): the directory both doors open onto
-(GET /api/loci/rooms) and the "who is in here" screen (GET /api/loci/subjects). The
-route lists the store and turns the dict into JSON; the counting is here.
+(GET /api/loci/rooms) and "who is in here" (`subjects`, which the names page and the
+pending names count over). The route lists the store and turns the dict into JSON; the
+counting is here.
 
 Both measure the way recall does: the timeline gate (`core/visibility.on_timeline`)
 filters first, so the number on the panel is the number the model sees on waking.
@@ -23,7 +24,7 @@ only entries written before `as_of` so a page does not shift while it is read
 `name_action` is the one way the names page's buttons write: it goes through
 core/names (aliases.yaml only, never an entry) and says what it did in words.
 
-Exports: rooms(all_buckets) · subjects(all_buckets) · written_before ·
+Exports: rooms(all_buckets) · subjects(all_buckets) · node_ts(meta) · written_before ·
          names_page · pending_names · name_card · NAME_ACTIONS · name_action
 ========================================
 """
@@ -31,11 +32,25 @@ Exports: rooms(all_buckets) · subjects(all_buckets) · written_before ·
 from collections import Counter
 from datetime import datetime
 
+from . import _when as _w
 from . import names as subj
 from ._rooms import ALL_ROOMS, normalize_room, room_cn
 from .paging import PAGE_LIMIT, cut, page
-from .starfield import node_ts
 from .visibility import on_timeline
+
+
+def node_ts(meta: dict) -> datetime | None:
+    """When an entry happened: `when` first, `created` as fallback — the same rule recall
+    uses.
+
+    It goes through `core/_when`, the same ruler recall uses, and returns timezone-aware
+    local time (never a `[:19]` slice, which cuts off the Z or the +08:00 offset).
+    """
+    for k in ("when", "created"):
+        ts = _w.parse_stamp(meta.get(k))
+        if ts is not None:
+            return ts
+    return None
 
 
 def rooms(all_buckets: list, scope=None) -> dict:

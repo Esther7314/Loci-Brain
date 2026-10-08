@@ -52,9 +52,9 @@ What counts as an offence, and what deliberately does not
                   mistaken for names) and JavaScript approximately (declaration forms
                   only; JS has no parser here).
 
-                  The most valuable ones it catches are the exported constants —
-                  `默认地址`, `强档关键词` — because those are not internal at all: they
-                  are names a stranger types after `require(...)`.
+                  The most valuable ones it catches are exported constants (a
+                  `默认地址`, say), because those are not internal at all: they are
+                  names a stranger types after `require(...)`.
     filenames     same reasoning, one level up.
     personal      references to the one person this system was built for. A stranger
                   does not know who that is, so to them it is noise — and it is a real

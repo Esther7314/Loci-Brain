@@ -35,9 +35,9 @@ def routes(tmp_path, monkeypatch):
     from web import panel_auth as PA
 
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("merge_threshold: 75\n", encoding="utf-8")
+    config_path.write_text("host_port: 18001\n", encoding="utf-8")
     monkeypatch.setenv("LOCI_CONFIG_PATH", str(config_path))
-    config = {"buckets_dir": str(tmp_path), "transport": "stdio", "merge_threshold": 75,
+    config = {"buckets_dir": str(tmp_path), "transport": "stdio", "host_port": 18001,
               "dehydration": {"api_key": "sk-test-0000", "base_url": "http://127.0.0.1:9/v1",
                               "model": "m"}}
     monkeypatch.setattr(sh, "config", config)
@@ -83,34 +83,34 @@ GUARDED = ["/api/config", "/api/test/dehydration", "/api/test/embedding", "/api/
 
 @pytest.mark.parametrize("path", GUARDED)
 def test_another_port_on_the_same_machine_is_refused(routes, path):
-    status, out = _post(routes, path, {"merge_threshold": 10, "api_key": "x"},
+    status, out = _post(routes, path, {"host_port": 10, "api_key": "x"},
                         origin=OTHER_PORT)
     assert status == 403
     assert "Origin" in out["error"]
-    assert routes["config"]["merge_threshold"] == 75
+    assert routes["config"]["host_port"] == 18001
 
 
 @pytest.mark.parametrize("path", GUARDED)
 def test_a_post_without_origin_is_refused(routes, path):
-    status, _ = _post(routes, path, {"merge_threshold": 10}, origin=None)
+    status, _ = _post(routes, path, {"host_port": 10}, origin=None)
     assert status == 403
-    assert routes["config"]["merge_threshold"] == 75
+    assert routes["config"]["host_port"] == 18001
 
 
 @pytest.mark.parametrize("path", GUARDED)
 def test_a_text_plain_body_is_refused(routes, path):
-    status, out = _post(routes, path, {"merge_threshold": 10}, content_type="text/plain")
+    status, out = _post(routes, path, {"host_port": 10}, content_type="text/plain")
     assert status == 400
     assert "application/json" in out["error"]
-    assert routes["config"]["merge_threshold"] == 75
+    assert routes["config"]["host_port"] == 18001
 
 
 def test_same_origin_config_post_is_applied(routes):
-    status, out = _post(routes, "/api/config", {"merge_threshold": 80})
+    status, out = _post(routes, "/api/config", {"host_port": 80})
     assert status == 200, out
     assert out["ok"] is True
-    assert "merge_threshold" in out["updated"]
-    assert routes["config"]["merge_threshold"] == 80
+    assert "host_port" in out["updated"]
+    assert routes["config"]["host_port"] == 80
 
 
 def test_same_origin_tests_and_models_reach_their_route(routes):

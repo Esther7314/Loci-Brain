@@ -1,15 +1,14 @@
 """
 ========================================
-web/loci_pages.py — the panel page itself, its modules, and the three.js it loads
+web/loci_pages.py — the panel page itself and its modules
 ========================================
 
     GET  /loci                        -> frontend/loci.html, with the AI's name filled in
     GET  /loci/panel/{path:path}      -> the panel's ES modules and stylesheet (frontend/panel)
-    GET  /loci/vendor/{path:path}     -> three.js, served locally, which the starfield page needs
 
-The two asset routes are public (panel_auth._PUBLIC_PREFIXES): the login page is itself one
-of the panel's modules, so they have to load before anyone is logged in. They hold code and
-no data.
+The asset route is public (panel_auth._PUBLIC_PREFIXES): the login page is itself one of
+the panel's modules, so they have to load before anyone is logged in. It holds code and no
+data.
 ========================================
 """
 
@@ -57,7 +56,7 @@ async def loci_panel_asset(request: Request) -> Response:
 
     Served no-cache, like the page: the modules import one another by plain relative
     paths with no version in them, so a cached module from before an update would run
-    against the new ones. The same traversal rule as `loci_vendor`."""
+    against the new ones. No path from the request is trusted (`_inside`)."""
     from starlette.responses import JSONResponse
     rel = str(request.path_params.get("path") or "")
     ext = os.path.splitext(rel)[1].lower()
@@ -72,30 +71,3 @@ async def loci_panel_asset(request: Request) -> Response:
     except OSError:
         return JSONResponse({"error": "not found"}, status_code=404)
 
-
-async def loci_vendor(request: Request) -> Response:
-    """Locally served three.js, which the starfield page needs.
-
-    The memory-starmap this was based on pulls three from a CDN at page load, so with no
-    network it is just a black screen. The whole memory system runs on the user's own
-    machine, and the starfield should not be the one place that breaks when the network
-    does — so the library was vendored locally.
-
-    Security: only .js is served, and no string from the request is ever concatenated
-    into a path directly. After realpath it must still be inside the vendor directory,
-    or this becomes the ?path=../../../etc/passwd kind of traversal.
-    """
-    from starlette.responses import Response as _Resp, JSONResponse
-    rel = str(request.path_params.get("path") or "")
-    if not rel.endswith(".js"):
-        return JSONResponse({"error": "not found"}, status_code=404)
-    root = os.path.realpath(os.path.join(sh.repo_root, "frontend", "vendor"))
-    target = os.path.realpath(os.path.join(root, rel))
-    if target != root and not target.startswith(root + os.sep):
-        return JSONResponse({"error": "not found"}, status_code=404)
-    try:
-        with open(target, "rb") as f:
-            return _Resp(f.read(), media_type="text/javascript",
-                         headers={"Cache-Control": "public, max-age=604800"})
-    except OSError:
-        return JSONResponse({"error": "not found"}, status_code=404)

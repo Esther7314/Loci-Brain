@@ -70,7 +70,7 @@ def _score_tag(e: dict) -> str:
     return f" {float(s):.2f}"
 
 
-# The display text for a memory (core/profile.label_of); the starfield shows the same.
+# The display text for a memory (core/profile.label_of).
 _label_of = _P.label_of
 
 

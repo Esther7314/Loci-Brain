@@ -26,10 +26,10 @@ def world(tmp_path, monkeypatch):
     from web import panel_auth as PA
 
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("surfacing:\n  breath_max_results: 20\n", encoding="utf-8")
+    config_path.write_text("surfacing:\n  involuntary_lines: 2\n", encoding="utf-8")
     monkeypatch.setenv("LOCI_CONFIG_PATH", str(config_path))
     config = {"buckets_dir": str(tmp_path), "transport": "stdio",
-              "surfacing": {"breath_max_results": 20}}
+              "surfacing": {"involuntary_lines": 2}}
     monkeypatch.setattr(sh, "config", config)
     monkeypatch.setattr(PA, "gate_needed", lambda: False)
 
@@ -85,7 +85,7 @@ def test_the_three_are_set_live_and_persisted(world):
     assert saved["surfacing"]["awake_recent_days"] == 5
     assert saved["surfacing"]["awake_date_days"] == 14
     assert saved["surfacing"]["awake_cue_days"] == 2
-    assert saved["surfacing"]["breath_max_results"] == 20
+    assert saved["surfacing"]["involuntary_lines"] == 2
 
     status, out = world["call"]("GET", "/api/config")
     assert out["surfacing"]["awake_date_days"] == 14
@@ -93,15 +93,15 @@ def test_the_three_are_set_live_and_persisted(world):
 
 def test_out_of_range_is_clamped_and_the_clamped_value_is_persisted(world):
     status, out = world["call"]("POST", "/api/config", {"persist": True, "surfacing": {
-        "awake_recent_days": -3, "awake_cue_days": 100000, "breath_max_results": 999}})
+        "awake_recent_days": -3, "awake_cue_days": 100000, "hold_review_days": 999}})
     assert status == 200, out
     sf = world["config"]["surfacing"]
     assert sf["awake_recent_days"] == 0
     assert sf["awake_cue_days"] == 365
-    assert sf["breath_max_results"] == 50
+    assert sf["hold_review_days"] == 365
     saved = yaml.safe_load(world["config_path"].read_text(encoding="utf-8"))["surfacing"]
     assert (saved["awake_recent_days"], saved["awake_cue_days"],
-            saved["breath_max_results"]) == (0, 365, 50)
+            saved["hold_review_days"]) == (0, 365, 365)
 
 
 def test_a_value_that_is_not_a_number_is_skipped(world):

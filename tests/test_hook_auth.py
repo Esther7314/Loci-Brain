@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Unit tests for the bridge-token gate on the four hook routes.
+"""Unit tests for the bridge-token gate on the three hook routes.
 
-BACKGROUND — why these four routes are special
-    The panel is protected by a password. Four routes were not, and could not be,
+BACKGROUND — why these three routes are special
+    The panel is protected by a password. Three routes were not, and could not be,
     because the caller is a separate process (the bridge) that has no browser cookie:
 
         GET  /api/loci/poke
-        GET  /api/muse/pending
         GET  /api/dream/current
         POST /api/loci/dream/wake
 
@@ -14,7 +13,7 @@ BACKGROUND — why these four routes are special
     the bridge really has no cookie — but the remedy took the door off its hinges
     instead of cutting the bridge a key. An external review demonstrated the
     consequence on a running instance: with the panel password set and every other
-    route returning 401, these four still served dream text and still mutated state
+    route returning 401, these three still served dream text and still mutated state
     (`dream/wake` advances the lifecycle and bumps the recall counter).
 
     On a machine bound to loopback that is close to harmless. Behind a tunnel, a
@@ -25,7 +24,7 @@ THE RULE THIS FILE GUARDS
     Once the door is locked, there are no exceptions.
 
         door unlocked (no panel password)  -> everything through, as before
-        door locked                        -> these four need the key, in a header
+        door locked                        -> these three need the key, in a header
 
     Fail closed: door locked and no key configured means refuse. A lock that only
     exists when the config happens to be right is not a lock — and "the config was
@@ -69,12 +68,11 @@ def with_key(monkeypatch, value):
 
 # ───────────────────────── which routes are which ─────────────────────────
 
-def test_the_four_hook_routes_are_no_longer_on_the_public_list():
+def test_the_three_hook_routes_are_no_longer_on_the_public_list():
     # The whole defect was these sitting in PUBLIC_PATHS. If anyone moves one back
     # to make a client "just work" again, that is the bug returning, and it returns
     # silently — nothing errors, the route simply stops asking.
-    for path in ("/api/loci/poke", "/api/muse/pending",
-                 "/api/dream/current", "/api/loci/dream/wake"):
+    for path in ("/api/loci/poke", "/api/dream/current", "/api/loci/dream/wake"):
         assert PA.is_hook(path), f"{path} should be a hook route"
         assert path not in PA.PUBLIC_PATHS, f"{path} is public again — that is the bug"
 
@@ -91,9 +89,9 @@ def test_an_ordinary_api_route_is_neither():
     # Ordinary routes must keep going through the cookie gate. If one of them
     # drifted into the hook set it would start accepting the bridge token instead
     # of a login — a downgrade dressed up as a fix.
-    assert not PA.is_hook("/api/loci/graph")
-    assert not PA.is_public("/api/loci/graph")
-    assert not PA.is_host_read("/api/loci/graph")
+    assert not PA.is_hook("/api/loci/similar")
+    assert not PA.is_public("/api/loci/similar")
+    assert not PA.is_host_read("/api/loci/similar")
     # recall is a host read (decision Q1): a host's credential reads it under its scope,
     # but without one it is still the panel's, behind the login — not a hook route.
     assert PA.is_host_read("/api/loci/recall") and not PA.is_hook("/api/loci/recall")

@@ -321,8 +321,6 @@ def test_a_dream_with_nothing_withdrawn_in_the_window_is_saved(library, monkeypa
     assert out is not None and [r["id"] for r in D.load_dreams()] == [out["id"]]
 
 
-BIG = "风车周末"
-
 
 async def _projections(store, e, d) -> dict:
     """What the panel's background projections give of the two memories."""
@@ -333,20 +331,15 @@ async def _projections(store, e, d) -> dict:
     from web import loci_reads as LR
     now = W.now()
     rows = await store.list_all(include_archive=False)
-    graph = await LR.build_graph()
     rooms = await LR.build_rooms()
     today = GV.written_since(rows, now - timedelta(days=1), now=now, offset=0, limit=50,
                              as_of=now + timedelta(minutes=1))
-    return {"stars": {n["id"] for n in graph["nodes"]},
-            "graph": json.dumps(graph, ensure_ascii=False),
-            "rooms": {r["room"]: r["n"] for door in rooms["doors"].values() for r in door},
+    return {"rooms": {r["room"]: r["n"] for door in rooms["doors"].values() for r in door},
             "today": json.dumps(today, ensure_ascii=False)}
 
 
 def test_the_projections_show_nothing_resting_on_a_source_in_the_window(library):
     store, e, d = library
-    asyncio.run(store.create(f"{BIG}：和小周去看风车\n周六出发", room="EVENT/WORLD",
-                             tags=["__大event__"], when="2026-10-03..", sources=[M]))
 
     async def main():
         before = await _projections(store, e, d)
@@ -357,12 +350,10 @@ def test_the_projections_show_nothing_resting_on_a_source_in_the_window(library)
         return before, during, after
 
     before, during, after = asyncio.run(main())
-    # Positive control: before the change both memories are drawn, counted and listed.
-    assert {e, d} <= before["stars"] and BIG in before["graph"]
+    # Positive control: before the change both memories are counted and listed.
     assert before["rooms"]["EVENT/WORLD"] == 1 and before["rooms"]["MIND/TRAITS"] == 1
     assert OWN in before["today"] and GREW in before["today"]
     for got in (during, after):
-        assert not {e, d} & got["stars"]
-        for word in (OWN, GREW, BIG):
-            assert word not in got["graph"] and word not in got["today"], word
+        for word in (OWN, GREW):
+            assert word not in got["today"], word
         assert got["rooms"]["EVENT/WORLD"] == 0 and got["rooms"]["MIND/TRAITS"] == 0

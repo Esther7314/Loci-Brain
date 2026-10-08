@@ -1,13 +1,12 @@
 """
 ========================================
-web/loci_health.py — the health check, the settings page's top block, pulse and the log tail
+web/loci_health.py — the health check, the settings page's top block and the log tail
 ========================================
 
     GET  /api/loci/health             -> this project's own health check (not the upstream diagnostics endpoint):
                                          every check, and the setting page's five rows over them
     GET  /api/loci/setup              -> the settings page's top block: five status rows, each saying what breaks if it is left unset
     GET  /api/logs                    -> the tail of server.log
-    GET  /api/loci/pulse              -> health check: how many entries, how much space, are the engines alive
 
 The checks behind health and setup are core/health.py's; the builders here hand in what
 the web side holds (sh's config and engines, the panel lock) and the routes turn the dict
@@ -152,25 +151,3 @@ async def api_logs(request: Request) -> Response:
     except Exception as e:                       # noqa: BLE001
         logger.warning(f"[loci] logs 失败: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
-
-
-async def api_loci_pulse(request: Request) -> Response:
-    """Health: how many entries, how much space, are the engines alive. **Read-only;
-    nothing is written to disk.**
-
-    `pulse` was withdrawn from the MCP tool surface — the other nine tools are all "what
-    am I doing to a memory", and this one alone is "is this machine healthy", which is
-    not a memory action.
-    The implementation is unchanged (`tools/pulse/`); only its entry point moved from the
-    tool surface to this read-only route, which the panel uses to draw the health card.
-
-    The `include_archive=1` query parameter includes the archive in the report.
-    """
-    from starlette.responses import PlainTextResponse
-    from tools import pulse as _pulse
-    inc = str(request.query_params.get("include_archive") or "").strip() in ("1", "true", "yes")
-    try:
-        return PlainTextResponse(await _pulse.pulse(include_archive=inc))
-    except Exception as e:                       # noqa: BLE001 - the health endpoint must not take the panel down with it
-        logger.warning(f"[loci] pulse 失败: {e}")
-        return PlainTextResponse(f"pulse 失败：{e}", status_code=500)

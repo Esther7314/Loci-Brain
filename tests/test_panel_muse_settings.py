@@ -5,8 +5,8 @@ tests/test_panel_muse_settings.py — muse's 高级设置: the reminder the pane
 GET /api/config gives the `muse` reminder as it runs (醒来的时候提一句 · 攒够几团才提 ·
 最老的放了几天才提) with its defaults; POST /api/config takes `muse` like the surfacing
 numbers: clamped into range, a value that is not a number skipped, applied live and
-written to config.yaml when persisted. With 醒来的时候提一句 off, /api/muse/pending never
-says it is time.
+written to config.yaml when persisted. With 醒来的时候提一句 off, the muse count the poke
+reads (build_muse_pending) never says it is time.
 """
 
 import asyncio

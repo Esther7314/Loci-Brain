@@ -437,8 +437,7 @@ def owed_names(bound) -> str:
 def label_of(e: dict) -> str:
     """The display text for a memory `{"meta", "content"}`: gist > name (timestamp
     stripped) > the start of the body. Every one of them is text written down at storage
-    time. recall and the starfield show it whole; entry_label below is the same rule cut
-    to one line."""
+    time. recall shows it whole; entry_label below is the same rule cut to one line."""
     meta = e["meta"]
     s = str(meta.get("summary") or "").strip()
     if s:

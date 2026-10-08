@@ -435,7 +435,6 @@ def load_config(config_path: Optional[str] = None) -> dict:
         "mcp_auth_mode": "oauth",
         "mcp_token": "",
         "buckets_dir": os.path.join(project_root, "buckets"),
-        "merge_threshold": 75,
         "dehydration": {
             "model": "gemini-2.0-flash",
             "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
@@ -454,7 +453,6 @@ def load_config(config_path: Optional[str] = None) -> dict:
             },
         },
         "matching": {
-            "fuzzy_threshold": 50,
             "max_results": 5,
         },
         "storage": {

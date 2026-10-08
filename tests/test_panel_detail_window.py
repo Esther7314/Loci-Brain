@@ -315,13 +315,6 @@ def test_a_content_fix_writes_a_new_version_marked_edited_and_keeps_the_old(stor
     assert {"key": "edited", "text": "人改的"} in win["tags_human"]
 
 
-def test_the_old_correct_path_still_writes_the_same_new_version(store, routes):
-    bid = event(store, "周六去海边。")
-    status, out = post(routes, "/api/loci/event/correct", {"id": bid, "text": "周日去海边。"})
-    assert status == 200 and out["old_id"] == bid and out["new_id"], out
-    assert "人改的" in run(store.get(out["new_id"]))["metadata"]["tags"]
-
-
 def test_content_wrong_on_a_mind_entry_hangs_her_mark_and_rewrites_nothing(store, routes):
     from core import _invalidation as I
     from tools.breath import awaken as A
@@ -356,11 +349,9 @@ def test_content_wrong_on_a_mind_entry_hangs_her_mark_and_rewrites_nothing(store
     assert f"人在面板上说这条不对（10-07）：「{note}」" in lines[0], lines
     assert "人说不对的是你自己的判断" in lines[-1]
 
-    # The other two kinds keep theirs; the old correct path still refuses a judgement.
+    # The typo kind keeps its own.
     status, out = fix(routes, {"id": view, "kind": "typo", "old": "陪看", "new": "陪着"})
     assert status == 200, out
-    status, out = post(routes, "/api/loci/event/correct", {"id": view, "text": "改掉"})
-    assert status == 403 and "mind" in out["error"]
 
 
 def test_her_mark_with_no_note_says_so_plainly(store, routes):

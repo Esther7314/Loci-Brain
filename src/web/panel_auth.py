@@ -22,7 +22,7 @@ Three security rules (read these before changing anything):
    the password invalidates every existing session**, with no separate revocation
    machinery to write.
 3. **The bridge-facing endpoints do not pass through this gate** (dream/wake,
-   muse/pending, dream/current, poke): the caller is another process, not a browser. It
+   dream/current, poke): the caller is another process, not a browser. It
    has no cookies and should not have any.
 
 The switch is `panel_auth` in config.yaml, default **true** — the build that ships should
@@ -87,18 +87,18 @@ PUBLIC_PATHS = frozenset([
 # read of the auth file, nothing logged.
 KEEPALIVE_PATH = "/auth/recovery-question"
 
-# **The four bridge-facing routes** are not in the exemption list above.
+# **The three bridge-facing routes** are not in the exemption list above.
 #
 #    "The caller is the bridge, not a browser, and it has no cookie" is true, but exempting
 #    them would remove the door rather than give the bridge a key: someone who set a panel
-#    password would believe it was locked, while these four stood open, **both readable
+#    password would believe it was locked, while these three stood open, **both readable
 #    and state-changing** (`dream/wake` moves recall_count and the lifecycle along).
 #    Harmless enough on loopback; the moment a tunnel, a reverse proxy, a LAN, or a
 #    misconfiguration is involved, the boundary is simply open.
 #
 # The rule, in one line: **once it is locked, there are no exceptions.**
-#      Gate unlocked (no password set) -> unchanged, anyone may call these four.
-#      Gate locked                     -> these four need a key (in a header), or an
+#      Gate unlocked (no password set) -> unchanged, anyone may call these three.
+#      Gate locked                     -> these three need a key (in a header), or an
 #                                         already-logged-in browser.
 #    WARNING: **the key travels in a header, not in the URL** — URLs leak through logs,
 #    Referer, and browser history.
@@ -112,7 +112,6 @@ KEEPALIVE_PATH = "/auth/recovery-question"
 # them, with the key.
 HOOK_PATHS = frozenset([
     "/api/loci/dream/wake",
-    "/api/muse/pending",
     "/api/dream/current",
     "/api/loci/poke",
     "/api/v2/slices",
@@ -155,8 +154,8 @@ HOST_READ_PATHS = frozenset([
 ])
 
 # The page's static assets: its own modules (the login page is one of them, so they load
-# before anyone is logged in) and three.js. Code only, no data.
-_PUBLIC_PREFIXES = ("/loci/panel/", "/loci/vendor/")
+# before anyone is logged in). Code only, no data.
+_PUBLIC_PREFIXES = ("/loci/panel/",)
 
 
 # **The auth file being unreadable is not the same as "no password was set".**

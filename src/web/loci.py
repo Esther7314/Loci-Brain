@@ -15,22 +15,17 @@ of what the panel can reach.
                                          of them)
     GET  /api/loci/recall             -> recall's second skin (card + list), and `rows`:
                                          the text skin's lines, paged by offset / limit
-    GET  /api/loci/graph              -> starfield: nodes + real edges + weak edges + constellations
     GET  /api/loci/similar            -> suspected-duplicate pairs + score distribution (adjustable threshold),
                                          less the pairs kept (core/similar_kept.py)
     GET  /api/loci/profile            -> the note by the door
     GET  /api/dream/current          -> the current dream (current layer + level; 204 when there is none, and it writes a recall state)
-    GET  /api/muse/pending            -> is it time to muse? (cluster count + age + worth_poking)
-    GET  /api/loci/pulse              -> health check: how many entries, how much space, are the engines alive
     GET  /api/loci/poke               -> dream (delivery) + muse cluster count (nudge) + structured recall scores, all in one read-only call
     GET  /api/loci/health             -> this project's own health check (not the upstream diagnostics endpoint)
     GET  /api/loci/setup              -> the settings page's top block: five status rows, each saying what breaks if it is left unset
     GET  /api/loci/rooms              -> the four rooms and what is in them
-    GET  /api/loci/subjects           -> the "who is in here" screen
     GET  /api/loci/recollect          -> pull a faded or sunk memory back up
     GET  /api/loci/auth/state         -> where the password currently lives, and whether one needs setting
     GET  /api/logs                    -> the tail of server.log
-    GET  /loci/vendor/{path:path}     -> three.js, served locally, which the starfield page needs
     GET  /api/v2/slices               -> the host's own read of the pending slices (hook key)
     GET  /api/v2/breath               -> breath's waking screen for a host's window-opening hook:
                                          the same text the tool returns, or `?format=json` for
@@ -75,10 +70,6 @@ them writes something.
                                          lookup)
     POST /api/loci/want/resolve       -> close something that was wanted (trace status)
     POST /api/loci/want/asked         -> record that it was asked about (trace)
-    POST /api/loci/event/correct      -> regrow: writes a NEW VERSION of a memory (the
-                                         content kind of entry/fix, under its old name)
-    POST /api/loci/subjects/action    -> edits the alias table in the data volume (the
-                                         same handler as names/action)
     POST /api/loci/auth/set-password  -> sets the password guarding remote MCP access
     POST /api/loci/auth/security-question -> sets or changes the security question the
                                          forgot-password page asks (a logged-in session
@@ -263,18 +254,17 @@ Where each group lives (a new route goes into its group's module and gets its li
 `register`, which adds the routes in this order). A read that computes something over the
 store is a core function plus a thin builder here: the builder reads the library, config
 and engines off `web/_shared` at call time, hands them to the core function, and the
-route turns its dict into JSON (core/starfield.py, core/census.py, core/similarity.py,
-core/health.py, core/profile.py):
+route turns its dict into JSON (core/census.py, core/similarity.py, core/health.py,
+core/profile.py):
 
-    web/loci_pages.py     /loci, /loci/panel, /loci/vendor
-    web/loci_reads.py     recall, rooms, graph, profile, recollect, subjects, and the
-                          builders behind them
+    web/loci_pages.py     /loci, /loci/panel
+    web/loci_reads.py     recall, rooms, profile, recollect, and the builders behind them
     web/loci_similar.py   similar, similar/action
-    web/loci_verdicts.py  want/resolve, want/asked, event/correct, subjects/action
+    web/loci_verdicts.py  want/resolve, want/asked
     web/loci_password.py  auth/state, auth/set-password, auth/security-question,
                           auth/revoke-grants
-    web/loci_health.py    health, setup, logs, pulse, and build_health / build_setup
-    web/loci_dream.py     muse/pending, poke, dream/wake, dream/current, and
+    web/loci_health.py    health, setup, logs, and build_health / build_setup
+    web/loci_dream.py     poke, dream/wake, dream/current, and
                           build_muse_pending / build_poke
     web/loci_detail.py    bucket, lineage, source, entry/fix (core/detail.py)
     web/loci_names.py     names, names/pending, names/{name}, names/action
@@ -296,8 +286,8 @@ Rules: do not use Optional[simple type] for parameters; run all three smoke suit
 changing anything here.
 
 Public surface: register(mcp). Re-exported for the callers that reach them through this
-module: the builders build_rooms / build_graph / build_subjects / build_profile /
-build_recollect / build_setup / build_health, and the write guards `_origin_reject` /
+module: the builders build_rooms / build_profile / build_recollect / build_setup /
+build_health, and the write guards `_origin_reject` /
 `_write_body` (web/library_api.py, web/import_api.py). build_poke and
 build_muse_pending are not re-exported: build_poke looks build_muse_pending up in
 web.loci_dream, so that is where a test swaps it.
@@ -314,13 +304,11 @@ from . import loci_similar
 from . import loci_verdicts
 from ._guards import _origin_reject, _write_body
 from .loci_health import build_health, build_setup
-from .loci_reads import (
-    build_graph, build_profile, build_recollect, build_rooms, build_subjects,
-)
+from .loci_reads import build_profile, build_recollect, build_rooms
 
 __all__ = [
     "register",
-    "build_rooms", "build_graph", "build_subjects", "build_profile", "build_recollect",
+    "build_rooms", "build_profile", "build_recollect",
     "build_setup", "build_health",
     "_origin_reject", "_write_body",
 ]
@@ -329,18 +317,14 @@ __all__ = [
 def register(mcp) -> None:
     mcp.custom_route("/loci", methods=["GET"])(loci_pages.loci_page)
     mcp.custom_route("/loci/panel/{path:path}", methods=["GET"])(loci_pages.loci_panel_asset)
-    mcp.custom_route("/loci/vendor/{path:path}", methods=["GET"])(loci_pages.loci_vendor)
     mcp.custom_route("/api/loci/recall", methods=["GET"])(loci_reads.api_loci_recall)
     mcp.custom_route("/api/loci/rooms", methods=["GET"])(loci_reads.api_loci_rooms)
-    mcp.custom_route("/api/loci/graph", methods=["GET"])(loci_reads.api_loci_graph)
     mcp.custom_route("/api/loci/similar", methods=["GET"])(loci_similar.api_loci_similar)
     mcp.custom_route("/api/loci/similar/action", methods=["POST"])(
         loci_similar.api_loci_similar_action)
     mcp.custom_route("/api/loci/want/resolve", methods=["POST"])(
         loci_verdicts.api_loci_want_resolve)
     mcp.custom_route("/api/loci/want/asked", methods=["POST"])(loci_verdicts.api_loci_want_asked)
-    mcp.custom_route("/api/loci/event/correct", methods=["POST"])(
-        loci_verdicts.api_loci_event_correct)
     mcp.custom_route("/api/loci/health", methods=["GET"])(loci_health.api_loci_health)
     mcp.custom_route("/api/loci/auth/state", methods=["GET"])(loci_password.api_loci_auth_state)
     mcp.custom_route("/api/loci/auth/set-password", methods=["POST"])(
@@ -360,13 +344,8 @@ def register(mcp) -> None:
     mcp.custom_route("/api/v2/cue/delivered", methods=["POST"])(host_api.api_v2_cue_delivered)
     mcp.custom_route("/api/v2/cue/dropped", methods=["POST"])(host_api.api_v2_cue_dropped)
     mcp.custom_route("/api/v2/changes", methods=["GET"])(host_api.api_v2_changes)
-    mcp.custom_route("/api/muse/pending", methods=["GET"])(loci_dream.api_muse_pending)
-    mcp.custom_route("/api/loci/subjects", methods=["GET"])(loci_reads.api_loci_subjects)
     mcp.custom_route("/api/loci/setup", methods=["GET"])(loci_health.api_loci_setup)
-    mcp.custom_route("/api/loci/subjects/action", methods=["POST"])(
-        loci_verdicts.api_loci_subjects_action)
     mcp.custom_route("/api/logs", methods=["GET"])(loci_health.api_logs)
-    mcp.custom_route("/api/loci/pulse", methods=["GET"])(loci_health.api_loci_pulse)
     mcp.custom_route("/api/loci/poke", methods=["GET"])(loci_dream.api_loci_poke)
     mcp.custom_route("/api/loci/dream/wake", methods=["POST"])(loci_dream.api_loci_dream_wake)
     mcp.custom_route("/api/dream/current", methods=["GET"])(loci_dream.api_dream_current)

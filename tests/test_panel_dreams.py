@@ -285,8 +285,7 @@ def test_no_road_of_the_model_and_no_host_route_reaches_the_copy(store, monkeypa
             ("GET", "/api/v2/breath", "", None),
             ("GET", "/api/v2/breath", "format=json", None),
             ("POST", "/api/v2/cue", "", {"text": ELSEWHERE, "window": "w1", "turn": 1}),
-            ("GET", "/api/v2/changes", "since=0", None),
-            ("GET", "/api/muse/pending", "", None)):
+            ("GET", "/api/v2/changes", "since=0", None)):
         reply = call(method, path, query, body, key="s3cret")
         assert reply.status < 500, (path, reply.raw)
         seen.append(reply.raw.decode("utf-8", "replace"))

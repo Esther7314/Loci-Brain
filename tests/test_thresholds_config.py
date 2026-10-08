@@ -37,7 +37,7 @@ def world(tmp_path, monkeypatch):
     from web import panel_auth as PA
 
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("surfacing:\n  breath_max_results: 20\n", encoding="utf-8")
+    config_path.write_text("surfacing:\n  involuntary_lines: 2\n", encoding="utf-8")
     monkeypatch.setenv("LOCI_CONFIG_PATH", str(config_path))
     monkeypatch.delenv(T.FLOOR_ENV, raising=False)
     config = {"buckets_dir": str(tmp_path), "transport": "stdio"}
@@ -170,7 +170,7 @@ def test_persisted_and_taken_back_to_the_default(world):
     assert status == 200, out
     saved = yaml.safe_load(world["config_path"].read_text(encoding="utf-8"))
     assert saved["thresholds"] == {"reconsolidation": 0.75, "recall_floor": 30.0}
-    assert saved["surfacing"]["breath_max_results"] == 20
+    assert saved["surfacing"]["involuntary_lines"] == 2
 
     status, out = world["call"]("POST", "/api/config", {"persist": True, "thresholds": {
         "reconsolidation": None}})

@@ -13,8 +13,6 @@ poke from the panel's muse page waiting to be said (core/_nudge.py).
 server.py binds the MCP instance (its request context says who is calling) and the store
 (the poke line reads it) with bind(), before any tool is mounted, and re-exports
 `_with_notice` for callers that reach it on server.
-
-Also here: the retired hard-delete notice shims that web/_shared.py still keeps slots for.
 ========================================
 """
 
@@ -42,22 +40,6 @@ def bind(mcp_instance, store) -> None:
     calling, and the store the poke line reads."""
     global mcp, bucket_mgr
     mcp, bucket_mgr = mcp_instance, store
-
-
-# =============================================================
-# Retired hard-delete notice compatibility hooks.
-# web/_shared.py keeps both injection slots so that older extensions do not fail on import.
-# This version neither writes nor consumes hard-delete notices, and never erases a memory.
-# =============================================================
-
-def _write_deletion_notice(_names: list) -> None:
-    """Compatibility shim for the old injection interface; physical deletion is retired."""
-    return None
-
-
-def _pop_deletion_notice() -> str:
-    """Compatibility shim for the old return value; there is never a hard-delete notice."""
-    return ""
 
 
 # =============================================================
@@ -230,12 +212,7 @@ async def _run_with_notice(coro: Awaitable[str], op: str = "", args: dict | None
             extras = format_warnings_suffix(pop_warnings())
         except Exception:
             extras = ""
-        notice = ""
-        try:
-            notice = _pop_deletion_notice()
-        except Exception:
-            pass
-        return (notice + err_str + extras) if notice else (err_str + extras)
+        return err_str + extras
     # The normal path
     if op:
         _log_op_ok(op, result)
@@ -243,9 +220,7 @@ async def _run_with_notice(coro: Awaitable[str], op: str = "", args: dict | None
         extras = format_warnings_suffix(pop_warnings())
     except Exception:
         extras = ""
-    notice = _pop_deletion_notice()
-    body = (notice + result) if notice else result
-    body = body + extras if extras else body
+    body = result + extras if extras else result
     return body + await _nudge_lines()
 
 

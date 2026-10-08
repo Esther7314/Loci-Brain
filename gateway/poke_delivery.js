@@ -360,25 +360,12 @@ module.exports = {
   DEFAULT_IDLE_MINUTES,
   attach_once,
 
-// ── Deprecated aliases: the names these used to have. Gone in the next major. ────────
-// 🔴 Renaming the bindings to English is an internal matter, but these keys are **names
-//    other people type by hand after require()** — drop them and their code breaks on
-//    the spot, on a name they cannot type. One line each costs nothing.
-  默认地址: DEFAULT_ADDRESS,
-  默认状态档: DEFAULT_STATE_PATH,
-  默认日志档: DEFAULT_LOG_PATH,
-  默认闲时阈值分钟: DEFAULT_IDLE_MINUTES,
-
-// ── Backward-compatible aliases ──────────────────────────────────────────────────────
-// 🔴 **Aliases only: each one points at the same thing as its formal name.** The formal
-//    names are English already, so new code should reach for those directly —
-//    attach_once and MARKER. These spellings stay because they are already written into
+// ── Backward-compatible alias ────────────────────────────────────────────────────────
+// 🔴 **An alias only: it points at the same thing as its formal name** (MARKER), which
+//    new code should reach for directly. It stays because it is already written into
 //    code elsewhere, and breaking a name someone has typed costs them far more than one
 //    line costs us.
-  // paste({ messages, requestId, 地址, 闲时阈值分钟 }) — modifies messages in place
-  paste: attach_once,
   MARKER_LINE: MARKER,
-  // DEFAULT_ADDRESS / DEFAULT_IDLE_MINUTES are the formal names now, exported above.
 
   _internal: { httpBase, fetch_poke, call_wake, build_patch_text, insert_before_latest_user },
 };

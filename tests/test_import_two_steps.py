@@ -495,7 +495,7 @@ def _routes(monkeypatch, store, eng):
     return call
 
 
-def test_the_routes_upload_status_resume_and_withdraw(store, tmp_path, monkeypatch):
+def test_the_routes_upload_batches_resume_and_withdraw(store, tmp_path, monkeypatch):
     before = library_hash(tmp_path)
     pipe = Pipe(by_topic)
     eng = engine(store, pipe)
@@ -513,10 +513,9 @@ def test_the_routes_upload_status_resume_and_withdraw(store, tmp_path, monkeypat
 
     code, out = call("POST", "/api/import/upload", fields={"wait": "1"}, file=file)
     assert code == 409 and out["batch"] == batch
-    code, st = call("GET", "/api/import/status", query=f"batch={batch}".encode())
-    assert code == 200 and st["status"] == "drafted" and st["is_running"] is False
     code, listed = call("GET", "/api/import/batches")
-    assert [b["batch"] for b in listed["batches"]] == [batch]
+    assert code == 200 and [b["batch"] for b in listed["batches"]] == [batch]
+    assert listed["batches"][0]["status"] == "drafted"
 
     # Resume is reachable with the batch alone (no file): nothing left, nothing called.
     calls = len(pipe.calls)

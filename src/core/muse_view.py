@@ -4,7 +4,7 @@ core/muse_view.py — muse's page on the panel: the thoughts that look like one 
 the stretches of days without a name
 ========================================
 
-The same clusters and gestures the muse tool and `/api/muse/pending` see, from the same
+The same clusters and gestures the muse tool and `/api/loci/poke` see, from the same
 cached pass (core/_muse.both_sides) — the route hands them over; nothing here recomputes
 them. Two lists, each paged on its own (`part`):
 

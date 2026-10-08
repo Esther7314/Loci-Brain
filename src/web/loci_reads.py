@@ -8,10 +8,8 @@ web/loci_reads.py — the panel's reads, and the builders behind them
                                          (`offset` / `limit` / `as_of`), each saying
                                          whether a gist covers it (`covered`)
     GET  /api/loci/rooms              -> the four rooms and what is in them
-    GET  /api/loci/graph              -> starfield: nodes + real edges + weak edges + constellations
     GET  /api/loci/profile            -> the note by the door
     GET  /api/loci/recollect          -> pull a faded or sunk memory back up
-    GET  /api/loci/subjects           -> the "who is in here" screen
 
 recall and rooms are host reads too (panel_auth.HOST_READ_PATHS): a host's credential
 reads them under its own scope, and each reply carries the request's scope line.
@@ -25,7 +23,6 @@ from . import _shared as sh
 from ._guards import _request_of, _scope_refusal
 from core import _when as _w      # "today" in the user's local timezone — never call datetime.now() directly
 from core import census as _census
-from core import starfield as _starfield
 from core.profile import _PROFILE_TAG
 from .loci_detail import library_view as _library_view, read_scope_of
 from utils import read_from_ids
@@ -47,10 +44,10 @@ def _scope_line(request: Request) -> str:
 # ============================================================
 # The builders are **deliberately apart from the route handlers**, so each can be run on
 # its own without faking a login session
-# (`python -c "asyncio.run(loci.build_graph())"`). The routes handle only auth and the JSON
+# (`python -c "asyncio.run(loci.build_rooms())"`). The routes handle only auth and the JSON
 # envelope. Where a read computes something over the store, the computing is a core
-# function (core/starfield.py, core/census.py, core/profile.py) and the builder lists the
-# store off `sh` and hands it over.
+# function (core/census.py, core/profile.py) and the builder lists the store off `sh` and
+# hands it over.
 # ============================================================
 
 async def build_rooms(view=None) -> dict:
@@ -61,20 +58,6 @@ async def build_rooms(view=None) -> dict:
     if view is None:
         view = await _library_view()
     return _census.rooms(await sh.bucket_mgr.list_all(include_archive=False), view)
-
-
-async def build_subjects() -> dict:
-    """"Who is in here" (core/census.subjects). **Read-only; nothing is written to disk.**"""
-    return _census.subjects(await sh.bucket_mgr.list_all(include_archive=False))
-
-
-async def build_graph(view=None) -> dict:
-    """Starfield (core/starfield.build): the live store, in the local `now`, read through
-    `view`; when None, the whole library as a panel page reads it (`library_view`)."""
-    if view is None:
-        view = await _library_view()
-    all_buckets = await sh.bucket_mgr.list_all(include_archive=False)
-    return _starfield.build(all_buckets, _w.now(), scope=view)
 
 
 def _collect_events(all_buckets: list, view=None) -> list[dict]:
@@ -318,18 +301,6 @@ async def api_loci_rooms(request: Request) -> Response:
 
 
 # ---------------------------------------------------------
-# Starfield
-# ---------------------------------------------------------
-async def api_loci_graph(request: Request) -> Response:
-    from starlette.responses import JSONResponse
-    try:
-        return JSONResponse(await build_graph())
-    except Exception as e:
-        logger.warning(f"[loci] graph 失败: {e}")
-        return JSONResponse({"error": str(e)}, status_code=500)
-
-
-# ---------------------------------------------------------
 # The profile — the note by the door
 # ---------------------------------------------------------
 async def api_loci_profile(request: Request) -> Response:
@@ -356,19 +327,3 @@ async def api_loci_recollect(request: Request) -> Response:
         logger.warning(f"[loci] recollect 失败: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
 
-
-async def api_loci_subjects(request: Request) -> Response:
-    """The data behind the "who is in here" screen. **Read-only** — it counts, and never
-    touches aliases.yaml.
-
-    Before this existed, the only way to get these numbers was a hand-written script
-    scanning the whole store, which the panel obviously cannot do on every page load.
-    Merging and renaming are **write** operations and live on a separate endpoint, so
-    that the rule holds: the system lays things out, and the merge is a human click.
-    """
-    from starlette.responses import JSONResponse
-    try:
-        return JSONResponse(await build_subjects())
-    except Exception as e:                       # noqa: BLE001
-        logger.warning(f"[loci] subjects 失败: {e}")
-        return JSONResponse({"error": str(e)}, status_code=500)

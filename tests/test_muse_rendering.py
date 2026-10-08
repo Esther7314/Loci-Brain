@@ -6,7 +6,7 @@ WHY THIS FILE EXISTS — it closes a hole that was proved to be open
     was a window in which `_muse.py` had the new names and the two files that READ those
     fields still had the old ones. In that window the whole fast lane was green: pyflakes
     clean, every unit test passing, gateway passing, the English ratchet passing — while
-    `muse()` and `/api/muse/pending` would have raised `AttributeError` on the first call.
+    `muse()` and `/api/loci/poke` would have raised `AttributeError` on the first call.
 
     Two separate blind spots lined up to produce that green:
 

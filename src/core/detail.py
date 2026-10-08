@@ -74,7 +74,17 @@ from . import visibility as _V
 from ._rooms import is_event_room, is_mind_room, normalize_room, room_cn
 from .profile import _EDITED_BY_USER_TAG, entry_label, owed_names, short_id
 from .scope import IMPORT_SYSTEM, LOCI
-from .starfield import split_ids
+
+
+def split_ids(raw) -> list[str]:
+    """An id field persisted as a comma-separated string (`supersedes`); a list is
+    accepted too."""
+    if isinstance(raw, (list, tuple)):
+        items = [str(x) for x in raw]
+    else:
+        items = str(raw or "").split(",")
+    return [x.strip() for x in items if x.strip()]
+
 
 # The words of the tag row, by key. `promised` names who owes it when that is not me;
 # `yearly` and `hold` carry their detail.

@@ -602,7 +602,7 @@ def test_a_scoped_host_gets_no_dream_and_is_told_with_the_fourth_line(store, mon
 
 
 def test_a_host_without_a_scope_is_refused_on_the_hook_routes(store, monkeypatch):
-    for path in ("/api/v2/breath", "/api/dream/current", "/api/muse/pending", "/api/v2/slices"):
+    for path in ("/api/v2/breath", "/api/dream/current", "/api/loci/poke", "/api/v2/slices"):
         resp = _hook(monkeypatch, store, path, [("x-loci-hook-token", "bot-key")])
         assert resp.status_code == 403, path
         assert "没收到范围" in json.loads(resp.body)["error"]

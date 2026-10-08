@@ -108,7 +108,7 @@ def test_the_route_serves_the_modules_and_the_stylesheet_uncached():
 
 
 @pytest.mark.parametrize("path", [
-    "../loci.html", "../../src/server.py", "..\\..\\README.md", "../vendor/three.module.js",
+    "../loci.html", "../../src/server.py", "..\\..\\README.md", "../../gateway/auto_attach.js",
     "missing.js", "app.js.map", "panel.css.bak", "", "pages",
 ])
 def test_the_route_serves_nothing_else(path):

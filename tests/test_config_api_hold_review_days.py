@@ -18,8 +18,8 @@ from _config_kit import config_world
 
 @pytest.fixture
 def world(tmp_path, monkeypatch):
-    return config_world(tmp_path, monkeypatch, "surfacing:\n  breath_max_results: 20\n",
-                        {"surfacing": {"breath_max_results": 20}})
+    return config_world(tmp_path, monkeypatch, "surfacing:\n  involuntary_lines: 2\n",
+                        {"surfacing": {"involuntary_lines": 2}})
 
 
 def test_get_gives_the_default_holds_run_on(world):
@@ -35,7 +35,7 @@ def test_it_is_set_live_and_persisted(world):
     assert "surfacing.hold_review_days" in out["updated"]
     assert H.review_days(world["config"]) == 3
     saved = yaml.safe_load(world["path"].read_text(encoding="utf-8"))["surfacing"]
-    assert saved == {"breath_max_results": 20, "hold_review_days": 3}
+    assert saved == {"involuntary_lines": 2, "hold_review_days": 3}
     assert world["call"]("GET", "/api/config")[1]["surfacing"]["hold_review_days"] == 3
 
 

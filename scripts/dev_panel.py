@@ -113,7 +113,6 @@ def _child_env(paths: dict, port: int, hook_token: str) -> dict:
         "LOCI_PORT": str(port),
         "LOCI_BIND_HOST": "127.0.0.1",
         "LOCI_TRANSPORT": "streamable-http",
-        "LOCI_HOOK_SKIP": "1",
         "LOCI_HOOK_TOKEN": hook_token,
         "PYTHONIOENCODING": "utf-8",
         "PYTHONUTF8": "1",

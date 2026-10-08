@@ -57,18 +57,11 @@ mcp_require_auth: true
 mcp_auth_mode: "oauth"
 mcp_token: ""
 
-# --- HTTP hooks auth / HTTP 钩子鉴权 ---
-# /breath-hook and /dream-hook are protected by default.
-# They accept the Dashboard login cookie, or this token via:
-#   ?token=...
-#   X-Loci-Hook-Token: ...
-#   Authorization: Bearer ...
-# Set allow_public=true only behind another trusted auth layer.
-# /breath-hook 和 /dream-hook 默认不公开；可用 Dashboard 登录态或 token 调用。
-# 只有在反代层另有鉴权时，才建议显式打开 allow_public。
-hooks:
-  token: ""
-  allow_public: false
+# --- The bridge's key / 桥的钥匙 ---
+# The key a bridge carries in the x-loci-hook-token header. Env var LOCI_HOOK_TOKEN takes
+# priority (web/panel_auth.hook_token). It is the legacy host's key (see 宿主 below).
+# 桥在请求头 x-loci-hook-token 里带的钥匙；设了环境变量 LOCI_HOOK_TOKEN 时以它为准。
+# hook_token: ""
 
 # --- Bucket storage path / 记忆桶存储路径 ---
 # Point this to your Obsidian vault subdirectory, or any local folder
@@ -81,12 +74,6 @@ hooks:
 # Only file metadata is polled; Markdown is reparsed when a change is detected.
 storage:
   external_change_poll_seconds: 1.0  # 0 = check every list; env: LOCI_EXTERNAL_CHANGE_POLL_SECONDS
-
-# --- Merge threshold / 桶合并阈值 ---
-# When storing a new memory, if similarity with an existing bucket exceeds
-# this value (0-100), merge instead of creating a new one
-# 存新记忆时，如果与已有桶的相似度超过此值（0-100），则合并而非新建
-merge_threshold: 75
 
 # --- Dehydration API / 脱水压缩 API 配置 ---
 # Uses a cheap LLM for intelligent compression. API is required; if the
@@ -171,26 +158,21 @@ embedding:
   #   base_url: "https://generativelanguage.googleapis.com/v1beta/openai/"
 
 # --- Scoring weights / 检索权重参数 ---
-# total = topic(×4) + emotion(×2) + time(×1.5) + importance(×1)
-scoring_weights:
-  topic_relevance: 4.0
-  emotion_resonance: 2.0
-  time_proximity: 1.5
-  importance: 1.0
+# total = semantic(×2.5) + bm25(×1.5): embedding similarity plus keyword matching.
+# 总分 = 语义（×2.5）＋ 关键词（×1.5）。不写就用这两个缺省。
+# scoring_weights:
+#   semantic_weight: 2.5
+#   bm25_weight: 1.5
 
-# --- Fuzzy matching / 模糊匹配参数 ---
+# --- Matching / 匹配参数 ---
 matching:
-  fuzzy_threshold: 50             # Minimum match score (0-100) / 最低匹配分数
   max_results: 5                  # Max results per search / 单次搜索最多返回条数
 
-# --- Surfacing defaults / 浮现默认参数 ---
-# Defaults applied when the AI calls breath() without explicit caps.
-# Front-end Settings panel writes the same fields back here.
-# AI 调用 breath() 不显式传 max_* 时使用这些默认；前端「浮现默认参数」面板会回写到这里。
+# --- Surfacing / 浮现参数 ---
+# What breath puts in front of the model. The panel's setting page writes the awake_* days
+# and hold_review_days back here.
+# breath 摆什么；面板设置页会回写 awake_* 和 hold_review_days。
 surfacing:
-  breath_max_results: 20          # 1-50, hard cap of buckets returned per breath
-  breath_max_tokens: 10000        # 500-20000, total token cap per breath
-  feel_max_tokens: 6000           # 500-20000, full-text budget for feel history; older feels collapse to one-line summaries
   # A "for now" hold (defer, no date) gets a review day this many days after it is written:
   # that day breath asks once whether it is still aside. It does not lift by itself. 0 = never ask.
   # 「先放一放」的条子（defer、没写日子）过这么多天问一次还放不放着；不会自己放下。0 = 不问。
@@ -217,14 +199,6 @@ surfacing:
   # 依据变了的: how many entries before the rest are counted in one line.
   # 依据变了的摆几条，多的数一行。
   invalidation_lines: 5
-  # iter 1.8: weighted sampling for breath surfacing mode（无参数浮现）
-  # 加权采样：从 top_k 候选里按 score**(1/temperature) 抽 sample_k 个，让"想起"带轻微随机性。
-  # 测试 fixture 里默认关 (enabled=false)，保证排序确定。生产可以开。
-  sampling:
-    enabled: false                # true = 启用加权采样；false = 退化为 top1+shuffle 原行为
-    top_k: 5                      # 候选池大小
-    sample_k: 2                   # 抽出几个
-    temperature: 0.7              # >1 更平均、<1 更偏向高分；0.7 是个温和的默认
 
 # --- Similarity lines / 多像才算像 ---
 # Five cosine lines and recall's relevance floor (core/thresholds.py). Unset, the defaults
@@ -255,10 +229,6 @@ limits:
   max_metadata_bytes: 16384       # combined tool metadata/filter cap; 0 disables
   max_grow_items: 100             # pre-split/digest item count cap; 0 disables
   max_pinned: 20                  # max pinned buckets; 0 disables check
-
-# --- Deprecated: Obsidian wikilinks auto injection / 已废弃 ---
-# wikilink 自动注入已禁用；OB 只读取正文里的 [[wikilink]] 做网络图。
-# 旧版 config.yaml 中残留的 wikilink.* 配置会被忽略。
 
 # ============================================================
 # 这两个人是谁

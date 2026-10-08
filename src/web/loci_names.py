@@ -18,7 +18,6 @@ web/loci_names.py — the names page and the name card
 The counting is core/census.py's (names_page, pending_names, name_card), the one write
 dispatcher core/census.name_action; these routes list the store, hand it over and turn
 the dict into JSON. Lists page by offset / limit / as_of (core/paging.py).
-POST /api/loci/subjects/action shares `api_loci_names_action`.
 ========================================
 """
 
