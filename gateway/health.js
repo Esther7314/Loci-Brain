@@ -3,6 +3,7 @@
 //
 // Mounted by server.js ahead of everything else. It reads the log the relay already
 // writes and computes a verdict; it never writes, and it never goes out to the network.
+// The `present` field is the present layer's own answer (present/health_section.js).
 // ============================================================
 
 // ════════════════════════════════════════════════════════════════
@@ -55,7 +56,7 @@ function read_recent_records(log_path, n = WINDOW_SIZE) {
   } catch { return []; }
 }
 
-function build_health({ log_path, min_score }) {
+function build_health({ log_path, min_score, present_health = null }) {
   // 🔴 **One shape, log or no log.** The first version returned early on the "no
   //    file" branch with a short object that was missing the count fields — the reader
   //    then had to cope with two shapes, and the entire point of this endpoint is that
@@ -146,11 +147,21 @@ function build_health({ log_path, min_score }) {
     score_floor: number_or_raw(min_score),
     log_path,
     log_exists,
+    // The present layer answers the same question for its own parts (present/health_section.js).
+    // It is computed apart, so a present failure costs only this one field.
+    present: present_section(present_health),
   };
+}
+
+function present_section(present_health) {
+  if (!present_health) return null;
+  try { return present_health(); }
+  catch (err) { return { error: `the present section could not compute itself: ${err?.message || err}` }; }
 }
 
 
 // The route path is `/health`, matched exactly by the mount table in server.js.
+// `opts.present_health`, when given, is a function returning the present section.
 // 🔴 This route **was originally spelled `/健康`, and nobody could reach it** — the
 //    client sends the percent-escaped `/%E5%81%A5%E5%BA%B7` while the comparison
 //    here is byte-for-byte, so it never matched.

@@ -109,6 +109,11 @@ LOCI_UPSTREAM=https://api.deepseek.com/v1 node gateway/server.js
 | `LOCI_GATEWAY_DATA` | `gateway/data` | 状态和日志落哪儿 |
 | `LOCI_GATEWAY_DAYS` | `<LOCI_GATEWAY_DATA>/host` | 原话（一天一份 `days/<日期>.jsonl`）落哪儿。设成 `<buckets>/_hosts/<名>` 才会跟着 Loci 的导出走；不设就留在网关自己的数据目录里，不碰任何库 |
 | `LOCI_TZ` | 本机时区 | 「一天」按哪个时区切（IANA 名，如 `Asia/Shanghai`） |
+| `LOCI_GATEWAY_BIND` | `127.0.0.1` | 网关听哪个地址。不是回环地址（比如 `0.0.0.0`，让手机从局域网连）时**必须**同时设 `LOCI_GATEWAY_PASSPHRASE`，不然起不来 |
+| `LOCI_GATEWAY_PASSPHRASE` | 无 | 非回环绑定时，**每条路径**前面都要带 `/<口令>/`（`/<口令>/v1/…`、`/<口令>/present`、`/<口令>/loci/source`、`/<口令>/health`），没带一律 404。16–128 个字母、数字或 `. _ ~ -`。口令进门就摘掉，不往上游发、不进日志。Loci 那边 `present_url` / `fetch_url` 写成 `http://<地址>:3100/<口令>`。回环绑定时不用带；设了也认带口令的路径 |
+| `LOCI_GATEWAY_TOKEN` | 无 | Loci 进网关的钥匙：`/present/*`（面板 present 页经 Loci 代问）和 `/loci/source`（Loci 来取原话）只认 `Authorization: Bearer <它>`，错了 401。**不设 = 这两族口关着**：`/present/*` 回 404，`/loci/source` 回 503（Loci 当「暂时取不到」，退回记忆自己的正文），回执里写明 `LOCI_GATEWAY_TOKEN` 没设。Loci 那边 `hosts.<名>.fetch_token_env` 指向的那个环境变量，值要跟它一样 |
+| `LOCI_GATEWAY_NAME` | `gateway` | 这个网关在 Loci 那边叫什么：`/present` 回执里的 `host`，原话来源的 `instance` |
+| `LOCI_UPSTREAM_KEY` | 无 | 网关自己那把上游钥匙（唤醒、日报那一轮用）。可选；只从环境变量读，面板只看得到「设了没有」，任何口都不回原文 |
 
 ### 闲时闸
 

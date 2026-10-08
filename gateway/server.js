@@ -50,9 +50,12 @@
 //
 // 📐 **This file is a mount table**: config read from env, the modules built from it,
 //    a list of routes → handlers, one heartbeat, and the startup lines. Logic does not
-//    live here: /health is health.js, everything else is relay.js, and the present
-//    layer (day store, threads, and later the window, the nightly report, wake and
-//    push) is gateway/present/. If this file grows, the lines that grew must be mounts.
+//    live here: /health is health.js, the door (bind address and passphrase) is door.js,
+//    /present/* and /loci/source are present/present_api.js and present/source_api.js
+//    behind LOCI_GATEWAY_TOKEN, everything else is relay.js, and the present layer (day
+//    store, threads, settings, prompt cards, and later the window, the nightly report,
+//    wake and push) is gateway/present/. If this file grows, the lines that grew must be
+//    mounts.
 // ============================================================
 
 const http = require("http");
@@ -63,6 +66,11 @@ const { handle_health } = require("./health.js");
 const { create_relay } = require("./relay.js");
 const { create_present } = require("./present/index.js");
 const { create_heartbeat } = require("./present/heartbeat.js");
+const { check_door, create_door, url_host } = require("./door.js");
+const { behind_token, send_json } = require("./present/http_io.js");
+const { create_present_api } = require("./present/present_api.js");
+const { create_source_api } = require("./present/source_api.js");
+const { build_present_health } = require("./present/health_section.js");
 
 // ———— Config: read once at startup; changing any of it means a restart ————
 const port = Number(process.env.PORT || 3100);
@@ -81,10 +89,18 @@ const data_root = process.env.LOCI_GATEWAY_DATA || path.join(__dirname, "data");
 //    the code is not. Something the docs never mention but the code still runs is a
 //    road with no entrance.
 const log_path = path.join(data_root, "logs", "memory-actions.jsonl");
+// Loci → gateway: the key Loci presents on /present/* and /loci/source. Unset = both closed
+// (/present/* 404; /loci/source 503, which Loci reads as UNAVAILABLE — see present/http_io.js).
+const gateway_token = String(process.env.LOCI_GATEWAY_TOKEN || "").trim();
+const door_config = check_door(process.env);
 
 if (!upstream) {
   console.error("LOCI_UPSTREAM is not set — there is nothing to forward requests to.");
   console.error("例：LOCI_UPSTREAM=https://api.deepseek.com/v1 node gateway/server.js");
+  process.exit(1);
+}
+if (door_config.error) {
+  console.error(door_config.error);
   process.exit(1);
 }
 
@@ -92,32 +108,48 @@ if (!upstream) {
 const present = create_present({ env: process.env, data_root });
 const relay = create_relay({ upstream, loci: LOCI, idle_threshold_minutes, min_score, data_root, log_path, present });
 const heartbeat = create_heartbeat({ tasks: present.heartbeat_tasks });
+const admit = create_door(door_config);
+const present_api = behind_token(gateway_token, create_present_api(present));
+const source_api = behind_token(gateway_token, create_source_api(present), { closed_status: 503 });
+const present_health = () => build_present_health({ present, doors: {
+  token_set: Boolean(gateway_token), bind: door_config.bind, passphrase_required: door_config.required } });
 
 // ———— Routes: first match wins ————
 // /health goes first: nothing below should be able to affect it, and it should affect
 // nothing below. Everything else is the relay, which keeps its own /v1/* guard.
 const routes = [
   { match: (req, route) => req.method === "GET" && route === "/health",
-    handle: (req, res) => handle_health(req, res, { log_path, min_score }) },
+    handle: (req, res) => handle_health(req, res, { log_path, min_score, present_health }) },
+  { match: (req, route) => route === "/present" || route.startsWith("/present/"), handle: present_api },
+  { match: (req, route) => route === "/loci/source", handle: source_api },
   { match: () => true, handle: relay },
 ];
 
 const server = http.createServer(async (req, res) => {
   const start = Date.now();
+  // The passphrase segment (door.js) comes off first, so nothing below ever sees it.
+  const inside = admit(req.url);
+  if (inside === null) {
+    req.resume();
+    console.log(`[gateway] ${req.method} → 404 (no passphrase)`);
+    return send_json(res, 404, { error: "not found" });
+  }
+  req.url = inside;
   const route = req.url.split("?")[0];
   const mounted = routes.find((r) => r.match(req, route));
   return mounted.handle(req, res, { start });
 });
 
 // ———— Startup ————
-server.listen(port, () => {
+server.listen(port, door_config.bind, () => {
   // 🔴 Report what was **actually bound**, not what was asked for. `PORT=0` is a legal
   //    setting — it means "you pick" — and until this line read the real port back, the
   //    banner answered with a literal 0 while the server sat on some other number. The
   //    first line of the banner is how everything downstream finds this process (the
   //    tests parse it), so a banner that lies is not cosmetic.
   const bound = server.address().port;
-  console.log(`[gateway] up on http://127.0.0.1:${bound}`);
+  const here = `http://${url_host(door_config.bind)}:${bound}${door_config.required ? "/<LOCI_GATEWAY_PASSPHRASE>" : ""}`;
+  console.log(`[gateway] up on http://${url_host(door_config.bind)}:${bound}`);
   console.log(`[gateway] upstream       ${upstream}`);
   console.log(`[gateway] Loci           ${poke._internal.httpBase(LOCI)}`);
   console.log(`[gateway] score floor    ${min_score}   ·   idle threshold ${idle_threshold_minutes} min`);
@@ -128,7 +160,10 @@ server.listen(port, () => {
   //    belongs on the first screen at startup.
   console.log(`[gateway] Loci timeout   ${process.env.RELEVANCE_TIMEOUT_MS || "(unset — using the default)"}`);
   for (const line of present.banner_lines()) console.log(`[gateway] ${line}`);
-  console.log(`[gateway] is it working  GET http://127.0.0.1:${bound}/health`);
-  console.log(`[gateway] point your client base_url at http://127.0.0.1:${bound}/v1`);
+  console.log(`[gateway] present api    ${gateway_token ? "/present/* and /loci/source open to Bearer LOCI_GATEWAY_TOKEN"
+    : "closed — LOCI_GATEWAY_TOKEN unset, so /present/* answers 404 and /loci/source 503"}`);
+  if (door_config.required) console.log("[gateway] passphrase     not a loopback bind: every path needs /<LOCI_GATEWAY_PASSPHRASE>/ in front");
+  console.log(`[gateway] is it working  GET ${here}/health`);
+  console.log(`[gateway] point your client base_url at ${here}/v1`);
   heartbeat.start();
 });

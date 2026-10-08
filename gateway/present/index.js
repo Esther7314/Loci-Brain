@@ -20,6 +20,8 @@
 //       gateway's own data folder, never inside a Loci library it was not pointed at.
 //       The startup banner prints which one is in use.
 //   · thread ledger (private):    <LOCI_GATEWAY_DATA>/threads/<thread>.json
+//   · settings and edited prompt cards: <LOCI_GATEWAY_DATA>/present.json · prompts.json
+//     (settings.js · prompts.js), read fresh by whoever needs them
 // ============================================================
 
 const path = require("path");
@@ -27,6 +29,8 @@ const { create_clock, resolve_zone } = require("./clock.js");
 const { create_day_store } = require("./day_store.js");
 const { create_threads } = require("./threads.js");
 const { capture_reply } = require("./reply_capture.js");
+const { create_settings } = require("./settings.js");
+const { create_prompts } = require("./prompts.js");
 
 function create_present({ env = process.env, data_root, clock = create_clock(env), log = console.error }) {
   const { zone, note: zone_note } = resolve_zone(env);
@@ -35,6 +39,9 @@ function create_present({ env = process.env, data_root, clock = create_clock(env
     : path.join(data_root, "host");
   const day_store = create_day_store({ dir: path.join(host_dir, "days"), clock, zone });
   const threads = create_threads({ dir: path.join(data_root, "threads"), day_store, clock });
+  const settings = create_settings({ file: path.join(data_root, "present.json"), env });
+  const prompts = create_prompts({ file: path.join(data_root, "prompts.json"), clock, zone });
+  const name = String(env.LOCI_GATEWAY_NAME || "").trim() || "gateway";
 
   function on_request({ body }) {
     const seen = threads.ingest(body.messages);
@@ -78,6 +85,11 @@ function create_present({ env = process.env, data_root, clock = create_clock(env
     heartbeat_tasks: [],
     day_store,
     threads,
+    settings,
+    prompts,
+    clock,
+    zone,
+    name,
   };
 }
 
