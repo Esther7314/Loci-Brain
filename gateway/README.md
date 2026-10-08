@@ -107,6 +107,8 @@ LOCI_UPSTREAM=https://api.deepseek.com/v1 node gateway/server.js
 | `RELEVANCE_TIMEOUT_MS` | `12000` | 等 `recall` 多久。**库越大要给越多** |
 | `RELEVANCE_WEAK` | 关 | `1` 打开弱档 |
 | `LOCI_GATEWAY_DATA` | `gateway/data` | 状态和日志落哪儿 |
+| `LOCI_GATEWAY_DAYS` | `<LOCI_GATEWAY_DATA>/host` | 原话（一天一份 `days/<日期>.jsonl`）落哪儿。设成 `<buckets>/_hosts/<名>` 才会跟着 Loci 的导出走；不设就留在网关自己的数据目录里，不碰任何库 |
+| `LOCI_TZ` | 本机时区 | 「一天」按哪个时区切（IANA 名，如 `Asia/Shanghai`） |
 
 ### 闲时闸
 

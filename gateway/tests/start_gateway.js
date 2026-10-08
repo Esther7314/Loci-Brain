@@ -40,9 +40,12 @@ const FENCE_FILE = path.join(__dirname, "network_fence.js");
  * @param 相关超时毫秒  RELEVANCE_TIMEOUT_MS — the number that bug lived on
  * @param 白名单端口    ports the fence lets through (only the fake upstream + fake Loci)
  * @param 账本路径      where the fence's ledger lands
+ * @param extra_env     more variables set after the wipe (e.g. LOCI_TZ, LOCI_GATEWAY_TEST_CLOCK,
+ *                      LOCI_GATEWAY_DAYS) — every path in it must point inside the test's temp directory
  */
 async function start_gateway({ 端口: port, 上游地址: upstream_url, loci地址: loci_url, 数据根: data_root,
-                               相关超时毫秒: relevance_timeout_ms, 白名单端口: allowed_ports, 账本路径: ledger_path }) {
+                               相关超时毫秒: relevance_timeout_ms, 白名单端口: allowed_ports, 账本路径: ledger_path,
+                               extra_env = {} }) {
   const env = { ...process.env };
   // 🔴 Wipe everything that could sway the outcome first, then set it explicitly — the machine's env does not get a vote
   for (const key of Object.keys(env)) {
@@ -58,7 +61,7 @@ async function start_gateway({ 端口: port, 上游地址: upstream_url, loci地
     POKE_IDLE_MINUTES: "210",               // factory value; the poke gate is held shut by the preset state file
     围栏白名单端口: allowed_ports.join(","),
     围栏账本: ledger_path,
-  });
+  }, extra_env);
   // RELEVANCE_WEAK unset = the weak trigger is off (the default); RELEVANCE_STRONG_WORDS
   // unset = the factory Chinese word list. Both are **deliberately left unset**: what is
   // under test is whether it works at all straight out of the box.
