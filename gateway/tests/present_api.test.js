@@ -18,7 +18,8 @@
 //   · present.json that cannot be read → defaults shown, wake reads as "do not wake",
 //     a POST refused (409) rather than written over
 //   · prompt cards: defaults, a rewrite, a reset, the same shape as Loci's
-//   · report answers 501 not_built; push-test with no Bark code says so (skipped_config_missing)
+//   · push-test with no Bark code says so (skipped_config_missing); report says why it will not
+//     queue (a bad kind 400, nothing missing 409) — the report itself is proved in present_day_close.test.js
 //   · the sentinel appears in no reply of /present/*, /loci/source or /health
 // ============================================================
 
@@ -180,8 +181,11 @@ test("GET /present: host, connected, every default, honest placeholders", { time
   assert.strictEqual(s.compress.kept_raw, null);
   assert.strictEqual(s.compress.last, null);
   assert.deepStrictEqual(s.compress.context, { tokens: 1000000, source: "default" });
-  assert.strictEqual(s.report.state, "not_built");
+  // the planted line was said after this morning's report window opened: yesterday was quiet
+  assert.strictEqual(s.report.state, "quiet");
+  assert.strictEqual(s.report.day, "2026-10-06");
   assert.strictEqual(s.report.text, null);
+  assert.strictEqual(s.report.next_flip, "daily");
   assert.strictEqual(s.wake.state, "off");
   assert.strictEqual(s.wake.next_why, "off");
   assert.strictEqual(s.wake.next_why_words, "自动唤醒关着");
@@ -353,7 +357,7 @@ test("prompt cards: defaults, a rewrite, back to the default, a reset", { timeou
   } finally { fs.rmSync(prompts_file); }
 });
 
-test("report is not built yet: 501, said plainly; push-test without a code says so; compress queues a pack", { timeout: 20000 }, async () => {
+test("push-test without a code says so; report refuses what it cannot do; compress queues a pack", { timeout: 20000 }, async () => {
   // 「现在压」 on the planted conversation: queued (its one line is inside keep_raw, so the
   // pack finds nothing to fold and sends nothing); an unknown conversation is a 404
   const queued = await call("POST", "/present/compress", { body: {} });
@@ -361,13 +365,17 @@ test("report is not built yet: 501, said plainly; push-test without a code says 
   assert.deepStrictEqual(queued.json, { ok: true, queued: true, thread: THREAD });
   assert.strictEqual((await call("POST", "/present/compress", { body: { thread: "t_000000" } })).status, 404);
   assert.strictEqual((await call("POST", "/present/compress", { body: { thread: 7 } })).status, 400);
-  const report = await call("POST", "/present/report", { body: {} });
-  assert.strictEqual(report.status, 501);
-  assert.strictEqual(report.json.ok, false);
-  assert.strictEqual(report.json.state, "not_built");
   const pushed = await call("POST", "/present/push-test", { body: {} });
   assert.strictEqual(pushed.status, 200);
   assert.deepStrictEqual(pushed.json, { ok: false, status: "skipped_config_missing", error: "Bark not configured", endpoint_redacted: "" });
+  const bad = await call("POST", "/present/report", { body: { kind: "later" } });
+  assert.deepStrictEqual([bad.status, bad.json.field], [400, "kind"]);
+  // a manual flip schedules nothing, so nothing is missing (no turn is started here)
+  assert.strictEqual((await call("POST", "/present", { body: { patch: { report: { flip: "manual" } } } })).status, 200);
+  const none = await call("POST", "/present/report", { body: { kind: "missing" } });
+  assert.strictEqual(none.status, 409, none.text);
+  assert.strictEqual(none.json.ok, false);
+  assert.strictEqual((await call("POST", "/present", { body: { patch: { report: { flip: "daily" } } } })).status, 200);
   assert.strictEqual((await call("GET", "/present/compress")).status, 404);
   assert.strictEqual((await call("GET", "/present/nope")).status, 404);
   assert.strictEqual((await call("DELETE", "/present")).status, 404);
@@ -379,11 +387,11 @@ test("/health: a present section that says when each part last succeeded", { tim
   assert.strictEqual(r.status, 200);
   const p = r.json.present;
   assert.deepStrictEqual(p.recording, { last_line_at: "2026-10-07T20:00:00+08:00", seconds_ago: 1800 });
-  assert.strictEqual(p.report.state, "not_built");
-  assert.strictEqual(p.report.last_ok_seconds_ago, null);
-  assert.strictEqual(p.report.failures_since_ok, null);
   assert.deepStrictEqual(p.push, { state: "off", last_ok_at: null, last_ok_seconds_ago: null, failures_since_ok: 0,
                                    last_failure_status: null, retrying: 0 });
+  assert.deepStrictEqual([p.report.state, p.report.last_ok_at, p.report.last_ok_seconds_ago, p.report.failures_since_ok, p.report.gave_up],
+    ["never", null, null, 0, false]);
+  assert.deepStrictEqual([p.report.handoff.last_ok_at, p.report.handoff.failures_since_ok], [null, 0]);
   assert.deepStrictEqual(p.wake, { state: p.wake.state, last_ok_at: null, last_ok_seconds_ago: null, failures_since_ok: 0, held: 0 });
   // no window was ever folded here; the manual pack above found nothing and is no failure
   assert.deepStrictEqual([p.compress.state, p.compress.last_ok_seconds_ago, p.compress.failures_since_ok], ["never", null, 0]);

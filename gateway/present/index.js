@@ -47,10 +47,15 @@
 //   owner_arrived()
 //       Called first thing for every chat request: a wake in flight is aborted (wake.js).
 //
-// heartbeat_tasks is what server.js hangs on its one beat, in order: pack (pack.js), wake
-// (wake.js), push retries (push.js).
+// heartbeat_tasks is what server.js hangs on its one beat, in order: pack retries
+// (pack.js), the night (day_close.js: hand-off, day report, flip), wake (wake.js), push
+// retries (push.js).
 // A finished answer also hands its request, as it went upstream, to wake.remember_turn:
-// the snapshot a wake's prefix is copied from (private, in the thread ledger).
+// the snapshot a wake's prefix is copied from (private, in the thread ledger), with the
+// assembly's layout (where the client's own messages sit in it). Every flip — he folded
+// it, a pack, the day report — rebuilds that snapshot for the new window (wake.rebase).
+//   report_now(kind) · report_status() · report_health()
+//       POST /present/report, status.report and the report part of /health (day_close.js).
 //
 // Nothing here can block the chat: Loci down or slow costs this turn its card or dream
 // (cue 3 s, poke 8 s), a hook that throws costs the turn its present work, and the relay
@@ -93,6 +98,8 @@ const compress = require("./compress.js");
 const { create_packer, PACK_WAIT_MS } = require("./pack.js");
 const { create_wall_escape } = require("./wall.js");
 const { local_stamp } = require("./clock.js");
+const { create_day_close } = require("./day_close.js");
+const { http_base } = require("./cue.js");
 
 const HOW_WORDS = { self: "他自己压的", forced: "到了强制线", manual: "你按的", day: "日报换窗" };
 
@@ -136,8 +143,10 @@ function create_present({
   const push = create_push({ data_root, settings, clock, zone, log,
                              bark_base: String(env.LOCI_BARK_BASE || "").trim() || undefined });
   const away = create_away({ data_root, threads, zone, log });
+  let day_close = null;   // built below; wake asks it whether today's due report is written
   const wake = create_wake({ data_root, threads, day_store, settings, prompts, own_turn, clock, zone, log,
-                             loci_address: loci, poke_state, on_spoke: (item) => push.on_spoke(item) });
+                             loci_address: loci, poke_state, on_spoke: (item) => push.on_spoke(item),
+                             report_ready: () => (day_close ? day_close.report_ready() : true) });
 
   // ———— forced / manual packing and the wall's way out (pack.js · wall.js) ————
   const read_compress = () => settings.load().values.compress;
@@ -148,11 +157,26 @@ function create_present({
   const packer = create_packer({
     threads, day_store, own_turn, prompts, read_compress, data_root, clock, zone, log,
     system_of: (id) => last_system.get(id) || [],
-    on_flip: ({ old_name }) => cue.dropped({ window: old_name, all: true })
-      .catch((err) => log(`[gateway] present: /cue/dropped failed: ${err?.message || err}`)),
+    on_flip: ({ thread, old_name }) => after_flip(thread, old_name),
   });
   const wall = create_wall_escape({ windows, threads, read_compress, data_root, clock, zone, log,
                                     request_pack: (id) => packer.request(id, "forced") });
+
+  /** Any flip: Loci hears the old window's cards dropped, and the wake snapshot moves to the new window. */
+  function after_flip(thread_id, old_name) {
+    try { wake.rebase(thread_id); }
+    catch (err) { log(`[gateway] present: rebuilding the wake snapshot failed: ${err?.message || err}`); }
+    cue.dropped({ window: old_name, all: true })
+      .catch((err) => log(`[gateway] present: /cue/dropped failed: ${err?.message || err}`));
+  }
+
+  // ———— the night: hand-off, day report, flip (day_close.js) ————
+  day_close = create_day_close({
+    data_root, host_dir, name, env, loci_base: http_base(loci), threads, day_store, settings, prompts, own_turn,
+    clock, zone, log,
+    system_of: (id) => last_system.get(id) || [],
+    on_flip: ({ thread, old_name, how }) => { packer.note_flip(how); after_flip(thread, old_name); },
+  });
 
   /** Poke delivery decides whether and what; the window decides where. */
   async function ask_poke(request_id) {
@@ -248,12 +272,29 @@ function create_present({
     const ctx = {
       seen, thread: thread.id, window: w.name, strip, model: body.model ? String(body.model) : null,
       sent: forward,   // what goes upstream: wake's snapshot once the answer finishes
+      layout: layout_of(body.messages, ids, built),   // where her client's messages sit in it (wake.rebase)
       estimate: estimate_prompt(forward),
       deliver: built.replayed.filter((o) => o.kind === "cue" && !o.delivered).map((o) => o.turn),
       forward, keep_head: built.keep_head,   // for the wall's cut-down resend (wall.js)
       away_prefix,   // the block the client sees before this answer (away.js), or null
     };
     return { body: forward, ctx, note: bits.join(" "), notes };
+  }
+
+  /**
+   * Where the client's own messages sit in the assembled request: { head: its leading
+   * system messages, lines: [[index, line id or null], …] for each client message after
+   * them }. Overlays and the carry are the gateway's and are not listed.
+   */
+  function layout_of(messages, ids, built) {
+    const head = built.keep_head - (built.carried ? 1 : 0);
+    const at = new Map(messages.map((m, i) => [m, i]));
+    const lines = [];
+    built.messages.forEach((m, k) => {
+      const i = at.get(m);
+      if (k >= built.keep_head && i !== undefined && i >= head) lines.push([k, ids[i] || null]);
+    });
+    return { head, lines };
   }
 
   function confirm_delivered(ctx) {
@@ -368,8 +409,7 @@ function create_present({
     threads.save(thread.id);
     packer.note_flip("self");
     console.log(`[gateway] present ${thread.id} window ${flip.old_name} → ${flip.name} (he folded it himself), mark ${flip.mark}`);
-    cue.dropped({ window: flip.old_name, all: true })
-      .catch((err) => log(`[gateway] present: /cue/dropped failed: ${err?.message || err}`));
+    after_flip(thread.id, flip.old_name);
   }
 
   function on_response(ctx, { status, headers, stream }) {
@@ -397,10 +437,11 @@ function create_present({
       } catch (err) { log(`[gateway] present: writing the reply failed: ${err?.message || err}`); }
       try { record_usage(thread_id, ctx, reply.usage); }
       catch (err) { log(`[gateway] present: recording usage failed: ${err?.message || err}`); }
+      // the snapshot first: a flip this turn ends with rebuilds it for the new window
+      try { wake.remember_turn(thread_id, ctx.sent, reply, ctx.layout); }
+      catch (err) { log(`[gateway] present: keeping the wake snapshot failed: ${err?.message || err}`); }
       try { after_summary(thread_id, ctx, split, reply.tools); }
       catch (err) { log(`[gateway] present: flipping the window failed: ${err?.message || err}`); }
-      try { wake.remember_turn(thread_id, ctx.sent, reply); }
-      catch (err) { log(`[gateway] present: keeping the wake snapshot failed: ${err?.message || err}`); }
       try { maybe_force(thread_id, ctx, reply.tools); }
       catch (err) { log(`[gateway] present: asking for a pack failed: ${err?.message || err}`); }
     });
@@ -455,6 +496,7 @@ function create_present({
       // a number that shows a misconfiguration at a glance belongs on the first screen
       `cue timeout    ${cue_timeout_ms} ms${env.LOCI_CUE_TIMEOUT_MS ? "" : "   (LOCI_CUE_TIMEOUT_MS unset — the default)"}`,
     ];
+    lines.push(day_close.banner_line());
     if (zone_note) lines.push(`⚠️ ${zone_note}`);
     return lines;
   }
@@ -463,15 +505,24 @@ function create_present({
     prepare,
     on_response,
     remember_owner: own_turn.remember_owner,
-    owner_arrived: wake.owner_arrived,
+    owner_arrived() { wake.owner_arrived(); day_close.owner_arrived(); },
     own_turn,
     wake,
     push,
     away,
     banner_lines,
     window_status,
-    heartbeat_tasks: [{ name: "pack", run: () => packer.beat() }, { name: "wake", run: () => wake.tick() },
-                      { name: "push", run: () => push.beat() }],
+    heartbeat_tasks: [
+      { name: "pack", run: () => packer.beat() },
+      { name: "day_close", run: () => day_close.tick() },
+      { name: "wake", run: () => wake.tick() },
+      { name: "push", run: () => push.beat() },
+    ],
+    // the night (day_close.js)
+    day_close,
+    report_now: (kind) => day_close.report_now(kind),
+    report_status: () => day_close.status(),
+    report_health: () => day_close.health(),
     cue_timeout_ms,
     day_store,
     threads,

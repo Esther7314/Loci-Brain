@@ -16,6 +16,9 @@
 //   · compress  — when a window was last folded, any way (he did it, a pack, the panel's
 //                 button), and how many paid pack failures since (present/index.js
 //                 compress_health: times, ways and counts)
+//   · report    — when a day report was last written, failures since, whether the latest
+//                 one gave up, and when the nightly hand-off to Loci last went through
+//                 (day_close.js health(): times, counts and the last error, never the text)
 //   · push      — when a Bark push last went through, failures since, retries in flight
 //                 (push.js health(); never the key or a text)
 // Nothing in this section reads the carry, an overlay or anything else that was said.
@@ -69,7 +72,7 @@ function build_present_health({ present, doors }) {
     recording: newest
       ? { last_line_at: newest.at, seconds_ago: Math.max(0, Math.round((now - newest.t) / 1000)) }
       : { last_line_at: null, seconds_ago: null },
-    report: not_built(),
+    report: typeof present.report_health === "function" ? present.report_health() : not_built(),
     wake: present.wake.health(),
     compress: compress_section(present, now),
     push: present.push ? present.push.health() : not_built(),

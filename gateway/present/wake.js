@@ -43,10 +43,25 @@
 // layer. The list is shared: a dream the chat path handed over first is not repeated by
 // a wake either. A wake that failed leaves the dream to the next one.
 // The snapshot lives in the private thread ledger (threads/<id>.json, `last_sent`:
-// { at, request, reply, wakes: [{ letter, reply }] }), written by remember_turn() once
+// { at, request, reply, wakes: [{ letter, reply }], layout }), written by remember_turn() once
 // an answer to a request has finished. It is never served by any route.
 // 🔴 The letter never reaches the day store or the client: it exists in the wake request
 //    and in the ledger's `wakes`, nowhere else.
+//
+// ─── After a flip ───
+// The snapshot is the last request as it went upstream, so the moment a window flips
+// (he folded it, a pack, the day report) it holds the old window: a wake built on it
+// would resend everything the flip just let go of, and the next chat turn would not
+// share its prefix. So every flip calls rebase(): the request's messages become what
+// window.js assemble would build now — the client's system messages, the new carry, the
+// client's messages from the new mark on — with no overlays (a new window starts with
+// none); every other field of the request (tools included), his reply and the earlier
+// wake pairs stay. To find the client's messages among the overlays, the snapshot keeps
+// a `layout` (index.js, from the assembly): { head: how many leading messages are the
+// client's system messages, lines: [[index in request.messages, line id or null], …] },
+// one entry per client message after the head. A mark older than the snapshot's first
+// line has the lines between taken from the day store, as plain messages; a snapshot with
+// no layout cannot be rebuilt and is dropped (no wake until her next turn makes one).
 //
 // ─── What it settles to ───
 //   · her request arrives (owner_arrived(), called by the relay before anything else):
@@ -138,6 +153,20 @@ function write_json_file(file, value) {
   const tmp = `${file}.tmp`;
   fs.writeFileSync(tmp, `${JSON.stringify(value, null, 1)}\n`, "utf8");
   fs.renameSync(tmp, file);
+}
+
+/** A snapshot's layout: where the client's own messages sit in the request (see the header). */
+function valid_layout(layout, length) {
+  return is_plain(layout) && Number.isInteger(layout.head) && layout.head >= 0 && layout.head <= length
+    && Array.isArray(layout.lines)
+    && layout.lines.every((e) => Array.isArray(e) && Number.isInteger(e[0]) && e[0] >= layout.head && e[0] < length);
+}
+
+/** A stored line as a plain message's text: its words, its attachments as their kinds. */
+function plain_text(line) {
+  const marks = (Array.isArray(line.attach) ? line.attach : []).map((k) => `[${k}]`).join(" ");
+  const text = String(line.text ?? "");
+  return marks ? (text ? `${text} ${marks}` : marks) : text;
 }
 
 /** A snapshot wake can build on: an answered request that went upstream. */
@@ -487,13 +516,66 @@ function create_wake({
    * become the thread's snapshot. A reply that is a tool call, or empty, is not a place a
    * wake can continue from, so the previous snapshot stays.
    */
-  function remember_turn(thread_id, request, reply) {
+  function remember_turn(thread_id, request, reply, layout = null) {
     if (!is_plain(request) || !Array.isArray(request.messages) || !request.messages.length) return false;
     const text = String(reply?.text ?? "");
     if (!text.trim() || (Array.isArray(reply?.tools) && reply.tools.length)) return false;
     const thread = threads.get(thread_id);
     if (!thread) return false;
     thread.last_sent = { at: clock.now(), request: JSON.parse(JSON.stringify(request)), reply: text, wakes: [] };
+    if (valid_layout(layout, request.messages.length)) thread.last_sent.layout = JSON.parse(JSON.stringify(layout));
+    threads.save(thread.id);
+    return true;
+  }
+
+  /**
+   * The thread's window flipped (any way): the snapshot is rebuilt as the new window's
+   * assembly, so the next wake goes out small and the next chat turn shares its prefix.
+   * See "After a flip" in the header. Returns whether a snapshot was rebuilt.
+   */
+  function rebase(thread_id) {
+    const thread = threads.get(thread_id);
+    if (!thread || !usable_snapshot(thread.last_sent)) return false;
+    const snap = thread.last_sent;
+    const req = snap.request.messages;
+    if (!valid_layout(snap.layout, req.length)) {
+      thread.last_sent = null;
+      threads.save(thread.id);
+      return false;
+    }
+    const w = thread.window && typeof thread.window === "object" ? thread.window : {};
+    const head = req.slice(0, snap.layout.head);
+    const client = snap.layout.lines.map(([i, id]) => ({ m: req[i], id: id || null }));
+    let start = 0;
+    let lead = [];
+    let carried = false;
+    if (w.mark) {
+      const at = client.findIndex((c) => c.id === w.mark);
+      if (at >= 0) { start = at; carried = true; }
+      else {
+        // the mark sits before what the snapshot holds: those lines come from the day store
+        const branch = Array.isArray(thread.branch) ? thread.branch : [];
+        const first_id = (client.find((c) => c.id) || {}).id;
+        const b_mark = branch.findIndex((e) => e.id === w.mark);
+        const b_first = first_id ? branch.findIndex((e) => e.id === first_id) : -1;
+        if (b_mark >= 0 && b_first > b_mark) {
+          lead = branch.slice(b_mark, b_first).map((e) => {
+            const line = day_store.get(e.id);
+            return line ? { m: { role: line.role, content: plain_text(line) }, id: e.id } : null;
+          }).filter(Boolean);
+          carried = true;
+        }
+      }
+    }
+    const carry = carried && typeof w.carry === "string" && w.carry ? [{ role: "system", content: w.carry }] : [];
+    const body = [...lead, ...client.slice(start)];
+    const messages = [...head, ...carry, ...body.map((c) => c.m)];
+    const offset = head.length + carry.length;
+    thread.last_sent = {
+      ...snap,
+      request: { ...snap.request, messages },
+      layout: { head: head.length, lines: body.map((c, k) => [offset + k, c.id]) },
+    };
     threads.save(thread.id);
     return true;
   }
@@ -535,7 +617,7 @@ function create_wake({
     };
   }
 
-  return { tick, owner_arrived, remember_turn, status, health, evaluate };
+  return { tick, owner_arrived, remember_turn, rebase, status, health, evaluate };
 }
 
-module.exports = { create_wake, assemble, pick_dream, usable_snapshot, WHY_WORDS, RESULT_WORDS, MIN_EVERY_MIN };
+module.exports = { create_wake, assemble, pick_dream, usable_snapshot, valid_layout, WHY_WORDS, RESULT_WORDS, MIN_EVERY_MIN };

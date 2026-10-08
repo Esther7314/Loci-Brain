@@ -164,7 +164,9 @@ async function boot({ wake = WAKE_ON, start = at("2026-10-07T10:00:00"), env = {
   // poke delivery's idle gate stays shut on the chat path (its clock is the real one)
   fs.writeFileSync(path.join(data_root, "state", "poke-window.json"),
     JSON.stringify({ lastUserMessageTime: new Date().toISOString(), wakePending: false }));
-  if (wake !== null) fs.writeFileSync(path.join(data_root, "present.json"), JSON.stringify({ wake }));
+  // a manual flip schedules no day report, so report_ready stays true here: the beat that
+  // writes reports is not driven in this file (present_day_close.test.js holds that gate)
+  if (wake !== null) fs.writeFileSync(path.join(data_root, "present.json"), JSON.stringify({ wake, report: { flip: "manual" } }));
   const c = clock || create_fake_clock(start);
   const present = create_present({ env: { LOCI_TZ: ZONE, ...env }, data_root, clock: c, upstream: up.url,
                                    loci: loci.url, log: () => {} });

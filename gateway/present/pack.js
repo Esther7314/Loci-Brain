@@ -52,6 +52,15 @@
 // on while the pack ran (he folded it himself, or another flip) is left alone and the
 // pack's summary dropped.
 //
+// ─── The wall ───
+// A pack's own input can be over the window (a long stretch, a small window): upstream
+// refuses it as too long (wall.js wall_error), and as it is it would be refused on every
+// retry. So within the attempt the oldest lines of the stretch are left out of the
+// letter — newest kept, sized by the limit and the refused size the error names (else
+// half) — and the pack sent again, at most WALL_RETRIES times. The mark does not move:
+// the left-out lines stay in the day store and in Loci, only this summary does not
+// cover them. Each cut is one "pack_wall" line in the log (counts only).
+//
 // ─── Failures ───
 //   unpaid (nothing reached upstream: no key, busy with another own turn, cannot
 //           connect) → tried again on the next heartbeat, not counted
@@ -73,10 +82,13 @@ const win = require("./window.js");
 const { compress_forced_shell } = require("./prompts.js");
 const { OPEN, CLOSE } = require("./stream_filter.js");
 const { local_stamp } = require("./clock.js");
+const { wall_error } = require("./wall.js");
 
 const PACK_WAIT_MS = 90 * 1000;
 const BACKOFF_BASE_MS = 2 * 60 * 1000;
 const BACKOFF_MAX_MS = 60 * 60 * 1000;
+const WALL_RETRIES = 3;
+const WALL_MARGIN = 0.85;   // aim under the limit: sizing by characters is rough
 
 /** The summary as it may go into a carry: no markers, trimmed. */
 function clean_summary(text) {
@@ -96,6 +108,31 @@ function format_line(line) {
   if (Array.isArray(line.tools) && line.tools.length) bits.push(`（调了工具：${line.tools.join("、")}）`);
   const stamp = line_stamp(line.at);
   return `${stamp ? `[${stamp}] ` : ""}${who}：${bits.filter(Boolean).join(" ")}`;
+}
+
+/** An own turn's failure as the context-length wall (wall.js wall_error), or null. */
+function wall_of(res) {
+  if (!res || res.ok || res.outcome !== "paid") return null;
+  const m = /^http_(\d+)$/.exec(String(res.reason || ""));
+  if (!m) return null;
+  const w = wall_error(Number(m[1]), res.error);
+  return w.hit ? w : null;
+}
+
+/**
+ * How many of the newest lines to keep so a refused letter fits: the letter is `total`
+ * characters, the lines are `sizes` (oldest first) and the rest is overhead. The share
+ * kept is the limit over the refused size the error names, with a margin, else half;
+ * at least one line is dropped. 0 = even the overhead alone does not fit.
+ */
+function fit_newest({ total, sizes, wall }) {
+  const ratio = wall && wall.limit && wall.actual && wall.actual > wall.limit
+    ? (wall.limit / wall.actual) * WALL_MARGIN : 0.5;
+  const lines = sizes.reduce((a, b) => a + b, 0);
+  let budget = total * ratio - (total - lines);
+  let keep = 0;
+  for (let i = sizes.length - 1; i >= 0 && budget >= sizes[i]; i--) { budget -= sizes[i]; keep += 1; }
+  return Math.min(keep, sizes.length - 1);
 }
 
 /**
@@ -170,11 +207,26 @@ function create_packer({
       write_line({ thread: thread_id, how, outcome: "nothing", window: w.name });
       return { outcome: "nothing" };
     }
-    const lines = plan.ids.map((id) => day_store.get(id)).filter(Boolean);
-    const shell = compress_forced_shell({ card: prompts.current("compress"), keep_raw: values.keep_raw,
-                                          originals: lines.map(format_line).join("\n"), earlier: earlier_summary(w) });
-    const messages = [...system_of(thread_id), { role: "user", content: shell }];
-    const res = await own_turn.run({ kind: "pack", messages, tools: "loci" });
+    let lines = plan.ids.map((id) => day_store.get(id)).filter(Boolean);
+    const card = prompts.current("compress");
+    const earlier = earlier_summary(w);
+    let res = null;
+    let left_out = 0;
+    for (let walls = 0; ; walls++) {
+      const formatted = lines.map(format_line);
+      const shell = compress_forced_shell({ card, keep_raw: values.keep_raw, originals: formatted.join("\n"), earlier });
+      const messages = [...system_of(thread_id), { role: "user", content: shell }];
+      res = await own_turn.run({ kind: "pack", messages, tools: "loci" });
+      const wall = wall_of(res);
+      if (!wall || walls >= WALL_RETRIES) break;
+      const keep = fit_newest({ total: shell.length, sizes: formatted.map((t) => t.length + 1), wall });
+      if (keep < 1) break;
+      left_out += lines.length - keep;
+      write_line({ thread: thread_id, how, outcome: "pack_wall", window: w.name, lines_before: lines.length,
+                   lines_after: keep, limit: wall.limit, actual: wall.actual, run: res.run });
+      console.log(`[gateway] present ${thread_id} the pack hit the wall: the oldest ${lines.length - keep} lines are left out of it (they stay in the day store and in Loci)`);
+      lines = lines.slice(lines.length - keep);
+    }
 
     let outcome = res.outcome;
     let reason = res.reason;
@@ -197,7 +249,7 @@ function create_packer({
     threads.save(now_thread.id);
     note_flip(how);
     write_line({ thread: thread_id, how, outcome: "ok", window: flip.old_name, next: flip.name, mark: plan.mark,
-                 lines: plan.ids.length, run: res.run, rounds: res.rounds, tools_used: res.tools_used });
+                 lines: plan.ids.length, left_out, run: res.run, rounds: res.rounds, tools_used: res.tools_used });
     console.log(`[gateway] present ${thread_id} window ${flip.old_name} → ${flip.name} (packed by the gateway: ${how}), mark ${plan.mark}`);
     try { on_flip({ thread: thread_id, old_name: flip.old_name, name: flip.name, how }); }
     catch (err) { log(`[gateway] present: after a pack: ${err?.message || err}`); }
@@ -284,4 +336,7 @@ function create_packer({
   return { request, beat, wait_for, note_flip, status, is_running: (id) => running.has(id) };
 }
 
-module.exports = { create_packer, plan_pack, format_line, clean_summary, earlier_summary, PACK_WAIT_MS, BACKOFF_BASE_MS, BACKOFF_MAX_MS };
+module.exports = {
+  create_packer, plan_pack, format_line, clean_summary, earlier_summary, fit_newest, wall_of,
+  PACK_WAIT_MS, BACKOFF_BASE_MS, BACKOFF_MAX_MS, WALL_RETRIES,
+};

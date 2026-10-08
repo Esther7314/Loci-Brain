@@ -113,6 +113,8 @@ LOCI_UPSTREAM=https://api.deepseek.com/v1 node gateway/server.js
 | `LOCI_GATEWAY_TOKEN` | 无 | Loci 进网关的钥匙：`/present/*`（面板 present 页经 Loci 代问）和 `/loci/source`（Loci 来取原话）只认 `Authorization: Bearer <它>`，错了 401。**不设 = 这两族口关着**：`/present/*` 回 404，`/loci/source` 回 503（Loci 当「暂时取不到」，退回记忆自己的正文），回执里写明 `LOCI_GATEWAY_TOKEN` 没设。Loci 那边 `hosts.<名>.fetch_token_env` 指向的那个环境变量，值要跟它一样 |
 | `LOCI_GATEWAY_NAME` | `gateway` | 这个网关在 Loci 那边叫什么：`/present` 回执里的 `host`，原话来源的 `instance` |
 | `LOCI_UPSTREAM_KEY` | 无 | 网关自己那把上游钥匙（唤醒、日报那一轮用）。可选；只从环境变量读，面板只看得到「设了没有」，任何口都不回原文 |
+| `LOCI_OWNER_NAME` | `用户` | 夜里把原话交给 Loci 切段时，你说的那几行署谁的名（`speaker`）。Loci 原样拿给切段的副模型看、原话里显示成「谁说的」 |
+| `LOCI_AI_NAME` | `AI_NAME`，再没有就 `AI` | 同上，他说的那几行署的名 |
 
 ### 闲时闸
 

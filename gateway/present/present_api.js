@@ -14,9 +14,12 @@
 //                            background (pack.js, how "manual"); 409 while one is already
 //                            running for it, 404 when there is no such conversation. The
 //                            result shows up as status.compress.last.
-//   POST /present/report     501 { ok: false, state: "not_built" } until the step that
-//                            does the work lands. Not a queued stub: "queued" would be a
-//                            promise nothing keeps, and the page would wait on it.
+//   POST /present/report     { kind: "missing" | "now" } → { ok: true, queued: true, kind, day }:
+//                            「补一份」 (the latest scheduled report, now) or 「现在写日报」
+//                            (hand-off, report, and her next turn opens the new window),
+//                            in the background (day_close.js); 409 while one is being
+//                            written or when nothing is missing. The result shows up as
+//                            status.report.
 //   POST /present/push-test  one Bark push now (push.js test), answered 200 with Bark's
 //                            outcome: { ok: true, status: 200 } · { ok: false, status:
 //                            "error", error: "timeout" } · { ok: false, status:
@@ -29,6 +32,11 @@
 // present/index.js window_status(): thread, fill_pct, used_tokens, estimated, kept_raw
 // (raw lines from the mark on), context {tokens, source}, and last {at, how, how_words}
 // (how the window was opened; null for a conversation's first window).
+//
+// status.report is day_close.js status(): day, state (written · missing · failed · quiet ·
+// not_due) with state_words, at, text (the report itself: the panel shows it to her),
+// error (the whole reason), gave_up, running, queued, next_flip (report.flip) and
+// next_flip_day.
 //
 // 🔴 No reply here carries a single character of what he compressed (the carry), the
 //    overlay, or the last request sent upstream: they live in the private thread ledger,
@@ -51,8 +59,13 @@ const NOT_BUILT = { ok: false, state: "not_built" };
  * @param wake             wake.js instance (status.wake is its status(): counts, times, reasons)
  * @param compress_now     present/index.js compress_now (「现在压」: thread id or null → { status, body })
  * @param push             push.js instance (status.push is its status(): state, last {at, ok, status}, retrying)
+ * @param report_now       present/index.js report_now (kind → { status, body })
+ * @param report_status    present/index.js report_status (status.report)
  */
-function create_present_api({ name, settings, prompts, threads, window_status, context_windows, wake, compress_now, push = null }) {
+function create_present_api({
+  name, settings, prompts, threads, window_status, context_windows, wake, compress_now, report_now, report_status,
+  push = null,
+}) {
   function latest_thread() {
     let best = null;
     for (const t of threads.list()) if (!best || (t.last_at || 0) > (best.last_at || 0)) best = t;
@@ -82,7 +95,8 @@ function create_present_api({ name, settings, prompts, threads, window_status, c
   function status(values) {
     return {
       compress: compress_status(),
-      report: { state: "not_built", day: null, at: null, text: null, error: null, gave_up: null, next_flip: values.report.flip },
+      report: report_status ? report_status()
+        : { state: "not_built", day: null, at: null, text: null, error: null, gave_up: null, next_flip: values.report.flip },
       wake: wake.status(),
       push: push ? push.status() : { state: "not_built", last: null },
     };
@@ -120,7 +134,13 @@ function create_present_api({ name, settings, prompts, threads, window_status, c
       const done = compress_now(thread);
       return send_json(res, done.status, done.body);
     },
-    "POST /present/report": async (req, res) => { req.resume(); send_json(res, 501, { ...NOT_BUILT, error: "the day report is not built yet" }); },
+    "POST /present/report": async (req, res) => {
+      const got = await read_json(req);
+      if (!got.ok) return send_json(res, 400, { error: got.error });
+      const kind = got.value && typeof got.value === "object" ? got.value.kind : null;
+      const done = report_now(kind);
+      return send_json(res, done.status, done.body);
+    },
     // ── push (push.js): one test push, its answer as it is (ok or not, it is an answer) ──
     "POST /present/push-test": async (req, res) => {
       req.resume();
