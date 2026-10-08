@@ -25,7 +25,10 @@ The package is a ZIP:
     originals/<id>.txt     the original text of each sunk entry (archive/原文/<id>.txt)
     media/<path>           attachments the entries reference, at their library path
     state/<path>           the library's own state files (`STATE_FILES`) and the names
-                           table (`state/aliases.yaml`)
+                           table (`state/aliases.yaml`); among them each host's day
+                           files and day reports (`_hosts/<name>/days/*.jsonl`,
+                           `_hosts/<name>/reports/*.md`), the original words a gateway
+                           wrote next to the library
 
 What is left out, and why:
   · withdrawn entries — standing on a source the registry records as withdrawn or deleted,
@@ -36,6 +39,10 @@ What is left out, and why:
   · secrets: config.yaml (credentials), the ledger's cursor key, the panel password; and
     host resend claims, whose stored replies can hold text no withdrawal reaches.
   · what is rebuilt: the dehydration cache, the vector queue, logs, earlier backups.
+  · of a host's folder (`_hosts/`), everything but its day files and day reports: a
+    failed report's error (`*.err.json`) is the gateway's retry bookkeeping, and anything
+    else there is the host's own. A gateway's private state (thread state, the window's
+    compressed text) lives outside the library folder and is never under `_hosts/`.
 A held source travels as held: the registry's hold goes with it and the entries standing
 on it stay blocked in the new library until the host's ordered change settles it. The
 permission state that belongs to the library travels the same way — each source record's
@@ -65,7 +72,7 @@ interrupted import finishes the first.
 
 Adding a kind of library state to the package is one row in `STATE_FILES`.
 
-Exports: PACKAGE_FORMAT · STATE_FILES · StateFile · build_package · restore_library_state ·
+Exports: PACKAGE_FORMAT · STATE_FILES · HOSTS_DIR · StateFile · build_package · restore_library_state ·
          library_snapshot · withdrawn · partition
 ========================================
 """
@@ -116,6 +123,12 @@ MEDIA_PREFIX = BA.PACKAGE_MEDIA_PREFIX
 NAMES_MEMBER = STATE_PREFIX + "aliases.yaml"
 MEDIA_DIR = "_media"
 IMPORTS_DIR = f"{_src.SOURCES_DIR}/{_imports.IMPORTS_DIR}"     # import_memory.ImportStore
+# Where a host keeps what it writes next to the library, one folder per host: a gateway's
+# day files (`days/<day>.jsonl`) and day reports (`reports/<day>.md`).
+HOSTS_DIR = "_hosts"
+_HOST_FILES_NOT_MERGED = ("the days in it belong to the host writing into this library; "
+                          "merged they would mix two hosts' lines under one name. Restored "
+                          "only into a library with no entries")
 
 # How a state file joins a library that already has its own.
 REGISTRY = "registry"   # by source identity, renumbered after the library's own changes
@@ -313,6 +326,14 @@ STATE_FILES: tuple[StateFile, ...] = (
                          "restored only into a library with no entries"),
     StateFile(f"night_fall/dreams/{_dream.FILE_PREFIX}*.json", FRESH, "dream records",
               _scrub_dream),
+    # A host's own words of each day and the report written over them (a gateway's
+    # present layer): material nothing else can rebuild. Their `.err.json` stays behind.
+    StateFile(f"{HOSTS_DIR}/*/days/*.jsonl", FRESH,
+              "a host's day files: each day's original lines, as the host wrote them",
+              not_merged=_HOST_FILES_NOT_MERGED),
+    StateFile(f"{HOSTS_DIR}/*/reports/*.md", FRESH,
+              "a host's day reports, one per day",
+              not_merged=_HOST_FILES_NOT_MERGED),
 )
 
 # What a library folder holds that the package leaves behind, and why. Checked in order;
@@ -352,6 +373,10 @@ _LEFT_BEHIND: tuple[tuple[str, str], ...] = (
     ("*.lock", "a lock file"),
     ("*.tmp", "a temporary file"),
     ("*.rewrite", "a temporary file"),
+    (f"{HOSTS_DIR}/*.err.json", "why a host's day report failed: the host's retry "
+                                "bookkeeping, not library material"),
+    (f"{HOSTS_DIR}/*", "a host's own files next to the library; only its day files and "
+                       "day reports travel"),
 )
 
 

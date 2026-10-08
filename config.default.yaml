@@ -308,11 +308,18 @@ panel_auth: true
 #       - {system: lento, instance: home, container: "private:U"}
 #     may_restore: false                  # scope_mode 不写就是 restricted
 #     fetch_url: "http://127.0.0.1:3010/api/loci/source"   # 可选：向这个宿主取原话的地址
+#     fetch_token_env: LOCI_FETCH_TOKEN_ENTRY_A           # Loci 对这个宿主的钥匙（另一个环境变量）
+#     present_url: "http://127.0.0.1:3100"                # 可选：网关的 present 层（面板 present 页经 Loci 代问）
 #
 # fetch_url（第四个接头，core/_originals.py）：模型 recall(query=id, view="original") 要看一条记忆
-# 依据的原话时，Loci 拿这条来源去问 max_grant 盖得住它的那个宿主（盖得最细的那个），带上这个宿主自己的
-# 钥匙（Authorization: Bearer）。没写 max_grant 的宿主不会被问。谁都没配 = 原话取不到，模型照旧只看记忆自己的正文。
+# 依据的原话时，Loci 拿这条来源去问 max_grant 盖得住它的那个宿主（盖得最细的那个），带上 Loci 对它的
+# 钥匙（fetch_token_env 那个环境变量的值，Authorization: Bearer）。没写 max_grant 的宿主不会被问。谁都没配 = 原话取不到，模型照旧只看记忆自己的正文。
 # 原文只进那一次回复：不存、不缓存、不写日志。
+#
+# present_url（网关的 present 层：滚动窗口 · 日报 · 唤醒 · 推送）：面板 present 页只跟 Loci 说话，
+# Loci 把 /api/loci/present* 原样转到 <present_url>/present...，带的钥匙跟取原话是同一把
+# （fetch_token_env 那个环境变量的值 = 网关的 LOCI_GATEWAY_TOKEN）。只有白名单上那几条路径，
+# 回执原样转、不缓存、不写日志。谁都没配 = present 页显示「还没接上」。
 
 # --- Original text from the host / 向宿主取原话（core/_originals.py）---
 # Only when the model asks for it (recall view="original"); never on an ordinary read.

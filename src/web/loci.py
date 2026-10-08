@@ -232,6 +232,26 @@ The POST writes:
                                          true} goes back to the shipped text (writes
                                          _state/prompts.json, not the ledger)
 
+The present page (web/loci_present.py): Loci only forwards, to `<present_url>/present...`
+of the host whose `hosts.<name>.present_url` is set (`host` names it; it may be left out
+when only one host has one), with Loci's fetch credential toward that host as Bearer. The
+gateway's reply passes through as it came, uncached and unlogged; no `present_url`
+anywhere is `{"connected": false}`, a gateway that cannot be reached adds `error`. The
+writes are the gateway's own (present.json, prompts.json there), none of them Loci's:
+
+    GET  /api/loci/present            -> the gateway's present settings and status
+    POST /api/loci/present            -> {host?, patch}: change settings
+    GET  /api/loci/present/{rest}     -> {rest} is `prompts`: the gateway's prompt cards
+                                         (compress, report, wake)
+    POST /api/loci/present/{rest}     -> {rest} is one of
+                                           compress   「现在压」 ({host?, thread?})
+                                           report     {host?, kind: missing | now}:
+                                                      补一份 / 现在写日报
+                                           push-test  「试推一条」
+                                           prompts    {key, text} / {key, reset: true}
+                                         any other {rest}, or method, is a 404
+                                         (loci_present.PRESENT_PATHS)
+
 Host reads (panel_auth.HOST_READ_PATHS, panel contract §六): breath/last, awake, hanging,
 names, names/{name}, recall, rooms, bucket, lineage, source, turns and usage answer a
 host's credential too, under that host's scope; GET only. The panel's other routes, and
@@ -263,6 +283,7 @@ core/health.py, core/profile.py):
                           (core/activity.py, core/grow_view.py, core/muse_view.py,
                           core/_nudge.py, core/_dream_archive.py, core/vector_view.py)
     web/loci_prompts.py   prompts (core/prompts.py)
+    web/loci_present.py   present, present/* (forwarded to the gateway)
     web/host_api.py      /api/v2/* (a host's credential, not the panel's)
     web/library_api.py    export, export/originals, import-package, embedding/migration
     web/loci_version.py   version
@@ -413,4 +434,17 @@ def register(mcp) -> None:
     from . import loci_prompts as _prompts
     mcp.custom_route("/api/loci/prompts", methods=["GET"])(_prompts.api_loci_prompts)
     mcp.custom_route("/api/loci/prompts", methods=["POST"])(_prompts.api_loci_prompts_save)
+
+    # ---------------------------------------------------------
+    # The present page, forwarded to the gateway named by a host's present_url
+    # (web/loci_present.py). One handler; its own allowlist turns every other path or
+    # method under /api/loci/present into a 404.
+    # ---------------------------------------------------------
+    from . import loci_present as _present
+    mcp.custom_route("/api/loci/present", methods=["GET"])(_present.api_loci_present)
+    mcp.custom_route("/api/loci/present", methods=["POST"])(_present.api_loci_present)
+    mcp.custom_route("/api/loci/present/{rest:path}", methods=["GET"])(
+        _present.api_loci_present)
+    mcp.custom_route("/api/loci/present/{rest:path}", methods=["POST"])(
+        _present.api_loci_present)
 

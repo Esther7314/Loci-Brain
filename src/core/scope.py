@@ -42,6 +42,13 @@ Hosts
           - {system: telegram, instance: bot-a}   # authority's behalf
         fetch_url: http://127.0.0.1:3010/api/loci/source   # where Loci asks for them
         fetch_token_env: LOCI_FETCH_TOKEN_ENTRY_A           # Loci's own credential there
+        present_url: http://127.0.0.1:3100                  # a gateway's present layer
+
+`present_url` is the base of a gateway's present layer (its `/present/*` routes):
+the panel's present page asks Loci (`/api/loci/present*`, web/loci_present.py), and Loci
+forwards the request to `<present_url>/present...` with the same credential it fetches
+originals with (`fetch_token_env`). It is an http(s) URL with a host and no credentials,
+query or fragment; a path in it (a gateway behind a passphrase segment) is kept.
 
 `max_grant` says what a host may touch; it never says whose a source is. Who is the change
 authority for a source (`authority`, core/_source_change.py), who serves its original
@@ -194,6 +201,9 @@ class Host:
     fetch_url: str = ""
     # Loci's credential toward `fetch_url`; "" = none, and then nothing is fetched.
     fetch_token: str = field(default="", repr=False, compare=False)
+    # The base of this host's present layer, which the panel's present page is forwarded
+    # to under `fetch_token` (web/loci_present.py); "" = the host has none.
+    present_url: str = ""
     provides: tuple = ()                 # places whose originals it serves
     authority: tuple = ()                # places whose changes it sends
     registers: tuple = ()                # places whose runs' line lists it submits
@@ -206,7 +216,7 @@ class Host:
 LOCI_HOST = Host(LOCI, scope_mode=OPEN)
 
 _HOST_KEYS = {"token_env", "max_grant", "may_restore", "scope_mode", "fetch_url",
-              "fetch_token_env", "provides", "authority", "registers"}
+              "fetch_token_env", "present_url", "provides", "authority", "registers"}
 # The keys declaring places whose host is resolved one per source (`_declared`).
 _DECLARING = ("authority", "provides", "registers")
 
@@ -248,6 +258,15 @@ def _host_from(name: str, raw, environ: Mapping[str, str], fallback_token: str) 
                 or parts.password or parts.fragment):
             raise ValueError(f"host {name}: fetch_url must be an http(s) URL with a host and "
                              "no credentials or fragment in it")
+    present_url = str(raw.get("present_url") or "").strip()
+    if present_url:
+        parts = urlsplit(present_url)
+        # The proxy appends `/present/...` to it, so a query or fragment has no place.
+        if (parts.scheme not in ("http", "https") or not parts.hostname or parts.username
+                or parts.password or parts.query or parts.fragment):
+            raise ValueError(f"host {name}: present_url must be an http(s) URL with a host "
+                             "and no credentials, query or fragment in it")
+        present_url = present_url.rstrip("/")
     fetch_env = str(raw.get("fetch_token_env") or "").strip()
     if fetch_env and fetch_env == token_env:
         raise ValueError(f"host {name}: fetch_token_env names Loci's own credential toward the "
@@ -268,7 +287,7 @@ def _host_from(name: str, raw, environ: Mapping[str, str], fallback_token: str) 
                                      "max_grant")
     return Host(name=name, scope_mode=mode, max_grant=max_grant,
                 may_restore=parse_bool(raw.get("may_restore"), default=False), token=token,
-                fetch_url=fetch_url, fetch_token=fetch_token,
+                fetch_url=fetch_url, fetch_token=fetch_token, present_url=present_url,
                 provides=_places(name, raw, "provides"), authority=authority,
                 registers=registers)
 
