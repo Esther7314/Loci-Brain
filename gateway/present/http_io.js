@@ -24,16 +24,16 @@ function read_json(req, limit = MAX_BODY_BYTES) {
     req.on("data", (c) => {
       if (done) return;
       size += c.length;
-      if (size > limit) { finish({ ok: false, error: `body over ${limit} bytes` }); req.resume(); return; }
+      if (size > limit) { finish({ ok: false, error: `请求体超过 ${limit} 字节` }); req.resume(); return; }
       chunks.push(c);
     });
     req.on("end", () => {
       const raw = Buffer.concat(chunks).toString("utf8");
       if (!raw.trim()) return finish({ ok: true, value: {} });
       try { finish({ ok: true, value: JSON.parse(raw) }); }
-      catch { finish({ ok: false, error: "body is not JSON" }); }
+      catch { finish({ ok: false, error: "请求体不是 JSON" }); }
     });
-    req.on("error", () => finish({ ok: false, error: "body could not be read" }));
+    req.on("error", () => finish({ ok: false, error: "请求体读不出来" }));
   });
 }
 
@@ -79,11 +79,11 @@ function behind_token(token, handler, { closed_status = 404 } = {}) {
     if (!token) {
       req.resume();
       return send_json(res, closed_status, { connected: false,
-        error: "closed: LOCI_GATEWAY_TOKEN is not set on the gateway, so nobody can be let in" });
+        error: "关着：网关没设 LOCI_GATEWAY_TOKEN，谁都进不来" });
     }
     if (!bearer_ok(req, token)) {
       req.resume();
-      return send_json(res, 401, { error: "Authorization: Bearer <LOCI_GATEWAY_TOKEN> is required" },
+      return send_json(res, 401, { error: "要带 Authorization: Bearer <LOCI_GATEWAY_TOKEN>" },
         { "WWW-Authenticate": "Bearer" });
     }
     return handler(req, res, ctx);

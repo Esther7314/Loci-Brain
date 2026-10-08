@@ -99,6 +99,7 @@ const { create_packer, PACK_WAIT_MS } = require("./pack.js");
 const { create_wall_escape } = require("./wall.js");
 const { local_stamp } = require("./clock.js");
 const { create_day_close } = require("./day_close.js");
+const { speaker_names } = require("./source_api.js");
 const { http_base } = require("./cue.js");
 
 const HOW_WORDS = { self: "他自己压的", forced: "到了强制线", manual: "你按的", day: "日报换窗" };
@@ -355,8 +356,8 @@ function create_present({
   function compress_now(thread_id = null) {
     const thread = thread_id ? threads.get(String(thread_id))
       : threads.list().slice().sort((a, b) => (b.last_at || 0) - (a.last_at || 0))[0] || null;
-    if (!thread) return { status: 404, body: { ok: false, error: thread_id ? `no such conversation: ${thread_id}` : "no conversation yet" } };
-    if (packer.is_running(thread.id)) return { status: 409, body: { ok: false, error: "a pack is already running for this conversation", thread: thread.id } };
+    if (!thread) return { status: 404, body: { ok: false, error: thread_id ? `没有这个对话：${thread_id}` : "还没有对话" } };
+    if (packer.is_running(thread.id)) return { status: 409, body: { ok: false, error: "这个对话正在压，等它压完", thread: thread.id } };
     packer.request(thread.id, "manual");
     return { status: 200, body: { ok: true, queued: true, thread: thread.id } };
   }
@@ -531,6 +532,7 @@ function create_present({
     clock,
     zone,
     name,
+    speaker_of: speaker_names(env).of,   // /loci/source (source_api.js)
     context_windows: windows,
     cue,
     // forced / manual packing and the wall (pack.js · wall.js)

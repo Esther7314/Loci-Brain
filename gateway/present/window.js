@@ -26,18 +26,18 @@
 //              the turn to end before the flip (same privacy as the carry)
 //   usage      the last prompt_tokens (or an estimate) and the fill % it makes
 //   model      the model the client used last
-//   opened_by  { at, how }: how this window was opened ("self" · later "forced",
-//              "manual", "day"); null for a conversation's first window. Time and way
+//   opened_by  { at, how }: how this window was opened ("self", "forced", "manual",
+//              "day"); null for a conversation's first window. Time and way
 //              only, never text: it is what /present shows as compress.last.
 //
 // ─── The carry ───
 // Composed by compose_carry() from two parts, each optional, in this order:
 //     a header      system text, not her words: this is only the recent past, the long
 //                   term is in Loci, breath for it
-//     〔上一份日报〕                 the latest day report (construction step 10 writes it)
+//     〔上一份日报〕                 the latest day report (day_close.js writes it)
 //     〔你上一扇窗收尾时写给自己的〕   the summary he wrote when the last window closed
 // A flip he made himself keeps the report part of the carry it replaces and puts his new
-// summary in. The day report's flip (step 10) puts the new report in and drops the
+// summary in. The day report's flip (day_close.js) puts the new report in and drops the
 // summary, because the report covers what the summary did. No part at all = no carry.
 // The composed text is stored as it is and sent unchanged for the whole window, so the
 // upstream prefix stays byte-stable.
@@ -63,7 +63,8 @@
 // client trimmed its own history past it — the mark is void for that request and the
 // history is forwarded as it is (overlays still replayed where their anchors are).
 // Moving the mark, setting the carry and flipping the window go through one door,
-// open_next(): a compression (present/compress.js) and later the daily report.
+// open_next(): a fold he made himself (present/compress.js), a pack (present/pack.js) and
+// the day report's flip (present/day_close.js).
 //
 // ─── Forks ───
 // A fork (threads.js: an edit, a rewind, a reply for a line the thread moved past) starts

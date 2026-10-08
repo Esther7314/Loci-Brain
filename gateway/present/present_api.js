@@ -22,7 +22,7 @@
 //                            status.report.
 //   POST /present/push-test  one Bark push now (push.js test), answered 200 with Bark's
 //                            outcome: { ok: true, status: 200 } · { ok: false, status:
-//                            "error", error: "timeout" } · { ok: false, status:
+//                            "error", error: "超时：Bark 没回" } · { ok: false, status:
 //                            "skipped_config_missing", … }, plus endpoint_redacted (masked)
 //   GET  /present/prompts    { items: [card…], error? }  (prompts.js)
 //   POST /present/prompts    { key, text } | { key, reset: true } → { ok: true, item }
@@ -40,9 +40,9 @@
 //
 // 🔴 No reply here carries a single character of what he compressed (the carry), the
 //    overlay, or the last request sent upstream: they live in the private thread ledger,
-//    and window_status() hands this file numbers, names and a time, never text. A status
-//    that is not built yet says so (`state: "not_built"`, nulls) instead of making
-//    something up.
+//    and window_status() hands this file numbers, names and a time, never text. A part the
+//    present object does not carry says so (`state: "not_built"`, nulls) instead of
+//    making something up.
 // ============================================================
 
 const { read_json, send_json } = require("./http_io.js");
@@ -120,7 +120,7 @@ function create_present_api({
       if (!got.ok) return send_json(res, 400, { error: got.error, field: null });
       const body = got.value;
       if (!body || typeof body !== "object" || !("patch" in body)) {
-        return send_json(res, 400, { error: "send { patch: {...} }", field: "patch" });
+        return send_json(res, 400, { error: "要传 { patch: {...} }", field: "patch" });
       }
       const done = settings.patch(body.patch);
       if (!done.ok) return send_json(res, done.status, { error: done.error, field: done.field });
@@ -130,7 +130,7 @@ function create_present_api({
       const got = await read_json(req);
       if (!got.ok) return send_json(res, 400, { error: got.error });
       const thread = got.value && typeof got.value === "object" ? got.value.thread ?? null : null;
-      if (thread !== null && typeof thread !== "string") return send_json(res, 400, { error: "thread must be a conversation id", field: "thread" });
+      if (thread !== null && typeof thread !== "string") return send_json(res, 400, { error: "thread 要是一个对话的 id", field: "thread" });
       const done = compress_now(thread);
       return send_json(res, done.status, done.body);
     },
@@ -144,7 +144,7 @@ function create_present_api({
     // ── push (push.js): one test push, its answer as it is (ok or not, it is an answer) ──
     "POST /present/push-test": async (req, res) => {
       req.resume();
-      if (!push) return send_json(res, 501, { ...NOT_BUILT, error: "push is not built yet" });
+      if (!push) return send_json(res, 501, { ...NOT_BUILT, error: "推送还没接上" });
       return send_json(res, 200, await push.test());
     },
     "GET /present/prompts": async (req, res) => { req.resume(); send_json(res, 200, prompts.cards()); },
@@ -160,7 +160,7 @@ function create_present_api({
   return async function handle_present(req, res) {
     const route = req.url.split("?")[0].replace(/\/+$/, "") || "/";
     const handler = routes[`${req.method} ${route}`];
-    if (!handler) { req.resume(); return send_json(res, 404, { error: `present has no ${req.method} ${route}` }); }
+    if (!handler) { req.resume(); return send_json(res, 404, { error: `present 没有 ${req.method} ${route} 这个口` }); }
     return handler(req, res);
   };
 }

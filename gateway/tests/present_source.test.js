@@ -15,7 +15,7 @@
 // Cases: given · not_found (no such line / no such day / not this gateway's source) ·
 // truncated (a cut single line, a run cut and truncated after) · a revised line's
 // revision · a replaced line · a run on one thread, across days, with a missing end ·
-// scope · span · the Bearer.
+// scope · span · the Bearer · speaker (LOCI_OWNER_NAME / LOCI_AI_NAME, else 「用户」 / 「AI」).
 // ============================================================
 
 const { test, before, after } = require("node:test");
@@ -28,6 +28,7 @@ const fence = require("./network_fence.js");
 const { start_fake_upstream } = require("./fake_upstream.js");
 const { start_fake_loci } = require("./fake_loci.js");
 const { start_gateway } = require("./start_gateway.js");
+const { speaker_names } = require("../present/source_api.js");
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "loci-present-source-"));
 const data_root = path.join(root, "data");
@@ -37,6 +38,8 @@ const TOKEN = "loci-fetch-key-for-the-gateway";
 const A = "t_aaaaaa";
 const B = "t_bbbbbb";
 const LONG = "长".repeat(300);
+const OWNER = "小周";
+const AI = "Echo";
 const OUR_PORTS = new Set();
 
 let fake_upstream, fake_loci, gateway;
@@ -87,7 +90,8 @@ before(async () => {
     相关超时毫秒: 1200,
     白名单端口: [fake_upstream.端口, fake_loci.端口],
     账本路径: ledger_path,
-    extra_env: { LOCI_TZ: "Asia/Shanghai", LOCI_GATEWAY_DAYS: host_dir, LOCI_GATEWAY_TOKEN: TOKEN },
+    extra_env: { LOCI_TZ: "Asia/Shanghai", LOCI_GATEWAY_DAYS: host_dir, LOCI_GATEWAY_TOKEN: TOKEN,
+                 LOCI_OWNER_NAME: ` ${OWNER} `, LOCI_AI_NAME: AI },
   });
   OUR_PORTS.add(gateway.端口);
   fence.allow(gateway.端口);
@@ -140,6 +144,11 @@ function reads_as_loci_would(answer, source) {
     for (const k of ["text", "missing", "revision"]) assert.ok(ln[k] == null || typeof ln[k] === "string", `${k} is text or null`);
     if ("cut" in ln) assert.strictEqual(typeof ln.cut, "boolean");
     if (ln.missing != null) assert.ok(MISSING_WORDS.includes(ln.missing), ln.missing);
+    if (ln.speaker != null) {
+      assert.strictEqual(typeof ln.speaker, "string", "speaker is text");
+      const name = ln.speaker.trim();
+      assert.ok(name && name === ln.speaker && name.length <= 64 && !/[\u0000-\u001f\u007f]/.test(name), `speaker reads: ${ln.speaker}`);
+    }
     if (ln.at != null) assert.match(ln.at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/, "an ISO time with its offset");
   }
   const ids = answer.lines.map((l) => l.id);
@@ -170,7 +179,7 @@ test("given: one line, its revision and when it was said, nothing else", { timeo
   const a = await given({ id: "m_20261007_0002", revision: "r1" });
   assert.deepStrictEqual(a, {
     v: 1, status: "given",
-    lines: [{ id: "m_20261007_0002", revision: "r1", text: "你好呀，今天过得怎么样？", at: "2026-10-07T20:41:09+08:00" }],
+    lines: [{ id: "m_20261007_0002", revision: "r1", text: "你好呀，今天过得怎么样？", at: "2026-10-07T20:41:09+08:00", speaker: AI }],
     truncated_after: null,
   });
 });
@@ -191,7 +200,7 @@ test("not_found: no such line, no such day, not this gateway's source", { timeou
 
 test("truncated: a single line is cut and never truncated after; a run is cut and truncated after", { timeout: 20000 }, async () => {
   const one = await given({ id: "m_20261007_0008", max_chars: 100 });
-  assert.deepStrictEqual(one.lines, [{ id: "m_20261007_0008", revision: "r1", text: "长".repeat(100), cut: true, at: "2026-10-07T20:47:00+08:00" }]);
+  assert.deepStrictEqual(one.lines, [{ id: "m_20261007_0008", revision: "r1", text: "长".repeat(100), cut: true, at: "2026-10-07T20:47:00+08:00", speaker: OWNER }]);
   assert.strictEqual(one.truncated_after, null);
 
   const run = await given({ id: "m_20261007_0007", through: "m_20261007_0009", max_chars: 107 });
@@ -209,12 +218,12 @@ test("truncated: a single line is cut and never truncated after; a run is cut an
 
 test("a revised line: its latest text with its own revision, said when it was first said", { timeout: 20000 }, async () => {
   const a = await given({ id: "m_20261007_0006", revision: "r1" });
-  assert.deepStrictEqual(a.lines, [{ id: "m_20261007_0006", revision: "r2", text: "改之后", at: "2026-10-07T20:45:00+08:00" }]);
+  assert.deepStrictEqual(a.lines, [{ id: "m_20261007_0006", revision: "r2", text: "改之后", at: "2026-10-07T20:45:00+08:00", speaker: AI }]);
 });
 
 test("a replaced line (a regenerated reply) is given as it was said, at the revision its text was set", { timeout: 20000 }, async () => {
   const a = await given({ id: "m_20261007_0004", revision: "r1" });
-  assert.deepStrictEqual(a.lines, [{ id: "m_20261007_0004", revision: "r1", text: "考完啦！", at: "2026-10-07T20:43:00+08:00" }]);
+  assert.deepStrictEqual(a.lines, [{ id: "m_20261007_0004", revision: "r1", text: "考完啦！", at: "2026-10-07T20:43:00+08:00", speaker: AI }]);
 });
 
 test("a run: the container's thread only, across days, an end that is not there marked not_found", { timeout: 20000 }, async () => {
@@ -228,10 +237,11 @@ test("a run: the container's thread only, across days, an end that is not there 
   assert.deepStrictEqual(days.lines.map((l) => [l.id, l.text]), [
     ["m_20261006_0002", "晚安，明天见。"], ["m_20261007_0001", "你好"], ["m_20261007_0002", "你好呀，今天过得怎么样？"],
   ]);
+  assert.deepStrictEqual(days.lines.map((l) => l.speaker), [AI, OWNER, AI], "each line names who said it");
 
   const open_end = await given({ id: "m_20261007_0009", through: "m_20261007_0012" });
   assert.deepStrictEqual(open_end.lines, [
-    { id: "m_20261007_0009", revision: "r1", text: "好长。", at: "2026-10-07T20:48:00+08:00" },
+    { id: "m_20261007_0009", revision: "r1", text: "好长。", at: "2026-10-07T20:48:00+08:00", speaker: AI },
     { id: "m_20261007_0012", revision: null, missing: "not_found" },
   ]);
   const backwards = await given({ id: "m_20261007_0005", through: "m_20261007_0001" });
@@ -263,8 +273,17 @@ test("the request: Loci's Bearer only; a body that does not read is a 400", { ti
     assert.ok(!r.text.includes("你好呀"));
   }
   for (const bad of [{ ...body, v: 2 }, { v: 1 }, { ...body, source: { ...body.source, id: "" } }]) {
-    assert.strictEqual((await ask(bad)).status, 400);
+    const r = await ask(bad);
+    assert.strictEqual(r.status, 400);
+    assert.match(r.json.error, /[\u4e00-\u9fff]/, r.text);
   }
+});
+
+test("speaker names: the env names, trimmed; unset, 「用户」 and 「AI」; AI_NAME stands in for LOCI_AI_NAME", () => {
+  assert.deepStrictEqual([speaker_names({}).of("user"), speaker_names({}).of("assistant")], ["用户", "AI"]);
+  assert.strictEqual(speaker_names({ AI_NAME: "Nova" }).of("assistant"), "Nova");
+  assert.strictEqual(speaker_names({ AI_NAME: "Nova", LOCI_AI_NAME: "Echo" }).of("assistant"), "Echo");
+  assert.strictEqual(speaker_names({ LOCI_OWNER_NAME: "  " }).of("user"), "用户", "blank is unset");
 });
 
 test("reconciliation: every outbound connection stayed inside this run", () => {

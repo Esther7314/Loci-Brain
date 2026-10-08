@@ -63,6 +63,7 @@
 // 📐 **This file is a mount table**: config read from env, the modules built from it,
 //    a list of routes → handlers, one heartbeat, and the startup lines. Logic does not
 //    live here: /health is health.js, the door (bind address and passphrase) is door.js,
+//    one gateway per data directory (gateway.lock) is lock.js,
 //    /present/* and /loci/source are present/present_api.js and present/source_api.js
 //    behind LOCI_GATEWAY_TOKEN, everything else is relay.js, and the present layer (day
 //    store, threads, the window and its overlays, cue, compression and packing, the
@@ -79,6 +80,7 @@ const { create_relay } = require("./relay.js");
 const { create_present } = require("./present/index.js");
 const { create_heartbeat } = require("./present/heartbeat.js");
 const { check_door, create_door, url_host } = require("./door.js");
+const { acquire_lock, refusal_message, release_on_exit } = require("./lock.js");
 const { behind_token, send_json } = require("./present/http_io.js");
 const { create_present_api } = require("./present/present_api.js");
 const { create_source_api } = require("./present/source_api.js");
@@ -108,6 +110,13 @@ if (door_config.error) {
   console.error(door_config.error);
   process.exit(1);
 }
+// Before anything reads or writes the data directory: a second gateway on it never starts.
+const lock = acquire_lock(data_root);
+if (!lock.ok) {
+  console.error(refusal_message(data_root, lock));
+  process.exit(1);
+}
+release_on_exit(lock.file);
 
 // ———— Modules ————
 const present = create_present({ env: process.env, data_root, upstream, loci: LOCI, idle_threshold_minutes, log_path });
@@ -158,6 +167,7 @@ server.listen(port, door_config.bind, () => {
   console.log(`[gateway] upstream       ${upstream}`);
   console.log(`[gateway] Loci           ${poke._internal.httpBase(LOCI)}`);
   console.log(`[gateway] idle threshold ${idle_threshold_minutes} min`);
+  console.log(`[gateway] data lock      ${lock.file}${lock.took_over ? ` (taken over from pid ${lock.took_over}, no longer running)` : ""}`);
   for (const line of present.banner_lines()) console.log(`[gateway] ${line}`);
   console.log(`[gateway] present api    ${gateway_token ? "/present/* and /loci/source open to Bearer LOCI_GATEWAY_TOKEN"
     : "closed — LOCI_GATEWAY_TOKEN unset, so /present/* answers 404 and /loci/source 503"}`);

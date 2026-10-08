@@ -116,6 +116,9 @@ after(async () => {
   else fs.rmSync(root, { recursive: true, force: true });
 });
 
+// Every error text here reaches the panel as it is, so it must be Chinese.
+const CHINESE = /[\u4e00-\u9fff]/;
+
 /** One call to the gateway; returns { status, text, json }. `auth: null` sends no Authorization. */
 async function call(method, route, { body, auth = TOKEN, to = gateway } = {}) {
   const headers = { "Content-Type": "application/json" };
@@ -255,11 +258,12 @@ test("POST /present: a bad patch → 400 naming the field; present.json untouche
     const r = await call("POST", "/present", { body: { patch } });
     assert.strictEqual(r.status, 400, `${JSON.stringify(patch)} → ${r.text}`);
     assert.strictEqual(r.json.field, field, `${JSON.stringify(patch)} → ${r.text}`);
-    assert.ok(r.json.error);
+    assert.match(r.json.error, CHINESE, `the panel shows it as it is: ${r.text}`);
   }
   const no_patch = await call("POST", "/present", { body: { wake: { on: true } } });
   assert.strictEqual(no_patch.status, 400);
   assert.strictEqual(no_patch.json.field, "patch");
+  assert.match(no_patch.json.error, CHINESE);
   assert.strictEqual(file_bytes(settings_file), before_bytes, "no bad patch touched the file");
 
   // allow_short lowers the floor, in the same patch or from the file
@@ -281,6 +285,7 @@ test("present.json that cannot be read: defaults, do not wake, and never written
     const w = await call("POST", "/present", { body: { patch: { wake: { on: false } } } });
     assert.strictEqual(w.status, 409, w.text);
     assert.strictEqual(w.json.field, "present.json");
+    assert.match(w.json.error, /^present\.json 读不出来/);
     assert.strictEqual(file_bytes(settings_file), "{ this is not json", "the owner's broken file is left as it is");
     const h = await call("GET", "/health");
     assert.strictEqual(h.json.present.settings.state, "unreadable");
@@ -343,6 +348,7 @@ test("prompt cards: defaults, a rewrite, back to the default, a reset", { timeou
   for (const body of [{ key: "nope", text: "x" }, { text: "x" }, { key: "wake" }, { key: "wake", text: "   " }, { key: "wake", text: "长".repeat(20001) }]) {
     const bad = await call("POST", "/present/prompts", { body });
     assert.strictEqual(bad.status, 400, JSON.stringify(body).slice(0, 80));
+    assert.match(bad.json.error, CHINESE, bad.text);
   }
 
   fs.writeFileSync(prompts_file, "nope", "utf8");
@@ -353,6 +359,7 @@ test("prompt cards: defaults, a rewrite, back to the default, a reset", { timeou
     assert.strictEqual(broken.json.items[0].text, CARDS.compress.text);
     const refused = await call("POST", "/present/prompts", { body: { key: "wake", text: NEW } });
     assert.strictEqual(refused.status, 409);
+    assert.match(refused.json.error, CHINESE, refused.text);
     assert.strictEqual(file_bytes(prompts_file), "nope");
   } finally { fs.rmSync(prompts_file); }
 });
@@ -367,14 +374,15 @@ test("push-test without a code says so; report refuses what it cannot do; compre
   assert.strictEqual((await call("POST", "/present/compress", { body: { thread: 7 } })).status, 400);
   const pushed = await call("POST", "/present/push-test", { body: {} });
   assert.strictEqual(pushed.status, 200);
-  assert.deepStrictEqual(pushed.json, { ok: false, status: "skipped_config_missing", error: "Bark not configured", endpoint_redacted: "" });
+  assert.deepStrictEqual(pushed.json, { ok: false, status: "skipped_config_missing", error: "推送码没填", endpoint_redacted: "" });
   const bad = await call("POST", "/present/report", { body: { kind: "later" } });
-  assert.deepStrictEqual([bad.status, bad.json.field], [400, "kind"]);
+  assert.deepStrictEqual([bad.status, bad.json.field, bad.json.error], [400, "kind", "kind 只能是 missing 或 now"]);
   // a manual flip schedules nothing, so nothing is missing (no turn is started here)
   assert.strictEqual((await call("POST", "/present", { body: { patch: { report: { flip: "manual" } } } })).status, 200);
   const none = await call("POST", "/present/report", { body: { kind: "missing" } });
   assert.strictEqual(none.status, 409, none.text);
   assert.strictEqual(none.json.ok, false);
+  assert.match(none.json.error, /不该写日报/);
   assert.strictEqual((await call("POST", "/present", { body: { patch: { report: { flip: "daily" } } } })).status, 200);
   assert.strictEqual((await call("GET", "/present/compress")).status, 404);
   assert.strictEqual((await call("GET", "/present/nope")).status, 404);

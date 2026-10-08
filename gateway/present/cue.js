@@ -7,7 +7,7 @@
 //   POST /api/v2/cue/delivered  {window, turn} — every card of that turn's answer is in the
 //                               model's input now (said once upstream accepted the request)
 //   POST /api/v2/cue/dropped    {window, all: true} / {window, turns} / {window, cards} —
-//                               cards that left the input (a window flip, later)
+//                               cards that left the input (a window flip, index.js)
 // `window` = "<thread>#w<window no>", `turn` = the owner's line id. Loci answers the same
 // turn with the same cards, so a resend can always ask again; the window state keeps the
 // first answer and replays it instead (present/window.js).
@@ -107,7 +107,7 @@ function create_cue({ address, hook_token = "", timeout_ms = DEFAULT_TIMEOUT_MS,
     }
   }
 
-  /** For the window flip (construction steps 4–5): `{all: true}`, `{turns}` or `{cards}`. */
+  /** For the window flip (index.js): `{all: true}`, `{turns}` or `{cards}`. */
   async function dropped({ window, ...which }) {
     try {
       await post("/api/v2/cue/dropped", { window, ...which });

@@ -79,23 +79,23 @@ function deep_merge(base, over) {
 // ———— Field checks ————
 
 function bool(v, field) {
-  if (typeof v !== "boolean") throw bad(field, "true or false");
+  if (typeof v !== "boolean") throw bad(field, "只能是 true 或 false（开 / 关）");
   return v;
 }
 function int_in(v, lo, hi, field) {
-  if (!Number.isInteger(v) || v < lo || v > hi) throw bad(field, `a whole number from ${lo} to ${hi}`);
+  if (!Number.isInteger(v) || v < lo || v > hi) throw bad(field, `要填 ${lo} 到 ${hi} 之间的整数`);
   return v;
 }
 function int_or_null(v, lo, hi, field) {
   return v === null || v === "" ? null : int_in(v, lo, hi, field);
 }
 function one_of(v, list, field) {
-  if (!list.includes(v)) throw bad(field, `one of ${list.join(" / ")}`);
+  if (!list.includes(v)) throw bad(field, `只能是 ${list.join(" / ")} 其中一个`);
   return v;
 }
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 function hhmm(v, field) {
-  if (typeof v !== "string" || !HHMM.test(v)) throw bad(field, "a time written HH:MM (00:00–23:59)");
+  if (typeof v !== "string" || !HHMM.test(v)) throw bad(field, "时间要写成 HH:MM（00:00–23:59）");
   return v;
 }
 const minutes = (t) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3));
@@ -103,7 +103,7 @@ const minutes = (t) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3));
 function span(obj, where) {
   const from = hhmm(obj.from, `${where}.from`);
   const to = hhmm(obj.to, `${where}.to`);
-  if (from === to) throw bad(`${where}.to`, "the end must differ from the start");
+  if (from === to) throw bad(`${where}.to`, "结束时间不能跟开始时间一样");
   return { from, to };
 }
 
@@ -118,18 +118,18 @@ function overlaps(a, b) {
 
 const BARK_KEY = /^[A-Za-z0-9_-]{4,128}$/;
 function bark(v, field) {
-  if (typeof v !== "string") throw bad(field, "a Bark key or a whole Bark URL, as text");
+  if (typeof v !== "string") throw bad(field, "要填 Bark 推送码，或者一整条 Bark 网址");
   const s = v.trim();
   if (!s) return "";
   if (/^https?:\/\//i.test(s)) {
     let u;
-    try { u = new URL(s); } catch { throw bad(field, "not a URL that reads"); }
+    try { u = new URL(s); } catch { throw bad(field, "这条网址读不出来"); }
     if (!/^https?:$/.test(u.protocol) || !u.hostname || /\s/.test(s) || s.length > 512) {
-      throw bad(field, "an http(s) URL with a host, no spaces, at most 512 characters");
+      throw bad(field, "网址要以 http(s) 开头、有主机名、不带空格，最长 512 个字符");
     }
     return s;
   }
-  if (!BARK_KEY.test(s)) throw bad(field, "a Bark key (letters, digits, - and _) or a whole http(s) URL");
+  if (!BARK_KEY.test(s)) throw bad(field, "推送码只能有字母、数字、- 和 _；或者填一整条 http(s) 网址");
   return s;
 }
 
@@ -161,16 +161,16 @@ const VALIDATE = {
       weak_pct: null,
       force_pct: int_in(c.force_pct, 1, 99, "compress.force_pct"),
     };
-    if (!Array.isArray(c.weak_pct) || c.weak_pct.length > 5) throw bad("compress.weak_pct", "a list of at most 5 percents");
+    if (!Array.isArray(c.weak_pct) || c.weak_pct.length > 5) throw bad("compress.weak_pct", "弱提醒线最多 5 条");
     out.weak_pct = c.weak_pct.map((p, i) => int_in(p, 1, 99, `compress.weak_pct[${i}]`)).sort((a, b) => a - b);
-    if (new Set(out.weak_pct).size !== out.weak_pct.length) throw bad("compress.weak_pct", "the same percent twice");
+    if (new Set(out.weak_pct).size !== out.weak_pct.length) throw bad("compress.weak_pct", "有两条弱提醒线一样");
     if (out.weak_pct.some((p) => p >= out.ask_pct)) {
       throw bad(touched("compress.weak_pct") || !touched("compress.ask_pct") ? "compress.weak_pct" : "compress.ask_pct",
-        "every weak line must be below the ask line");
+        "弱提醒线要比水位线低");
     }
     if (out.ask_pct >= out.force_pct) {
       throw bad(touched("compress.force_pct") ? "compress.force_pct" : "compress.ask_pct",
-        "the ask line must be below the force line");
+        "水位线要比强制线低");
     }
     return out;
   },
@@ -187,22 +187,22 @@ const VALIDATE = {
 
   wake(w) {
     const allow_short = bool(w.allow_short, "wake.allow_short");
-    if (!is_plain(w.dnd)) throw bad("wake.dnd", "an object {on, from, to}");
-    if (!is_plain(w.segments)) throw bad("wake.segments", "an object {mode, list}");
+    if (!is_plain(w.dnd)) throw bad("wake.dnd", "要写成 {on, from, to}");
+    if (!is_plain(w.segments)) throw bad("wake.segments", "要写成 {mode, list}");
     const mode = one_of(w.segments.mode, ["all", "only"], "wake.segments.mode");
     if (!Array.isArray(w.segments.list) || w.segments.list.length > 12) {
-      throw bad("wake.segments.list", "a list of at most 12 {from, to}");
+      throw bad("wake.segments.list", "时间段最多 12 段");
     }
     const list = w.segments.list.map((s, i) => {
-      if (!is_plain(s)) throw bad(`wake.segments.list[${i}]`, "an object {from, to}");
+      if (!is_plain(s)) throw bad(`wake.segments.list[${i}]`, "要写成 {from, to}");
       return span(s, `wake.segments.list[${i}]`);
     });
     for (let i = 0; i < list.length; i++) {
       for (let j = 0; j < i; j++) {
-        if (overlaps(list[i], list[j])) throw bad(`wake.segments.list[${i}]`, `overlaps wake.segments.list[${j}]`);
+        if (overlaps(list[i], list[j])) throw bad(`wake.segments.list[${i}]`, `跟第 ${j + 1} 段时间重叠了`);
       }
     }
-    if (mode === "only" && list.length === 0) throw bad("wake.segments.list", "mode only needs at least one segment");
+    if (mode === "only" && list.length === 0) throw bad("wake.segments.list", "只在时间段里叫醒，就至少要有一段");
     const floor = allow_short ? 1 : MIN_EVERY_MIN;
     return {
       on: bool(w.on, "wake.on"),
@@ -217,11 +217,11 @@ const VALIDATE = {
   },
 
   own(o) {
-    if (!Array.isArray(o.models) || o.models.length > 10) throw bad("own.models", "a list of at most 10 model names");
+    if (!Array.isArray(o.models) || o.models.length > 10) throw bad("own.models", "模型最多填 10 个");
     return {
       tool_rounds: int_in(o.tool_rounds, 1, 20, "own.tool_rounds"),
       models: o.models.map((m, i) => {
-        if (typeof m !== "string" || !m.trim() || m.length > 200) throw bad(`own.models[${i}]`, "a model name");
+        if (typeof m !== "string" || !m.trim() || m.length > 200) throw bad(`own.models[${i}]`, "要填一个模型名（最长 200 个字符）");
         return m.trim();
       }),
     };
@@ -234,19 +234,19 @@ const VALIDATE = {
 
 /** Refuse what a patch may not name: unknown sections or keys, wrong shapes. Returns it without the read-only echoes. */
 function clean_patch(patch) {
-  if (!is_plain(patch)) throw bad("patch", "an object of settings sections");
+  if (!is_plain(patch)) throw bad("patch", "要按设置分节传一个对象");
   const out = {};
   for (const [section, body] of Object.entries(patch)) {
-    if (!SECTIONS.includes(section)) throw bad(section, "not a settings section");
-    if (!is_plain(body)) throw bad(section, "an object");
+    if (!SECTIONS.includes(section)) throw bad(section, "没有这一节设置");
+    if (!is_plain(body)) throw bad(section, "要是一个对象");
     out[section] = {};
     for (const [key, value] of Object.entries(body)) {
       if ((READ_ONLY[section] || []).includes(key)) continue;
-      if (!(key in DEFAULTS[section])) throw bad(`${section}.${key}`, "not a setting");
+      if (!(key in DEFAULTS[section])) throw bad(`${section}.${key}`, "没有这一项设置");
       if ((NESTED[section] || []).includes(key)) {
-        if (!is_plain(value)) throw bad(`${section}.${key}`, "an object");
+        if (!is_plain(value)) throw bad(`${section}.${key}`, "要是一个对象");
         for (const sub of Object.keys(value)) {
-          if (!(sub in DEFAULTS[section][key])) throw bad(`${section}.${key}.${sub}`, "not a setting");
+          if (!(sub in DEFAULTS[section][key])) throw bad(`${section}.${key}.${sub}`, "没有这一项设置");
         }
       }
       out[section][key] = value;
@@ -282,8 +282,8 @@ function create_settings({ file, env = process.env }) {
       try {
         const raw = JSON.parse(text);
         if (is_plain(raw)) return { state: "ok", raw };
-        last_err = "the file does not hold a JSON object";
-      } catch (err) { last_err = `not JSON (${err.message})`; }
+        last_err = "文件里不是一个 JSON 对象";
+      } catch (err) { last_err = `不是 JSON（${err.message}）`; }
     }
     return { state: "unreadable", raw: null, error: last_err };
   }
@@ -329,7 +329,7 @@ function create_settings({ file, env = process.env }) {
     const got = read_file();
     if (got.state === "unreadable") {
       return { ok: false, status: 409, field: "present.json",
-        error: `present.json cannot be read (${got.error}); fix or remove it by hand — it is not written over` };
+        error: `present.json 读不出来（${got.error}）。去手动改好或者删掉它，网关不会盖掉它` };
     }
     let cleaned;
     try { cleaned = clean_patch(patch_body); }

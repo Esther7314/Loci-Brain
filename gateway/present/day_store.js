@@ -10,7 +10,7 @@
 // Rules, and why:
 //   · **An id is born with its line** — `m_<YYYYMMDD>_<seq>`, seq counting up within the
 //     day, at least four digits. The date inside the id names the file, so whoever holds
-//     an id (Loci asking for an original, later) opens one file and nothing else.
+//     an id (Loci asking for an original, source_api.js) opens one file and nothing else.
 //   · **Append only.** Nothing is ever rewritten in place. A change is a new line with
 //     the same id and `rev` + 1, appended to the file the id was born in (not today's
 //     file), so the newest version of an id is always the last line carrying it there.

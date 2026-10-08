@@ -28,7 +28,8 @@
 // `speaker` is a name, not a role word: Loci shows it as is to the side model that slices
 // and as `who` in an original, so it says who spoke. The owner's lines carry
 // LOCI_OWNER_NAME, his carry LOCI_AI_NAME (else AI_NAME, Loci's own variable); unset, the
-// owner is 「用户」 and he is 「AI」, as Loci's own import names them.
+// owner is 「用户」 and he is 「AI」, as Loci's own import names them (source_api.js
+// speaker_names: /loci/source names them the same way).
 // What happens to a batch:
 //   · 2xx → handed over; its lines are never sent again
 //   · Loci unreachable, a timeout, 401, a 5xx other than 502 → tried again on a later beat
@@ -97,7 +98,7 @@ const win = require("./window.js");
 const { local_stamp } = require("./clock.js");
 const { in_span, local_minute, minute_of_day } = require("./dnd.js");
 const { report_shell } = require("./prompts.js");
-const { line_view } = require("./source_api.js");
+const { line_view, speaker_names, DEFAULT_OWNER, DEFAULT_AI } = require("./source_api.js");
 const { format_line, clean_summary, fit_newest, wall_of } = require("./pack.js");
 
 const BATCH_LINES = 1000;
@@ -109,9 +110,6 @@ const FAILED_KEPT = 20;
 const SLICES_POST_TIMEOUT_MS = 5 * 60 * 1000;   // the side model slices while Loci holds the request
 const SLICES_GET_TIMEOUT_MS = 15 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
-
-const DEFAULT_OWNER = "用户";
-const DEFAULT_AI = "AI";
 
 // What the model reads in the letter (Chinese, like every model-facing text).
 const NO_PENDING = "（现在没有在排队的段落）";
@@ -180,9 +178,8 @@ function create_day_close({
   const log_file = path.join(data_root, "logs", "present.jsonl");
   const reports_dir = path.join(host_dir, "reports");
   const hook_token = String(env.LOCI_HOOK_TOKEN || "").trim();
-  const owner_name = String(env.LOCI_OWNER_NAME || "").trim();
-  const ai_name = String(env.LOCI_AI_NAME || env.AI_NAME || "").trim();
-  const speaker_of = (role) => (role === "user" ? owner_name || DEFAULT_OWNER : ai_name || DEFAULT_AI);
+  const speakers = speaker_names(env);
+  const speaker_of = speakers.of;
 
   let owner_seen_at = 0;
   let running = null;      // { kind, promise }
@@ -706,8 +703,8 @@ function create_day_close({
    * `now` = 「现在写日报」 (hand-off, report, flip). → { status, body }
    */
   function report_now(kind) {
-    if (kind !== "missing" && kind !== "now") return { status: 400, body: { ok: false, error: "kind is missing or now", field: "kind" } };
-    if (running || queued) return { status: 409, body: { ok: false, error: "a day report is already being written" } };
+    if (kind !== "missing" && kind !== "now") return { status: 400, body: { ok: false, error: "kind 只能是 missing 或 now", field: "kind" } };
+    if (running || queued) return { status: 409, body: { ok: false, error: "日报正在写，等它写完" } };
     const now = clock.now();
     let job;
     if (kind === "now") job = { kind: "now", day: day_of(now), occ: null };
@@ -716,9 +713,9 @@ function create_day_close({
       const occ = occurrence(now, values);
       const st = read_state();
       const a = auto_of(st, occ);
-      if (!cadence_due(occ, st, values)) return { status: 409, body: { ok: false, error: `no report is due for ${occ.day} (flip: ${values.flip}); use kind now` } };
+      if (!cadence_due(occ, st, values)) return { status: 409, body: { ok: false, error: `${occ.day} 不该写日报（翻页：${values.flip}）；要写就用「现在写日报」` } };
       if ((a && a.written_at) || (st.last_report && st.last_report.at_ms >= occ.start)) {
-        return { status: 409, body: { ok: false, error: `the report for ${occ.day} is written already` } };
+        return { status: 409, body: { ok: false, error: `${occ.day} 的日报已经写过了` } };
       }
       job = { kind: "missing", day: occ.day, occ: occ.start };
     }
@@ -808,8 +805,8 @@ function create_day_close({
   }
 
   function banner_line() {
-    return `speakers       ${owner_name || DEFAULT_OWNER} / ${ai_name || DEFAULT_AI}`
-      + (owner_name && ai_name ? "" : "   (LOCI_OWNER_NAME / LOCI_AI_NAME unset — the names Loci sees on handed-over lines)");
+    return `speakers       ${speakers.owner} / ${speakers.ai}`
+      + (speakers.owner_set && speakers.ai_set ? "" : "   (LOCI_OWNER_NAME / LOCI_AI_NAME unset — the names Loci sees on handed-over lines and originals)");
   }
 
   return {

@@ -2,7 +2,8 @@
 // gateway/present/own_turn.js — the one path for every turn the gateway pays for itself
 //
 // Wake, the daily report and forced packing all go upstream through run(). Nothing here
-// runs on its own: the heartbeat (later steps) decides when, this file decides how.
+// runs on its own: the callers (wake.js, day_close.js, pack.js, driven by the one heartbeat)
+// decide when, this file decides how.
 //
 // Which key (the owner's ruling, blueprint §七.1):
 //   · LOCI_UPSTREAM_KEY set → that key, as `Authorization: Bearer <key>`. Works across
@@ -24,7 +25,8 @@
 //   · 400 / 403 / 422 whose error body names a model ("model_not_found", "does not have
 //     access to model …", "model … does not support tools", or the model's own name) —
 //     unless it is about the context being too long, which another model of the chain
-//     does not cure and which has its own way out (compress step)
+//     does not cure and which has its own way out (pack.js and day_close.js drop the oldest
+//     lines and ask again)
 //   · not 401 (the key is wrong for every model), not 429 (rate or quota: the next model
 //     on the same key mostly hits the same wall, and backoff is the heartbeat's job),
 //     not 5xx (the provider is unwell, not the model)

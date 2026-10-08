@@ -526,7 +526,7 @@ test("push: a Bark that hangs times out, said as Lento's bark.js says it; errors
   const rig = push_rig({ push: { bark: bark.url }, items: [ITEM], timeout_ms: 150 });
   const r = await rig.push.test();
   bark.release();
-  assert.deepStrictEqual(r, { ok: false, status: "error", error: "timeout", endpoint_redacted: `${bark.base}/••••7Q` });
+  assert.deepStrictEqual(r, { ok: false, status: "error", error: "超时：Bark 没回", endpoint_redacted: `${bark.base}/••••7Q` });
   assert.strictEqual(scrub(`connect to ${bark.url}/x?token=abcdef failed`, `${bark.url}?token=abcdef`).includes(BARK_KEY), false);
   assert.ok(!scrub(`bad token abcdef`, `${bark.url}?token=abcdef`).includes("abcdef"));
 });

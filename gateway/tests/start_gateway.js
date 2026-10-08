@@ -100,7 +100,9 @@ async function start_gateway({ 端口: port, 上游地址: upstream_url, loci地
       }
     };
     child.stdout.on("data", check_ready);
-    child.on("exit", (code) => { clearTimeout(timer); reject(new Error(`网关起来就退了（exit ${code}）。它说：\n${output}`)); });
+    // "close", not "exit": close comes once stdout and stderr are drained too, so the
+    // message carries everything it said on the way out (a refusal is its last words).
+    child.on("close", (code) => { clearTimeout(timer); reject(new Error(`网关起来就退了（exit ${code}）。它说：\n${output}`)); });
     check_ready();
   });
 

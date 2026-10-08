@@ -81,7 +81,7 @@ node gateway/server.js
 | `LOCI_GATEWAY_DATA` | `gateway/data` | 网关的**私账**目录：设置、窗口状态（含压缩文）、日志。见第八节 |
 | `LOCI_GATEWAY_DAYS` | `<LOCI_GATEWAY_DATA>/host` | 原话（`days/<日期>.jsonl`）和日报（`reports/<日期>.md`）落哪。设成 `<buckets>/_hosts/<LOCI_GATEWAY_NAME>` 才会跟着 Loci 的导出走；不设就留在网关自己的目录里，不碰任何库 |
 | `LOCI_TZ` | 本机时区 | 「一天」按哪个时区切（IANA 名，如 `Asia/Shanghai`）。日报时段、免打扰、唤醒时间段都按它。认不出的名字退回本机时区，启动时打一行 ⚠️ |
-| `LOCI_OWNER_NAME` | `用户` | 夜里把原话交给 Loci 切段时，你说的那几行署谁的名。跟 Loci 用的是同一个变量名，写成一样 |
+| `LOCI_OWNER_NAME` | `用户` | 你说的那几行署谁的名：夜里交给 Loci 切段时、Loci 来取原话时都署这个。跟 Loci 用的是同一个变量名，写成一样 |
 | `LOCI_AI_NAME` | `AI_NAME`，再没有就 `AI` | 同上，他说的那几行署的名 |
 | `POKE_IDLE_MINUTES` | `210` | 闲时闸：你多久没说话之后的第一句才递梦 / 发呆（第九节） |
 | `LOCI_CUE_TIMEOUT_MS` | `3000` | 等 Loci 的卡片多久。等不到这一轮就不贴，照发 |
@@ -281,7 +281,7 @@ curl http://127.0.0.1:3100/health
 10. **Bark 只有 iPhone**；推送内容经过 Bark 的服务器（自己搭一个就只经过自己的）。
 11. **Loci 在 Docker 里来问原话**，要能连到网关：Docker Desktop 上写 `host.docker.internal`；Linux 没实测过（见第六节）。
 12. **官方 App、Claude Code**（填不了 base URL）：只有记忆，没有这一层。
-13. **一个数据目录只能跑一个网关**：两个网关共用一份 `LOCI_GATEWAY_DATA` 会互相踩账，而且两个都会叫醒他 —— 双倍的钱、两个他。
+13. **一个数据目录只能跑一个网关**：两个网关共用一份 `LOCI_GATEWAY_DATA` 会互相踩账，而且两个都会叫醒他 —— 双倍的钱、两个他。所以网关一起来先在数据目录里占一个 `gateway.lock`（里面是它的 pid），占不到第二个就不启动；上一个崩了、被强杀留下的锁，pid 已经不在了，下一个起来时直接接过去。
 
 ---
 
@@ -291,13 +291,14 @@ curl http://127.0.0.1:3100/health
 |---|---|---|
 | 网关起不来：`LOCI_UPSTREAM is not set` | 没设上游 | 设 `LOCI_UPSTREAM=<那家的 /v1>` |
 | 网关起不来：`LOCI_GATEWAY_BIND=… is not a loopback address` | 绑了非回环地址（`0.0.0.0`、局域网 IP）却没设口令 | 设 `LOCI_GATEWAY_PASSPHRASE`（16 位以上）；或者改回 `127.0.0.1` |
+| 网关起不来：`Another gateway (pid …) is already running on LOCI_GATEWAY_DATA=…` | 这个数据目录上已经有一个网关在跑（第五节第 13 条） | 留一个就够：停掉那个，或者给这个另设一个 `LOCI_GATEWAY_DATA`。那个 pid 根本不是网关（锁是很久以前留下的、pid 又被别的程序用上了），就手动删掉报错里写的那个 `gateway.lock` |
 | 网关起不来：`LOCI_GATEWAY_PASSPHRASE must be 16–128 characters` | 口令太短，或者有 URL 路径里会被改写的字符 | 只用字母、数字和 `. _ ~ -`，16–128 位 |
 | 面板 present 页整页「还没接上」 | Loci 的 `hosts:` 里没有一个宿主写了 `present_url`（或者写了但 Loci 没重启） | 照第二节第 2 步加上，重启 Loci |
 | present 页「连不上网关」/「5 秒内没回话」 | 网关没起、`present_url` 写错、Loci 在 Docker 里连不到本机的 `127.0.0.1` | 先 `curl <present_url>/health`；Docker 见最后一行 |
 | present 页「Loci 对宿主 gateway 没有钥匙」 | 没写 `fetch_token_env`，或者那个环境变量没值，或者值跟 `token_env` 那把一样 | 写上、填值（跟网关的 `LOCI_GATEWAY_TOKEN` 一样，跟 `token_env` 那把不一样），重启 Loci |
 | present 页「网关不认 Loci 的钥匙（HTTP 401）」 | 网关设了 `LOCI_GATEWAY_TOKEN`，但 Loci 带来的不是这一串 | 两边对一下：Loci 的 `fetch_token_env` 那个变量 = 网关的 `LOCI_GATEWAY_TOKEN` |
 | 直接打 `/present` 回 **401** | 门开着，钥匙不对或者没带 `Authorization: Bearer` | 同上 |
-| 直接打 `/present` 回 **404**，正文说 `closed: LOCI_GATEWAY_TOKEN is not set` | 网关没设 `LOCI_GATEWAY_TOKEN`，这族口关着 | 设上，重启网关 |
+| 直接打 `/present` 回 **404**，正文说「关着：网关没设 LOCI_GATEWAY_TOKEN」 | 网关没设 `LOCI_GATEWAY_TOKEN`，这族口关着 | 设上，重启网关 |
 | 直接打 `/present` 回 **404**，正文只有 `not found` | 网关绑在非回环地址上，路径里没带口令 | 路径前面加 `/<口令>`；`present_url` / `fetch_url` 也要带 |
 | 面板一打开就 401「写了 hosts 表，面板就必须先上锁」 | 写了 `hosts:`，面板还没设密码 | 面板「账号」里设一把密码 |
 | 写了 `hosts:` 之后，直连 Loci 的 MCP 客户端连不上（`No host credential`） | MCP 鉴权关着时，表上的人才进得来 | 那个客户端请求头带上 legacy 的钥匙（第二节第 2 步那三件事） |
@@ -306,7 +307,7 @@ curl http://127.0.0.1:3100/health
 | **一直不唤醒** | ① 唤醒没开（缺省关）② **网关重启后还没钥匙**：要等你先说一句 ③ 在免打扰里（缺省 23:00–08:00）或不在你设的时间段里 ④ `wake.dry_run` 开着：到点只记一行 `would_wake`，不真叫 ⑤ **今天的日报该写还没写**：早上第一声等日报 ⑥ 今天到上限了 / 他说的话攥到 `held_cap` 了 ⑦ 还没有一个能接着说下去的对话（刚装好、一句都没聊过） ⑧ `present.json` 读不出来或唤醒那节填坏了：读不出来就不叫 | 看 present 页「自动唤醒」那行的「下一次为什么不准点」，或者 `logs/present.jsonl` 里的 `wake_gate`。② 配 `LOCI_UPSTREAM_KEY` 就不用等 |
 | 间隔填 2 分钟被拒 | 间隔最小 15 分钟 | 试的时候在 `present.json` 里开 `wake.allow_short`，试完关掉 |
 | 「试推一条」失败：`skipped_config_missing` | 推送码没填 | present 页填推送码或整条 Bark URL |
-| 「试推一条」失败：`error` / `timeout` | 网关这台机器连不上 Bark 服务器（Node 自带的 fetch 不走系统代理）；自建服务器地址写错 | 在网关那台机器上 `curl https://api.day.app` 试试；自建的检查 `LOCI_BARK_BASE` 或整条 URL |
+| 「试推一条」失败：`error`，「超时：Bark 没回」或「连不上 Bark：……」 | 网关这台机器连不上 Bark 服务器（Node 自带的 fetch 不走系统代理）；自建服务器地址写错 | 在网关那台机器上 `curl https://api.day.app` 试试；自建的检查 `LOCI_BARK_BASE` 或整条 URL |
 | 「试推一条」失败：HTTP 400 / 4xx | 多半是推送码不对（重装过 Bark 会换码） | Bark App 里重新复制推送码 |
 | 试推能到，他唤醒说的话推不到 | 那会儿在免打扰里（试推不管免打扰，真推送管）；或者失败重试 15 分钟后放弃了 | 话还在：你下次开口时出现在他回话最前面 |
 | 某一轮特别慢，`logs/present.jsonl` 里有一行「撞墙」 | **撞墙**：上游说上下文太长了（窗口认大了，或者服务商把窗口切得比纸面小） | 不用管：网关砍掉最老的几轮重发一次，记住这个模型的真上限（来处变成 `learned`），再排一次打包。老撞就在 present 页把窗口填小一点。自助压缩关着时每次撞都只砍不压 |
@@ -332,6 +333,7 @@ curl http://127.0.0.1:3100/health
   - `held.json` —— 他唤醒时说了、你还没看到的话
   - `present.json` —— 设置，**Bark 推送码是明文**（任何口都只回打码的尾巴）
   - `prompts.json` · `counters.json` · `context_windows.json` · `logs/`（日志只有数字、名字和原因，没有字）
+  - `gateway.lock` —— 只有正在跑的那个网关的 pid（第五节第 13 条）
 - **钥匙**：客户端的 API key 只路过；借来给网关自己那一轮用的那把只在内存里，不落盘、不进日志，重启就没了。
   `LOCI_UPSTREAM_KEY` 只从环境变量读。
 - **Bark 推送的字经过 Bark 的服务器**。缺省推全文；不想让字经过别人的服务器，`present.json` 里

@@ -7,7 +7,7 @@
 //          `estimated: true` (the panel says 「估的」)
 //   window present/context_window.js, with where the number came from
 // It is measured on the last turn, so the next turn still adds the owner's line, the reply
-// and any tool round trips on top — the lines that act on it (construction steps 4–5)
+// and any tool round trips on top — the lines that act on it (compress.js, pack.js)
 // leave room for that.
 // ============================================================
 

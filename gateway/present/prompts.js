@@ -208,13 +208,13 @@ function create_prompts({ file, clock, zone }) {
     try {
       const data = JSON.parse(text);
       const got = data && typeof data === "object" ? data.prompts : null;
-      if (!got || typeof got !== "object" || Array.isArray(got)) return { saved: {}, error: "prompts.json does not hold { prompts: {...} }" };
+      if (!got || typeof got !== "object" || Array.isArray(got)) return { saved: {}, error: "prompts.json 里不是 { prompts: {...} }" };
       const saved = {};
       for (const [k, v] of Object.entries(got)) {
         if (v && typeof v === "object" && typeof v.text === "string") saved[k] = v;
       }
       return { saved };
-    } catch (err) { return { saved: {}, error: `prompts.json is not JSON (${err.message})` }; }
+    } catch (err) { return { saved: {}, error: `prompts.json 不是 JSON（${err.message}）` }; }
   }
 
   function card_of(key, saved) {
@@ -260,17 +260,17 @@ function create_prompts({ file, clock, zone }) {
    */
   function apply(body) {
     const key = String(body?.key ?? "").trim();
-    if (!KEYS.includes(key)) return { ok: false, status: 400, error: `no such prompt card: ${key || "(no key)"} (there are: ${KEYS.join(", ")})` };
+    if (!KEYS.includes(key)) return { ok: false, status: 400, error: `没有这张提示词卡：${key || "（没给 key）"}（有的是：${KEYS.join("、")}）` };
     const reset = body.reset === true;
-    if (!reset && typeof body.text !== "string") return { ok: false, status: 400, error: "send text (the rewritten card) or reset: true" };
+    if (!reset && typeof body.text !== "string") return { ok: false, status: 400, error: "要传 text（改好的卡），或者 reset: true" };
     const got = read_file();
-    if (got.error) return { ok: false, status: 409, error: `${got.error}; fix or remove it by hand — it is not written over` };
+    if (got.error) return { ok: false, status: 409, error: `${got.error}。去手动改好或者删掉它，网关不会盖掉它` };
     const saved = { ...got.saved };
     if (reset || body.text === CARDS[key].text) {
       if (key in saved) { delete saved[key]; write(saved); }
     } else {
-      if (!body.text.trim()) return { ok: false, status: 400, error: "the card cannot be empty; reset it instead" };
-      if (body.text.length > TEXT_MAX) return { ok: false, status: 400, error: `the card is too long: ${body.text.length} characters (at most ${TEXT_MAX})` };
+      if (!body.text.trim()) return { ok: false, status: 400, error: "卡不能是空的；想回到原样就恢复默认" };
+      if (body.text.length > TEXT_MAX) return { ok: false, status: 400, error: `卡太长了：${body.text.length} 个字符（最多 ${TEXT_MAX}）` };
       saved[key] = { text: body.text, at: local_stamp(clock.now(), zone).iso };
       write(saved);
     }

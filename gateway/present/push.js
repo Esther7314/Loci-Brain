@@ -116,7 +116,7 @@ function scrub(text, endpoint) {
  */
 async function send_bark({ endpoint, title, body, timeout_ms = TIMEOUT_MS, fetch_impl = fetch }) {
   const endpoint_redacted = mask_endpoint(endpoint);
-  if (!endpoint) return { ok: false, status: "skipped_config_missing", error: "Bark not configured", endpoint_redacted };
+  if (!endpoint) return { ok: false, status: "skipped_config_missing", error: "推送码没填", endpoint_redacted };
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout_ms);
   try {
@@ -130,11 +130,11 @@ async function send_bark({ endpoint, title, body, timeout_ms = TIMEOUT_MS, fetch
     if (resp.ok) return { ok: true, status: resp.status, endpoint_redacted };
     let said = "";
     try { said = String(JSON.parse(text)?.message ?? ""); } catch { said = ""; }
-    return { ok: false, status: resp.status, error: scrub(said || `HTTP ${resp.status}`, endpoint).slice(0, 200), endpoint_redacted };
+    return { ok: false, status: resp.status, error: scrub(said || `Bark 回了 HTTP ${resp.status}`, endpoint).slice(0, 200), endpoint_redacted };
   } catch (err) {
     const aborted = err?.name === "AbortError" || controller.signal.aborted;
-    const why = aborted ? "timeout" : [err?.message, err?.cause?.code || err?.cause?.message].filter(Boolean).join(": ");
-    return { ok: false, status: "error", error: scrub(why || "error", endpoint).slice(0, 200), endpoint_redacted };
+    const why = aborted ? "超时：Bark 没回" : `连不上 Bark：${[err?.message, err?.cause?.code || err?.cause?.message].filter(Boolean).join(": ")}`;
+    return { ok: false, status: "error", error: scrub(why, endpoint).slice(0, 200), endpoint_redacted };
   } finally {
     clearTimeout(timer);
   }

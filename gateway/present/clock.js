@@ -7,7 +7,7 @@
 //   · LOCI_GATEWAY_TEST_CLOCK=<file>: the time is whatever epoch-milliseconds number
 //     that file holds, read fresh on every call. It exists for the black-box tests,
 //     which run the gateway as a child process and have no other way to move its clock
-//     (resend windows, day boundaries, and later the night report and wake hours).
+//     (resend windows, day boundaries, the night report and wake hours).
 //     A missing or unreadable file throws: a test clock that silently fell back to the
 //     real time would make a time-dependent test pass or fail by the wall clock.
 //

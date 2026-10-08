@@ -44,7 +44,7 @@ test("unreadable or a bad wake section: wake gets null (do not wake); compress a
   fs.writeFileSync(s.file, JSON.stringify({ wake: { dnd: { from: "8 pm" } }, report: { quiet_min: 45 }, someday: { x: 1 } }), "utf8");
   const got = s.load();
   assert.strictEqual(got.state, "invalid");
-  assert.deepStrictEqual(got.errors, [{ field: "wake.dnd.from", error: "a time written HH:MM (00:00–23:59)" }]);
+  assert.deepStrictEqual(got.errors, [{ field: "wake.dnd.from", error: "时间要写成 HH:MM（00:00–23:59）" }]);
   assert.strictEqual(got.values.report.quiet_min, 45);
   assert.strictEqual(s.for_wake(), null);
 
@@ -63,7 +63,9 @@ test("a patch: merged over what is there, written whole, readable by hand", () =
   assert.deepStrictEqual(s.patch({ wake: { segments: { mode: "only", list: [{ from: "22:00", to: "02:00" }, { from: "02:00", to: "06:00" }] } } }), { ok: true },
     "touching ends do not overlap (start inclusive, end exclusive)");
   const overlap = s.patch({ wake: { segments: { list: [{ from: "22:00", to: "02:00" }, { from: "01:59", to: "06:00" }] } } });
-  assert.deepStrictEqual([overlap.status, overlap.field], [400, "wake.segments.list[1]"]);
+  assert.deepStrictEqual([overlap.status, overlap.field, overlap.error], [400, "wake.segments.list[1]", "跟第 1 段时间重叠了"]);
+  assert.deepStrictEqual(s.patch({ compress: { force_pct: 60 } }),
+    { ok: false, status: 400, field: "compress.force_pct", error: "水位线要比强制线低" }, "the panel shows this text as it is");
 });
 
 test("the Bark code is shown only as its origin and a two-character tail", () => {

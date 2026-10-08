@@ -34,8 +34,8 @@
 // He writes 【窗口摘要】…【/窗口摘要】 in his reply. The client never sees it
 // (stream_filter.js); a closed block becomes the next window's carry, and once the reply
 // has finished the window flips (lesson ②: write it, then leave):
-//   · the carry = the latest day report (for now the previous carry's report part, if any)
-//     + this summary (window.js compose_carry)
+//   · the carry = the report part of the carry it replaces (the latest day report, if
+//     any) + this summary (window.js compose_carry)
 //   · the mark moves to the last keep_raw raw lines, onto a line of hers
 //   · the window number goes up by one; the fill and the offered lines start empty
 //     (lesson ③: a new window that inherits the old fill is nagged at once)

@@ -4,7 +4,7 @@
 // Same question as the rest of /health: not "is the process up" but **"when did each
 // thing last actually succeed"** — the last day report, wake, compression and push, how
 // long ago, how many failures since, how many things he said are waiting for her.
-// Parts that are not built yet answer `state: "not_built"` with nulls: a monitor that
+// A part the present object does not carry answers `state: "not_built"` with nulls: a monitor that
 // fills a gap with a guess is worse than one that says it does not know.
 //
 // What is built and measured here:

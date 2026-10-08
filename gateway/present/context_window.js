@@ -7,12 +7,12 @@
 //   user      the owner typed it (`compress.context_tokens` in present.json; absent or
 //             null = not set)
 //   learned   the model hit the wall once and the gateway learned its real limit from
-//             that (the wall-hit escape, construction step 5, calls learn())
+//             that (the wall-hit escape, wall.js, calls learn())
 //   provider  the provider's own model list (`GET /v1/models`) reports it
 //   table     the built-in table of common models below, matched by name
 //   default   1,000,000 — big on purpose: a window set too small makes the gateway pack
 //             early and lose words for nothing; one set too big hits the wall, and the
-//             wall has a way out (step 5)
+//             wall has a way out (wall.js)
 // The user's number wins over everything because the owner knows their provider; a
 // learned limit wins over the provider's list because it was measured on this very
 // route (proxies and plans cut windows below the model's paper size).
@@ -174,7 +174,7 @@ function create_context_windows({ data_root, upstream = "", read_settings = () =
   }
 
   /**
-   * The hook for the wall-hit escape (construction step 5): the limit read out of a
+   * The hook for the wall-hit escape (wall.js): the limit read out of a
    * context-length error, or else the last prompt_tokens that still went through.
    */
   function learn(model, tokens, how) {

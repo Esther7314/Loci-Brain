@@ -37,7 +37,10 @@
 //     replaced writes a new revision without changing the text, so its revision stays
 //     the one at which that text was set.
 //   · `at` is when the line was first said (its first revision), with the owner's offset.
-//     `speaker` is left out: nothing in the gateway names the owner or the model yet.
+//     `speaker` is a name, never a role word (speaker_names below): her lines carry
+//     LOCI_OWNER_NAME, his LOCI_AI_NAME (else AI_NAME); unset, 「用户」 and 「AI」. The
+//     night's slices name them the same way (day_close.js), so one line is one speaker
+//     wherever Loci meets it. A line given as missing carries none.
 //   · Attachments are kept as kinds only; their placeholders ("[image]") follow the text.
 //   · `span` (one line only): the fragment's own text, in the unit asked (utf16 · utf8 · char).
 //   · `scope`: null reads everything. Otherwise the source's place must be covered by
@@ -96,6 +99,21 @@ function covered(source, scope) {
     && ["system", "instance", "container"].every((k) => p[k] == null || p[k] === source[k]));
 }
 
+const DEFAULT_OWNER = "用户";
+const DEFAULT_AI = "AI";
+
+/**
+ * Who said a line, as Loci shows it: a display name for each role, from env.
+ * @returns { owner, ai, owner_set, ai_set, of(role) }
+ */
+function speaker_names(env = process.env) {
+  const owner_set = String(env.LOCI_OWNER_NAME || "").trim();
+  const ai_set = String(env.LOCI_AI_NAME || env.AI_NAME || "").trim();
+  const owner = owner_set || DEFAULT_OWNER;
+  const ai = ai_set || DEFAULT_AI;
+  return { owner, ai, owner_set, ai_set, of: (role) => (role === "user" ? owner : ai) };
+}
+
 /**
  * One id's view from its revisions: the current version, the revision its text was set
  * at, and when it was first said.
@@ -115,7 +133,7 @@ function line_view(revisions) {
     text: marks ? (text ? `${text} ${marks}` : marks) : text,
   };
   if (sorted[0].at) line.at = sorted[0].at;
-  return { line, thread: latest.thread };
+  return { line, thread: latest.thread, role: latest.role };
 }
 
 function fragment(text, span) {
@@ -151,8 +169,15 @@ function bad_request(res, error) {
 /**
  * @param day_store  day_store.js instance (read_day by day)
  * @param name       LOCI_GATEWAY_NAME: the `instance` this gateway's sources carry
+ * @param speaker_of (role) → the line's speaker (speaker_names(env).of)
  */
-function create_source_api({ day_store, name }) {
+function create_source_api({ day_store, name, speaker_of = speaker_names().of }) {
+  const view = (revisions) => {
+    const { line, thread, role } = line_view(revisions);
+    line.speaker = speaker_of(role);
+    return { line, thread };
+  };
+
   function answer(body) {
     const source = body.source;
     const single = source.through == null;
@@ -185,7 +210,7 @@ function create_source_api({ day_store, name }) {
     if (single) {
       const revs = by_id.get(source.id);
       if (!revs) return all_missing();
-      const { line } = line_view(revs);
+      const { line } = view(revs);
       if (body.span) line.text = fragment(line.text, body.span);
       const cut = within_budget([line], max_chars, true);
       return { v: VERSION, status: "given", lines: cut.lines, truncated_after: null };
@@ -195,7 +220,7 @@ function create_source_api({ day_store, name }) {
     const ordered = [...by_id.keys()].map(parse_id).sort(order).map((p) => p.id);
     const lines = [];
     for (const id of ordered) {
-      const { line, thread } = line_view(by_id.get(id));
+      const { line, thread } = view(by_id.get(id));
       const end = id === source.id || id === source.through;
       if (end || !wanted || wanted.includes(thread)) lines.push(line);
     }
@@ -207,18 +232,18 @@ function create_source_api({ day_store, name }) {
 
   /** The request, checked; a string says why it does not read. */
   function check(body) {
-    if (!body || typeof body !== "object" || Array.isArray(body)) return "the body is not a JSON object";
-    if (body.v !== VERSION) return "v is not 1";
+    if (!body || typeof body !== "object" || Array.isArray(body)) return "请求体不是一个 JSON 对象";
+    if (body.v !== VERSION) return "v 不是 1";
     const s = body.source;
-    if (!s || typeof s !== "object" || typeof s.id !== "string" || !s.id) return "source.id is missing";
-    for (const k of ["system", "instance", "container"]) if (typeof s[k] !== "string") return `source.${k} is missing`;
-    if (s.through != null && typeof s.through !== "string") return "source.through is not text";
-    if (body.scope != null && (typeof body.scope !== "object" || Array.isArray(body.scope))) return "scope is not an object";
+    if (!s || typeof s !== "object" || typeof s.id !== "string" || !s.id) return "缺 source.id";
+    for (const k of ["system", "instance", "container"]) if (typeof s[k] !== "string") return `缺 source.${k}`;
+    if (s.through != null && typeof s.through !== "string") return "source.through 不是文字";
+    if (body.scope != null && (typeof body.scope !== "object" || Array.isArray(body.scope))) return "scope 不是一个对象";
     if (body.span != null) {
-      if (s.through != null) return "a run of lines with a span is not supported";
+      if (s.through != null) return "一段连续的行不能带 span";
       const sp = body.span;
       if (typeof sp !== "object" || !SPAN_UNITS.includes(sp.unit) || !Number.isInteger(sp.start)
-          || !Number.isInteger(sp.end) || sp.start < 0 || sp.start >= sp.end) return "span is not {unit, start, end}";
+          || !Number.isInteger(sp.end) || sp.start < 0 || sp.start >= sp.end) return "span 要写成 {unit, start, end}";
     }
     return null;
   }
@@ -226,7 +251,7 @@ function create_source_api({ day_store, name }) {
   return async function handle_source(req, res) {
     if (req.method !== "POST") {
       req.resume();
-      send_json(res, 404, { error: "/loci/source takes POST" });
+      send_json(res, 404, { error: "/loci/source 只收 POST" });
       return { outcome: "not_post" };
     }
     const got = await read_json(req);
@@ -241,4 +266,4 @@ function create_source_api({ day_store, name }) {
   };
 }
 
-module.exports = { create_source_api, line_view, within_budget, MAX_LINES };
+module.exports = { create_source_api, line_view, speaker_names, within_budget, MAX_LINES, DEFAULT_OWNER, DEFAULT_AI };
