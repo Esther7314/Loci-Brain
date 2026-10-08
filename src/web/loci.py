@@ -83,6 +83,8 @@ them writes something.
     POST /api/loci/auth/security-question -> sets or changes the security question the
                                          forgot-password page asks (a logged-in session
                                          only; web/loci_password.py)
+    POST /api/loci/auth/revoke-grants -> takes back every MCP OAuth grant: each client
+                                         authorizes again (a logged-in session only)
     POST /api/loci/dream/wake         -> the demotion signal: drop a live "whole" dream
                                          layer down to the fragment layer (idempotent)
     POST /api/loci/import-package     -> bring an export package back: a multipart `file`
@@ -269,7 +271,8 @@ core/health.py, core/profile.py):
                           builders behind them
     web/loci_similar.py   similar, similar/action
     web/loci_verdicts.py  want/resolve, want/asked, event/correct, subjects/action
-    web/loci_password.py  auth/state, auth/set-password, auth/security-question
+    web/loci_password.py  auth/state, auth/set-password, auth/security-question,
+                          auth/revoke-grants
     web/loci_health.py    health, setup, logs, pulse, and build_health / build_setup
     web/loci_dream.py     muse/pending, poke, dream/wake, dream/current, and
                           build_muse_pending / build_poke
@@ -344,6 +347,8 @@ def register(mcp) -> None:
         loci_password.api_loci_set_password)
     mcp.custom_route("/api/loci/auth/security-question", methods=["POST"])(
         loci_password.api_loci_security_question)
+    mcp.custom_route("/api/loci/auth/revoke-grants", methods=["POST"])(
+        loci_password.api_loci_revoke_grants)
     mcp.custom_route("/api/loci/profile", methods=["GET"])(loci_reads.api_loci_profile)
     mcp.custom_route("/api/loci/recollect", methods=["GET"])(loci_reads.api_loci_recollect)
     mcp.custom_route("/api/v2/slices", methods=["POST"])(host_api.api_v2_slices_take)

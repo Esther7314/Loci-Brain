@@ -5,7 +5,8 @@ web/loci_reads.py — the panel's reads, and the builders behind them
 
     GET  /api/loci/recall             -> recall's second skin (card + list), and `rows`:
                                          the text skin's lines, one page of them
-                                         (`offset` / `limit` / `as_of`)
+                                         (`offset` / `limit` / `as_of`), each saying
+                                         whether a gist covers it (`covered`)
     GET  /api/loci/rooms              -> the four rooms and what is in them
     GET  /api/loci/graph              -> starfield: nodes + real edges + weak edges + constellations
     GET  /api/loci/profile            -> the note by the door
@@ -279,10 +280,28 @@ async def api_loci_recall(request: Request) -> Response:
         # The search's lines are one list worked out whole; the panel reads them a page
         # at a time (core/paging), the first page's as_of carried back as on every list.
         data["rows"] = _pg.page(data.get("rows") or [], *paging)
+        try:
+            _refused, view, _line = await read_scope_of(request)
+            await _mark_covered(data["rows"].get("items") or [], view)
+        except Exception as e:           # noqa: BLE001 - the lines still stand unmarked
+            logger.warning(f"[loci] recall 标不出被概括盖住的: {e}")
         return JSONResponse({**data, "scope": _scope_line(request)})
     except Exception as e:
         logger.warning(f"[loci] recall 失败: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+async def _mark_covered(items: list, view) -> None:
+    """Each line gets `covered`: whether a live gist the request may see covers its memory
+    (core/detail.covering_gists) — the same gists the detail window lists under
+    「长出了什么？」, so the list can say so without opening it."""
+    from core import detail as _D
+    live = await sh.bucket_mgr.list_all(include_archive=False)
+    by_id = {str((b.get("metadata") or {}).get("id") or b.get("id") or ""): b for b in live}
+    for item in items:
+        b = by_id.get(str(item.get("id") or ""))
+        item["covered"] = bool(b is not None
+                               and _D.covering_gists(b.get("metadata") or {}, by_id, view))
 
 
 # The room directory plus frequent tags — the first thing seen through either door.

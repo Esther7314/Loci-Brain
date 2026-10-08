@@ -7,10 +7,11 @@ web/loci_password.py — this panel's own password
     POST /api/loci/auth/set-password  -> sets the password guarding remote MCP access
     POST /api/loci/auth/security-question -> sets or changes the question the forgot-password
                                          page asks, and its answer
+    POST /api/loci/auth/revoke-grants -> takes back every MCP OAuth grant handed out so far
 
-The first two are on the panel gate's allowlist (web/panel_auth.py). The third is not: it
-sits behind the gate like every panel write (a host's credential is refused there), and
-asks for a logged-in session besides.
+The first two are on the panel gate's allowlist (web/panel_auth.py). The last two are not:
+they sit behind the gate like every panel write (a host's credential is refused there), and
+ask for a logged-in session besides.
 ========================================
 """
 
@@ -201,3 +202,39 @@ async def api_loci_security_question(request: Request) -> Response:
         logger.warning(f"[loci] 存安全问题失败: {e}")
         return JSONResponse({"error": f"写不进去：{e}"}, status_code=500)
     return JSONResponse({"ok": True, "question": question, "message": "安全问题存好了"})
+
+
+async def api_loci_revoke_grants(request: Request) -> Response:
+    """Take back every MCP OAuth grant (bridge/oauth.revoke_all_mcp_grants): every access
+    and refresh token, on disk and in memory, and any authorization code still in flight.
+    Each connected client has to go through the authorization page again. Body `{}`.
+
+    For when a token may have leaked, or a device that was once authorized is gone.
+    Changing the password does not do this: grants outlive the password that issued them.
+    The static token (`mcp_auth_mode: token`) is a separate credential and is untouched.
+
+    **A logged-in session, always**, for the same reason as the security question: the
+    OAuth page stands whether or not the panel is locked, and an unlocked panel must not
+    let whoever reaches the port log every client out.
+
+    The revocation is durable or it is not claimed: if the empty grant state cannot be
+    written, the answer is a 500 and the grants on disk are still the old ones."""
+    from starlette.responses import JSONResponse
+    from . import panel_auth
+    try:
+        await _write_body(request)          # same-origin check plus Content-Type
+    except PermissionError as e:
+        return JSONResponse({"error": str(e)}, status_code=403)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    if not panel_auth.has_session(request):
+        return JSONResponse({"error": "请先登录"}, status_code=401)
+    from bridge import oauth
+    try:
+        oauth.revoke_all_mcp_grants()
+    except Exception as e:                  # noqa: BLE001
+        logger.error(f"[loci] 收回授权失败: {e}")
+        return JSONResponse({"error": f"没收回来，授权都还在：{e}"}, status_code=500)
+    logger.warning("[loci] 面板收回了全部 MCP 授权")
+    return JSONResponse({"ok": True,
+                         "message": "授权都收回了：接进来的客户端要重新授权一次才能再用"})

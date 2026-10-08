@@ -12,7 +12,8 @@
        it>）, opening the memory. The time at the right (first under the line on the phone).
    Words typed, or a filter set (boards recall-search, recall-search-phone):
        GET /api/loci/recall?query&room&when&tag&offset&limit — its `rows`, paged: one line
-       per root, open promises first; under each line 答应了还没关, how it was found
+       per root, open promises first; under each line 答应了还没关, 合进概括了 (a gist
+       covers it: what the detail window lists under 长出了什么？), how it was found
        (字面 · 意思相近) and its score, 「+ N 条派生」 for the other hits of its root; its
        date at the right (first under the line on the phone). Filters alone, no words:
        the same lines without how or score. Nothing found: 没捞到.
@@ -202,6 +203,7 @@ function howWords(how) {
 function resultRow(r) {
   const why = [r.date ? h("span", { class: "only-phone", text: r.date }) : null];
   if (r.open_promise) why.push("答应了还没关");
+  if (r.covered) why.push("合进概括了");
   why.push(...howWords(r.how));
   if (r.score != null) why.push(Number(r.score).toFixed(1));
   if ((r.others || []).length) why.push(h("span", { class: "lnk", text: `+ ${r.others.length} 条派生` }));

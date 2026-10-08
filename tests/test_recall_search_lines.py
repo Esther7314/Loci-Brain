@@ -239,3 +239,42 @@ def test_the_route_pages_the_lines(store, monkeypatch):
     assert more["rows"]["next_offset"] is None
     status, bad = get(query="海边", offset="x")
     assert status == 400 and bad["error"]
+
+
+def test_the_route_marks_a_line_a_live_gist_covers(store, monkeypatch):
+    # The list's quiet mark for what the detail window lists under 长出了什么？: a live gist
+    # covers it. A gist that went to the archive covers nothing.
+    import json
+    from urllib.parse import urlencode
+    from starlette.requests import Request
+    from web import _shared as sh
+    from web import loci_reads as WR
+    monkeypatch.setattr(sh, "bucket_mgr", store)
+
+    def rows(**query):
+        req = Request({"type": "http", "method": "GET", "path": "/api/loci/recall",
+                       "path_params": {}, "headers": [],
+                       "query_string": urlencode(query).encode()})
+        resp = asyncio.run(WR.api_loci_recall(req))
+        assert resp.status_code == 200, resp.body
+        return {r["id"]: r for r in json.loads(resp.body)["rows"]["items"]}
+
+    async def seed():
+        covered = await _new(store, "山脚下那家面馆的第一碗面。", when="2026-09-01")
+        bare = await _new(store, "山脚下那家面馆换了招牌。", when="2026-09-02")
+        orphan = await _new(store, "山脚下那家面馆排了很久的队。", when="2026-09-03")
+        gist = await store.create("九月初常去山脚下的面馆", tags=["__gist__"], name="面馆",
+                                  room="EVENT/SELF")
+        gone = await store.create("一条没留下来的概括", tags=["__gist__"], name="没留下",
+                                  room="EVENT/SELF")
+        await store.update(gist, cover=[covered])
+        await store.update(gone, cover=[orphan])
+        await store.update(covered, covered_by=[gist])
+        await store.update(orphan, covered_by=[gone])
+        await store.archive(gone)
+        return covered, bare, orphan
+    covered, bare, orphan = asyncio.run(seed())
+    got = rows(when="2026-09", room="EVENT")
+    assert got[covered]["covered"] is True
+    assert got[bare]["covered"] is False
+    assert got[orphan]["covered"] is False

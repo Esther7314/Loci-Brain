@@ -849,7 +849,7 @@ button:disabled{{opacity:.65;cursor:wait}}
 <input type="hidden" name="resource" value="{e(resource)}">
 <input type="hidden" name="scope" value="{e(scope)}">
 <input type="hidden" name="trace_id" value="{trace_id}">
-<input type="password" name="password" placeholder="输入 Dashboard 密码" autofocus>
+<input type="password" name="password" placeholder="输入面板密码" autofocus>
 <button type="submit" id="oauth-submit">授权并连接</button>
 </form>
 <p class="submit-status" id="submit-status" role="status" aria-live="polite"></p>
@@ -1040,7 +1040,7 @@ def register(mcp) -> None:
             if ok and p.get("code_challenge_method", "S256") != "S256":
                 ok, err = False, "仅支持 PKCE S256"
             if ok and sh._is_setup_needed():
-                ok, err = False, "尚未设置 Dashboard 密码，请先打开 Dashboard 完成初始化"
+                ok, err = False, "还没设面板密码：先打开 Loci 面板，在「账号」里设一个"
             return HTMLResponse(_oauth_authorize_html(
                 p.get("client_id", ""), p.get("redirect_uri", ""),
                 p.get("state", ""), p.get("code_challenge", ""),
@@ -1084,7 +1084,7 @@ def register(mcp) -> None:
             return HTMLResponse(_oauth_authorize_html(
                 client_id, redirect_uri, state, code_challenge,
                 resource=resource, scope=scope,
-                error="尚未设置 Dashboard 密码，请先打开 Dashboard 完成初始化",
+                error="还没设面板密码：先打开 Loci 面板，在「账号」里设一个",
             ), status_code=503)
         retry = sh._login_retry_after(request)
         if retry:

@@ -499,9 +499,25 @@ def request_scope_of(request: Request, caller):
     return _scope.RequestScope.resolve(caller, request.headers.get(_scope.SCOPE_HEADER))
 
 
-def _set_cookie(resp: Response, value: str, max_age: int) -> Response:
+def _came_over_https(request: Request) -> bool:
+    """Whether the browser reached us over https: this connection itself, or a proxy we
+    trust (LOCI_TRUSTED_PROXY_CIDRS, `_shared._trusted_forwarded_value`) saying so in
+    X-Forwarded-Proto. A forwarded header from anyone else is ignored, as everywhere else.
+
+    Deliberately not `deployment.public_url`: an https public URL does not stop the same
+    panel being opened over plain http on the LAN, and that browser must still get a
+    cookie it will send back."""
+    if str(getattr(request.url, "scheme", "") or "").lower() == "https":
+        return True
+    return sh._trusted_forwarded_value(request, "x-forwarded-proto").lower() == "https"
+
+
+def _set_cookie(request: Request, resp: Response, value: str, max_age: int) -> Response:
+    """Secure only when the request came over https (`_came_over_https`): a Secure cookie
+    set over plain http is never sent back, and a LAN login at http://192.168.x.x would
+    loop on the login page forever."""
     resp.set_cookie(_COOKIE, value, max_age=max_age, path="/",
-                    httponly=True, samesite="lax")
+                    httponly=True, samesite="lax", secure=_came_over_https(request))
     return resp
 
 
@@ -534,11 +550,11 @@ def register(mcp) -> None:
                 return JSONResponse({"error": _STORAGE_BROKEN_HINT}, status_code=503)
             return JSONResponse({"error": "密码不对"}, status_code=401)
         sh._record_login_success(request)
-        return _set_cookie(JSONResponse({"ok": True}), _make_cookie(), _TTL)
+        return _set_cookie(request, JSONResponse({"ok": True}), _make_cookie(), _TTL)
 
     @mcp.custom_route("/auth/logout", methods=["POST"])
     async def auth_logout(request: Request) -> Response:
-        return _set_cookie(JSONResponse({"ok": True}), "", 0)
+        return _set_cookie(request, JSONResponse({"ok": True}), "", 0)
 
     @mcp.custom_route("/auth/recovery-question", methods=["GET"])
     async def auth_recovery_question(request: Request) -> Response:
@@ -581,4 +597,4 @@ def register(mcp) -> None:
                                 status_code=409)
         sh._record_login_success(request)
         # New password = new key = every old session is dead, so hand out a fresh one here.
-        return _set_cookie(JSONResponse({"ok": True}), _make_cookie(), _TTL)
+        return _set_cookie(request, JSONResponse({"ok": True}), _make_cookie(), _TTL)

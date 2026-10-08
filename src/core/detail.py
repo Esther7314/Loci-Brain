@@ -28,6 +28,8 @@ same thing.
                          cue it waits on, the holds live on it). Every linked entry goes
                          through the gate on the read road; one out of the request's scope
                          is left out, one not live carries its state in words.
+  covering_gists(...)    the live gists covering an entry that the request may see — what
+                         lineage lists under covered_by, and what a list row marks.
   source_view(...)       来源: the host sources it was formed from with their registry
                          state and whether the original can be asked for, the memories it
                          stands on, and two sentences — how it is known and whether its
@@ -49,7 +51,7 @@ YYYY-MM-DD.
 
 Exports: TAG_WORDS · HOLD_WORDS · BLOCKED_STATES · source_state_words · FIX_KINDS ·
          NEW_VERSION · MARK · human_tags · date_of · local_stamp · state_words · clearing_due · edit_actions · content_fix ·
-         disputed_view · lineage · related_counts · source_layer_of ·
+         disputed_view · lineage · covering_gists · related_counts · source_layer_of ·
          source_view · original_row · fetch_original · fetched · entry_view
 ========================================
 """
@@ -246,6 +248,16 @@ def _in_scope(row, scope) -> bool:
 # 关联 — lineage
 # ============================================================
 
+def covering_gists(meta: dict, by_id: dict, scope=None) -> list:
+    """The live gists covering this entry that the request may see, as store rows
+    (`by_id` maps the live store's ids to its buckets). Its new version
+    (`superseded_by`) is not one of them: that is 新版本, listed on its own."""
+    sup = str((meta or {}).get("superseded_by") or "").strip()
+    return [by_id[c] for c in _F.covers_of(meta)
+            if c != sup and c in by_id and _in_scope(by_id[c], scope)
+            and _V.state_of(_meta(by_id[c])) == _V.LIVE]
+
+
 def lineage(all_buckets: list, meta: dict, now: datetime, *, scope=None,
             extra: dict | None = None) -> dict:
     """关联 for one entry. `all_buckets` is the live store's listing; `extra` maps the
@@ -260,9 +272,7 @@ def lineage(all_buckets: list, meta: dict, now: datetime, *, scope=None,
 
     derived = [_line(b, kind=True) for b in all_buckets
                if _bid(b) != bid and bid in read_from_ids(_meta(b)) and _in_scope(b, scope)]
-    covered_by = [_line(by_id[c]) for c in _F.covers_of(meta)
-                  if c != sup and c in by_id and _in_scope(by_id[c], scope)
-                  and _V.state_of(_meta(by_id[c])) == _V.LIVE]
+    covered_by = [_line(row) for row in covering_gists(meta, by_id, scope)]
     periods = []
     ts = _w.ts_of(meta or {})
     if ts is not None:

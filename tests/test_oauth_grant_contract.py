@@ -445,9 +445,9 @@ def test_a_failed_rotation_keeps_the_old_refresh_token_alive(grant_state, monkey
 # ───────────────────────── revocation ─────────────────────────
 
 def test_revoke_all_grants_kills_memory_disk_and_in_flight_codes(grant_state):
-    # revoke_all_mcp_grants currently has no route (the door goes back in the
-    # panel-rework batch); this freezes its contract so wiring it up later
-    # cannot quietly ship a half-revocation.
+    # The panel reaches this through POST /api/loci/auth/revoke-grants (its door is
+    # test_panel_revoke_grants.py); this freezes the function itself, so no caller
+    # can quietly ship a half-revocation.
     access, refresh = _issue_pair(grant_state)
     _store_fresh_code("pending-code")
     oauth.revoke_all_mcp_grants()
