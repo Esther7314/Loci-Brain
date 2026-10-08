@@ -138,6 +138,10 @@ function intOr(raw) {
   return raw !== "" && Number.isFinite(v) ? v : raw;
 }
 
+/** A percent box shows "85%"; what is typed is read with or without the sign. */
+const pctShow = (v) => (v === null || v === undefined || v === "" ? "" : `${v}%`);
+const pctRead = (raw) => intOr(raw.replace(/\s*[%％]\s*$/, ""));
+
 /** "4" · "4:30" · "4.30" · "0430" -> "04:00" · "04:30"; anything else as typed. The box
  *  has the phone's number pad, which has no colon. */
 function timeOr(raw) {
@@ -279,13 +283,13 @@ function readLater(p, anchor, ms = 8000) {
 function numBox(p, path, { label, kind = "int", board = "", placeholder, style }) {
   const key = path.join(".");
   if (!p.live) return off(num({ value: board, "aria-label": label, style }));
-  const show = (v) => (v === null || v === undefined ? "" : String(v));
+  const show = kind === "pct" ? pctShow : (v) => (v === null || v === undefined ? "" : String(v));
   const el = p.reg(key, num({ "aria-label": label, placeholder, style }));
   el.addEventListener("change", () => {
     const raw = el.value.trim();
     const saved = at(p.s, path);
     if (raw === "" && kind !== "int?") { el.value = show(saved); el.removeAttribute("aria-invalid"); return; }
-    const value = raw === "" ? null : kind === "time" ? timeOr(raw) : intOr(raw);
+    const value = raw === "" ? null : kind === "time" ? timeOr(raw) : kind === "pct" ? pctRead(raw) : intOr(raw);
     if (value === saved) { el.value = show(saved); return; }
     save(p, nest(path, value));
   });
@@ -347,15 +351,19 @@ function weakLines(p) {
     if (p.live) register();
   };
   async function send() {
-    const list = used().map((b) => intOr(b.value.trim()));
+    const list = used().map((b) => pctRead(b.value.trim()));
     register();
     if (sameList(list, p.s.compress.weak_pct)) return;
     if (await save(p, { compress: { weak_pct: list } }) && !sameList(list, p.s.compress.weak_pct)) draw(p.s.compress.weak_pct);
   }
   const box = (v) => {
-    const b = num({ value: v === "" ? "" : String(v), "aria-label": "弱提醒线" });
+    const b = num({ value: pctShow(v), "aria-label": "弱提醒线" });
     if (!p.live) return off(b);
-    b.addEventListener("change", send);
+    b.addEventListener("change", () => {
+      const v = pctRead(b.value.trim());
+      if (typeof v === "number") b.value = pctShow(v);
+      send();
+    });
     return b;
   };
   const draw = (values) => {
@@ -373,6 +381,7 @@ function compressGroup(p) {
   const fillWhy = h("span");
   const keptWhy = h("span");
   const lastWhy = h("span");
+  const forceWhy = h("span");
   p.watch(() => {
     const st = p.st.compress || {};
     const c = st.context || {};
@@ -386,6 +395,8 @@ function compressGroup(p) {
     keptWhy.textContent = Number.isInteger(st.kept_raw) ? `这一窗现在有 ${st.kept_raw} 条原话` : "";
     lastWhy.textContent = !st.thread ? ""
       : st.last ? `上次换窗 ${when(st.last.at)} · ${st.last.how_words || st.last.how}` : "这一窗是这个对话的第一窗";
+    // a forced pack held back (it could not bring the window under the line) says why here
+    forceWhy.textContent = st.held_back_words || "兜底压缩线，不考虑他的意见了。";
   });
 
   const now = p.ctl(btn("现在压"));
@@ -408,8 +419,8 @@ function compressGroup(p) {
   const custom = customBox([
     h("div", { style: { marginTop: "6px" } },
       weakLines(p),
-      setRow({ text: "强制压缩线", why: "兜底压缩线，不考虑他的意见了。",
-        right: acts(numBox(p, ["compress", "force_pct"], { label: "强制压缩线" })) })),
+      setRow({ text: "强制压缩线", why: p.live ? forceWhy : "兜底压缩线，不考虑他的意见了。",
+        right: acts(numBox(p, ["compress", "force_pct"], { label: "强制压缩线", kind: "pct" })) })),
     h("p", { class: "why", style: { margin: "10px 0 0", lineHeight: "1.6" },
       text: "如果你开 auto compact（自动压缩），记得关掉，不然两边会起冲突。" }),
   ], { open: true });
@@ -418,7 +429,7 @@ function compressGroup(p) {
       setRow({ text: "开关", right: acts(toggle(p, ["compress", "on"], "自助压缩开关")) }),
       setRow({ text: "上下文窗口", why: p.live ? ctxWhy : null,
         right: acts(numBox(p, ["compress", "context_tokens"], { label: "上下文窗口", kind: "int?", placeholder: "自动", style: { width: "104px" } })) }),
-      setRow({ text: "压缩水位线", why: p.live ? fillWhy : null, right: acts(numBox(p, ["compress", "ask_pct"], { label: "水位线" })) }),
+      setRow({ text: "压缩水位线", why: p.live ? fillWhy : null, right: acts(numBox(p, ["compress", "ask_pct"], { label: "水位线", kind: "pct" })) }),
       setRow({ text: "压缩完留多少条原话", why: p.live ? keptWhy : null, right: acts(numBox(p, ["compress", "keep_raw"], { label: "留多少条" })) }),
       setRow({ text: "手动压缩", why: p.live ? ["不等水位线，现在就压一次", lastWhy] : "不等水位线，现在就压一次", right: acts(now) }),
       home),
