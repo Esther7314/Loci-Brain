@@ -83,7 +83,7 @@ a:hover { color: var(--ink-solid); }
 .outlet.fill { flex: 1 0 auto; display: flex; flex-direction: column; }
 
 /* the header: a hairline, the name and the ten pages on one row, a hairline */
-.mast { display: flex; align-items: center; gap: var(--s-2) var(--s-6); padding: var(--s-1) 0; border-top: 1px solid var(--rule-strong); border-bottom: 1px solid var(--rule-strong); }
+.mast { display: flex; align-items: center; gap: var(--s-2) var(--s-6); padding: var(--s-2) 0; border-top: 1px solid var(--rule-strong); border-bottom: 1px solid var(--rule-strong); }
 .brand { font: var(--title); color: var(--ink); text-transform: uppercase; white-space: nowrap; }
 .topnav { flex: 1 1 auto; min-width: 0; display: flex; overflow-x: auto; scrollbar-width: none; font: var(--caption); text-transform: uppercase; }
 .topnav::-webkit-scrollbar { display: none; }
@@ -96,7 +96,7 @@ a:hover { color: var(--ink-solid); }
 
 /* the row under the header: the sub-tabs as a breadcrumb (breath / surface), or a page's
    one line, with the i after it; a page's secondary entry or its date on the right */
-.subbar { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--s-2) var(--s-5); padding: var(--s-2) 0 var(--s-5); }
+.subbar { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--s-2) var(--s-5); padding: var(--s-5) 0 var(--s-6); }
 .tabs { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); font: var(--body); }
 .tabs a { color: var(--small); }
 .tabs a.on { color: var(--ink); }
@@ -210,9 +210,10 @@ input[type=radio], input[type=checkbox] { accent-color: var(--ink); }
 .gate .note { margin: 6px 0 0; line-height: 1.6; }
 
 /* ---------------- the detail window ---------------- */
-.scrim { position: fixed; inset: 0; z-index: 20; background: var(--scrim); overflow-y: auto; overscroll-behavior: contain; padding: 64px 16px; box-sizing: border-box; }
+/* a column, so the window sits in the middle of the screen, and scrolls from its top when taller */
+.scrim { position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column; background: var(--scrim); overflow-y: auto; overscroll-behavior: contain; padding: 48px 16px; box-sizing: border-box; }
 /* the window: her glass card — a pale see-through ground over a blur, a white edge, a soft drop */
-.dlg { position: relative; max-width: 560px; margin: 0 auto; border: 1px solid #FFFFFF; border-radius: 24px; padding: 14px 24px 20px; box-sizing: border-box;
+.dlg { position: relative; width: 100%; max-width: 560px; margin: auto; border: 1px solid #FFFFFF; border-radius: 24px; padding: 14px 24px 20px; box-sizing: border-box;
   background: linear-gradient(90deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0)), rgba(240, 237, 232, 0.28);
   -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
   box-shadow: 0 12px 28px -8px rgba(var(--ink-rgb), 0.08); }
