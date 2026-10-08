@@ -89,6 +89,17 @@ CJK = re.compile(r"[⺀-鿿豈-﫿＀-￯]")
 # What the gateway's own turns may cost (gateway/present/settings.js own.tool_rounds).
 DEFAULT_TOOL_ROUNDS = 6
 
+def request_kind(body: dict) -> str:
+    """What asked, read off the request: an own turn offers tools; the side model's calls
+    are told apart by the first words of their system prompt."""
+    if body.get("tools"):
+        return "own turn"
+    msgs = body.get("messages") or []
+    first = next((m for m in msgs if m.get("role") == "system"), msgs[0] if msgs else {})
+    text = first.get("content") if isinstance(first.get("content"), str) else str(first.get("content") or "")
+    return "side: " + " ".join(text.split())[:24]
+
+
 # Seconds to wait before each retry of a request the upstream answered 429.
 RETRY_WAITS = (5, 15, 30, 60)
 
@@ -356,6 +367,7 @@ class StandIn:
         self.clock = clock or Clock(None)
         self.log = log
         self.counts = {"scripted": 0, "forwarded": 0, "refused": 0}
+        self.kinds: dict[str, int] = {}      # forwarded requests by what asked (request_kind)
         self.server = ThreadingHTTPServer(("127.0.0.1", listen), self._handler())
         self.server.daemon_threads = True
         self.port = self.server.server_address[1]
@@ -449,7 +461,8 @@ class StandIn:
                     outer.log("  stand-in: refused a request (no upstream key: nothing is sent anywhere)")
                     return self._json(503, {"error": "the replay's stand-in has no upstream key"})
                 outer.counts["forwarded"] += 1
-                kind = f"turn {turn.index + 1}" if turn is not None else "own turn / side model"
+                kind = f"turn {turn.index + 1}" if turn is not None else request_kind(body)
+                outer.kinds[kind] = outer.kinds.get(kind, 0) + 1
                 # At most `concurrency` requests upstream at once, and a 429 waited out
                 # (RETRY_WAITS): a free or low tier allows few requests in flight. Too few slots
                 # and a caller with a short timeout (the side model) gives up while queued.
@@ -711,6 +724,8 @@ def replay(fx: dict, handle: dict, args, key: str) -> int:
     print(f"  dreams                      {os.path.join(handle.get('buckets', ''), 'night_fall', 'dreams')} and the panel's 梦 page")
     print("  grown memories, slices      the panel (grow · recall pages)")
     print(f"  stand-in                    {stand_in.counts}")
+    for kind, n in sorted(stand_in.kinds.items(), key=lambda kv: -kv[1]):
+        print(f"    {n:5d}  {kind}")
     return 0
 
 
@@ -779,7 +794,7 @@ def main() -> int:
     ap.add_argument("--concurrency", type=int, default=4,
                     help="requests in flight to the real upstream at once (1 for a tier that allows one)")
     ap.add_argument("--wake-cap", type=int, default=3, help="wakes per day at most (each is a paid own turn)")
-    ap.add_argument("--wait", type=float, default=900, help="seconds to wait for one night's report or one wake")
+    ap.add_argument("--wait", type=float, default=2400, help="seconds to wait for one night's report or one wake")
     ap.add_argument("--days", type=int, default=0,
                     help="replay only the first N days (and the night after them); try 1 first")
     args = ap.parse_args()
