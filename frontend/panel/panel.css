@@ -38,7 +38,7 @@
   --klein: #1F3FD6;
   --klein-dark: #7B8FFF;                  /* the blue on a dark ground */
   --red: #B42318;
-  --scrim: rgba(var(--ink-rgb), 0.45);
+  --scrim: rgba(var(--ink-rgb), 0.10);   /* light, so the glass window reads as glass */
   --scrim-menu: rgba(var(--ink-rgb), 0.32);
   --shadow: rgba(var(--ink-rgb), 0.14);
   --wash: rgba(var(--ink-rgb), 0.42);     /* the soft ink-wash behind the content */
@@ -211,17 +211,26 @@ input[type=radio], input[type=checkbox] { accent-color: var(--ink); }
 
 /* ---------------- the detail window ---------------- */
 .scrim { position: fixed; inset: 0; z-index: 20; background: var(--scrim); overflow-y: auto; overscroll-behavior: contain; padding: 64px 16px; box-sizing: border-box; }
-.dlg { position: relative; max-width: 680px; margin: 0 auto; background: var(--raised); border-radius: 14px; padding: 22px 28px 24px; box-sizing: border-box; }
+/* the window: her glass card — a pale see-through ground over a blur, a white edge, a soft drop */
+.dlg { position: relative; max-width: 560px; margin: 0 auto; border: 1px solid #FFFFFF; border-radius: 24px; padding: 14px 24px 20px; box-sizing: border-box;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0)), rgba(240, 237, 232, 0.28);
+  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+  box-shadow: 0 12px 28px -8px rgba(var(--ink-rgb), 0.08); }
 .dlg:focus { outline: none; }
 .dlg .grab { display: none; }
 .dlg .head { display: flex; align-items: center; gap: 10px; }
-.dlg h1 { flex: 1; min-width: 0; margin: 0; font-size: 22px; font-weight: 700; line-height: 1.4; overflow-wrap: anywhere; }
-.dlg .meta { gap: 4px 20px; align-items: center; }
-.dlg .cap { margin: 0 0 6px; font-size: 13px; color: var(--small); }
+.dlg h1 { flex: 1; min-width: 0; margin: 0; font: var(--title); color: var(--ink); overflow-wrap: anywhere; }
+.dlg .head .btn { height: auto; padding: 4px 10px; border-color: rgba(255, 255, 255, 0.4); border-radius: 999px; background: rgba(255, 255, 255, 0.2); font: 500 10px/14px var(--font); color: rgba(var(--ink-rgb), 0.55); }
+.dlg .head .btn[aria-expanded="true"] { background: rgba(255, 255, 255, 0.45); }
+.dlg .meta { margin-top: 3px; color: rgba(var(--ink-rgb), 0.30); }
+.dlg .entry-body { margin-top: 15px; }
+.dlg .facts { margin-top: 4px; color: rgba(var(--ink-rgb), 0.30); }
+.dlg .meta, .dlg .facts { display: flex; flex-wrap: wrap; gap: 4px 15px; align-items: center; }
+.dlg .cap { margin: 0 0 4px; font: var(--caption); color: var(--small); }
 .dlg .cap.sum { margin-top: 22px; }
 .dlg .said { margin-top: 24px; }
-.dlg .body { margin: 0; font-size: 16px; line-height: 1.6; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
-.dlg hr { border: 0; border-top: 1px solid var(--line); margin: 22px 0 4px; }
+.dlg .body { margin: 0; font: 400 16px/26px var(--font); color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.dlg hr { border: 0; border-top: 1px solid var(--line); margin: 15px 0 4px; }
 .dlg .h { margin: 0 0 4px; font-size: 17px; font-weight: 500; color: var(--ink); }
 .dlg .row { display: flex; flex-direction: column; gap: 4px; padding: 12px 0; }
 .dlg .row + .row { border-top: 1px solid var(--line); }
@@ -234,10 +243,12 @@ input[type=radio], input[type=checkbox] { accent-color: var(--ink); }
 .dlg .origin { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; }
 .dlg .sub { margin: 0 0 0 30px; }
 .ib { width: 40px; height: 40px; display: inline-flex; align-items: center; justify-content: center; border: 0; background: transparent; color: var(--ink); cursor: pointer; flex-shrink: 0; padding: 0; }
-.ib.close { margin-right: -10px; }
+.ib.close { width: 32px; height: 32px; margin-right: -11px; color: var(--ink); }
 .ib.backarrow { margin-left: -12px; }
 .morel { display: inline-flex; align-items: center; gap: 4px; min-height: 40px; font-size: 15px; color: var(--ink); border: 0; background: transparent; padding: 0; font-family: inherit; cursor: pointer; }
 .foot2 { display: flex; justify-content: space-between; align-items: center; }
+.foot2 .morel { min-height: 28px; font: var(--caption); color: var(--small); gap: 6px; }
+.foot2 > .why { line-height: 28px; }
 .dlg .editbox { display: flex; flex-direction: column; gap: 10px; margin-top: 18px; }
 .dlg .editbox .acts { margin-top: 4px; }
 
@@ -345,7 +356,8 @@ input[type=radio], input[type=checkbox] { accent-color: var(--ink); }
      has no transform: a transformed card would pin the fixed 编辑 sheet to itself
      instead of to the screen's bottom */
   .scrim { padding: 56px 0 0; display: flex; flex-direction: column; }
-  .dlg { flex: 1 0 auto; width: 100%; max-width: none; margin: 0; border-radius: 16px 16px 0 0; padding: 10px 20px 40px; transform: none; transition: transform 0.22s ease-out; }
+  /* a sheet that fills the screen: the same glass, thicker, so the page under it does not read through */
+  .dlg { flex: 1 0 auto; width: 100%; max-width: none; margin: 0; border-width: 1px 0 0; border-radius: 24px 24px 0 0; padding: 10px 20px 40px; background: linear-gradient(90deg, rgba(255, 255, 255, 0.30), rgba(255, 255, 255, 0.10)), rgba(240, 237, 232, 0.82); transform: none; transition: transform 0.22s ease-out; }
   .dlg.rising { transform: translateY(100%); }
   .dlg .grab { display: block; width: 36px; height: 4px; border-radius: 2px; background: var(--edge); margin: 0 auto 10px; }
   .dlg .head { gap: 8px; }
@@ -356,7 +368,7 @@ input[type=radio], input[type=checkbox] { accent-color: var(--ink); }
   .dlg:not(.namecard) .btn[aria-expanded="true"] { border-color: var(--edge); }
   .dlg.namecard .head { gap: 10px; }
   .dlg.namecard .head .btn { font-size: 14px; }
-  .dlg .meta { gap: 4px 16px; }
+  .dlg .meta, .dlg .facts { gap: 4px 12px; }
   .dlg hr { margin-top: 20px; }
   .dlg .line { display: flex; flex-direction: column; gap: 2px; padding: 8px 0; }
   .dlg .line .why { line-height: inherit; }

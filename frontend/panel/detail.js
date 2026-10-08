@@ -39,11 +39,12 @@ import { h, fill, clickable, richText, btn, errorLine, clock, dayTime } from "./
 const LABELS = { typo: "字写错了", content: "内容错了", delete: "删除" };
 
 const ICON = {
-  close: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg>',
+  close: '<svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"><path d="M.5.5l10 10M10.5.5l-10 10"></path></svg>',
   back: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"></path></svg>',
   down: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"></path></svg>',
   up: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"></path></svg>',
   arrow: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>',
+  longArrow: '<svg width="24" height="10" viewBox="0 0 24 10" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><path d="M.5 5h23M19 .8 23.5 5 19 9.2"></path></svg>',
 };
 
 /** An icon from the fixed set above (constant markup, never data). */
@@ -155,7 +156,8 @@ function makeWindow() {
     if (b.valence !== null && b.valence !== undefined && b.arousal !== null && b.arousal !== undefined) {
       facts.push(h("span", { text: `V ${round(b.valence)}　A ${round(b.arousal)}` }));
     }
-    for (const t of b.tags || []) facts.push(h("span", { text: `#${t}` }));
+    // An internal tag is stored framed in underscores (__档案事实__); it reads as #档案事实.
+    for (const t of b.tags || []) facts.push(h("span", { text: `#${String(t).replace(/^_+|_+$/g, "")}` }));
     for (const s of b.subjects || []) {
       facts.push(subjectOpener
         ? clickable(h("a", { class: "nm", text: s }), () => { close(); subjectOpener(s); })
@@ -171,21 +173,21 @@ function makeWindow() {
     const rel = h("div");
     const relBtn = related
       ? h("button", { class: "morel", type: "button", "aria-expanded": "false" }, `关联 ${related} `, icon("down"))
-      : h("span");
+      : h("span", { class: "why", text: "暂无关联" });
     if (related) relBtn.addEventListener("click", () => toggleRelated(relBtn, rel));
-    const srcBtn = h("button", { class: "morel", type: "button" }, "来源 ", icon("arrow"));
+    const srcBtn = h("button", { class: "morel", type: "button" }, "来源", icon("longArrow"));
     srcBtn.addEventListener("click", () => showSource());
 
     fill(dlg,
       h("div", { class: "grab", "aria-hidden": "true" }),
       h("div", { class: "head" }, title, editBtn, closeBtn()),
-      h("div", { class: "why meta", style: { marginTop: "8px" } },
+      h("div", { class: "why meta" },
         h("span", { text: `#${b.short}` }), b.date ? h("span", { text: b.date }) : null, tags),
       state.notice ? h("p", { class: "why", role: "status", style: { margin: "14px 0 0" }, text: state.notice }) : null,
       summary ? h("p", { class: "cap sum", text: `摘要：${summary}` }) : null,
-      h("div", { class: "entry-body", style: { marginTop: summary ? "18px" : "22px" } },
+      h("div", { class: "entry-body" },
         h("p", { class: "cap", text: "正文" }), body),
-      facts.length ? h("div", { class: "why meta", style: { marginTop: "22px" } }, facts) : null,
+      facts.length ? h("div", { class: "why facts" }, facts) : null,
       h("hr"),
       h("div", { class: "foot2" }, relBtn, srcBtn),
       rel);
