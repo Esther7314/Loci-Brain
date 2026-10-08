@@ -149,11 +149,15 @@ function log_line(file, value) {
 
 // ——— Minimal MCP streamable-http client (same gestures as the host's own, kept separate) ———
 
-function make_client({ address = DEFAULT_ADDRESS, timeout_ms = 10000 } = {}) {
+// `headers` ride on every request of this client (a host credential such as
+// `x-loci-hook-token`); a call's own `headers` ride on that call only (Loci reads
+// `Loci-Turn` per tool call). `signal` lets the caller abandon a call at once: the
+// request is torn down and the call throws, with no retry.
+function make_client({ address = DEFAULT_ADDRESS, timeout_ms = 10000, headers = {} } = {}) {
   let session = null;
 
-  function build_headers(with_session) {
-    const h = { "Content-Type": "application/json", "Accept": "application/json, text/event-stream" };
+  function build_headers(with_session, extra = {}) {
+    const h = { "Content-Type": "application/json", "Accept": "application/json, text/event-stream", ...headers, ...extra };
     if (with_session && session) h["Mcp-Session-Id"] = session;
     return h;
   }
@@ -168,20 +172,25 @@ function make_client({ address = DEFAULT_ADDRESS, timeout_ms = 10000 } = {}) {
     return null;
   }
 
-  async function rpc_once(payload, { with_session = true } = {}) {
+  async function rpc_once(payload, { with_session = true, extra = {}, signal = null } = {}) {
+    if (signal?.aborted) throw new Error("aborted");
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeout_ms);
+    const on_abort = () => controller.abort();
+    if (signal) signal.addEventListener("abort", on_abort, { once: true });
+    const settle = () => { clearTimeout(timer); if (signal) signal.removeEventListener("abort", on_abort); };
     let resp;
     try {
-      resp = await fetch(address, { method: "POST", headers: build_headers(with_session), body: JSON.stringify(payload), signal: controller.signal });
+      resp = await fetch(address, { method: "POST", headers: build_headers(with_session, extra), body: JSON.stringify(payload), signal: controller.signal });
     } catch (err) {
-      clearTimeout(timer);
+      settle();
+      if (signal?.aborted) throw new Error("aborted");
       throw new Error(`连不上 Loci（${address}）：${err?.message || err}`);
     }
     const new_session = resp.headers.get("mcp-session-id");
     if (new_session) session = new_session;
-    if (resp.status === 202 || !resp.body) { clearTimeout(timer); return null; }
-    if (!resp.ok) { clearTimeout(timer); throw new Error(`Loci 回了 HTTP ${resp.status}`); }
+    if (resp.status === 202 || !resp.body) { settle(); return null; }
+    if (!resp.ok) { settle(); throw new Error(`Loci 回了 HTTP ${resp.status}`); }
     const reader = resp.body.getReader();
     let pending = "";
     try {
@@ -192,8 +201,11 @@ function make_client({ address = DEFAULT_ADDRESS, timeout_ms = 10000 } = {}) {
         const frame = pick_frame(pending);
         if (frame) return frame;
       }
+    } catch (err) {
+      if (signal?.aborted) throw new Error("aborted");
+      throw err;
     } finally {
-      clearTimeout(timer);
+      settle();
       controller.abort();
     }
     throw new Error("Loci 没给回应");
@@ -214,20 +226,33 @@ function make_client({ address = DEFAULT_ADDRESS, timeout_ms = 10000 } = {}) {
     await rpc_once({ jsonrpc: "2.0", method: "notifications/initialized" });
   }
 
-  async function call_tool(tool, args = {}) {
+  // One request, with one re-handshake and resend when it fails (a stale session is the
+  // usual cause). An abandoned call is not resent.
+  async function request(method, params, { headers: extra = {}, signal = null } = {}) {
     if (!session) await handshake_once();
-    const send = () => rpc_once({ jsonrpc: "2.0", id: Date.now() % 100000, method: "tools/call", params: { name: tool, arguments: args } });
+    const send = () => rpc_once({ jsonrpc: "2.0", id: Date.now() % 100000, method, params }, { extra, signal });
     let resp = await send().catch(err => ({ __炸了: err }));
-    if (resp?.__炸了 || resp?.error) {
+    if ((resp?.__炸了 || resp?.error) && !signal?.aborted) {
       await handshake_once();
       resp = await send().catch(err => ({ __炸了: err }));
     }
     if (resp?.__炸了) throw resp.__炸了;
     if (resp?.error) throw new Error(resp.error.message || JSON.stringify(resp.error));
-    return (resp?.result?.content || []).map(block => block.text || "").join("\n");
+    return resp?.result || {};
   }
 
-  return { call_tool };
+  async function call_tool(tool, args = {}, opts = {}) {
+    const result = await request("tools/call", { name: tool, arguments: args }, opts);
+    return (result.content || []).map(block => block.text || "").join("\n");
+  }
+
+  /** The tools the server lists: [{ name, description, inputSchema }]. */
+  async function list_tools(opts = {}) {
+    const result = await request("tools/list", {}, opts);
+    return Array.isArray(result.tools) ? result.tools : [];
+  }
+
+  return { call_tool, list_tools };
 }
 
 // ——— Breath paste ———

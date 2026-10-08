@@ -115,6 +115,13 @@ function create_relay({ upstream, present = null }) {
       return;
     }
 
+    // A chat request upstream accepted lends its credential and model to the gateway's own
+    // turns (present/own_turn.js): held in memory only, never written or logged.
+    if (present?.remember_owner && is_chat(req, body) && resp.ok) {
+      try { present.remember_owner({ headers: req.headers, model: body.model }); }
+      catch (err) { console.error(`[gateway] present failed to note the credential: ${err?.message || err}`); }
+    }
+
     const resp_headers = {};
     // 🔴 `content-length` has to be dropped together with `content-encoding` — found by
     //    the gateway's first test suite.

@@ -1,7 +1,7 @@
 // ============================================================
 // gateway/present/index.js — the present layer as the relay sees it
 //
-// server.js builds this once and hands it to the relay, which calls two hooks per chat
+// server.js builds this once and hands it to the relay, which calls three hooks per chat
 // request on /v1/*:
 //
 //   prepare({ body, headers, request_id }) → { body, ctx, note, notes }
@@ -21,6 +21,9 @@
 //       reply is written after the turn when it finishes, and its usage becomes the fill.
 //       When the gateway asked for usage on the client's behalf, the client gets a stream
 //       with the usage chunk taken out; otherwise null (pipe upstream's stream as it is).
+//   remember_owner({ headers, model })
+//       Called once upstream accepted a chat request: its credential headers and model
+//       become what the gateway's own turns borrow (own_turn.js; memory only).
 //
 // Nothing here can block the chat: Loci down or slow costs this turn its card or dream
 // (cue 3 s, poke 8 s), a hook that throws costs the turn its present work, and the relay
@@ -52,6 +55,7 @@ const { create_cue, DEFAULT_TIMEOUT_MS: CUE_TIMEOUT_MS } = require("./cue.js");
 const { create_context_windows } = require("./context_window.js");
 const { with_usage, create_usage_strip } = require("./stream_filter.js");
 const { estimate_prompt, measure } = require("./fill.js");
+const { create_own_turn } = require("./own_turn.js");
 const win = require("./window.js");
 
 const POKE_TIMEOUT_MS = 8000;
@@ -87,6 +91,9 @@ function create_present({
     read_settings: read_settings || (() => settings.load().values) });
   const poke_state = path.join(data_root, "state", "poke-window.json");
   const delivering = new Set();
+  // the gateway's own paid turns; the relay hands it each accepted request's credential (memory only)
+  const own_turn = create_own_turn({ env, data_root, upstream, loci_address: loci, clock, zone, log,
+                                     read_own: () => settings.load().values.own });
 
   /** Poke delivery decides whether and what; the window decides where. */
   async function ask_poke(request_id) {
@@ -254,6 +261,8 @@ function create_present({
   return {
     prepare,
     on_response,
+    remember_owner: own_turn.remember_owner,
+    own_turn,
     banner_lines,
     window_status,
     heartbeat_tasks: [],
