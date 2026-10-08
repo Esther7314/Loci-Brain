@@ -43,15 +43,44 @@
 // New ids are only ever born into today's file, so once every line up to a moment has
 // been settled the scan starts from that day (handoff.floor) and earlier books are let go.
 //
+// ─── ①b A handed-over line that changed (§七.10) ───
+// Her client showing one of his replies edited makes a new revision of that line
+// (threads.js ingest); when its words changed, note_revised() puts it in the books
+// (changes.queue), at once and on disk, so neither Loci being down nor a restart loses
+// it. Every job starts by working the queue off, before its hand-off, and a beat with no
+// other job starts one for a queue that holds anything:
+//   · a line not handed over yet is dropped from the queue: the hand-off sends its
+//     current text, and Loci never had the old one. (Jobs run one at a time, so no
+//     hand-off is in flight then; a line edited while its batch was in flight is in the
+//     books as handed over by the next job, and its change goes then.)
+//   · a handed-over line goes as
+//         POST /api/v2/source/change {change_id, source: {system, instance, container,
+//              id}, host_seq, change: "revised", revision}
+//     with the source exactly as its slices named it (the thread it was born on), the
+//     revision as the fourth joint gives it ("r<n>"), host_seq = n (the line's own
+//     revision count only grows, so it is one order per source with nothing to keep),
+//     and change_id = revised-<id>-r<n>, so a resend of the same change is Loci's
+//     duplicate. Only the newest revision of a line is kept in the queue.
+//   · applied, duplicate, unknown_source, stale (a newer change is there already) → done;
+//     Loci unreachable, a timeout, 401, a 5xx, in_progress → the next beat, same
+//     change_id; any other answer (forbidden, conflict, a 4xx) → given up, kept with its
+//     reason in changes.failed.
+// Only an edit is sent. A regenerate marks the old reply `replaced` without changing its
+// words or revision, and the wire has no kind for "superseded" (source_api.js); a delete
+// or a rewind is never inferred (the client may have trimmed its own history).
+//
 // ─── ② The report turn (on the cadence's days, §七.6) ───
 //   daily     every occurrence writes a report, then flips
 //   every_n   an occurrence writes a report when report.every_n days have passed since the
 //             last flip (any way: a report it wrote, or one she asked for), then flips
 //   manual    nothing scheduled; she asks (POST /present/report {kind: "now"}), it writes
 //             and flips, and her next turn opens the new window
-// The lines the report covers are those born after the last report's cut (the moment its
-// job started) up to this job's start. An occurrence whose report day had no lines in
-// that stretch before the window opened is `quiet`: nothing to write, no flip.
+// The lines the report covers are those born after the last report's cut up to this
+// job's cut. A cut is the last millisecond before the second the job started in: a line's
+// `at` is kept to the second, so a line said in that second (before or after the job
+// started) belongs wholly to the next report, never to neither. An occurrence whose
+// report day had no lines in that stretch before the window opened is `quiet`: nothing
+// to write, no flip.
 // The turn is one own turn (own_turn.js, kind "report"), a fresh window with no cache:
 // the latest conversation's system messages (memory only, so he writes as himself) and
 // report_shell (prompts.js) with the report card in force, the pending slices of this
@@ -73,11 +102,15 @@
 // for export. The same occurrence gives up after REPORT_TRIES counted failures (a
 // deterministic refusal tried ten thousand times is the same refusal); not counted: the
 // own-turn runner busy with something else (tried again next beat) and no key yet (after
-// a restart, until she has spoken). An occurrence missed inside its window — the computer
-// was off, she never went quiet — gets its make-up after report.to, at her first quiet
-// moment, for that occurrence only: the latest occurrence is never more than a day old,
-// so only yesterday is ever made up. POST /present/report {kind: "missing"} (「补一份」)
-// writes it now, quiet or not, even after it gave up — once per press.
+// a restart, until she has spoken). A scheduled report the runner cannot send at all
+// (own_turn blocked(): no key, no model) is not started: the beat runs only the hand-off,
+// the reason is set on the occurrence for the panel and written to the log once, and the
+// report starts on the first quiet beat after it clears. An occurrence missed inside its
+// window — the computer was off, she never went quiet — gets its make-up after
+// report.to, at her first quiet moment, for that occurrence only: the latest occurrence
+// is never more than a day old, so only yesterday is ever made up.
+// POST /present/report {kind: "missing"} (「补一份」) writes it now, quiet or not, even
+// after it gave up — once per press.
 //
 // ─── ③ The flip ───
 // Every thread with a window: window.js open_next with the new report as the carry's
@@ -89,10 +122,11 @@
 // neither written, nor given up, nor quiet — "the morning's first call waits for the
 // report".
 //
-// Books: <LOCI_GATEWAY_DATA>/counters.json under `report` (the hand-off books, the last
-// report, the occurrence's attempts), logs/present.jsonl (counts, ids, reasons — never a
-// line's text or the report). The report text itself is in reports/, which the panel may
-// show (/present status.report.text); nothing here touches the carry beyond setting it.
+// Books: <LOCI_GATEWAY_DATA>/counters.json under `report` (the hand-off books, the changes
+// owed to Loci, the last report, the occurrence's attempts), logs/present.jsonl (counts,
+// ids, reasons — never a line's text or the report). The report text itself is in
+// reports/, which the panel may show (/present status.report.text); nothing here touches
+// the carry beyond setting it.
 // ============================================================
 
 const fs = require("fs");
@@ -103,6 +137,7 @@ const { in_span, local_minute, minute_of_day } = require("./dnd.js");
 const { report_shell } = require("./prompts.js");
 const { line_view, speaker_names, DEFAULT_OWNER, DEFAULT_AI } = require("./source_api.js");
 const { format_line, clean_summary, fit_newest, wall_of } = require("./pack.js");
+const { day_of_id } = require("./day_store.js");
 
 const BATCH_LINES = 1000;
 const HANDOFF_TRIES = 3;
@@ -112,7 +147,12 @@ const WALL_RETRIES = 3;
 const FAILED_KEPT = 20;
 const SLICES_POST_TIMEOUT_MS = 5 * 60 * 1000;   // the side model slices while Loci holds the request
 const SLICES_GET_TIMEOUT_MS = 15 * 1000;
+const CHANGE_TIMEOUT_MS = 30 * 1000;   // Loci holds a second send of one change up to ~10 s
+const CHANGE_DONE = ["applied", "duplicate", "unknown_source", "stale"];
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** A report job's cut: the last millisecond before the second it started in. */
+const cut_of = (started_ms) => Math.floor(started_ms / 1000) * 1000 - 1;
 
 // What the model reads in the letter (Chinese, like every model-facing text).
 const NO_PENDING = "（现在没有在排队的段落）";
@@ -141,6 +181,8 @@ function write_file_atomic(file, text) {
 function blank_state() {
   return {
     handoff: { floor: null, sent: {}, tries: {}, failed: [], last_ok_at: null, last_error: null, failures_since_ok: 0 },
+    // revisions of handed-over lines Loci is still owed: { key, id, day, thread, host_seq, revision, noted_at }
+    changes: { queue: [], failed: [], last_ok_at: null, last_error: null, failures_since_ok: 0 },
     last_report: null,       // { at, at_ms, through_ms, day, file, kind }
     last_flip_day: null,
     auto: null,              // the latest occurrence's attempts: { occ, day, failures, gave_up, error, quiet, written_at, file }
@@ -176,6 +218,7 @@ function create_day_close({
   data_root, host_dir, name, env = process.env, loci_base, threads, day_store, settings, prompts, own_turn,
   clock, zone, log = console.error, system_of = () => [], on_flip = () => {},
   post_timeout_ms = SLICES_POST_TIMEOUT_MS, get_timeout_ms = SLICES_GET_TIMEOUT_MS,
+  change_timeout_ms = CHANGE_TIMEOUT_MS,
 }) {
   const counters_file = path.join(data_root, "counters.json");
   const log_file = path.join(data_root, "logs", "present.jsonl");
@@ -188,6 +231,8 @@ function create_day_close({
   let running = null;      // { kind, promise }
   let queued = null;       // an asked-for job waiting for the own-turn runner
   let last_logged = null;  // the last "nothing to do / waiting" reason written down
+  let last_blocked = null; // the reason a due report cannot be sent, as last written down
+  let last_change_error = null;   // the last "Loci did not take a change, later" reason written down
 
   const iso = (ms) => local_stamp(ms, zone).iso;
   const day_of = (ms) => local_stamp(ms, zone).day;
@@ -217,6 +262,9 @@ function create_day_close({
     if (!is_plain(st.handoff.sent)) st.handoff.sent = {};
     if (!is_plain(st.handoff.tries)) st.handoff.tries = {};
     if (!Array.isArray(st.handoff.failed)) st.handoff.failed = [];
+    st.changes = { ...blank_state().changes, ...(is_plain(kept.changes) ? kept.changes : {}) };
+    if (!Array.isArray(st.changes.queue)) st.changes.queue = [];
+    if (!Array.isArray(st.changes.failed)) st.changes.failed = [];
     return { ok: true, all, st };
   }
 
@@ -457,6 +505,105 @@ function create_day_close({
     return done;
   }
 
+  // ———— ①b Changes to handed-over lines ————
+
+  /**
+   * Lines threads.js has just revised (ids). Those whose words changed are owed to Loci
+   * if they were handed over; whether they were is decided when the queue is worked off.
+   * @returns how many went into the queue
+   */
+  function note_revised(ids) {
+    const items = [];
+    for (const id of ids || []) {
+      const day = day_of_id(id);
+      if (!day) continue;
+      const revisions = day_store.read_day(day).filter((x) => x.id === id);
+      if (!revisions.length) continue;
+      const latest = revisions.reduce((x, y) => (y.rev >= x.rev ? y : x));
+      const { line } = line_view(revisions);
+      if (line.revision !== `r${latest.rev}`) continue;   // the words stayed (a tool name changed)
+      items.push({ key: `revised-${id}-r${latest.rev}`, id, day, thread: latest.thread,
+                   host_seq: latest.rev, revision: line.revision, noted_at: clock.now() });
+    }
+    if (!items.length) return 0;
+    const fresh = new Set(items.map((c) => c.id));
+    update_state((s) => {
+      s.changes.queue = [...s.changes.queue.filter((c) => !fresh.has(c.id)), ...items];
+    });
+    return items.length;
+  }
+
+  function change_owed(st) { return st.changes.queue.length > 0; }
+
+  /** One change → { kind: "ok" | "later" | "refused", down?, status?, outcome?, note?, error? } */
+  async function send_change(c) {
+    const body = {
+      change_id: c.key,
+      source: { system: "gateway", instance: name, container: `thread:${c.thread}`, id: c.id },
+      host_seq: c.host_seq, change: "revised", revision: c.revision,
+    };
+    const r = await loci("POST", "/api/v2/source/change", body, change_timeout_ms);
+    if (!r.reached) return { kind: "later", down: true, error: `Loci unreachable: ${r.error}` };
+    const why = String(r.json?.error || r.json?.note || r.text || "").slice(0, 300);
+    if (r.status >= 200 && r.status < 300) {
+      const outcome = String(r.json?.status || "");
+      if (CHANGE_DONE.includes(outcome)) return { kind: "ok", outcome };
+      if (outcome === "in_progress") return { kind: "later", outcome, error: "in_progress" };
+      return { kind: "refused", status: r.status, outcome: outcome || null, note: r.json?.note || null, error: why };
+    }
+    if (r.status === 401 || r.status >= 500) return { kind: "later", status: r.status, error: why };
+    return { kind: "refused", status: r.status, outcome: null, note: r.json?.note || null, error: why };
+  }
+
+  /** Work the queue of changes off (see ①b). Runs inside a job, before its hand-off. */
+  async function send_changes() {
+    const st = read_state();
+    if (!change_owed(st)) return null;
+    const h = st.handoff;
+    const handed = (c) => Boolean((h.floor && c.day < h.floor)
+      || (Array.isArray(h.sent[c.day]) && h.sent[c.day].includes(c.id)));
+    const settled = [];   // { c, outcome }
+    let later = null;     // the first outcome that waits for a later beat
+    let waiting = 0;
+    for (const c of st.changes.queue) {
+      if (!handed(c)) { settled.push({ c, outcome: { kind: "not_handed" } }); continue; }
+      if (later && later.down) { waiting += 1; continue; }
+      const outcome = await send_change(c);
+      if (outcome.kind === "later") { later = later || outcome; waiting += 1; continue; }
+      settled.push({ c, outcome });
+    }
+    const now = clock.now();
+    const count = (kind) => settled.filter((x) => x.outcome.kind === kind).length;
+    update_state((s) => {
+      const ch = s.changes;
+      // by key: a newer revision noted while this ran stays queued
+      const gone = new Set(settled.map((x) => x.c.key));
+      ch.queue = ch.queue.filter((c) => !gone.has(c.key));
+      for (const { c, outcome } of settled) {
+        if (outcome.kind !== "refused") continue;
+        ch.failed = [...ch.failed, { key: c.key, id: c.id, day: c.day, status: outcome.status ?? null,
+                                     outcome: outcome.outcome, note: outcome.note, error: outcome.error || null, at: iso(now) }]
+          .slice(-FAILED_KEPT);
+      }
+      if (count("ok") && !count("refused") && !later) { ch.last_ok_at = now; ch.last_error = null; ch.failures_since_ok = 0; }
+      if (count("refused") || later) {
+        ch.failures_since_ok += 1;
+        const first = settled.find((x) => x.outcome.kind === "refused")?.outcome || later;
+        ch.last_error = `${first.status ? `HTTP ${first.status}: ` : ""}${first.outcome && first.outcome !== first.error ? `${first.outcome} ` : ""}${first.error || ""}`.trim();
+      }
+    });
+    const result = { ok: count("ok"), refused: count("refused"), not_handed: count("not_handed"), later: waiting };
+    const later_reason = later ? String(later.error || later.status || "later").slice(0, 300) : null;
+    // a change Loci keeps not taking is written down when the reason changes, not every beat
+    if (settled.length || later_reason !== last_change_error) {
+      write_log({ event: "source_change", ...result, later_reason,
+                  refused_ids: settled.filter((x) => x.outcome.kind === "refused")
+                    .map((x) => ({ id: x.c.id, status: x.outcome.status ?? null, outcome: x.outcome.outcome, note: x.outcome.note })) });
+    }
+    last_change_error = later_reason;
+    return result;
+  }
+
   // ———— ② The report ————
 
   /** The pending slices of this gateway's sources, as the letter lists them; null when Loci did not answer. */
@@ -526,7 +673,8 @@ function create_day_close({
    */
   async function write_report(job, handed) {
     const st = read_state();
-    const lines = lines_between({ after_ms: st.last_report ? st.last_report.through_ms : null, upto_ms: job.started });
+    const cut = cut_of(job.started);
+    const lines = lines_between({ after_ms: st.last_report ? st.last_report.through_ms : null, upto_ms: cut });
     if (!lines.length) {
       update_state((s) => {
         if (job.occ !== null) s.auto = { ...(auto_of(s, { start: job.occ }) || fresh_auto(job)), quiet: true };
@@ -571,7 +719,7 @@ function create_day_close({
       write_file_atomic(file, `${text}\n`);
       try { fs.rmSync(err_file(job.day), { force: true }); } catch { /* a stale error card is not worth failing over */ }
       update_state((s) => {
-        s.last_report = { at: iso(finished), at_ms: finished, through_ms: job.started, day: job.day,
+        s.last_report = { at: iso(finished), at_ms: finished, through_ms: cut, day: job.day,
                           file: path.basename(file), kind: job.kind };
         s.last_flip_day = job.day;
         s.failures_since_ok = 0;
@@ -640,13 +788,16 @@ function create_day_close({
 
   function start(job) {
     const promise = (async () => {
+      // the changes owed first: one line not handed over yet is dropped here, before this
+      // job's hand-off sends its current text
+      const changes = await send_changes();
       // a report job always asks: with nothing left to hand over it comes back delivered,
       // so the letter lists what is queued
       const handed = job.handoff || job.report ? await hand_off(job.started) : null;
-      if (!job.report) return { handoff: handed };
+      if (!job.report) return { changes, handoff: handed };
       const r = await write_report(job, handed);
       if (r.outcome === "busy" && job.asked) queued = { ...job, started: null };   // she asked: wait for the runner
-      return { handoff: handed, report: r };
+      return { changes, handoff: handed, report: r };
     })().catch((err) => {
       log(`[gateway] present: day close failed: ${err?.stack || err}`);
       return { error: String(err?.message || err) };
@@ -665,6 +816,14 @@ function create_day_close({
       start(job);
       return { started: true, kind: job.kind };
     }
+    const r = tick_night(now);
+    if (r.started || !change_owed(read_state())) return r;
+    // nothing else to do, but Loci is owed a change: a job of its own
+    start({ kind: "changes", day: null, occ: null, started: now, handoff: false, report: false });
+    return { started: true, kind: "changes", handoff: false, report: false };
+  }
+
+  function tick_night(now) {
     const values = settings.load().values.report;
     const occ = occurrence(now, values);
     const quiet = now - last_owner_at() >= values.quiet_min * 60000;
@@ -679,9 +838,23 @@ function create_day_close({
       write_log({ event: "report", kind: report.kind, day: report.day, outcome: "quiet" });
       report = null;
     }
-    // the hand-off goes in the window, or with the make-up that stands in for it
-    const handoff = (occ.in_window || Boolean(report)) && unsent_lines(st, now).length > 0;
-    if (!report && !handoff) return { started: false, why: "nothing" };
+    // a report the runner cannot send at all (no key after a restart, no model) is not
+    // started: the reason goes on the occurrence and into the log once
+    const blocked = report && typeof own_turn.blocked === "function" ? own_turn.blocked() : null;
+    if (blocked) {
+      const due = report;
+      if (auto_of(st, { start: due.occ })?.error !== blocked) {
+        update_state((s) => { s.auto = { ...(auto_of(s, { start: due.occ }) || fresh_auto(due)), error: blocked }; });
+      }
+      if (last_blocked !== `${due.occ}|${blocked}`) {
+        last_blocked = `${due.occ}|${blocked}`;
+        write_log({ event: "day_close", waiting: blocked, kind: due.kind, day: due.day });
+      }
+      report = null;
+    } else last_blocked = null;
+    // the hand-off goes in the window, or with the make-up that stands in for it (sent or held back)
+    const handoff = (occ.in_window || Boolean(report) || Boolean(blocked)) && unsent_lines(st, now).length > 0;
+    if (!report && !handoff) return { started: false, why: blocked || "nothing" };
     last_logged = null;
     const job = report ? { ...report, started: now, handoff, report: true }
       : { kind: "handoff", day: null, occ: null, started: now, handoff, report: false };
@@ -804,6 +977,13 @@ function create_day_close({
         last_error: h.last_error,
         given_up_batches: h.failed.filter((f) => f.given_up).length,
       },
+      changes: {
+        owed: st.changes.queue.length,
+        last_ok_at: st.changes.last_ok_at ? iso(st.changes.last_ok_at) : null,
+        failures_since_ok: st.changes.failures_since_ok,
+        last_error: st.changes.last_error,
+        given_up: st.changes.failed.length,
+      },
     };
   }
 
@@ -819,6 +999,7 @@ function create_day_close({
     status,
     health,
     banner_line,
+    note_revised,
     owner_arrived() { owner_seen_at = clock.now(); },
     /** Resolves once the job in flight (if any) has finished. */
     settle: () => (running ? running.promise : Promise.resolve(null)),

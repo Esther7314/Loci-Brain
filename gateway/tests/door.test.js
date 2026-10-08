@@ -22,7 +22,8 @@ const fence = require("./network_fence.js");
 const { start_fake_upstream } = require("./fake_upstream.js");
 const { start_fake_loci } = require("./fake_loci.js");
 const { start_gateway } = require("./start_gateway.js");
-const { check_door, create_door, is_loopback } = require("../door.js");
+const http = require("node:http");
+const { check_door, create_door, create_caller_check, is_loopback } = require("../door.js");
 
 const PASS = "Ab3-very.secret_door~0042";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "loci-door-"));
@@ -118,6 +119,77 @@ test("black box on loopback: the prefix is taken off before routing and never re
   const h = await health.json();
   assert.strictEqual(h.present.doors.passphrase_required, false);
   assert.ok(!g.全部输出().includes(PASS), "the passphrase is never printed");
+});
+
+test("web pages: a native client and a page of her own machine get in; another site, null and a rebinding host do not", () => {
+  const check = create_caller_check({ env: { LOCI_GATEWAY_ORIGINS: "https://chat.example.com, http://192.168.1.5:8080/" }, loopback: true });
+  const req = (headers, method = "POST") => ({ method, headers: { host: "127.0.0.1:3100", ...headers } });
+  for (const h of [{}, { host: "localhost:3100" }, { host: "[::1]:3100" }, { host: "gw.localhost" },
+    { origin: "http://localhost:5173" }, { origin: "http://127.0.0.1:3000" }, { origin: "http://[::1]:8080" },
+    { origin: "http://tauri.localhost" }, { origin: "tauri://localhost" }, { origin: "app://cherry" },
+    { origin: "https://chat.example.com" }, { origin: "HTTPS://Chat.Example.com" }, { origin: "http://192.168.1.5:8080" },
+    { "sec-fetch-site": "none" }]) {
+    assert.strictEqual(check(req(h)), null, JSON.stringify(h));
+  }
+  assert.strictEqual(check(req({ "sec-fetch-site": "cross-site" }, "GET")), null, "a link or an image: GET only");
+  for (const h of [{ origin: "https://evil.example" }, { origin: "null" }, { origin: "http://chat.example.com" },
+    { origin: "https://chat.example.com.evil.example" }, { origin: "not a url" },
+    { host: "evil.example:3100" }, { host: "evil.example:3100", origin: "http://evil.example:3100" },
+    { "sec-fetch-site": "cross-site" }, { "sec-fetch-site": "same-site" }]) {
+    const r = check(req(h));
+    assert.ok(r && r.status === 403 && r.error, JSON.stringify(h));
+  }
+  // a name of her own for this machine, listed
+  const named = create_caller_check({ env: { LOCI_GATEWAY_HOSTS: "loci.lan" }, loopback: true });
+  assert.strictEqual(named(req({ host: "loci.lan:3100" })), null);
+  // beyond loopback the passphrase guards the path; the Host is whatever name reached it
+  const lan = create_caller_check({ env: {}, loopback: false });
+  assert.strictEqual(lan(req({ host: "192.168.1.20:3100" })), null);
+  assert.strictEqual(lan(req({ host: "192.168.1.20:3100", origin: "https://evil.example" })).status, 403);
+});
+
+/** A raw request, so Host, Origin and Content-Type are exactly as given. */
+function raw_request(port, { method = "POST", path: p, headers = {}, body = "" }) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: "127.0.0.1", port, method, path: p, headers: { ...headers, "Content-Length": Buffer.byteLength(body) } }, (res) => {
+      const chunks = [];
+      res.on("data", (c) => chunks.push(c));
+      res.on("end", () => resolve({ status: res.statusCode, text: Buffer.concat(chunks).toString("utf8") }));
+    });
+    req.on("error", reject);
+    req.end(body);
+  });
+}
+
+test("black box: a cross-site text/plain chat request writes nothing and never goes upstream; a listed origin works", { timeout: 20000 }, async () => {
+  const g = await boot("web", { LOCI_GATEWAY_ORIGINS: "https://chat.example.com" });
+  const days = path.join(root, "web", "host", "days");
+  const threads = path.join(root, "web", "threads");
+  fake_upstream.清账();
+  const chat = JSON.stringify({ model: "m", messages: [{ role: "user", content: "网页偷偷塞进来的一句" }] });
+  const tries = [
+    { headers: { Host: `127.0.0.1:${g.端口}`, Origin: "https://evil.example", "Content-Type": "text/plain;charset=UTF-8" }, want: 403 },
+    { headers: { Host: `evil.example:${g.端口}`, Origin: `http://evil.example:${g.端口}`, "Content-Type": "application/json" }, want: 403 },
+    { headers: { Host: `127.0.0.1:${g.端口}`, Origin: "null", "Content-Type": "application/json" }, want: 403 },
+    { headers: { Host: `127.0.0.1:${g.端口}`, "Sec-Fetch-Site": "cross-site", "Content-Type": "application/json" }, want: 403 },
+    { headers: { Host: `127.0.0.1:${g.端口}`, "Content-Type": "text/plain" }, want: 415 },
+  ];
+  for (const t of tries) {
+    const r = await raw_request(g.端口, { path: "/v1/chat/completions", headers: t.headers, body: chat });
+    assert.strictEqual(r.status, t.want, `${JSON.stringify(t.headers)} → ${r.text}`);
+  }
+  assert.strictEqual(fake_upstream.收到.length, 0, "nothing went upstream");
+  assert.ok(!fs.existsSync(days) || fs.readdirSync(days).length === 0, "nothing in the day store");
+  assert.ok(!fs.existsSync(threads) || fs.readdirSync(threads).length === 0, "no thread");
+  assert.ok(/403 \(origin https:\/\/evil\.example\)/.test(g.全部输出()), "the refused origin is named in the log");
+
+  // a browser client from a listed origin, and a native one with no Origin at all
+  for (const extra of [{ Origin: "https://chat.example.com" }, {}]) {
+    const r = await raw_request(g.端口, { path: "/v1/chat/completions",
+      headers: { Host: `127.0.0.1:${g.端口}`, "Content-Type": "application/json", Authorization: "Bearer client-key", ...extra }, body: chat });
+    assert.strictEqual(r.status, 200, r.text);
+  }
+  assert.strictEqual(fake_upstream.收到.length, 2);
 });
 
 test("reconciliation: every outbound connection stayed inside this run", () => {

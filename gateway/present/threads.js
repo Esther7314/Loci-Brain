@@ -54,7 +54,16 @@
 //   · **Regenerate**: the history ends at a line already stored, and the thread has only
 //     replies after it. When the new reply finishes, the earlier replies are marked
 //     `replaced` (a new revision each) and the new reply is written. A reply identical to
-//     the earlier one writes nothing.
+//     the earlier one writes nothing. Only the replies that were there when the request
+//     came in (`replaceable`: what the client asked to have redone) are ever replaced; a
+//     reply written since belongs to another request in flight at the same time, and the
+//     new reply forks instead.
+//   · **An opening seen again** (no reply of the model's in its history) within
+//     RESEND_WINDOW_MS is a resend of the same turn, but once the thread holds a reply to
+//     it there is no telling a regenerate of that first reply from a second chat opened
+//     with the same words. Nothing is replaced then: the new reply forks off the shared
+//     opening line and the earlier reply stays live. A regenerated opening costs a stray
+//     one-reply conversation; the other reading would cost a chat its reply.
 //   · **Fork / rewind / edit**: the history leaves the stored branch with a message of
 //     the owner's that differs from what is stored there, or a reply arrives for a line
 //     the thread has already moved past. The thread is left exactly as it is and a new
@@ -279,12 +288,22 @@ function create_threads({ dir, day_store, clock, resend_window_ms = RESEND_WINDO
     return null;
   }
 
+  /** The replies right after the cursor: what a regenerate of this request may replace. */
+  function replies_after(thread, cursor) {
+    const at = cursor ? thread.branch.findIndex((e) => e.id === cursor) : -1;
+    if (cursor && at < 0) return [];
+    const out = [];
+    for (let i = at + 1; i < thread.branch.length && thread.branch[i].role === "assistant"; i++) out.push(thread.branch[i].id);
+    return out;
+  }
+
   /**
    * Called with the client's messages, before anything goes upstream.
    * Writes the owner's new lines right here.
    * @returns { kind: "turn" | "continuation" | "ignored", thread, turn, cursor, resend,
-   *            wrote: [ids], revised: [ids], forked_from }
+   *            wrote: [ids], revised: [ids], forked_from, replaceable: [ids] }
    *   `cursor` is the stored line the client's history ends at; the reply goes after it.
+   *   `replaceable` are the replies after the cursor that the reply may replace.
    */
   function ingest(messages) {
     load_all();
@@ -296,6 +315,9 @@ function create_threads({ dir, day_store, clock, resend_window_ms = RESEND_WINDO
 
     const said = messages.filter((m) => m && (m.role === "user" || m.role === "assistant")).map(to_said);
     const key = request_key(kind, messages, said);
+    // an opening cannot tell a regenerate from a second chat with the same words: it replaces nothing
+    const opening = !said.some((m) => m.role === "assistant");
+    const replaceable_of = (thread, cursor) => (opening ? [] : replies_after(thread, cursor));
     prune(now);
 
     const seen = recent.get(key);
@@ -306,7 +328,8 @@ function create_threads({ dir, day_store, clock, resend_window_ms = RESEND_WINDO
         thread.last_at = now;
         save(thread);
         return { kind, thread: thread.id, cursor: seen.cursor, turn: seen.cursor && turn_of(thread, seen.cursor),
-                 resend: true, wrote: [], revised: [], forked_from: null };
+                 resend: true, wrote: [], revised: [], forked_from: null,
+                 replaceable: replaceable_of(thread, seen.cursor) };
       }
     }
 
@@ -352,7 +375,7 @@ function create_threads({ dir, day_store, clock, resend_window_ms = RESEND_WINDO
     save(thread);
     recent.set(key, { thread: thread.id, cursor, at: now });
     return { kind, thread: thread.id, cursor, turn: cursor && turn_of(thread, cursor),
-             resend: false, wrote, revised, forked_from };
+             resend: false, wrote, revised, forked_from, replaceable: replaceable_of(thread, cursor) };
   }
 
   /**
@@ -380,7 +403,9 @@ function create_threads({ dir, day_store, clock, resend_window_ms = RESEND_WINDO
     let end = at + 1;
     while (end < thread.branch.length && thread.branch[end].role === "assistant") end++;
     const earlier = thread.branch.slice(at + 1, end);
-    const moved_on = end < thread.branch.length;
+    // a reply the request did not see (written since it came in) is not one it asked to redo
+    const allowed = Array.isArray(seen.replaceable) ? new Set(seen.replaceable) : null;
+    const moved_on = end < thread.branch.length || Boolean(allowed && earlier.some((e) => !allowed.has(e.id)));
 
     if (earlier.length && earlier[0].fp === said.fp) {
       return { thread: thread.id, wrote: null, replaced: [], forked_from: null };

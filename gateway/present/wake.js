@@ -14,8 +14,10 @@
 //     cap is set (null = no limit)
 //   · a key exists (own_turn: the fixed key, or one borrowed from her latest accepted
 //     request — after a restart there is none until she has spoken)
-//   · a conversation to wake into: the thread that was active last (`last_at`) holds a
-//     snapshot of its last answered request, not marked `walled` (see "The wall" below)
+//   · a conversation to wake into: the most recently active thread (`last_at`) among
+//     those holding a snapshot of their last answered request. A newer thread without
+//     one (a new chat whose first request failed) is passed over, not a reason to stay
+//     silent. That snapshot must not be marked `walled` (see "The wall" below)
 //   · she has been quiet for every_min (her latest request, or the latest line on any
 //     thread, whichever is later)
 //   · every_min since the last wake, times the backoff. It counts from the later of the
@@ -312,9 +314,13 @@ function create_wake({
     return { ok: true, items: got.value.items, rest: got.value };
   }
 
+  /** The most recently active thread that has a snapshot to wake on, or null. */
   function latest_thread() {
     let best = null;
-    for (const t of threads.list()) if (!best || (t.last_at || 0) > (best.last_at || 0)) best = t;
+    for (const t of threads.list()) {
+      if (!usable_snapshot(t.last_sent)) continue;
+      if (!best || (t.last_at || 0) > (best.last_at || 0)) best = t;
+    }
     return best;
   }
 

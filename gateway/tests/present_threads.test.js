@@ -185,6 +185,42 @@ test("a new chat opening with the same words is its own thread; within two minut
   assert.deepStrictEqual(by_thread[b.seen.thread], ["你好", "你好呀，今天想聊点什么呢？我在这儿。", "随便聊聊", LONG(9)]);
 });
 
+test("two chats opened with the same words within two minutes: the first chat's reply is never replaced", (t) => {
+  const { threads, clock, day_store } = scene(t);
+  const B_REPLY = "你好呀，这是另一段对话里的第一句回话，跟上一段不一样。";
+  const a = send(threads, [SYS, user("你好")], LONG(1));
+  clock.advance(30 * 1000);
+  const b = send(threads, [SYS, user("你好")], B_REPLY);
+  assert.deepStrictEqual(b.done.replaced, [], "an opening seen again may be a second chat: nothing is replaced");
+  assert.notStrictEqual(b.done.thread, a.seen.thread, "the second reply goes on a thread of its own");
+  assert.strictEqual(day_store.get(a.done.wrote).state, "live");
+
+  // chat A carries on with its own reply, chat B with its own
+  const a2 = send(threads, [SYS, user("你好"), assistant(LONG(1)), user("在干嘛")], LONG(2));
+  const b2 = send(threads, [SYS, user("你好"), assistant(B_REPLY), user("随便聊聊")], LONG(9));
+  assert.strictEqual(a2.seen.thread, a.seen.thread);
+  assert.strictEqual(b2.seen.thread, b.done.thread);
+  assert.deepStrictEqual(a2.seen.wrote.length, 1, "chat A's history is all on its thread");
+  const live = day_store.current(DAY).filter((l) => l.state === "live").map((l) => l.text);
+  assert.ok(live.includes(LONG(1)) && live.includes(B_REPLY));
+  assert.strictEqual(day_store.current(DAY).filter((l) => l.state === "replaced").length, 0);
+});
+
+test("the second chat's opening arrives before the first one's reply finished: the first reply still stays live", (t) => {
+  const { threads, clock, day_store } = scene(t);
+  const B_REPLY = "这是第二段对话里的回话，跟第一段说的完全不同。";
+  const a_seen = threads.ingest([SYS, user("你好")]);
+  clock.advance(5 * 1000);
+  const b_seen = threads.ingest([SYS, user("你好")]);
+  const a_done = threads.record_reply(a_seen, { text: LONG(1), tools: [] });
+  const b_done = threads.record_reply(b_seen, { text: B_REPLY, tools: [] });
+  assert.deepStrictEqual(b_done.replaced, [], "a reply written after this request came in is not one it asked to replace");
+  assert.strictEqual(day_store.get(a_done.wrote).state, "live");
+  assert.notStrictEqual(b_done.thread, a_done.thread);
+  const a2 = send(threads, [SYS, user("你好"), assistant(LONG(1)), user("在干嘛")]);
+  assert.strictEqual(a2.seen.thread, a_done.thread);
+});
+
 test("a short generic reply shared with another chat does not glue two chats together", (t) => {
   const { threads } = scene(t);
   const a = send(threads, [SYS, user("在吗")], "在的。");

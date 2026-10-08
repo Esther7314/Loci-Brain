@@ -658,3 +658,22 @@ test("a dream handed over on the chat path is recorded, and a wake does not hand
   assert.ok(wakes[0].startsWith(LETTER_MARK) && !wakes[0].includes(DREAM), "the wake does not repeat it");
   assert.strictEqual(JSON.stringify(wakes[0]).includes("梦"), false, "no dream line at all");
 });
+
+test("a brand-new chat whose first request failed does not silence wake: it wakes into the newest thread with a snapshot", { timeout: 30000 }, async () => {
+  up.plan((body, { wake, i }) => (wake ? { text: "" } : i === 2 ? { status: 500 } : { text: "嗯。" }));
+  const g = await boot();
+  await g.say(HELLO);
+  const answered = g.present.threads.list()[0];
+  g.clock.advance(MIN);
+  const failed = await g.chat([{ role: "system", content: "你是 ta 的伴。" }, { role: "user", content: "新开一段，换个话题。" }]);
+  assert.strictEqual(failed.status, 500);
+  const newest = g.present.threads.list().slice().sort((x, y) => y.last_at - x.last_at)[0];
+  assert.notStrictEqual(newest.id, answered.id, "the failed opening is a thread of its own");
+  assert.ok(!newest.last_sent, "and it has no snapshot");
+
+  await run_until(g, at("2026-10-07T11:30:00"));
+  assert.strictEqual(up.wakes().length, 1, "wake went out");
+  const msgs = up.wakes()[0].body.messages;
+  assert.strictEqual(msgs[1].content, HELLO[1].content, "into the thread that has a snapshot");
+  assert.ok(!log_lines(g.data_root).some((l) => l.event === "wake_gate" && l.blocked === "no_thread"));
+});

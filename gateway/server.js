@@ -62,7 +62,8 @@
 //
 // 📐 **This file is a mount table**: config read from env, the modules built from it,
 //    a list of routes → handlers, one heartbeat, and the startup lines. Logic does not
-//    live here: /health is health.js, the door (bind address and passphrase) is door.js,
+//    live here: /health is health.js, the door (bind address, passphrase, and which web
+//    pages may knock: Origin and Host) is door.js,
 //    one gateway per data directory (gateway.lock) is lock.js,
 //    /present/* and /loci/source are present/present_api.js and present/source_api.js
 //    behind LOCI_GATEWAY_TOKEN, everything else is relay.js, and the present layer (day
@@ -79,7 +80,7 @@ const { handle_health } = require("./health.js");
 const { create_relay } = require("./relay.js");
 const { create_present } = require("./present/index.js");
 const { create_heartbeat } = require("./present/heartbeat.js");
-const { check_door, create_door, url_host } = require("./door.js");
+const { check_door, create_door, create_caller_check, url_host } = require("./door.js");
 const { acquire_lock, refusal_message, release_on_exit } = require("./lock.js");
 const { behind_token, send_json } = require("./present/http_io.js");
 const { create_present_api } = require("./present/present_api.js");
@@ -123,6 +124,7 @@ const present = create_present({ env: process.env, data_root, upstream, loci: LO
 const relay = create_relay({ upstream, present });
 const heartbeat = create_heartbeat({ tasks: present.heartbeat_tasks });
 const admit = create_door(door_config);
+const caller_refused = create_caller_check({ env: process.env, loopback: door_config.loopback });
 const present_api = behind_token(gateway_token, create_present_api(present));
 const source_api = behind_token(gateway_token, create_source_api(present), { closed_status: 503 });
 const present_health = () => build_present_health({ present, doors: {
@@ -149,6 +151,13 @@ const server = http.createServer(async (req, res) => {
     return send_json(res, 404, { error: "not found" });
   }
   req.url = inside;
+  // Then the web pages: a cross-site page or a rebinding domain never gets past here (door.js).
+  const refused = caller_refused(req);
+  if (refused) {
+    req.resume();
+    console.log(`[gateway] ${req.method} ${req.url.split("?")[0]} → 403 (${refused.why})`);
+    return send_json(res, refused.status, { error: refused.error });
+  }
   const route = req.url.split("?")[0];
   const mounted = routes.find((r) => r.match(req, route));
   return mounted.handle(req, res, { start });

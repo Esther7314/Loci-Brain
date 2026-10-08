@@ -15,7 +15,9 @@
 //   · held in this process's memory only. Never written, never logged, never returned by
 //     status(); an upstream error body that echoes it is redacted before it is logged.
 //     After a restart there is no key until she has spoken once: run() answers
-//     { outcome: "unpaid", reason: "no_key" } without sending anything.
+//     { outcome: "unpaid", reason: "no_key" } without sending anything. blocked() says
+//     the same beforehand (no_key, or no_model when no model can be named), so a caller
+//     on the beat can wait without preparing a turn that cannot go.
 //
 // Which model: the caller's `models`, else present.json `own.models`, else the model of
 // her latest accepted request. The list is a fallback chain: when upstream refuses the
@@ -279,6 +281,21 @@ function create_own_turn({
     return null;
   }
 
+  /** The model chain a run would try: the caller's, else own.models, else her latest model. */
+  function chain_of(models) {
+    const own = read_own() || {};
+    const asked = Array.isArray(models) && models.length ? models
+      : Array.isArray(own.models) && own.models.length ? own.models
+      : [borrowed?.model];
+    return [...new Set(asked.map((m) => String(m || "").trim()).filter(Boolean))];
+  }
+
+  /** Why run() would refuse before sending anything ("no_key" · "no_model"), or null. */
+  function blocked(models = null) {
+    if (!credential()) return "no_key";
+    return chain_of(models).length ? null : "no_model";
+  }
+
   /** Every secret this process holds, as it could appear in text. */
   function secrets() {
     const out = new Set();
@@ -442,10 +459,7 @@ function create_own_turn({
     const cred = credential();
     if (!cred) return result({ kind, outcome: "unpaid", reason: "no_key" });
     const own = read_own() || {};
-    const asked = Array.isArray(models) && models.length ? models
-      : Array.isArray(own.models) && own.models.length ? own.models
-      : [borrowed?.model];
-    const chain = [...new Set(asked.map((m) => String(m || "").trim()).filter(Boolean))];
+    const chain = chain_of(models);
     if (!chain.length) return result({ kind, outcome: "unpaid", reason: "no_model" });
     const max_rounds = Number.isInteger(own.tool_rounds) && own.tool_rounds > 0 ? own.tool_rounds : DEFAULT_TOOL_ROUNDS;
 
@@ -602,7 +616,7 @@ function create_own_turn({
     };
   }
 
-  return { run, abort, remember_owner, status, busy: () => Boolean(current) };
+  return { run, abort, remember_owner, status, blocked, busy: () => Boolean(current) };
 }
 
 module.exports = {

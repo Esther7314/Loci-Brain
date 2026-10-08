@@ -119,8 +119,10 @@ function start_loci() {
   const posts = [];       // POST /api/v2/slices bodies, in order
   const gets = [];
   const dropped = [];
+  const changes = [];     // POST /api/v2/source/change bodies, in order
   let pending = [];
   let plan = null;        // (body, i) → { status, json } | null (null: the default success)
+  let plan_change = null; // the same for source changes (null: applied)
   let down = false;
   let seq = 0;
   const server = http.createServer((req, res) => {
@@ -141,6 +143,13 @@ function start_loci() {
                           gist: "ta 说起考试", guesses: [{ id: "abcd1234ef567890", short: "abcd1234", score: 0.8 }] }];
         pending.push({ batch_id: `b_${seq}`, source: body.source, day: body.day, revision: null, slices });
         return json(200, { batch_id: `b_${seq}`, day: body.day, source: body.source, slices, unsliced: 0, replaced: false });
+      }
+      if (route === "/api/v2/source/change" && req.method === "POST") {
+        changes.push({ body, headers: { ...req.headers } });
+        const p = plan_change ? plan_change(body, changes.length) : null;
+        if (p) return json(p.status, p.json);
+        return json(200, { change_id: body.change_id, status: "applied", state: "active", blocked: false,
+                           applied_cursor: `c${changes.length}`, entries: [], derived_pending: [] });
       }
       if (route === "/api/v2/slices" && req.method === "GET") {
         gets.push(Date.now());
@@ -167,10 +176,14 @@ function start_loci() {
   return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve({
     port: server.address().port,
     url: `http://127.0.0.1:${server.address().port}/mcp`,
-    posts, gets, dropped,
+    posts, gets, dropped, changes,
     plan_slices(fn) { plan = fn; },
+    plan_changes(fn) { plan_change = fn; },
     set_down(v) { down = v; },
-    reset() { posts.length = 0; gets.length = 0; dropped.length = 0; pending = []; plan = null; down = false; seq = 0; },
+    reset() {
+      posts.length = 0; gets.length = 0; dropped.length = 0; changes.length = 0;
+      pending = []; plan = null; plan_change = null; down = false; seq = 0;
+    },
     async close() { server.closeAllConnections?.(); await new Promise((r) => server.close(r)); },
   })));
 }
@@ -190,15 +203,15 @@ after(async () => {
 });
 
 /** The real present layer and the real relay, in this process, on a fake clock. */
-async function boot({ settings = {}, start = at("2026-10-07T20:00:00") } = {}) {
-  loci.reset();
-  const data_root = fresh_dir();
+async function boot({ settings = {}, start = at("2026-10-07T20:00:00"), data_root = null, clock: given_clock = null } = {}) {
+  // a data_root passed in is the same gateway restarted: Loci's books stay as they are
+  if (!data_root) { loci.reset(); data_root = fresh_dir(); }
   fs.mkdirSync(path.join(data_root, "state"), { recursive: true });
   // poke delivery's idle gate stays shut on the chat path (its clock is the real one)
   fs.writeFileSync(path.join(data_root, "state", "poke-window.json"),
     JSON.stringify({ lastUserMessageTime: new Date().toISOString(), wakePending: false }));
   fs.writeFileSync(path.join(data_root, "present.json"), JSON.stringify({ compress: { keep_raw: 2 }, ...settings }));
-  const clock = create_fake_clock(start);
+  const clock = given_clock || create_fake_clock(start);
   const present = create_present({ env: { LOCI_TZ: ZONE, LOCI_OWNER_NAME: OWNER, LOCI_AI_NAME: AI },
                                    data_root, clock, upstream: up.url, loci: loci.url, log: () => {} });
   const relay = create_relay({ upstream: up.url, present });
@@ -623,4 +636,125 @@ test("a pack over the window: the oldest lines are dropped until it fits, the pa
   assert.strictEqual(fit_newest({ total: 1000, sizes: [200, 200, 200, 200], wall: { limit: null, actual: null } }), 1);
   assert.strictEqual(fit_newest({ total: 30, sizes: [10, 10, 10], wall: { limit: 1000, actual: 1001 } }), 2,
     "limit over refused size, with the margin: at least one goes");
+});
+
+test("a line born in the second the report job started, after it, goes in the next report", { timeout: 30000 }, async () => {
+  const LATE = "同一秒里又说了一句。";
+  let g = null;
+  up.plan((body, { kind, i }) => {
+    if (kind !== "report") return { text: REPLY(i) };
+    if (up.of("report").length === 1) {
+      // while the first report is being written, still inside the second its job started in
+      g.clock.set(at("2026-10-08T04:31:00") + 700);
+      g.present.day_store.append_new({ thread: g.thread().id, role: "user", text: LATE });
+    }
+    return { text: `日报${up.of("report").length}。` };
+  });
+  g = await boot();
+  await day_one(g);
+  g.clock.set(at("2026-10-08T04:31:00") + 200);
+  await g.beat();
+  const first = up.of("report")[0].messages.at(-1).content;
+  assert.ok(!first.includes(LATE), "it was not there when the first report read its lines");
+  await g.beat(at("2026-10-09T04:31:00"));
+  assert.strictEqual(up.of("report").length, 2, "the second night has a line to report");
+  assert.ok(up.of("report")[1].messages.at(-1).content.includes(LATE), "and the line is in it");
+});
+
+test("no key after a restart: the hand-off goes, the due report waits without trying every beat, and is written once she has spoken", { timeout: 30000 }, async () => {
+  up.plan((body, { kind, i }) => ({ text: kind === "report" ? "等到钥匙才写的日报。" : REPLY(i) }));
+  const before_restart = await boot();
+  await day_one(before_restart);
+  // the process restarts: the borrowed key is gone with it
+  const g = await boot({ data_root: before_restart.data_root, clock: before_restart.clock });
+  const r = await g.beat(at("2026-10-08T04:31:00"));
+  assert.deepStrictEqual([r.started, r.kind, r.report], [true, "handoff", false], "only the hand-off runs");
+  assert.strictEqual(loci.posts.length, 1, "the lines are handed over");
+  for (let m = 32; m <= 45; m++) {
+    const beat = await g.beat(at(`2026-10-08T04:${m}:00`));
+    assert.strictEqual(beat.started, false, `beat 04:${m}`);
+  }
+  assert.strictEqual(loci.gets.length, 0, "no pending slices asked for a report that cannot run");
+  assert.strictEqual(up.of("report").length, 0);
+  const lines = log_lines(g.data_root);
+  assert.strictEqual(lines.filter((l) => l.event === "report").length, 0, "no failed report written down every minute");
+  assert.strictEqual(lines.filter((l) => l.event === "day_close" && l.waiting === "no_key").length, 1, "the reason, once");
+  assert.ok(!fs.existsSync(path.join(g.reports_dir, "2026-10-07.err.json")));
+  assert.strictEqual(g.present.report_status().error, "no_key", "the panel can say why");
+
+  // she speaks; once she is quiet again the report is written
+  g.clock.set(at("2026-10-08T05:00:00"));
+  await g.say([...DAY1, a("好，去吧。"), u("醒了。")]);
+  const after = await g.beat(at("2026-10-08T05:31:00"));
+  assert.deepStrictEqual([after.started, after.report], [true, true]);
+  assert.deepStrictEqual(g.reports(), ["2026-10-07.md"]);
+});
+
+test("a handed-over line edited in the client reaches Loci as `revised`, and survives Loci being down and a restart", { timeout: 30000 }, async () => {
+  up.plan((body, { kind, i }) => ({ text: kind === "report" ? "日报。" : REPLY(i) }));
+  const g = await boot();
+  await day_one(g);
+  await g.beat(at("2026-10-08T04:31:00"));
+  assert.strictEqual(loci.posts.length, 1, "handed over");
+  const t = g.thread();
+  const last_reply = t.branch[5].id;
+  assert.strictEqual(loci.changes.length, 0);
+
+  // later that morning her client shows his last reply edited; Loci is down right then
+  loci.set_down(true);
+  g.clock.set(at("2026-10-08T09:00:00"));
+  await g.say([...DAY1, a("好，快去吧，别着凉。"), u("洗完了。")]);
+  assert.strictEqual(g.present.day_store.get(last_reply).text, "好，快去吧，别着凉。");
+  const down = await g.beat(at("2026-10-08T09:01:00"));
+  assert.deepStrictEqual([down.started, down.kind], [true, "changes"]);
+  assert.strictEqual(loci.changes.length, 0, "Loci was down: nothing reached it");
+
+  // the gateway restarts before Loci is back: the change is still owed
+  const g2 = await boot({ data_root: g.data_root, clock: g.clock });
+  loci.set_down(false);
+  await g2.beat(at("2026-10-08T09:02:00"));
+  assert.strictEqual(loci.changes.length, 1);
+  const sent = loci.changes[0].body;
+  assert.deepStrictEqual(sent.source, { system: "gateway", instance: "gateway", container: `thread:${t.id}`, id: last_reply });
+  assert.deepStrictEqual([sent.change, sent.revision, sent.host_seq], ["revised", "r2", 2]);
+  assert.match(sent.change_id, /^\S{1,128}$/);
+  await g2.beat(at("2026-10-08T09:03:00"));
+  assert.strictEqual(loci.changes.length, 1, "sent once");
+  assert.ok(!log_lines(g2.data_root).some((l) => JSON.stringify(l).includes("别着凉")), "no text in the log");
+
+  // in_progress is sent again later with the same change_id; forbidden is given up and kept
+  g2.clock.set(at("2026-10-08T10:00:00"));
+  loci.plan_changes((body, i) => (i === 2 ? { status: 200, json: { change_id: body.change_id, status: "in_progress", note: "retry_same_change_id" } }
+    : { status: 200, json: { change_id: body.change_id, status: "forbidden", note: "not_change_authority" } }));
+  await g2.say([...DAY1, a("好，快去吧，别着凉，早点睡。"), u("洗完了。")]);
+  await g2.beat(at("2026-10-08T10:01:00"));
+  await g2.beat(at("2026-10-08T10:02:00"));
+  await g2.beat(at("2026-10-08T10:03:00"));
+  assert.strictEqual(loci.changes.length, 3);
+  assert.strictEqual(loci.changes[1].body.change_id, loci.changes[2].body.change_id, "the same change sent again");
+  assert.deepStrictEqual([loci.changes[2].body.revision, loci.changes[2].body.host_seq], ["r3", 3]);
+  const books = JSON.parse(fs.readFileSync(path.join(g2.data_root, "counters.json"), "utf8")).report.changes;
+  assert.deepStrictEqual([books.queue.length, books.failed.length, books.failed[0].note], [0, 1, "not_change_authority"]);
+});
+
+test("a line edited before it was handed over sends no change: the night carries the new text", { timeout: 30000 }, async () => {
+  up.plan((body, { kind, i }) => ({ text: kind === "report" ? "日报。" : REPLY(i) }));
+  const g = await boot();
+  await day_one(g);
+  g.clock.set(at("2026-10-07T21:00:00"));
+  await g.say([...DAY1, a("好，快去吧，别着凉。"), u("洗完了。")]);
+  await g.beat(at("2026-10-07T21:01:00"));
+  await g.beat(at("2026-10-08T04:31:00"));
+  assert.strictEqual(loci.changes.length, 0, "Loci never had the old text");
+  const edited = loci.posts[0].body.lines.find((l) => l.text === "好，快去吧，别着凉。");
+  assert.strictEqual(edited.revision, "r2");
+  // and a regenerate of a handed-over reply (21:00's) is not reported (the owner's ruling: only an edit)
+  g.clock.set(at("2026-10-08T09:00:00"));
+  up.plan(() => ({ text: "嗯，洗完早点睡。" }));
+  await g.say([...DAY1, a("好，快去吧，别着凉。"), u("洗完了。")]);
+  const replaced = g.present.day_store.current("2026-10-07").filter((l) => l.state === "replaced");
+  assert.strictEqual(replaced.length, 1, "the handed-over reply was replaced");
+  assert.ok(loci.posts[0].body.lines.some((l) => l.id === replaced[0].id), "and it had been handed over");
+  await g.beat(at("2026-10-08T09:01:00"));
+  assert.strictEqual(loci.changes.length, 0);
 });

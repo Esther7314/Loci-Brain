@@ -22,6 +22,7 @@ Loci 的核心**不主动说话** —— MCP 是被动协议，工具没被调�
 | 客户端 | 得到什么 |
 |---|---|
 | **能填 base URL 的**（OpenAI 兼容）：Kelivo、Cherry Studio …… | 记忆 + present，全套 |
+| **在浏览器里开的聊天网页**（网页版客户端，从别的网址连到网关） | 全套，但要先把那个网页的地址加进 `LOCI_GATEWAY_ORIGINS`（见二·3 末尾）；不加一律 403 |
 | **官方 App**（ChatGPT、Claude 等）、**Claude Code** —— 填不了 base URL | **只有记忆**：照旧直连 Loci 的 MCP，自己调工具。没有这一层（窗口、日报、唤醒、推送、卡片和梦的递送都没有） |
 
 📌 只认 OpenAI 兼容的 `/v1/chat/completions`。别的 `/v1/*` 原样转发，不做任何事；
@@ -73,6 +74,8 @@ node gateway/server.js
 | `PORT` | `3100` | 网关听哪个端口。`0` = 随便挑一个，启动第一行告诉你挑了哪个 |
 | `LOCI_GATEWAY_BIND` | `127.0.0.1` | 网关听哪个地址。不是回环地址（比如 `0.0.0.0`，让手机从局域网连）时**必须**同时设 `LOCI_GATEWAY_PASSPHRASE`，不然起不来 |
 | `LOCI_GATEWAY_PASSPHRASE` | 无 | 非回环绑定时，**每条路径**前面都要带 `/<口令>/`（`/<口令>/v1/…`、`/<口令>/present`、`/<口令>/loci/source`、`/<口令>/health`），没带一律 404。16–128 个字母、数字或 `. _ ~ -`。进门就摘掉，不往上游发、不进日志。回环绑定时不用带；设了也认带口令的路径 |
+| `LOCI_GATEWAY_ORIGINS` | 无 | 哪些**网页**可以连网关，逗号隔开，照浏览器地址栏写 `协议://域名[:端口]`（如 `https://chat.example.com`）。不设也照常能用的：不带 Origin 的原生客户端（Kelivo、curl、各家 SDK）、本机网页（`http://localhost:…`、`http://127.0.0.1:…`）、桌面壳（`tauri://…`、`app://…` 这类不是 http(s) 的来源）。见二·3 末尾 |
+| `LOCI_GATEWAY_HOSTS` | 无 | 回环绑定时，除了 `localhost` / `127.x.x.x` / `[::1]` / `*.localhost`，还认哪些名字寄来的请求（hosts 文件里自己起的名、本机的反向代理），逗号隔开。别的名字一律 403（防 DNS 重绑定）。非回环绑定时不看这个，靠口令 |
 | `LOCI_MCP` | `http://127.0.0.1:18002/mcp` | Loci 在哪（`/mcp` 结尾；REST 口挂在同一个根上） |
 | `LOCI_HOOK_TOKEN` | 无 | **网关 → Loci** 的钥匙：问卡片、取梦、夜里交原话、自己那一轮调 Loci 工具时，放在 `x-loci-hook-token` 请求头里（不进 URL）。值 = Loci 那边 `hosts.gateway.token_env` 指的那个环境变量的值 |
 | `LOCI_GATEWAY_TOKEN` | 无 | **Loci → 网关** 的钥匙：`/present/*`（面板 present 页经 Loci 代问）和 `/loci/source`（Loci 来取原话）只认 `Authorization: Bearer <它>`，错了 401。**不设 = 这两族口关着**：`/present/*` 回 404，`/loci/source` 回 503（Loci 当「暂时取不到」，退回记忆自己的正文）。值 = Loci 那边 `hosts.gateway.fetch_token_env` 指的那个环境变量的值 |
@@ -179,6 +182,28 @@ Loci 那边只有 open 的宿主不带 `Loci-Scope` 也能读全库，别的宿�
 base URL 填 `http://<电脑的局域网 IP>:3100/<口令>/v1`。**别把网关裸开在局域网上 —— 卡片里是你的记忆。**
 口令是门，不是加密：出了家门要用，走你自己的 VPN / 隧道。
 
+**网页也是一扇门。** 网关只听本机，挡得住别的电脑，挡不住你浏览器里开着的别的网站：
+任何网页都能悄悄往 `127.0.0.1:3100` 发一条请求，借 DNS 重绑定甚至能读到回话。而一条聊天请求
+还没到上游验钥匙，就已经落了一句原话、开了一个对话、打断了唤醒、重置了你的「静了多久」。所以网关进门先看两样：
+
+- **寄给谁（Host）**：回环绑定时，请求必须是寄给本机名字的（`localhost`、`127.x.x.x`、`[::1]`、`*.localhost`），
+  或者你在 `LOCI_GATEWAY_HOSTS` 里列过的名字。重绑定的网页用的是它自己的域名，在这儿就被挡了。
+- **从哪个网页来（Origin）**：浏览器发请求会带上来源网页，原生客户端不带。
+  - 不带 Origin → 原生客户端，照常进（Kelivo、curl、SDK 都是这样）。
+  - 来源在 `LOCI_GATEWAY_ORIGINS` 里 → 进。
+  - 来源是本机网页（`http://localhost:…`、`http://127.0.0.1:…`、`http://xxx.localhost`）或者不是 http(s) 的桌面壳
+    （`tauri://localhost`、`app://…`）→ 进：别的网站冒充不了这些。
+  - 别的一律 403，**包括 `null`**（沙盒 iframe、`data:` 网页发的就是 `null`）。
+  - 浏览器没带 Origin、但 `Sec-Fetch-Site` 说是别的网站发来的写请求 → 403。
+
+**用网页版客户端**（在浏览器里打开、从别的网址连网关的那种）：把它的地址照浏览器地址栏抄进
+`LOCI_GATEWAY_ORIGINS`（`https://chat.example.com`，带端口就带上端口），重启网关。被挡的那条在网关日志里是一行
+`403 (origin https://…)`，抄那个就对。只有确定要用、并且信得过那个网站的才加 —— 加进去的网站就能替你跟他说话。
+某个桌面客户端被挡、日志里写的是 `origin null`，可以把 `null` 加进去，但这同时放进了所有沙盒网页，能不加就别加。
+
+聊天请求还必须带 `Content-Type: application/json`（OpenAI 兼容的客户端都带）。不带的回 415、不往上游发 ——
+网页不打招呼就能发的只有 `text/plain` 这类，网关不当它是聊天。
+
 ### 4. 面板 present 页
 
 面板只跟 Loci 说话，Loci 把 present 页的请求转给网关（`present_url`）。在这儿：
@@ -223,6 +248,7 @@ curl http://127.0.0.1:3100/health
 - 网关重启后，唤醒和日报要等你先说一句（借你那把钥匙）；不想等就配 `LOCI_UPSTREAM_KEY`。
 - 想让他在你不在的时候说的话推到手机上：装 Bark，把推送码贴进 present 页，点「试推一条」。
 - 手机上的客户端要连电脑上的网关：先看 `LOCI_GATEWAY_BIND` 那一行，别把网关裸开在局域网上 —— 卡片里是你的记忆。
+- 在浏览器里用的网页版客户端，先把它的地址加进 `LOCI_GATEWAY_ORIGINS`；Kelivo 这类原生客户端不用管。
 
 ---
 
@@ -270,9 +296,15 @@ curl http://127.0.0.1:3100/health
 
 1. **客户端看不见压缩**，也看不见 carry —— 你没法读、没法改他压出来的那段（故意的，第八节）。
 2. **推不进客户端**：他不在你眼前说的话，只能 Bark 推一条、等你下次开口时以「（你不在的时候我说过：……）」进历史。你一直不开口，客户端里就一直没有。
-3. **分不清删除和截断**：客户端少发了几条，网关不知道是你删的还是客户端自己截的，所以从不据此去改记忆。只有「改了」（编辑 / 重新生成已经交给 Loci 的话）才会报。
+3. **分不清删除和截断**：客户端少发了几条，网关不知道是你删的还是客户端自己截的，所以从不据此去改记忆。
+   只有「改了」才报：已经交给 Loci 的一句，客户端里显示成改过的样子（你编辑了他的回话），网关就告诉 Loci
+   这一句换成了新版本（`revised`）。这一条先记在网关账上再发，Loci 那会儿没开、网关重启了都不丢，下一拍接着发。
+   **重新生成不报**：被换掉的那句字没变，Loci 那边留着它也是真说过的话。
 4. **从这个服务商进来的全算他**：网关不看请求里写了什么，只看它是从哪进来的。杂活混进来也会被记下 ——
-   所以要单独建服务商。同时开好几个对话，唤醒只接着最近说过话的那一个；他那时说的话，你在哪个对话里开口就出现在哪个对话里。
+   所以要单独建服务商。同时开好几个对话，唤醒只接着最近一个他回过话的对话（刚开、第一句就失败的新对话跳过）；
+   他那时说的话，你在哪个对话里开口就出现在哪个对话里。
+   两分钟内用一模一样的第一句开两个新对话，网关分不出「第二个对话」和「把第一句的回话重新生成」，
+   就当成两个对话：两边的回话都留着。代价是真重新生成第一句的回话时，旧的那句也会作为一段一句话的对话交给 Loci。
 5. **窗口大小是认出来的，不是量出来的**：服务商不报、模型表里没有，就当 1M。认大了会撞墙（有出路，但那一轮要多等）；
    认小了会早压、白丢字。不对就在 present 页填。
 6. **缓存保不保得住看上游**：工具表一变、system prompt 一改、隔太久，缓存就没了。
@@ -294,6 +326,9 @@ curl http://127.0.0.1:3100/health
 | 网关起不来：`LOCI_GATEWAY_BIND=… is not a loopback address` | 绑了非回环地址（`0.0.0.0`、局域网 IP）却没设口令 | 设 `LOCI_GATEWAY_PASSPHRASE`（16 位以上）；或者改回 `127.0.0.1` |
 | 网关起不来：`Another gateway (pid …) is already running on LOCI_GATEWAY_DATA=…` | 这个数据目录上已经有一个网关在跑（第五节第 13 条） | 留一个就够：停掉那个，或者给这个另设一个 `LOCI_GATEWAY_DATA`。那个 pid 根本不是网关（锁是很久以前留下的、pid 又被别的程序用上了），就手动删掉报错里写的那个 `gateway.lock` |
 | 网关起不来：`LOCI_GATEWAY_PASSPHRASE must be 16–128 characters` | 口令太短，或者有 URL 路径里会被改写的字符 | 只用字母、数字和 `. _ ~ -`，16–128 位 |
+| 网页版客户端连网关回 **403**，「这个请求来自网页……不在 LOCI_GATEWAY_ORIGINS 里」 | 网关只放原生客户端和本机网页进来（二·3 末尾） | 把网关日志里 `403 (origin …)` 那个地址加进 `LOCI_GATEWAY_ORIGINS`，重启网关 |
+| 回 **403**，「这个请求是寄给……的，不是本机的名字」 | 用了 hosts 文件里自己起的名字或者反向代理访问回环绑定的网关 | 把那个名字加进 `LOCI_GATEWAY_HOSTS`，重启网关 |
+| 聊天回 **415** | 请求没带 `Content-Type: application/json`（多半是手写的 `curl -d`） | 加上 `-H "Content-Type: application/json"` |
 | 面板 present 页整页「还没接上」 | Loci 的 `hosts:` 里没有一个宿主写了 `present_url`（或者写了但 Loci 没重启） | 照第二节第 2 步加上，重启 Loci |
 | present 页「连不上网关」/「5 秒内没回话」 | 网关没起、`present_url` 写错、Loci 在 Docker 里连不到本机的 `127.0.0.1` | 先 `curl <present_url>/health`；Docker 见最后一行 |
 | present 页「Loci 对宿主 gateway 没有钥匙」 | 没写 `fetch_token_env`，或者那个环境变量没值，或者值跟 `token_env` 那把一样 | 写上、填值（跟网关的 `LOCI_GATEWAY_TOKEN` 一样，跟 `token_env` 那把不一样），重启 Loci |
@@ -305,6 +340,7 @@ curl http://127.0.0.1:3100/health
 | 写了 `hosts:` 之后，直连 Loci 的 MCP 客户端连不上（`No host credential`） | MCP 鉴权关着时，表上的人才进得来 | 那个客户端请求头带上 legacy 的钥匙（第二节第 2 步那三件事） |
 | 没有卡片；`/health` 说一直失败 | Loci 没起 / `LOCI_MCP` 不对 / 网关的 `LOCI_HOOK_TOKEN` 跟 Loci 那边 `token_env` 的值对不上 / 宿主不是 `scope_mode: open` | 照 `/health` 里的错误看；钥匙两边对一下；`scope_mode: open` |
 | `/health` 说 Loci 回了但「no card」 | 不是故障：库里没有跟这几句对得上的 | 不用管 |
+| 日报那行一直写着 `no_key` | 网关重启后还没钥匙，该写的日报在等：夜里照交原话，日报等你先说一句、再静够了才写（不会每分钟白试一次） | 说一句就好；不想等就配 `LOCI_UPSTREAM_KEY` |
 | **一直不唤醒** | ① 唤醒没开（缺省关）② **网关重启后还没钥匙**：要等你先说一句 ③ 在免打扰里（缺省 23:00–08:00）或不在你设的时间段里 ④ `wake.dry_run` 开着：到点只记一行 `would_wake`，不真叫 ⑤ **今天的日报该写还没写**：早上第一声等日报 ⑥ 今天到上限了 / 他说的话攥到 `held_cap` 了 ⑦ 还没有一个能接着说下去的对话（刚装好、一句都没聊过） ⑧ `present.json` 读不出来或唤醒那节填坏了：读不出来就不叫 ⑨ **唤醒撞墙了**：上一轮对话加上唤醒信已经超过窗口，先丢掉前面几次唤醒的来回再试一次，还撞就停在这一轮，等你下次开口或者换窗 | 看 present 页「自动唤醒」那行的「下一次为什么不准点」，或者 `logs/present.jsonl` 里的 `wake_gate`。② 配 `LOCI_UPSTREAM_KEY` 就不用等 |
 | 间隔填 2 分钟被拒 | 间隔最小 15 分钟 | 试的时候在 `present.json` 里开 `wake.allow_short`，试完关掉 |
 | 「试推一条」失败：`skipped_config_missing` | 推送码没填 | present 页填推送码或整条 Bark URL |
@@ -313,7 +349,7 @@ curl http://127.0.0.1:3100/health
 | 试推能到，他唤醒说的话推不到 | 那会儿在免打扰里（试推不管免打扰，真推送管）；或者失败重试 15 分钟后放弃了 | 话还在：你下次开口时出现在他回话最前面 |
 | 某一轮特别慢，`logs/present.jsonl` 里有一行「撞墙」 | **撞墙**：上游说上下文太长了（窗口认大了，或者服务商把窗口切得比纸面小） | 不用管：网关砍掉最老的几轮重发一次，记住这个模型的上限（来处变成 `learned`；报错里没写数时是估的，那一行的 `words` 说怎么估的），再排一次打包。老撞就在 present 页把窗口填小一点。自助压缩关着时每次撞都只砍不压 |
 | 到了强制线却不压了，`/health` 的 compress 里有 `held_back_words` | 压了也降不下来：客户端的 system、摘要和「压缩完留多少条原话」已经快占满窗口（窗口小、人设长，或者窗口认小了），每压一次都是一整轮的钱 | 照那句话改：调大上下文窗口、调少留的原话或调高强制压缩线；「现在压」照样能压。撞墙的出路不受影响 |
-| 夜里交切片一直失败，原因是 403 | Loci 那边这个宿主没写 `authority`，或者网关的 `LOCI_HOOK_TOKEN` 填成了 legacy 那串 | 照第二节第 2 步改好，重启 Loci。被拒过的那几批不会重交，之后的照常交 |
+| 夜里交切片一直失败，原因是 403；或者 `/health` 里 `report.changes` 说改过的句子报给 Loci 被拒（`forbidden` · `not_change_authority`） | Loci 那边这个宿主没写 `authority`，或者网关的 `LOCI_HOOK_TOKEN` 填成了 legacy 那串 | 照第二节第 2 步改好，重启 Loci。被拒过的那几批 / 那几句不会重发，之后的照常发 |
 | 导出包里没有原话 | 没设 `LOCI_GATEWAY_DAYS`，原话留在网关自己的目录里 | 设成 `<buckets>/_hosts/<LOCI_GATEWAY_NAME>`；已经写下的从 `<LOCI_GATEWAY_DATA>/host/` 挪过去 |
 | 他回话最前面多了「（你不在的时候我说过：……）」 | 不是错：他唤醒时说过话，这是那几句 | — |
 | **Loci 在 Docker 里，取原话 / present 页连不上网关** | 容器里的 `127.0.0.1` 是容器自己 | **Docker Desktop**（Windows / Mac）：`fetch_url`、`present_url` 里的 `127.0.0.1` 换成 `host.docker.internal`。**Linux：没实测过**，思路是 compose 里给 Loci 加 `extra_hosts: ["host.docker.internal:host-gateway"]`，网关绑到容器够得着的地址 —— 那就不是回环了，得设口令。试通没有：`docker exec loci-brain python -c "import urllib.request as u; print(u.urlopen('http://host.docker.internal:3100/health').status)"` |

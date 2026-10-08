@@ -8,7 +8,9 @@
 //       Sees the client's messages exactly as sent, before anything goes upstream, and
 //       builds the copy that does go upstream. In this order:
 //         ① threads: which conversation, what is new; the owner's new line is written
-//            to the day store right here ("store before forwarding")
+//            to the day store right here ("store before forwarding"); a reply the client
+//            shows edited is a new revision, and day_close.js books it as a change Loci
+//            is owed when the line was already handed over
 //         ①b a pack in flight for this conversation (pack.js): the turn waits for it, up
 //            to PACK_WAIT_MS (LOCI_PACK_WAIT_MS), so it goes with the new window; past
 //            that it goes as it is and the pack keeps going
@@ -205,7 +207,12 @@ function create_present({
     if (seen.kind === "continuation") bits.push("tool turn");
     if (seen.forked_from) bits.push(`forked from ${seen.forked_from}`);
     if (seen.wrote.length) bits.push(`+${seen.wrote.join(",")}`);
-    if (seen.revised.length) bits.push(`rev ${seen.revised.join(",")}`);
+    if (seen.revised.length) {
+      bits.push(`rev ${seen.revised.join(",")}`);
+      // an edit of a line Loci already has is owed to it (day_close.js ①b), on disk now
+      try { if (day_close.note_revised(seen.revised)) bits.push("change owed to Loci"); }
+      catch (err) { log(`[gateway] present: noting a changed line for Loci failed: ${err?.message || err}`); }
+    }
 
     // ①b a pack in flight: wait for it, so this turn goes with the new window
     const waited = await packer.wait_for([seen.thread, seen.forked_from], pack_wait_ms);

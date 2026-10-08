@@ -2,9 +2,11 @@
 // gateway/relay.js — everything that is not /health: read the request, let the present
 // layer build the copy that goes upstream, forward it, pipe the answer back
 //
-// Mounted by server.js as the catch-all route. The order inside one request:
-//   ① read and parse the body
-//   ② the /v1/* guard: anything else is answered 404 here, before anyone is asked anything
+// Mounted by server.js as the catch-all route, behind the door (door.js: passphrase,
+// Origin, Host). The order inside one request:
+//   ① read the body; parse it only when its Content-Type says JSON
+//   ② the /v1/* guard: anything else is answered 404 here, before anyone is asked anything;
+//      a chat request whose Content-Type is not JSON is a 415, never forwarded unrecorded
 //   ③ a chat request: the present layer (present/index.js) sees the client's messages
 //      untouched, stores the owner's line, asks Loci for this turn's card and poke
 //      delivery for a dream / muse line, and hands back the copy to forward — carry,
@@ -32,6 +34,12 @@ function read_body(req) {
   });
 }
 
+/** Does the request say its body is JSON (application/json, or any +json type)? */
+function says_json(req) {
+  const type = String(req.headers?.["content-type"] || "").split(";")[0].trim().toLowerCase();
+  return type === "application/json" || /^application\/[\w.+-]+\+json$/.test(type);
+}
+
 function is_chat(req, body) {
   return req.method === "POST"
     && /\/chat\/completions$/.test(req.url.split("?")[0])
@@ -45,8 +53,12 @@ function is_chat(req, body) {
 function create_relay({ upstream, present = null }) {
   return async function handle_relay(req, res, { start }) {
     const raw = await read_body(req).catch(() => Buffer.alloc(0));
+    // Only a body that says it is JSON is read as JSON: a text/plain one is what a web
+    // page can send without asking (door.js keeps those pages out; this is the second lock)
     let body = null;
-    try { body = raw.length ? JSON.parse(raw.toString("utf8")) : null; } catch { body = null; }
+    if (says_json(req)) {
+      try { body = raw.length ? JSON.parse(raw.toString("utf8")) : null; } catch { body = null; }
+    }
 
     const route = req.url.split("?")[0];
     const notes = [];
@@ -75,6 +87,17 @@ function create_relay({ upstream, present = null }) {
       res.writeHead(404, { "Content-Type": "application/json; charset=utf-8", "Content-Length": payload.length });
       res.end(payload);
       console.log(`[gateway] ${req.method} ${req.url} → 404（不是 /v1/*，没往上游发）`);
+      return;
+    }
+
+    // A chat request that does not say it is JSON would go upstream unrecorded: refused out loud.
+    if (req.method === "POST" && /\/chat\/completions$/.test(route) && raw.length && !says_json(req)) {
+      const payload = Buffer.from(JSON.stringify({
+        error: "聊天请求要带 Content-Type: application/json，网关只认 JSON 的聊天请求；这一条没往上游发。",
+      }), "utf8");
+      res.writeHead(415, { "Content-Type": "application/json; charset=utf-8", "Content-Length": payload.length });
+      res.end(payload);
+      console.log(`[gateway] ${req.method} ${route} → 415 (Content-Type ${String(req.headers["content-type"] || "none").slice(0, 60)})`);
       return;
     }
 
