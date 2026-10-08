@@ -14,8 +14,10 @@
 //   · wake      — when a wake last ran to an answer, failures since, how many things he
 //                 said are held for her (wake.js health())
 //   · compress  — when a window was last folded, any way (he did it, a pack, the panel's
-//                 button), and how many paid pack failures since (present/index.js
-//                 compress_health: times, ways and counts)
+//                 button), how many paid pack failures since, and how many windows the
+//                 gateway has stopped packing on its own because a pack could not bring
+//                 them under the force line, with why in Chinese (present/index.js
+//                 compress_health: times, ways, counts and pack.js's words)
 //   · report    — when a day report was last written, failures since, whether the latest
 //                 one gave up, and when the nightly hand-off to Loci last went through
 //                 (day_close.js health(): times, counts and the last error, never the text)
@@ -56,6 +58,8 @@ function compress_section(present, now) {
     last_failure_reason: c.last_failure_reason,
     running: c.running,
     waiting_to_retry: c.waiting_to_retry,
+    held_back: c.held_back ?? 0,
+    held_back_words: c.held_back_words ?? null,
   };
 }
 

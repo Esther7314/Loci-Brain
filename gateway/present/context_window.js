@@ -6,8 +6,18 @@
 // with the number so the panel can say where it came from:
 //   user      the owner typed it (`compress.context_tokens` in present.json; absent or
 //             null = not set)
-//   learned   the model hit the wall once and the gateway learned its real limit from
-//             that (the wall-hit escape, wall.js, calls learn())
+//   learned   the model hit the wall and the gateway learned its limit from that (the
+//             wall-hit escape, wall.js, calls learn()). Two kinds:
+//               error    the limit the error named: real knowledge, kept until a turn
+//                        that goes through with more proves it low
+//               last_ok  the error named none, so the last prompt_tokens that went
+//                        through stands in for it: a guess. It never replaces an `error`
+//                        number, and it lapses after GUESS_TTL_MS — a single long paste
+//                        on a provider with a vague error must not shrink the window for
+//                        good; if the window really is that small, the next wall learns
+//                        it again (with a fresher, usually larger last_ok)
+//             Either kind is raised, never lowered, by a turn that goes through with
+//             more prompt_tokens than it says (note_ok): a success is proof.
 //   provider  the provider's own model list (`GET /v1/models`) reports it
 //   table     the built-in table of common models below, matched by name
 //   default   1,000,000 — big on purpose: a window set too small makes the gateway pack
@@ -30,6 +40,7 @@ const DEFAULT_TOKENS = 1_000_000;
 const LIST_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 const LIST_TIMEOUT_MS = 5000;
 const MIN_TOKENS = 1024;
+const GUESS_TTL_MS = 24 * 60 * 60 * 1000;   // how long a `last_ok` guess stands
 
 // Numeric fields providers use for the window in a /v1/models entry. `max_tokens` is
 // deliberately absent: more often than not it is the output cap.
@@ -148,14 +159,23 @@ function create_context_windows({ data_root, upstream = "", read_settings = () =
     return Number.isInteger(n) && n >= MIN_TOKENS ? n : null;
   }
 
+  /** The learned entry for this model, unless it is missing, broken or a guess that lapsed. */
+  function live_learned(s, name) {
+    const e = name ? s.learned[name] : null;
+    const tokens = Number(e?.tokens);
+    if (!e || !Number.isInteger(tokens) || tokens < MIN_TOKENS) return null;
+    if (e.how === "last_ok" && !(Number(e.until) > clock.now())) return null;
+    return { tokens, how: e.how };
+  }
+
   /** @returns { tokens, source: "user" | "learned" | "provider" | "table" | "default" } */
   function resolve(model) {
     const s = load();
     const name = String(model || "");
     const user = user_tokens();
     if (user) return { tokens: user, source: "user" };
-    const learned = Number(s.learned[name]?.tokens);
-    if (name && Number.isInteger(learned) && learned >= MIN_TOKENS) return { tokens: learned, source: "learned" };
+    const learned = live_learned(s, name);
+    if (learned) return { tokens: learned.tokens, source: "learned" };
     const provider = Number(s.provider[name]);
     if (name && Number.isInteger(provider) && provider >= MIN_TOKENS) return { tokens: provider, source: "provider" };
     const table = table_tokens(name);
@@ -174,15 +194,36 @@ function create_context_windows({ data_root, upstream = "", read_settings = () =
   }
 
   /**
-   * The hook for the wall-hit escape (wall.js): the limit read out of a
-   * context-length error, or else the last prompt_tokens that still went through.
+   * The hook for the wall-hit escape (wall.js): how "error" = the limit read out of a
+   * context-length error; how "last_ok" = the last prompt_tokens that still went through,
+   * a guess that lapses after GUESS_TTL_MS and never replaces a live "error" number.
+   * @returns whether it was taken
    */
   function learn(model, tokens, how) {
     const name = String(model || "");
     const n = Math.floor(Number(tokens));
     if (!name || !Number.isFinite(n) || n < MIN_TOKENS) return false;
     const s = load();
-    s.learned[name] = { tokens: n, how: String(how || ""), at: clock.now() };
+    const kind = String(how || "");
+    if (kind === "last_ok" && live_learned(s, name)?.how === "error") return false;
+    const now = clock.now();
+    s.learned[name] = { tokens: n, how: kind, at: now, ...(kind === "last_ok" ? { until: now + GUESS_TTL_MS } : {}) };
+    save();
+    return true;
+  }
+
+  /**
+   * A turn on this model went through with `tokens` of prompt: a learned size below that
+   * is proven low and is raised to it (a guess keeps its lapse time). @returns whether it moved
+   */
+  function note_ok(model, tokens) {
+    const name = String(model || "");
+    const n = Math.floor(Number(tokens));
+    if (!name || !Number.isFinite(n)) return false;
+    const s = load();
+    const live = live_learned(s, name);
+    if (!live || n <= live.tokens) return false;
+    s.learned[name] = { ...s.learned[name], tokens: n, raised_at: clock.now() };
     save();
     return true;
   }
@@ -217,7 +258,7 @@ function create_context_windows({ data_root, upstream = "", read_settings = () =
     return true;
   }
 
-  return { resolve, ensure, note_models_list, learn, file };
+  return { resolve, ensure, note_models_list, learn, note_ok, file };
 }
 
-module.exports = { create_context_windows, table_tokens, parse_models_list, entry_tokens, DEFAULT_TOKENS, TABLE };
+module.exports = { create_context_windows, table_tokens, parse_models_list, entry_tokens, DEFAULT_TOKENS, GUESS_TTL_MS, TABLE };

@@ -61,6 +61,25 @@
 // the left-out lines stay in the day store and in Loci, only this summary does not
 // cover them. Each cut is one "pack_wall" line in the log (counts only).
 //
+// ─── A forced pack that cannot help is not paid for ───
+// If the client's system prompt, the carry and the keep_raw lines already fill the
+// window past the force line (a small window, a long persona, a window size learned too
+// small), every pack lands right back above it, and every finished turn would start
+// another paid pack that folds the two lines since the last one. So before a forced pack
+// starts (manual ones always start: she asked), the fill it would leave is predicted:
+//     fill now × (1 − share of the window the folded lines are)
+// — the fill is the last measured one (or, after the wall, the refused request's against
+// the window in use); the share is by estimate (fill.js) over the client's system
+// messages, the carry and the raw lines from the mark on, so the estimate's error cancels
+// out; the new summary is taken to be as long as the carry it replaces. The pack goes only
+// when that prediction is under the force line and at least MIN_GAIN_PCT points below the
+// fill now — a pack that frees two points is paid again on the next turn. Otherwise it
+// does not start (outcome `no_help`, nothing sent, nothing counted): one "pack" line in
+// the ledger with the reason in Chinese, once per window and reason, and status() /
+// /health carry it while it holds. Every later forced request is judged again, so it lifts
+// by itself once enough lines have left the kept tail, the settings change or the window
+// flips. Meanwhile the wall (wall.js) still keeps every turn under the limit.
+//
 // ─── Failures ───
 //   unpaid (nothing reached upstream: no key, busy with another own turn, cannot
 //           connect) → tried again on the next heartbeat, not counted
@@ -82,13 +101,15 @@ const win = require("./window.js");
 const { compress_forced_shell } = require("./prompts.js");
 const { OPEN, CLOSE } = require("./stream_filter.js");
 const { local_stamp } = require("./clock.js");
-const { wall_error } = require("./wall.js");
+const { wall_of_run } = require("./wall.js");
+const { estimate_text, estimate_prompt } = require("./fill.js");
 
 const PACK_WAIT_MS = 90 * 1000;
 const BACKOFF_BASE_MS = 2 * 60 * 1000;
 const BACKOFF_MAX_MS = 60 * 60 * 1000;
 const WALL_RETRIES = 3;
 const WALL_MARGIN = 0.85;   // aim under the limit: sizing by characters is rough
+const MIN_GAIN_PCT = 10;    // a forced pack must be expected to free at least this many points
 
 /** The summary as it may go into a carry: no markers, trimmed. */
 function clean_summary(text) {
@@ -110,14 +131,8 @@ function format_line(line) {
   return `${stamp ? `[${stamp}] ` : ""}${who}：${bits.filter(Boolean).join(" ")}`;
 }
 
-/** An own turn's failure as the context-length wall (wall.js wall_error), or null. */
-function wall_of(res) {
-  if (!res || res.ok || res.outcome !== "paid") return null;
-  const m = /^http_(\d+)$/.exec(String(res.reason || ""));
-  if (!m) return null;
-  const w = wall_error(Number(m[1]), res.error);
-  return w.hit ? w : null;
-}
+/** An own turn's failure as the context-length wall (wall.js wall_of_run), or null. */
+const wall_of = wall_of_run;
 
 /**
  * How many of the newest lines to keep so a refused letter fits: the letter is `total`
@@ -149,6 +164,25 @@ function plan_pack(thread, keep_raw) {
   return { mark, ids: branch.slice(from, to).map((e) => e.id) };
 }
 
+/**
+ * The fill a pack following `plan` would leave, predicted from the fill now (see "A forced
+ * pack that cannot help" in the header). null when the window holds nothing to measure.
+ * @param line_tokens  (id) → the estimated tokens of a stored line
+ */
+function predict_fill({ thread, plan, fill_pct, system = [], line_tokens }) {
+  const branch = Array.isArray(thread.branch) ? thread.branch : [];
+  const w = thread.window || {};
+  const from = w.mark ? Math.max(0, branch.findIndex((e) => e.id === w.mark)) : 0;
+  const to = plan.mark ? branch.findIndex((e) => e.id === plan.mark) : -1;
+  if (to < from) return null;
+  const sum = (list) => list.reduce((n, e) => n + line_tokens(e.id), 0);
+  const folded = sum(branch.slice(from, to));
+  const whole = estimate_prompt({ messages: system }) + (w.carry ? 4 + estimate_text(w.carry) : 0)
+    + folded + sum(branch.slice(to));
+  if (!(whole > 0)) return null;
+  return Math.round(fill_pct * (1 - folded / whole) * 10) / 10;
+}
+
 /** What the current carry holds from before its mark, to be folded into the new summary. */
 function earlier_summary(w) {
   if (!w || !w.carry) return null;
@@ -177,6 +211,7 @@ function create_packer({
   const running = new Map();   // thread → { how, promise, window }
   const pending = new Map();   // thread → { how, window, next_at, paid }
   const record = { last_ok_at: null, last_ok_how: null, failures_since_ok: 0, last_failure: null };
+  const stopped = new Map();   // thread → { window, reason, words, fill_pct, predicted_pct, at }: forced packs held back
 
   function stamp() { return zone ? local_stamp(clock.now(), zone).iso : new Date(clock.now()).toISOString(); }
 
@@ -256,6 +291,49 @@ function create_packer({
     return { outcome: "ok" };
   }
 
+  /**
+   * Would a forced pack of this thread bring its window back under the force line?
+   * @returns null (go ahead) | { reason, words, fill_pct, predicted_pct } (do not start)
+   */
+  function cannot_help(thread_id, fill_hint = null) {
+    const thread = threads.get(thread_id);
+    const w = thread && thread.window;
+    if (!w) return null;
+    const values = read_compress() || {};
+    const force = Number(values.force_pct);
+    const hinted = fill_hint === null || fill_hint === undefined ? NaN : Number(fill_hint);
+    const fill = Number.isFinite(hinted) ? hinted : Number(w.usage?.fill_pct);
+    if (!Number.isFinite(fill) || !Number.isFinite(force)) return null;
+    const plan = plan_pack(thread, values.keep_raw);
+    if (!plan.ids.length) return null;   // attempt() ends it as `nothing`, unpaid
+    const line_tokens = (id) => { const l = day_store.get(id); return l ? 4 + estimate_text(l.text) : 0; };
+    const predicted = predict_fill({ thread, plan, fill_pct: fill, system: system_of(thread_id), line_tokens });
+    if (predicted === null) return null;
+    if (predicted >= force) {
+      return { reason: "over_line", fill_pct: fill, predicted_pct: predicted,
+        words: `强制压缩先停了：压完估计还有 ${predicted}%，仍在强制压缩线 ${force}% 以上——客户端的 system、摘要和压缩完留的 ${values.keep_raw} 条原话已经快把窗口占满，再压也降不下来。调大上下文窗口、调少「压缩完留多少条原话」或调高强制压缩线；「现在压」照样能压` };
+    }
+    if (fill - predicted < MIN_GAIN_PCT) {
+      return { reason: "small_gain", fill_pct: fill, predicted_pct: predicted,
+        words: `强制压缩先不压：压完估计只能从 ${fill}% 降到 ${predicted}%，不到 ${MIN_GAIN_PCT} 个点，等能压掉的话多一些再压` };
+    }
+    return null;
+  }
+
+  /** A forced pack held back: one ledger line per window and reason, and kept for status(). */
+  function hold_back(thread_id, why) {
+    const window_name = threads.get(thread_id)?.window?.name || null;
+    const prior = stopped.get(thread_id);
+    stopped.set(thread_id, { window: window_name, ...why, at: clock.now() });
+    const first = !prior || prior.window !== window_name || prior.reason !== why.reason;
+    if (first) {
+      write_line({ thread: thread_id, how: "forced", outcome: "no_help", reason: why.reason, window: window_name,
+                   fill_pct: why.fill_pct, predicted_pct: why.predicted_pct, words: why.words });
+      console.log(`[gateway] present ${thread_id} forced pack held back (${why.reason}): fill ${why.fill_pct}% → about ${why.predicted_pct}% after a pack`);
+    }
+    return { no_help: true, reason: why.reason, first };
+  }
+
   function start(thread_id, how) {
     const thread = threads.get(thread_id);
     const window_name = thread?.window?.name || null;
@@ -283,15 +361,22 @@ function create_packer({
   }
 
   /**
-   * Ask for a pack of this thread.
-   * @returns { started: true } | { running: true } (one is in flight for it already)
+   * Ask for a pack of this thread. `fill_pct` (forced only): the fill to judge by instead of
+   * the last measured one (the wall's refused request).
+   * @returns { started: true } | { running: true } (one is in flight for it already) |
+   *          { waiting: true } (backing off) | { no_help: true, reason, first } (see the header)
    */
-  function request(thread_id, how = "forced") {
+  function request(thread_id, how = "forced", { fill_pct = null } = {}) {
     if (!thread_id) return { started: false };
     if (running.has(thread_id)) return { running: true };
     const prior = pending.get(thread_id);
     const same_window = prior && prior.window === (threads.get(thread_id)?.window?.name || null);
     if (same_window && how !== "manual" && prior.next_at > clock.now()) return { waiting: true };
+    if (how !== "manual") {
+      const why = cannot_help(thread_id, fill_pct);
+      if (why) { pending.delete(thread_id); return hold_back(thread_id, why); }
+    }
+    stopped.delete(thread_id);
     start(thread_id, how);
     return { started: true };
   }
@@ -303,6 +388,10 @@ function create_packer({
       const t = threads.get(thread_id);
       if (!t || !t.window || t.window.name !== p.window) { pending.delete(thread_id); continue; }
       if (p.next_at > clock.now()) continue;
+      if (p.how !== "manual") {
+        const why = cannot_help(thread_id);
+        if (why) { pending.delete(thread_id); hold_back(thread_id, why); continue; }
+      }
       start(thread_id, p.how);
     }
   }
@@ -330,13 +419,24 @@ function create_packer({
       last_failure: record.last_failure,
       running: [...running.entries()].map(([thread, j]) => ({ thread, how: j.how })),
       pending: [...pending.entries()].map(([thread, p]) => ({ thread, how: p.how, next_at: p.next_at, paid: p.paid })),
+      stopped: held_back(),
     };
+  }
+
+  /** Forced packs held back whose window is still the one they were judged in, newest first. */
+  function held_back() {
+    const out = [];
+    for (const [thread, s] of stopped) {
+      if (threads.get(thread)?.window?.name !== s.window) { stopped.delete(thread); continue; }
+      out.push({ thread, ...s });
+    }
+    return out.sort((a, b) => b.at - a.at);
   }
 
   return { request, beat, wait_for, note_flip, status, is_running: (id) => running.has(id) };
 }
 
 module.exports = {
-  create_packer, plan_pack, format_line, clean_summary, earlier_summary, fit_newest, wall_of,
-  PACK_WAIT_MS, BACKOFF_BASE_MS, BACKOFF_MAX_MS, WALL_RETRIES,
+  create_packer, plan_pack, predict_fill, format_line, clean_summary, earlier_summary, fit_newest, wall_of,
+  PACK_WAIT_MS, BACKOFF_BASE_MS, BACKOFF_MAX_MS, WALL_RETRIES, MIN_GAIN_PCT,
 };

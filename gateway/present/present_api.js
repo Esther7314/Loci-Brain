@@ -30,8 +30,10 @@
 //
 // status.compress is the most recently active conversation's window, from
 // present/index.js window_status(): thread, fill_pct, used_tokens, estimated, kept_raw
-// (raw lines from the mark on), context {tokens, source}, and last {at, how, how_words}
-// (how the window was opened; null for a conversation's first window).
+// (raw lines from the mark on), context {tokens, source}, last {at, how, how_words}
+// (how the window was opened; null for a conversation's first window), and
+// held_back_words: why the gateway is not packing this window on its own (pack.js: a
+// forced pack would not bring it under the force line), in Chinese, or null.
 //
 // status.report is day_close.js status(): day, state (written · missing · failed · quiet ·
 // not_due) with state_words, at, text (the report itself: the panel shows it to her),
@@ -78,7 +80,7 @@ function create_present_api({
     const w = id ? window_status(id) : null;
     if (!w) {
       return { state: "no_thread", thread: null, fill_pct: null, used_tokens: null, estimated: null,
-               kept_raw: null, last: null, context: context_windows.resolve(null) };
+               kept_raw: null, last: null, context: context_windows.resolve(null), held_back_words: null };
     }
     return {
       state: "ok",
@@ -89,6 +91,7 @@ function create_present_api({
       kept_raw: w.kept_raw,
       last: w.last,
       context: { tokens: w.context_tokens, source: w.context_source },
+      held_back_words: w.held_back_words ?? null,
     };
   }
 

@@ -32,7 +32,8 @@
 //       summary block taken out), its usage becomes the fill, and a closed summary block
 //       flips the window once the turn has ended (compress.js; Loci hears /cue/dropped).
 //       A finished turn whose fill reached compress.force_pct asks for a pack (pack.js),
-//       which starts at once in the background.
+//       which starts at once in the background — unless pack.js predicts it could not
+//       bring the window back under the line (then it is held back and said once).
 //   escape_wall(ctx, resp, send) → the Response to go on with
 //       Upstream refused the turn (non-2xx): when it is the context-length wall, the
 //       oldest lines after the mark are cut and the request sent once more (wall.js).
@@ -161,7 +162,7 @@ function create_present({
     on_flip: ({ thread, old_name }) => after_flip(thread, old_name),
   });
   const wall = create_wall_escape({ windows, threads, read_compress, data_root, clock, zone, log,
-                                    request_pack: (id) => packer.request(id, "forced") });
+                                    request_pack: (id, hint) => packer.request(id, "forced", hint) });
 
   /** Any flip: Loci hears the old window's cards dropped, and the wake snapshot moves to the new window. */
   function after_flip(thread_id, old_name) {
@@ -349,6 +350,7 @@ function create_present({
     const fill = Number(w.usage?.fill_pct);
     if (!Number.isFinite(fill) || fill < values.force_pct) return;
     const asked = packer.request(thread.id, "forced");
+    if (asked.no_help) return;   // pack.js wrote it down, once per window
     console.log(`[gateway] present ${thread.id} fill ${fill}% ≥ force line ${values.force_pct}%: pack ${asked.started ? "started" : asked.running ? "already running" : "waiting to retry"}`);
   }
 
@@ -383,6 +385,9 @@ function create_present({
       last_failure_reason: s.last_failure ? s.last_failure.reason : null,
       running: s.running.length,
       waiting_to_retry: s.pending.length,
+      // forced packs held back because they could not bring a window under the force line (pack.js)
+      held_back: s.stopped.length,
+      held_back_words: s.stopped.length ? s.stopped[0].words : null,
     };
   }
 
@@ -471,6 +476,7 @@ function create_present({
       kept_raw = at >= 0 ? branch.length - at : null;
     }
     const opened = w && w.opened_by && typeof w.opened_by === "object" ? w.opened_by : null;
+    const held = packer.status().stopped.find((x) => x.thread === thread.id) || null;
     return {
       thread: thread.id,
       window: w ? w.name : null,
@@ -487,6 +493,8 @@ function create_present({
       // time and way only: what the panel shows as compress.last
       last: opened && opened.how
         ? { at: opened.at ?? null, how: String(opened.how), how_words: HOW_WORDS[opened.how] || null } : null,
+      // why the gateway is not packing this window on its own, in the panel's words (pack.js), or null
+      held_back_words: held ? held.words : null,
     };
   }
 

@@ -15,7 +15,7 @@
 //   · a key exists (own_turn: the fixed key, or one borrowed from her latest accepted
 //     request — after a restart there is none until she has spoken)
 //   · a conversation to wake into: the thread that was active last (`last_at`) holds a
-//     snapshot of its last answered request
+//     snapshot of its last answered request, not marked `walled` (see "The wall" below)
 //   · she has been quiet for every_min (her latest request, or the latest line on any
 //     thread, whichever is later)
 //   · every_min since the last wake, times the backoff. It counts from the later of the
@@ -63,6 +63,16 @@
 // line has the lines between taken from the day store, as plain messages; a snapshot with
 // no layout cannot be rebuilt and is dropped (no wake until her next turn makes one).
 //
+// ─── The wall ───
+// A wake refused as too long (wall.js wall_of_run: the context-length error) would be
+// refused the same way every time, and each one is paid. So after such a refusal the
+// earlier wake pairs are dropped from the snapshot (its request, the cached prefix, stays)
+// and the next wake goes with only the letter on top; a snapshot refused with no pairs on
+// it is marked `walled` and the gate stays shut on it ("walled", said once) until her next
+// turn makes a new snapshot or a flip rebuilds it smaller (rebase clears the mark). One
+// "wake_wall" line in the ledger says which, in Chinese. The refusal itself still settles
+// as a paid failure below.
+//
 // ─── What it settles to ───
 //   · her request arrives (owner_arrived(), called by the relay before anything else):
 //     the wake in flight is aborted with "owner_arrived". Nothing is written — no line,
@@ -90,6 +100,7 @@ const poke = require("../poke_delivery.js");
 const { local_stamp } = require("./clock.js");
 const { dnd_state, in_span, local_minute, minute_of_day } = require("./dnd.js");
 const { wake_shell } = require("./prompts.js");
+const { wall_of_run } = require("./wall.js");
 
 const MIN_EVERY_MIN = 15;
 const MAX_BACKOFF_FACTOR = 4;
@@ -112,6 +123,7 @@ const WHY_WORDS = {
   dnd: "在免打扰时段里，等免打扰结束",
   segment: "不在唤醒时间段里，等下一个时间段",
   backoff: "上次没叫成，间隔拉长了",
+  walled: "上一轮对话加上唤醒信已经超过模型的窗口（撞墙了），再叫也是白花钱；等 ta 下次开口或者换窗以后再叫",
 };
 // gate reasons that only mean "not yet": next_at already says when
 const WAIT_WORDS = {
@@ -322,6 +334,7 @@ function create_wake({
     if (!own_turn.status().key) return shut("no_key", { s });
     const thread = latest_thread();
     if (!thread || !usable_snapshot(thread.last_sent)) return shut("no_thread", { s });
+    if (thread.last_sent.walled) return shut("walled", { s });
 
     const w = st.wake;
     const every = (s.allow_short ? s.every_min : Math.max(MIN_EVERY_MIN, s.every_min)) * 60000;
@@ -414,7 +427,27 @@ function create_wake({
     // the stamp goes down before the request: a restart mid-run does not wake again at once
     update_state((w) => { w.last_started_at = now; });
     const r = await own_turn.run({ kind: "wake", messages: built.messages, tools: built.tools, models, extra: built.extra });
+    after_wall(r, thread, snap);
     return settle({ r, thread, snap, letter, dream, shape });
+  }
+
+  /**
+   * The wake was refused as too long: the same request cannot succeed. Earlier wake pairs
+   * go; a snapshot refused with none is marked walled (see "The wall" in the header).
+   */
+  function after_wall(r, thread, snap) {
+    const wall = wall_of_run(r);
+    if (!wall) return;
+    try {
+      const now_snap = threads.get(thread.id)?.last_sent;
+      if (!now_snap || now_snap.at !== snap.at) return;   // a newer turn of hers already replaced it
+      const pairs = Array.isArray(now_snap.wakes) ? now_snap.wakes.length : 0;
+      if (pairs) now_snap.wakes = [];
+      else now_snap.walled = clock.now();
+      threads.save(thread.id);
+      write_log({ event: "wake_wall", thread: thread.id, pattern: wall.pattern, limit: wall.limit, dropped_wakes: pairs,
+        words: pairs ? `唤醒撞墙了：前面 ${pairs} 次唤醒的来回不再带上，下次只带上一轮对话和唤醒信` : WHY_WORDS.walled });
+    } catch (err) { log(`[gateway] present: handling a wake that hit the wall failed: ${err?.message || err}`); }
   }
 
   function settle({ r, thread, snap, letter, dream, shape }) {
@@ -576,6 +609,7 @@ function create_wake({
       request: { ...snap.request, messages },
       layout: { head: head.length, lines: body.map((c, k) => [offset + k, c.id]) },
     };
+    delete thread.last_sent.walled;   // rebuilt smaller: worth a try again
     threads.save(thread.id);
     return true;
   }

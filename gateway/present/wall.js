@@ -11,15 +11,25 @@
 //      429 (a wrong key, a forbidden model, a rate or quota limit are not about length)
 //   ② learn the real window for this model (context_window.js learn(), source `learned`):
 //      the limit the error names, else the last prompt_tokens a turn on this model got
-//      through with (the owner's ruling, blueprint §七.4, 10-08), else nothing new
+//      through with (the owner's ruling, blueprint §七.4, 10-08), else nothing new.
+//      That last_ok stand-in is a guess, so it is only taken when the size in use cannot
+//      explain the refusal: when the refused request was already bigger than the window
+//      the gateway believed in (one long paste), the wall says nothing new about the
+//      window and nothing is learned. A guess lapses after a day and a later turn that
+//      goes through with more raises it (context_window.js)
 //   ③ cut: drop the oldest raw lines after the mark — whole turns, each starting at a
 //      line of hers, with the overlays and tool round trips inside them — until the
 //      estimate is under the force line of that window. The client's system messages,
 //      the carry and the current turn (her line onwards) are never dropped.
-//   ④ resend once; 「撞墙」 goes to logs/present.jsonl (numbers only, never text)
+//   ④ resend once; 「撞墙」 goes to logs/present.jsonl (numbers only, never text). A resend
+//      that goes through replaces what the turn counts as sent — ctx.forward, ctx.sent
+//      and its layout — so the wake snapshot made from it (wake.remember_turn) is the
+//      request that fits, not the one that was refused
 //   ⑤ ask for a pack (pack.js, how "forced"), so the next turns stop hitting the wall —
 //      unless compress.on is false: then every turn that hits it is cut again, but
-//      nothing is folded behind the owner's back
+//      nothing is folded behind the owner's back. The pack is told how full the refused
+//      request was (the fill measured on this turn is only the cut one), so it can judge
+//      whether folding would bring the window back under the force line at all
 //
 // It never gets stuck:
 //   · the cut never depends on the fill: every request that hits the wall is cut, so a
@@ -52,7 +62,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { estimate_prompt, measure } = require("./fill.js");
+const { estimate_prompt, measure, fill_pct } = require("./fill.js");
 const { local_stamp } = require("./clock.js");
 
 const WALL_PATTERNS = [
@@ -114,6 +124,29 @@ function wall_error(status, text) {
   return { hit: true, pattern: found.name, limit: read(LIMIT_READERS), actual: read(ACTUAL_READERS) };
 }
 
+/** An own turn's failure (own_turn.js run()) as the context-length wall, or null. */
+function wall_of_run(res) {
+  if (!res || res.ok || res.outcome !== "paid") return null;
+  const m = /^http_(\d+)$/.exec(String(res.reason || ""));
+  if (!m) return null;
+  const w = wall_error(Number(m[1]), res.error);
+  return w.hit ? w : null;
+}
+
+/**
+ * The layout of a request (index.js layout_of: where the client's messages sit) after
+ * cut_oldest dropped `dropped` messages starting at `keep_head`.
+ */
+function cut_layout(layout, keep_head, dropped) {
+  if (!layout || !Array.isArray(layout.lines) || !dropped) return layout;
+  const lines = [];
+  for (const [k, id] of layout.lines) {
+    if (k < keep_head) lines.push([k, id]);
+    else if (k >= keep_head + dropped) lines.push([k - dropped, id]);
+  }
+  return { ...layout, lines };
+}
+
 /**
  * Drop the oldest turns between the kept head and the current turn until the estimate is
  * at most `target`. A turn starts at a user message; what sits before the first one in
@@ -160,7 +193,8 @@ const SCALE_MAX = 4;
  * @param windows        context_window.js instance (resolve, learn)
  * @param threads        threads.js instance (the fill is set on a wall whose resend failed)
  * @param read_compress  () → present.json compress section
- * @param request_pack   (thread_id) → asks pack.js for a pack, how "forced"
+ * @param request_pack   (thread_id, { fill_pct }) → asks pack.js for a pack, how "forced"; fill_pct
+ *                       is the refused request's fill against the window now in use
  * @param data_root      LOCI_GATEWAY_DATA; 「撞墙」 lines go to logs/present.jsonl
  */
 function create_wall_escape({ windows, threads, read_compress, request_pack, data_root, clock, zone, log = console.error }) {
@@ -175,6 +209,8 @@ function create_wall_escape({ windows, threads, read_compress, request_pack, dat
     const est = Number(estimate);
     const ratio = Number.isFinite(est) && est > 0 ? real / est : null;
     last_ok.set(String(model), { prompt_tokens: real, ratio });
+    try { windows.note_ok(String(model), real); }
+    catch (err) { log(`[gateway] present: raising a learned window failed: ${err?.message || err}`); }
   }
 
   function write_line(entry) {
@@ -206,20 +242,30 @@ function create_wall_escape({ windows, threads, read_compress, request_pack, dat
       const model = ctx.model ? String(ctx.model) : "";
       const before = estimate_prompt(ctx.forward);
 
-      // ② learn
+      const known_ratio = wall.actual && before > 0 ? wall.actual / before : last_ok.get(model)?.ratio;
+      const scale = Math.min(SCALE_MAX, Math.max(SCALE_MIN, Number(known_ratio) || 1));
+      const refused = wall.actual || Math.round(before * scale);   // the refused request, in real tokens as far as known
+
+      // ② learn: the named limit; else the last_ok guess, only when the size in use cannot explain the refusal
       let learned = null;
+      let learn_words = null;
+      const believed = windows.resolve(model);
       if (wall.limit && windows.learn(model, wall.limit, "error")) learned = { tokens: wall.limit, how: "error" };
-      else {
+      else if (!wall.limit) {
         const ok = last_ok.get(model);
-        if (ok && windows.learn(model, ok.prompt_tokens, "last_ok")) learned = { tokens: ok.prompt_tokens, how: "last_ok" };
+        if (refused > believed.tokens) {
+          learn_words = `报错里没写上限；这一轮估计有 ${refused} token，本来就比现在按的窗口 ${believed.tokens} 大，窗口不改`;
+        } else if (ok && ok.prompt_tokens < refused && ok.prompt_tokens < believed.tokens
+                   && windows.learn(model, ok.prompt_tokens, "last_ok")) {
+          learned = { tokens: ok.prompt_tokens, how: "last_ok" };
+          learn_words = `报错里没写上限，先按撞墙前最后一次成功的 ${ok.prompt_tokens} token 记着；一天后作废，中间有更大的一轮成功就往上调`;
+        }
       }
       const size = windows.resolve(model);
 
       // ③ cut to the force line
       const values = read_compress() || {};
       const force = Number(values.force_pct) > 0 ? Number(values.force_pct) / 100 : 0.85;
-      const known_ratio = wall.actual && before > 0 ? wall.actual / before : last_ok.get(model)?.ratio;
-      const scale = Math.min(SCALE_MAX, Math.max(SCALE_MIN, Number(known_ratio) || 1));
       const sq = squeeze.get(model) || 1;
       const target = Math.floor(Math.min(size.tokens * force / scale, before * force) * sq);
       const cut = cut_oldest(ctx.forward.messages, { keep_head: ctx.keep_head || 0, target, tools: ctx.forward.tools });
@@ -234,6 +280,8 @@ function create_wall_escape({ windows, threads, read_compress, request_pack, dat
       if (again && again.ok) {
         outcome = "ok";
         ctx.forward = body;
+        ctx.sent = body;   // the wake snapshot is what went through, not what was refused
+        ctx.layout = cut_layout(ctx.layout, ctx.keep_head || 0, cut.dropped);
         ctx.estimate = cut.estimate;
         ctx.walled = true;
         out = again;
@@ -261,12 +309,12 @@ function create_wall_escape({ windows, threads, read_compress, request_pack, dat
       // ⑤ a pack, so the next turns stop hitting it
       const packing = values.on === true;
       if (packing) {
-        try { request_pack(ctx.thread); } catch (err) { log(`[gateway] present: asking for a pack after the wall failed: ${err?.message || err}`); }
+        try { request_pack(ctx.thread, { fill_pct: fill_pct(refused, size.tokens) }); } catch (err) { log(`[gateway] present: asking for a pack after the wall failed: ${err?.message || err}`); }
       }
 
       write_line({
         thread: ctx.thread, window: ctx.window, model: model || null, status: resp.status, pattern: wall.pattern,
-        limit: wall.limit, learned, size: size.tokens, size_source: size.source,
+        limit: wall.limit, learned, words: learn_words, size: size.tokens, size_source: size.source,
         estimate_before: before, estimate_after: cut.estimate, target, dropped: cut.dropped,
         resend: outcome, error: again_error, pack: packing,
       });
@@ -282,4 +330,4 @@ function create_wall_escape({ windows, threads, read_compress, request_pack, dat
   return { escape, note_usage };
 }
 
-module.exports = { create_wall_escape, wall_error, cut_oldest, WALL_PATTERNS };
+module.exports = { create_wall_escape, wall_error, wall_of_run, cut_oldest, cut_layout, WALL_PATTERNS };
