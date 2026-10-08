@@ -13,7 +13,10 @@
 //   · doors     — whether /present/* and /loci/source can be entered at all
 //   · wake      — when a wake last ran to an answer, failures since, how many things he
 //                 said are held for her (wake.js health())
-// Nothing in this section reads the private thread ledger's contents.
+//   · compress  — when a window was last folded, any way (he did it, a pack, the panel's
+//                 button), and how many paid pack failures since (present/index.js
+//                 compress_health: times, ways and counts)
+// Nothing in this section reads the carry, an overlay or anything else that was said.
 // ============================================================
 
 const fs = require("fs");
@@ -36,6 +39,21 @@ function newest_line_at(day_store) {
   return null;
 }
 
+function compress_section(present, now) {
+  if (typeof present.compress_health !== "function") return not_built();
+  const c = present.compress_health();
+  return {
+    state: c.last_ok_at ? "ok" : "never",
+    last_ok_at: c.last_ok_at,
+    last_ok_seconds_ago: c.last_ok_ms === null ? null : Math.max(0, Math.round((now - c.last_ok_ms) / 1000)),
+    last_how: c.last_how,
+    failures_since_ok: c.failures_since_ok,
+    last_failure_reason: c.last_failure_reason,
+    running: c.running,
+    waiting_to_retry: c.waiting_to_retry,
+  };
+}
+
 /**
  * @param present  present/index.js instance
  * @param doors    { token_set, bind, passphrase_required }
@@ -51,7 +69,7 @@ function build_present_health({ present, doors }) {
       : { last_line_at: null, seconds_ago: null },
     report: not_built(),
     wake: present.wake.health(),
-    compress: not_built(),
+    compress: compress_section(present, now),
     push: not_built(),
     settings: { state: loaded.state, errors: loaded.errors },
     doors: {

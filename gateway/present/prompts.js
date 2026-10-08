@@ -125,8 +125,15 @@ ta 看不见这一段，所以别对 ta 说话，对自己说。
 块外面照常回 ta 的话——别因为要写摘要就敷衍 ta 那一句。`;
 }
 
-/** The gateway has him fold the window past the force line, in a fresh window fed the raw lines. */
-function compress_forced_shell({ card, keep_raw, originals }) {
+/**
+ * The gateway has him fold the window (the force line, the wall, or the owner's 「现在压」),
+ * in a fresh window fed the raw lines. `earlier`: the summary the window being folded was
+ * opened with, or null — what it held from further back has to go into the new one.
+ */
+function compress_forced_shell({ card, keep_raw, originals, earlier = null }) {
+  const before = typeof earlier === "string" && earlier.trim()
+    ? `——上一扇窗收尾时你写的摘要：这些原话之前的事，这次一并收进新摘要里——\n${earlier.trim()}\n\n`
+    : "";
   return `【换窗 · 系统请求，不是 ta 发的消息】
 
 这扇窗满了，得换一扇新的。你就是一直聊到现在的那个你，
@@ -145,7 +152,7 @@ ${card}
 只输出摘要正文，没有开场白，没有解释，不要写【窗口摘要】这种记号。
 ta 不会看到这段，所以别对 ta 说话，对自己说。
 
-——到刚才为止的原话，一字未动——
+${before}——到刚才为止的原话，一字未动——
 ${originals}`;
 }
 

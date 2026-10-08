@@ -63,7 +63,8 @@ before(async () => {
   fs.mkdirSync(path.join(data_root, "state"), { recursive: true });
   fs.writeFileSync(path.join(data_root, "state", "poke-window.json"),
     JSON.stringify({ lastUserMessageTime: new Date().toISOString(), wakePending: false }));
-  fs.writeFileSync(path.join(data_root, "present.json"), JSON.stringify({ compress: { context_tokens: 10000, keep_raw: 3 } }));
+  // force line at 99: these turns reach 97%, and the gateway's own packing is present_pack.test.js's
+  fs.writeFileSync(path.join(data_root, "present.json"), JSON.stringify({ compress: { context_tokens: 10000, keep_raw: 3, force_pct: 99 } }));
   gateway = await start_gateway({
     端口: 0,
     上游地址: fake_upstream.地址,

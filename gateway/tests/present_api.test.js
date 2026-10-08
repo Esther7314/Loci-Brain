@@ -354,8 +354,15 @@ test("prompt cards: defaults, a rewrite, back to the default, a reset", { timeou
   } finally { fs.rmSync(prompts_file); }
 });
 
-test("compress, report and push-test are not built yet: 501, said plainly", { timeout: 20000 }, async () => {
-  for (const route of ["/present/compress", "/present/report", "/present/push-test"]) {
+test("report and push-test are not built yet: 501, said plainly; compress queues a pack", { timeout: 20000 }, async () => {
+  // 「现在压」 on the planted conversation: queued (its one line is inside keep_raw, so the
+  // pack finds nothing to fold and sends nothing); an unknown conversation is a 404
+  const queued = await call("POST", "/present/compress", { body: {} });
+  assert.strictEqual(queued.status, 200, queued.text);
+  assert.deepStrictEqual(queued.json, { ok: true, queued: true, thread: THREAD });
+  assert.strictEqual((await call("POST", "/present/compress", { body: { thread: "t_000000" } })).status, 404);
+  assert.strictEqual((await call("POST", "/present/compress", { body: { thread: 7 } })).status, 400);
+  for (const route of ["/present/report", "/present/push-test"]) {
     const r = await call("POST", route, { body: {} });
     assert.strictEqual(r.status, 501, route);
     assert.strictEqual(r.json.ok, false);
@@ -372,12 +379,14 @@ test("/health: a present section that says when each part last succeeded", { tim
   assert.strictEqual(r.status, 200);
   const p = r.json.present;
   assert.deepStrictEqual(p.recording, { last_line_at: "2026-10-07T20:00:00+08:00", seconds_ago: 1800 });
-  for (const part of ["report", "compress", "push"]) {
+  for (const part of ["report", "push"]) {
     assert.strictEqual(p[part].state, "not_built", part);
     assert.strictEqual(p[part].last_ok_seconds_ago, null, part);
     assert.strictEqual(p[part].failures_since_ok, null, part);
   }
   assert.deepStrictEqual(p.wake, { state: p.wake.state, last_ok_at: null, last_ok_seconds_ago: null, failures_since_ok: 0, held: 0 });
+  // no window was ever folded here; the manual pack above found nothing and is no failure
+  assert.deepStrictEqual([p.compress.state, p.compress.last_ok_seconds_ago, p.compress.failures_since_ok], ["never", null, 0]);
   assert.strictEqual(p.settings.state, "ok");
   assert.deepStrictEqual(p.doors, { present_api: "open", loci_source: "open", bind: "127.0.0.1", passphrase_required: false });
   assert.ok(r.json.verdict, "the rest of /health is unchanged");

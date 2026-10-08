@@ -193,7 +193,8 @@ function overlay_message(o) { return { role: OVERLAY_ROLE, content: o.text }; }
  * @param messages  the client's messages, as sent (not modified)
  * @param ids       map_ids() of those messages
  * @param win       the window state
- * @returns { messages, mark: "none" | "kept" | "void", cut, carried, replayed: [overlays] }
+ * @returns { messages, mark: "none" | "kept" | "void", cut, carried, replayed: [overlays],
+ *            keep_head: how many leading messages are the client's system and the carry }
  */
 function assemble(messages, ids, win) {
   let head = 0;
@@ -224,7 +225,8 @@ function assemble(messages, ids, win) {
     out.push(messages[i]);
     for (const o of here) if (o.place === "after") { out.push(overlay_message(o)); replayed.push(o); }
   }
-  return { messages: out, mark, cut: mark === "kept" ? from - head : 0, carried, replayed };
+  return { messages: out, mark, cut: mark === "kept" ? from - head : 0, carried, replayed,
+           keep_head: head + (carried ? 1 : 0) };
 }
 
 /**

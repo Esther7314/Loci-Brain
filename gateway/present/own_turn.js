@@ -55,6 +55,11 @@
 //     Reason "owner_arrived" is her request arriving: outcome "aborted", not a failure,
 //     and the caller writes nothing from it. A Loci tool call that already completed
 //     cannot be taken back.
+//   · her arrival stops only the kinds in ARRIVAL_ABORTS (wake: it speaks to her unasked,
+//     and she is here now). A pack is not stopped by it — her turn waits for the pack
+//     instead, so it goes with the new window (pack.js) — and neither is the report.
+//     abort("owner_arrived") on any other kind is a no-op answering false; every other
+//     reason (the alarm, a shutdown) stops whatever runs.
 //   · the alarm (10 minutes) aborts too, and counts as a paid failure.
 //   · one run at a time: a second caller gets { outcome: "busy" } at once.
 //
@@ -103,6 +108,9 @@ const UNSENT_CODES = new Set([
 ]);
 
 const TURN_ID = /^[^\s#]{1,200}$/;
+
+// The run kinds her arriving request stops (see the header, Stopping).
+const ARRIVAL_ABORTS = new Set(["wake"]);
 
 function is_silence(text) {
   const t = String(text ?? "").trim();
@@ -293,6 +301,7 @@ function create_own_turn({
 
   function abort(reason = "owner_arrived") {
     if (!current) return false;
+    if (reason === "owner_arrived" && !ARRIVAL_ABORTS.has(current.kind)) return false;
     if (!current.abort_reason) {
       current.abort_reason = String(reason || "aborted");
       current.controller.abort();
@@ -565,5 +574,5 @@ function create_own_turn({
 
 module.exports = {
   create_own_turn, is_silence, model_refused, loci_name,
-  NOT_HERE, LOCI_DOWN, DEFAULT_ALARM_MS, CREDENTIAL_HEADERS,
+  NOT_HERE, LOCI_DOWN, DEFAULT_ALARM_MS, CREDENTIAL_HEADERS, ARRIVAL_ABORTS,
 };

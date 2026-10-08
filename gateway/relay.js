@@ -9,7 +9,9 @@
 //      untouched, stores the owner's line, asks Loci for this turn's card and poke
 //      delivery for a dream / muse line, and hands back the copy to forward — carry,
 //      window, overlays replayed, usage asked for
-//   ④ forward · ⑤ the present layer listens to the answer as it passes through and hands
+//   ④ forward — and when upstream refuses a chat turn as too long, the present layer cuts
+//     the oldest lines after the mark and sends it once more (present/wall.js)
+//   ⑤ the present layer listens to the answer as it passes through and hands
 //      back the stream the client gets (upstream's bytes, less his summary block and the
 //      usage chunk the client did not ask for)
 //
@@ -104,18 +106,25 @@ function create_relay({ upstream, present = null }) {
     delete headers.host; delete headers["content-length"]; delete headers["accept-encoding"];
 
     const target = upstream.replace(/\/v1$/, "") + req.url;
+    const send = (payload) => fetch(target, {
+      method: req.method,
+      headers: headers,
+      body: ["GET", "HEAD"].includes(req.method) ? undefined : payload,
+    });
     let resp;
     try {
-      resp = await fetch(target, {
-        method: req.method,
-        headers: headers,
-        body: ["GET", "HEAD"].includes(req.method) ? undefined : forward_body,
-      });
+      resp = await send(forward_body);
     } catch (err) {
       res.writeHead(502, { "Content-Type": "application/json; charset=utf-8" });
       res.end(JSON.stringify({ error: "cannot reach upstream: " + String(err?.message || err) }));
       console.error(`[gateway] ${req.method} ${req.url} → 上游连不上：${err?.message || err}`);
       return;
+    }
+
+    // ---- The wall: a chat turn refused as too long gets one cut-down resend (present/wall.js). ----
+    if (!resp.ok && present?.escape_wall && present_ctx) {
+      try { resp = await present.escape_wall(present_ctx, resp, (b) => send(Buffer.from(JSON.stringify(b)))); }
+      catch (err) { console.error(`[gateway] present failed at the wall: ${err?.message || err}`); }
     }
 
     // A chat request upstream accepted lends its credential and model to the gateway's own

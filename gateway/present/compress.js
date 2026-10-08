@@ -6,8 +6,8 @@
 // kinds of line act on it (present.json, compress.*):
 //   weak_pct[]  "this window is getting full, pick your moment"   ┐ reminders only, each
 //   ask_pct     "fold it this turn or the next"                    ┘ offered once per window
-//   force_pct   the gateway packs the window itself — construction step 5, not here
-// Nothing is offered while compress.on is false.
+//   force_pct   the gateway packs the window itself (pack.js); the wall's way out is wall.js
+// Nothing is offered, and nothing packed, while compress.on is false.
 //
 // ─── A reminder ───
 // When the fill crosses a line not yet offered in this window, his reminder

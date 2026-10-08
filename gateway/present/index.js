@@ -9,6 +9,9 @@
 //       builds the copy that does go upstream. In this order:
 //         ① threads: which conversation, what is new; the owner's new line is written
 //            to the day store right here ("store before forwarding")
+//         ①b a pack in flight for this conversation (pack.js): the turn waits for it, up
+//            to PACK_WAIT_MS (LOCI_PACK_WAIT_MS), so it goes with the new window; past
+//            that it goes as it is and the pack keeps going
 //         ② a new line of hers (not a resend, not a tool turn) → poke delivery (dreams /
 //            muse, behind its idle gate) and Loci's cue, side by side, each with its own
 //            timeout; what they hand back becomes an overlay on her line (window.js)
@@ -23,6 +26,13 @@
 //       reply is written after the turn when it finishes (the text the client saw, the
 //       summary block taken out), its usage becomes the fill, and a closed summary block
 //       flips the window once the turn has ended (compress.js; Loci hears /cue/dropped).
+//       A finished turn whose fill reached compress.force_pct asks for a pack (pack.js),
+//       which starts at once in the background.
+//   escape_wall(ctx, resp, send) → the Response to go on with
+//       Upstream refused the turn (non-2xx): when it is the context-length wall, the
+//       oldest lines after the mark are cut and the request sent once more (wall.js).
+//   compress_now(thread?) · compress_health()
+//       「现在压」 for /present/compress, and the compress part of /health (pack.js).
 //       The client gets the answer through stream_filter.js: the summary block never
 //       reaches it, and the usage chunk does not either when the gateway asked for it on
 //       the client's behalf. null (non-2xx) = pipe upstream's answer as it is.
@@ -50,6 +60,7 @@
 //   · thread ledger (private):    <LOCI_GATEWAY_DATA>/threads/<thread>.json — the branch,
 //       and the window (mark, 🔴 carry, overlays, fill). Never exported, never served.
 //   · window sizes (private):     <LOCI_GATEWAY_DATA>/context_windows.json
+//   · own turns, packs and walls:  <LOCI_GATEWAY_DATA>/logs/present.jsonl (numbers, never text)
 //   · settings and edited prompt cards: <LOCI_GATEWAY_DATA>/present.json · prompts.json
 //     (settings.js · prompts.js), read fresh by whoever needs them
 // ============================================================
@@ -70,6 +81,8 @@ const { create_own_turn } = require("./own_turn.js");
 const { create_wake } = require("./wake.js");
 const win = require("./window.js");
 const compress = require("./compress.js");
+const { create_packer, PACK_WAIT_MS } = require("./pack.js");
+const { create_wall_escape } = require("./wall.js");
 const { local_stamp } = require("./clock.js");
 
 const HOW_WORDS = { self: "他自己压的", forced: "到了强制线", manual: "你按的", day: "日报换窗" };
@@ -113,6 +126,21 @@ function create_present({
   const wake = create_wake({ data_root, threads, day_store, settings, prompts, own_turn, clock, zone, log,
                              loci_address: loci, poke_state });
 
+  // ———— forced / manual packing and the wall's way out (pack.js · wall.js) ————
+  const read_compress = () => settings.load().values.compress;
+  const asked_wait = Number(env.LOCI_PACK_WAIT_MS);
+  const pack_wait_ms = Number.isFinite(asked_wait) && asked_wait >= 0 ? asked_wait : PACK_WAIT_MS;
+  // the client's system messages per conversation, for the pack to write as himself: memory only
+  const last_system = new Map();
+  const packer = create_packer({
+    threads, day_store, own_turn, prompts, read_compress, data_root, clock, zone, log,
+    system_of: (id) => last_system.get(id) || [],
+    on_flip: ({ old_name }) => cue.dropped({ window: old_name, all: true })
+      .catch((err) => log(`[gateway] present: /cue/dropped failed: ${err?.message || err}`)),
+  });
+  const wall = create_wall_escape({ windows, threads, read_compress, data_root, clock, zone, log,
+                                    request_pack: (id) => packer.request(id, "forced") });
+
   /** Poke delivery decides whether and what; the window decides where. */
   async function ask_poke(request_id) {
     const scratch = [];
@@ -135,6 +163,11 @@ function create_present({
     if (seen.forked_from) bits.push(`forked from ${seen.forked_from}`);
     if (seen.wrote.length) bits.push(`+${seen.wrote.join(",")}`);
     if (seen.revised.length) bits.push(`rev ${seen.revised.join(",")}`);
+
+    // ①b a pack in flight: wait for it, so this turn goes with the new window
+    const waited = await packer.wait_for([seen.thread, seen.forked_from], pack_wait_ms);
+    if (waited) bits.push(waited === "done" ? "waited for the pack" : `pack still running after ${pack_wait_ms} ms: as it is`);
+    remember_system(seen.thread, body.messages);
 
     let thread = threads.get(seen.thread);
     if (seen.forked_from) win.inherit(thread, threads.get(seen.forked_from), clock.now());
@@ -195,6 +228,7 @@ function create_present({
       sent: forward,   // what goes upstream: wake's snapshot once the answer finishes
       estimate: estimate_prompt(forward),
       deliver: built.replayed.filter((o) => o.kind === "cue" && !o.delivered).map((o) => o.turn),
+      forward, keep_head: built.keep_head,   // for the wall's cut-down resend (wall.js)
     };
     return { body: forward, ctx, note: bits.join(" "), notes };
   }
@@ -223,6 +257,68 @@ function create_present({
     thread.window.usage = measure({ usage, estimate: ctx.estimate, window: windows.resolve(ctx.model),
                                     model: ctx.model, at: clock.now() });
     threads.save(thread.id);
+    wall.note_usage(ctx.model, usage, ctx.estimate);
+  }
+
+  /** The client's leading system messages of this conversation, for a pack (memory only). */
+  function remember_system(thread_id, messages) {
+    const head = [];
+    for (const m of messages) {
+      if (m?.role !== "system" && m?.role !== "developer") break;
+      head.push({ role: m.role, content: m.content });
+    }
+    last_system.set(thread_id, head);
+  }
+
+  /**
+   * A finished turn (a reply without tool calls) whose fill reached the force line asks
+   * for a pack. Not while compress is off, not when the window already flipped.
+   */
+  function maybe_force(thread_id, ctx, tools) {
+    if (tools && tools.length) return;
+    const values = read_compress();
+    if (values.on !== true) return;
+    const thread = threads.get(thread_id);
+    const w = thread && thread.window;
+    if (!w || w.name !== ctx.window || w.summary_pending) return;
+    const fill = Number(w.usage?.fill_pct);
+    if (!Number.isFinite(fill) || fill < values.force_pct) return;
+    const asked = packer.request(thread.id, "forced");
+    console.log(`[gateway] present ${thread.id} fill ${fill}% ≥ force line ${values.force_pct}%: pack ${asked.started ? "started" : asked.running ? "already running" : "waiting to retry"}`);
+  }
+
+  /** 「现在压」: pack this thread (default: the most recent) now. → { status, body } */
+  function compress_now(thread_id = null) {
+    const thread = thread_id ? threads.get(String(thread_id))
+      : threads.list().slice().sort((a, b) => (b.last_at || 0) - (a.last_at || 0))[0] || null;
+    if (!thread) return { status: 404, body: { ok: false, error: thread_id ? `no such conversation: ${thread_id}` : "no conversation yet" } };
+    if (packer.is_running(thread.id)) return { status: 409, body: { ok: false, error: "a pack is already running for this conversation", thread: thread.id } };
+    packer.request(thread.id, "manual");
+    return { status: 200, body: { ok: true, queued: true, thread: thread.id } };
+  }
+
+  /**
+   * For /health: the newest successful compression of any kind (a flip's opened_by in
+   * the ledger, so it survives a restart; or a flip this process saw) and the pack
+   * failures since. Times and counts only.
+   */
+  function compress_health() {
+    const s = packer.status();
+    let last = s.last_ok_at ? { t: s.last_ok_at, how: s.last_ok_how } : null;
+    for (const t of threads.list()) {
+      const o = t.window && t.window.opened_by;
+      const at = o && o.how ? Date.parse(o.at) : NaN;
+      if (Number.isFinite(at) && (!last || at > last.t)) last = { t: at, how: o.how };
+    }
+    return {
+      last_ok_at: last ? local_stamp(last.t, zone).iso : null,
+      last_ok_ms: last ? last.t : null,
+      last_how: last ? last.how : null,
+      failures_since_ok: s.failures_since_ok,
+      last_failure_reason: s.last_failure ? s.last_failure.reason : null,
+      running: s.running.length,
+      waiting_to_retry: s.pending.length,
+    };
   }
 
   /**
@@ -247,6 +343,7 @@ function create_present({
     const flip = compress.self_flip({ thread, summary: w.summary_pending, keep_raw: values.keep_raw,
                                       at: local_stamp(clock.now(), zone).iso, now: clock.now() });
     threads.save(thread.id);
+    packer.note_flip("self");
     console.log(`[gateway] present ${thread.id} window ${flip.old_name} → ${flip.name} (he folded it himself), mark ${flip.mark}`);
     cue.dropped({ window: flip.old_name, all: true })
       .catch((err) => log(`[gateway] present: /cue/dropped failed: ${err?.message || err}`));
@@ -280,6 +377,8 @@ function create_present({
       catch (err) { log(`[gateway] present: flipping the window failed: ${err?.message || err}`); }
       try { wake.remember_turn(thread_id, ctx.sent, reply); }
       catch (err) { log(`[gateway] present: keeping the wake snapshot failed: ${err?.message || err}`); }
+      try { maybe_force(thread_id, ctx, reply.tools); }
+      catch (err) { log(`[gateway] present: asking for a pack failed: ${err?.message || err}`); }
     });
     // the client always gets the answer through the filter: the summary block never
     // reaches it, whether or not anyone asked for one
@@ -343,7 +442,7 @@ function create_present({
     wake,
     banner_lines,
     window_status,
-    heartbeat_tasks: [{ name: "wake", run: () => wake.tick() }],
+    heartbeat_tasks: [{ name: "pack", run: () => packer.beat() }, { name: "wake", run: () => wake.tick() }],
     cue_timeout_ms,
     day_store,
     threads,
@@ -354,6 +453,11 @@ function create_present({
     name,
     context_windows: windows,
     cue,
+    // forced / manual packing and the wall (pack.js · wall.js)
+    escape_wall: (ctx, resp, send) => wall.escape(ctx, resp, send),
+    compress_now,
+    compress_health,
+    packer,
   };
 }
 

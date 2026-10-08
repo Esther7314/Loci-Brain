@@ -9,9 +9,14 @@
 //   GET  /present            { host, connected: true, settings, settings_state, status }
 //   POST /present            { patch: {...} } → 400 { error, field } for a value that does
 //                            not pass, 409 when present.json cannot be read; else as GET
-//   POST /present/compress   ┐ 501 { ok: false, state: "not_built" } until the step that
-//   POST /present/report     │ does the work lands. Not a queued stub: "queued" would be a
-//   POST /present/push-test  ┘ promise nothing keeps, and the page would wait on it.
+//   POST /present/compress   { thread? } → { ok: true, queued: true, thread }: 「现在压」, a pack
+//                            of that conversation (default: the most recent) starts in the
+//                            background (pack.js, how "manual"); 409 while one is already
+//                            running for it, 404 when there is no such conversation. The
+//                            result shows up as status.compress.last.
+//   POST /present/report     ┐ 501 { ok: false, state: "not_built" } until the step that
+//   POST /present/push-test  ┘ does the work lands. Not a queued stub: "queued" would be a
+//                              promise nothing keeps, and the page would wait on it.
 //   GET  /present/prompts    { items: [card…], error? }  (prompts.js)
 //   POST /present/prompts    { key, text } | { key, reset: true } → { ok: true, item }
 // Any other path or method under /present is a 404.
@@ -40,8 +45,9 @@ const NOT_BUILT = { ok: false, state: "not_built" };
  * @param window_status    present/index.js window_status (a window as numbers and names)
  * @param context_windows  context_window.js instance (the window size when there is no thread)
  * @param wake             wake.js instance (status.wake is its status(): counts, times, reasons)
+ * @param compress_now     present/index.js compress_now (「现在压」: thread id or null → { status, body })
  */
-function create_present_api({ name, settings, prompts, threads, window_status, context_windows, wake }) {
+function create_present_api({ name, settings, prompts, threads, window_status, context_windows, wake, compress_now }) {
   function latest_thread() {
     let best = null;
     for (const t of threads.list()) if (!best || (t.last_at || 0) > (best.last_at || 0)) best = t;
@@ -101,7 +107,14 @@ function create_present_api({ name, settings, prompts, threads, window_status, c
       if (!done.ok) return send_json(res, done.status, { error: done.error, field: done.field });
       return send_json(res, 200, snapshot());
     },
-    "POST /present/compress": async (req, res) => { req.resume(); send_json(res, 501, { ...NOT_BUILT, error: "compressing on request is not built yet" }); },
+    "POST /present/compress": async (req, res) => {
+      const got = await read_json(req);
+      if (!got.ok) return send_json(res, 400, { error: got.error });
+      const thread = got.value && typeof got.value === "object" ? got.value.thread ?? null : null;
+      if (thread !== null && typeof thread !== "string") return send_json(res, 400, { error: "thread must be a conversation id", field: "thread" });
+      const done = compress_now(thread);
+      return send_json(res, done.status, done.body);
+    },
     "POST /present/report": async (req, res) => { req.resume(); send_json(res, 501, { ...NOT_BUILT, error: "the day report is not built yet" }); },
     "POST /present/push-test": async (req, res) => { req.resume(); send_json(res, 501, { ...NOT_BUILT, error: "push is not built yet" }); },
     "GET /present/prompts": async (req, res) => { req.resume(); send_json(res, 200, prompts.cards()); },

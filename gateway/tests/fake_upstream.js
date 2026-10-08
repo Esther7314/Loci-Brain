@@ -24,7 +24,9 @@
 // on the finishing chunk instead of a chunk of its own.
 //
 // A streamed plan can also break off mid-answer (`cut_inside` + `cut`), the way a dropped
-// connection or a provider that gives up looks from the gateway's side.
+// connection or a provider that gives up looks from the gateway's side. A plan can take its
+// time (`delay_ms`) before answering at all, and an error plan can carry a `code`
+// (`context_length_exceeded`) next to its message, the way OpenAI-style errors do.
 // ============================================================
 
 const http = require("node:http");
@@ -53,7 +55,9 @@ async function start_fake_upstream({ 端口: port }) {
     const text = String(plan.text ?? "");
     const tools = plan.tools || [];
     if (status !== 200) {
-      const payload = JSON.stringify({ error: { message: plan.error || "scripted failure" } });
+      const error = { message: plan.error || "scripted failure" };
+      if (plan.code) Object.assign(error, { type: "invalid_request_error", param: "messages", code: plan.code });
+      const payload = JSON.stringify({ error });
       sent.push(payload);
       without_usage_chunk.push(payload);
       res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
@@ -135,7 +139,11 @@ async function start_fake_upstream({ 端口: port }) {
         原文: raw,
         // the gateway must not lose or scramble messages, so the raw text is kept too and can be compared character by character
       });
-      if (script) return answer_scripted(res, body, script(body) || {});
+      if (script) {
+        const plan = script(body) || {};
+        if (!plan.delay_ms) return answer_scripted(res, body, plan);
+        return setTimeout(() => { try { answer_scripted(res, body, plan); } catch { /* the gateway left; normal */ } }, plan.delay_ms);
+      }
       const resp = {
         id: "假上游-固定回应",
         object: "chat.completion",
@@ -178,8 +186,8 @@ async function start_fake_upstream({ 端口: port }) {
     最后一笔() { return received[received.length - 1]; },
     设压缩(on) { compress = Boolean(on); },
     /**
-     * script(body) → { status?, text?, tools?: [names], error?, usage?, piece?,
-     * cut_inside?, cut? }; streamed as SSE when the request asked for stream:true. Pass
+     * script(body) → { status?, text?, tools?: [names], error?, code?, usage?, piece?,
+     * cut_inside?, cut?, delay_ms? }; streamed as SSE when the request asked for stream:true. Pass
      * null to go back to the fixed answer.
      */
     reply_with(fn) { script = fn; },

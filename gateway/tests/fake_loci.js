@@ -16,7 +16,8 @@
 //                            The default answer is one card that names the turn, so a
 //                            test can tell whose card sits where; `cue_with(fn)` overrides.
 //   · `POST /mcp`            MCP streamable-http; auto_attach.js's recall (no longer on
-//                            the chat path — any traffic here is booked and visible)
+//                            the chat path — any traffic here is booked and visible);
+//                            tools/list names recall and grow, for the gateway's own turns
 //   · `GET  /api/loci/poke`  ordinary REST; poke_delivery.js goes here. It rides in the
 //                            same request as the cue, so it has to be booked as well —
 //                            "nothing leaked" is a claim that must be provable from the
@@ -169,6 +170,12 @@ async function start_fake_loci({ 端口: port }) {
         }
         if (rpc === "notifications/initialized") {
           res.writeHead(202); return res.end();     // a notification has no id: 202 with an empty body, exactly what real MCP answers
+        }
+        if (rpc === "tools/list") {
+          return send_sse(res, { jsonrpc: "2.0", id: body.id, result: { tools: [
+            { name: "recall", description: "找回记忆", inputSchema: { type: "object", properties: { query: { type: "string" } } } },
+            { name: "grow", description: "写下", inputSchema: { type: "object", properties: {} } },
+          ] } });
         }
         if (rpc === "tools/call") {
           tool_calls.push({ 工具: body?.params?.name, 参数: body?.params?.arguments || {} });
