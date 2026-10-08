@@ -2,20 +2,19 @@
 // gateway/server.js — the mini gateway that sits in front of Loci
 //
 // **What it does**: your client posts a chat request here, this layer forwards it to
-// the real model, and on the way it pokes Loci twice to put what the AI ought to know
-// into this round's messages.
+// the real model, and on the way it puts what the AI ought to know into this round's
+// messages — without changing a byte of the client's own history.
 //
-// Two pokes, landing in two different places — do not mix them up:
-//   · poke delivery (poke_delivery.js)     dreams / muse, pinned in the stable prefix
-//   · relevance reminder (auto_attach.js)  **pinned at the true tail** — after the
-//                                          latest user message, at the very end of the
-//                                          whole messages array
-//
-// 🔴 Why the reminder has to go on last: its position has to be "as close as possible
-//    to the moment the model speaks". So build_relevance_notice() never touches
-//    messages itself — it only computes the patch and hands it back, and
-//    attach_at_true_tail() runs as the last step, once everything else is inserted and
-//    the request body is assembled. Get the order wrong and the position is wrong.
+// What goes in, and where (present/window.js keeps them as overlays on the owner's line
+// and replays each one at the same place, with the same bytes, every later turn until
+// the window changes — the prompt cache and Loci's "delivered to this window" both
+// depend on that):
+//   · Loci's cards (present/cue.js)      right **after** her line: asked with her
+//                                         message, at most three, confirmed to Loci once
+//                                         upstream accepted the turn
+//   · dreams / muse (poke_delivery.js)   right **before** her line, only on the first
+//                                         line back after a long silence (the idle gate)
+// and the window itself: past a mark, the carry stands in for the older lines.
 //
 // ⛔ **This shell does not call breath() on the AI's behalf.** auto_attach.js also
 //    carries a function that pastes a whole breath() into the system prompt on the
@@ -28,17 +27,17 @@
 //    If you do want the gateway to do it for you, the function is right there in the
 //    module: wire it up in one line.
 //
-// 🔴 Three boundaries (shared with both modules — do not lose them when you edit):
+// 🔴 Three boundaries (do not lose them when you edit):
 //   · **A failure never blocks the chat.** Any poke that comes up empty — a timeout,
 //     Loci not running, a reply that is not JSON — still forwards as usual and writes
 //     one log line. Better to miss an attachment this round than to stall a human
 //     conversation.
-//   · **Nearly all reads, barely any writes.** It touches breath / recall (reads) and
-//     poke / dream.wake (a read-only endpoint plus an idempotent signal).
+//   · **Nearly all reads, barely any writes.** It touches cue (a read, plus the
+//     delivered acknowledgement that only keeps Loci's ledger of what this window holds)
+//     and poke / dream.wake (a read-only endpoint plus an idempotent signal).
 //     ⛔ It never modifies a memory.
-//   · **It reports that something exists, never what it says.** What the reminder
-//     inserts is a **count** — "there are N relevant memories" — and the judgement is
-//     left to the AI itself.
+//   · **The judgement stays with the AI.** A card says what matched and what is open;
+//     whether it happened, whether to act on it, is the model's to decide after reading.
 //
 // Zero dependencies: only Node's built-in http / fetch (Node 18+).
 //
@@ -53,14 +52,13 @@
 //    live here: /health is health.js, the door (bind address and passphrase) is door.js,
 //    /present/* and /loci/source are present/present_api.js and present/source_api.js
 //    behind LOCI_GATEWAY_TOKEN, everything else is relay.js, and the present layer (day
-//    store, threads, settings, prompt cards, and later the window, the nightly report,
-//    wake and push) is gateway/present/. If this file grows, the lines that grew must be
-//    mounts.
+//    store, threads, the window and its overlays, cue, settings, prompt cards, and later
+//    the nightly report, wake and push) is gateway/present/. If this file grows, the
+//    lines that grew must be mounts.
 // ============================================================
 
 const http = require("http");
 const path = require("path");
-const auto = require("./auto_attach.js");
 const poke = require("./poke_delivery.js");
 const { handle_health } = require("./health.js");
 const { create_relay } = require("./relay.js");
@@ -77,7 +75,6 @@ const port = Number(process.env.PORT || 3100);
 const upstream = (process.env.LOCI_UPSTREAM || "").replace(/\/+$/, "");
 const LOCI = process.env.LOCI_MCP || poke.DEFAULT_ADDRESS;
 const idle_threshold_minutes = Number(process.env.POKE_IDLE_MINUTES || poke.DEFAULT_IDLE_MINUTES);
-const min_score = Number(process.env.RELEVANCE_MIN_SCORE || auto.DEFAULT_MIN_SCORE);
 const data_root = process.env.LOCI_GATEWAY_DATA || path.join(__dirname, "data");
 // ⚰️ **The "recent memory view" was pulled out wholesale.**
 //    What it did: on the first turn of the next day's window, paste excerpts of
@@ -105,8 +102,8 @@ if (door_config.error) {
 }
 
 // ———— Modules ————
-const present = create_present({ env: process.env, data_root });
-const relay = create_relay({ upstream, loci: LOCI, idle_threshold_minutes, min_score, data_root, log_path, present });
+const present = create_present({ env: process.env, data_root, upstream, loci: LOCI, idle_threshold_minutes, log_path });
+const relay = create_relay({ upstream, present });
 const heartbeat = create_heartbeat({ tasks: present.heartbeat_tasks });
 const admit = create_door(door_config);
 const present_api = behind_token(gateway_token, create_present_api(present));
@@ -119,7 +116,7 @@ const present_health = () => build_present_health({ present, doors: {
 // nothing below. Everything else is the relay, which keeps its own /v1/* guard.
 const routes = [
   { match: (req, route) => req.method === "GET" && route === "/health",
-    handle: (req, res) => handle_health(req, res, { log_path, min_score, present_health }) },
+    handle: (req, res) => handle_health(req, res, { log_path, cue_timeout_ms: present.cue_timeout_ms, present_health }) },
   { match: (req, route) => route === "/present" || route.startsWith("/present/"), handle: present_api },
   { match: (req, route) => route === "/loci/source", handle: source_api },
   { match: () => true, handle: relay },
@@ -152,13 +149,7 @@ server.listen(port, door_config.bind, () => {
   console.log(`[gateway] up on http://${url_host(door_config.bind)}:${bound}`);
   console.log(`[gateway] upstream       ${upstream}`);
   console.log(`[gateway] Loci           ${poke._internal.httpBase(LOCI)}`);
-  console.log(`[gateway] score floor    ${min_score}   ·   idle threshold ${idle_threshold_minutes} min`);
-  // 🔴 This line **is the one that used not to be printed**, and the "5 second timeout
-  //    → never worked once since it shipped" bug would have been **visible on day one**
-  //    had it been on the first screen at startup.
-  //    📌 The rule: any number that lets someone spot a misconfiguration at a glance
-  //    belongs on the first screen at startup.
-  console.log(`[gateway] Loci timeout   ${process.env.RELEVANCE_TIMEOUT_MS || "(unset — using the default)"}`);
+  console.log(`[gateway] idle threshold ${idle_threshold_minutes} min`);
   for (const line of present.banner_lines()) console.log(`[gateway] ${line}`);
   console.log(`[gateway] present api    ${gateway_token ? "/present/* and /loci/source open to Bearer LOCI_GATEWAY_TOKEN"
     : "closed — LOCI_GATEWAY_TOKEN unset, so /present/* answers 404 and /loci/source 503"}`);

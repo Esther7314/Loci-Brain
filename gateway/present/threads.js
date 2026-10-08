@@ -70,8 +70,11 @@
 //
 // ─── On disk ───
 // <LOCI_GATEWAY_DATA>/threads/<thread>.json — the private ledger, never exported:
-//     { id, created_at, last_at, branch: [{ id, role, fp }] }
+//     { id, created_at, last_at, branch: [{ id, role, fp }], window }
 // `branch` is the conversation as the client currently shows it, as day-store line ids.
+// `window` belongs to present/window.js (mark, carry, overlays, usage); this module keeps
+// it in the same file and never reads it. A fork starts without one — present/index.js
+// decides what the fork inherits.
 // A thread file that cannot be read after three tries is left alone: never matched,
 // never overwritten (a file that will not parse is not an empty thread).
 // ============================================================
@@ -404,6 +407,8 @@ function create_threads({ dir, day_store, clock, resend_window_ms = RESEND_WINDO
     ingest,
     record_reply,
     get: (id) => { load_all(); return threads.get(id) || null; },
+    /** Write a thread back after something outside this module (the window) changed it. */
+    save: (id) => { load_all(); const t = threads.get(id); if (t) save(t); return Boolean(t); },
     list: () => { load_all(); return [...threads.values()]; },
     broken: () => { load_all(); return [...broken]; },
   };

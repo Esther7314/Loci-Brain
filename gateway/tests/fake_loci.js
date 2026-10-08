@@ -8,20 +8,27 @@
 //    This impostor returns a **hard-coded, predictable** search result, and the
 //    assertions are written against exactly that.
 //
-// It impersonates two faces (the real Loci hangs both on the same port, which is what
-// the gateway assumes too):
-//   · `POST /mcp`            MCP streamable-http; auto_attach.js's recall goes here
-//   · `GET  /api/loci/poke`  ordinary REST; poke_delivery.js goes here. Not covered by
-//                            this suite, but it rides in the same request as the path
-//                            that is, so it has to be booked as well — "nothing leaked"
-//                            is a claim that must be provable from the ledger.
+// It impersonates the faces the gateway knocks on (the real Loci hangs them all on the
+// same port, which is what the gateway assumes too):
+//   · `POST /api/v2/cue`, `/cue/delivered`, `/cue/dropped`   the cards for a turn and the
+//                            two acknowledgements (present/cue.js). The same window and
+//                            turn asked again get the same answer, as the real Loci does.
+//                            The default answer is one card that names the turn, so a
+//                            test can tell whose card sits where; `cue_with(fn)` overrides.
+//   · `POST /mcp`            MCP streamable-http; auto_attach.js's recall (no longer on
+//                            the chat path — any traffic here is booked and visible)
+//   · `GET  /api/loci/poke`  ordinary REST; poke_delivery.js goes here. It rides in the
+//                            same request as the cue, so it has to be booked as well —
+//                            "nothing leaked" is a claim that must be provable from the
+//                            ledger.
 //
 // Six moods (switched with 设模式):
-//   正常    — returns that hard-coded search result, honestly
-//   五百    — the handshake is fine, tools/call answers HTTP 500 (Loci alive but broken)
-//   断连    — any /mcp request has its connection cut (Loci is not running at all)
-//   慢      — tools/call deliberately drags past the gateway's timeout (the scene of
-//             that "5 second bug")
+//   正常    — returns that hard-coded search result / the default card, honestly
+//   五百    — the handshake is fine, tools/call and the cue routes answer HTTP 500 (Loci
+//             alive but broken)
+//   断连    — any /mcp or /api/v2/* request has its connection cut (Loci is not running)
+//   慢      — tools/call and the cue routes deliberately drag past the gateway's timeout
+//             (the scene of that "5 second bug")
 //   换排版  — same content, different layout (what it looks like the day Loci changes
 //             its recall render)
 //   空库    — the lookup succeeds, but nothing relevant exists (**exactly what day one
@@ -84,6 +91,32 @@ async function start_fake_loci({ 端口: port }) {
   let mode = "正常";
   let slow_ms = 3000;
   const timers = new Set();
+  let cue_script = null;
+  const cue_answers = new Map();   // "<window>|<turn>" → the first answer, given again on a retry
+  let card_seq = 0;
+
+  function cue_answer(body) {
+    const key = `${body?.window}|${body?.turn}`;
+    if (cue_answers.has(key)) return cue_answers.get(key);
+    let answer = cue_script ? cue_script(body) : null;
+    if (!answer) {
+      if (mode === "空库") answer = { cards: [], text: "" };
+      else {
+        card_seq += 1;
+        const text = `〔相关记忆〕卡${card_seq}·${body?.turn}：${String(body?.text || "").slice(0, 12)}`;
+        answer = { cards: [{ card: `e${card_seq}@v1`, kind: "memory", id: `e${card_seq}`, short: `e${card_seq}`, why: "phrase", text }], text };
+      }
+    }
+    const full = { window: body?.window, turn: body?.turn, cards: answer.cards, text: answer.text, scope: "" };
+    cue_answers.set(key, full);
+    return full;
+  }
+
+  function later(fn) {
+    const timer = setTimeout(() => { timers.delete(timer); try { fn(); } catch { /* the other side left long ago; normal */ } }, slow_ms);
+    if (timer.unref) timer.unref();
+    timers.add(timer);
+  }
 
   function send_sse(res, obj, session) {
     const headers = { "Content-Type": "text/event-stream; charset=utf-8" };
@@ -105,7 +138,21 @@ async function start_fake_loci({ 端口: port }) {
       all_received.push(entry);
 
       // ——— 断连: Loci is not running at all, so the connection is cut the moment it is made ———
-      if (mode === "断连" && route === "/mcp") { req.socket.destroy(); return; }
+      if (mode === "断连" && (route === "/mcp" || route.startsWith("/api/v2/"))) { req.socket.destroy(); return; }
+
+      // ——— The cue face ———
+      if (req.method === "POST" && route.startsWith("/api/v2/cue")) {
+        const json = (status, obj) => { res.writeHead(status, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
+        const answer = () => {
+          if (mode === "五百") return json(500, { error: "假 Loci 故意炸给你看" });
+          if (route === "/api/v2/cue") return json(200, cue_answer(body));
+          if (route === "/api/v2/cue/delivered") return json(200, { window: body?.window, delivered: [], unknown: [] });
+          if (route === "/api/v2/cue/dropped") return json(200, { window: body?.window, dropped: [], cleared: Boolean(body?.all) });
+          return json(404, { error: "no such route" });
+        };
+        if (mode === "慢") return later(answer);
+        return answer();
+      }
 
       // ——— The MCP face ———
       if (req.method === "POST" && route === "/mcp") {
@@ -191,6 +238,10 @@ async function start_fake_loci({ 端口: port }) {
     应该过线的id: EXPECTED_PASSING_IDS, 应该的事件数: EXPECTED_EVENT_COUNT,
     应该的认知数: EXPECTED_MIND_COUNT, 挡在线下的id: BLOCKED_ID, 记忆正文样本: MEMORY_BODY_SAMPLES,
     设模式(new_mode, ms) { mode = new_mode; if (ms != null) slow_ms = ms; },
+    /** fn(body) → { cards, text } decides the next fresh cue answers; null goes back to the default card. */
+    cue_with(fn) { cue_script = fn; },
+    /** The cue requests (asks, delivered, dropped) in the whole-run ledger, in order. */
+    cue_requests(route = null) { return all_received.filter((r) => (route ? r.路径 === route : r.路径.startsWith("/api/v2/cue"))); },
     清账() { received.length = 0; tool_calls.length = 0; },
     async 关() {
       for (const t of timers) clearTimeout(t);

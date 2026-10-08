@@ -318,12 +318,12 @@ test("reply capture: SSE pieces reassemble, unfinished streams and error bodies 
   sse.push("data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"all\",\"arguments\":\"{}\"}}]}}]}\n\n");
   sse.push("data: {\"choices\":[{\"index\":1,\"delta\":{\"content\":\"别的选项\"}}]}\n\n");
   sse.push("data: [DONE]\n\n");
-  assert.deepStrictEqual(sse.end(), { text: "你好", tools: ["recall"] });
+  assert.deepStrictEqual(sse.end(), { text: "你好", tools: ["recall"], usage: null });
 
   const cut = create_sse_reader();
   cut.push("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"半截\"}}]}\n\n");
   assert.strictEqual(cut.end(), null, "a stream that never finished is not a reply");
 
   assert.strictEqual(parse_json_reply("{\"error\":{\"message\":\"bad\"}}"), null);
-  assert.deepStrictEqual(parse_json_reply("{\"choices\":[{\"index\":0,\"message\":{\"content\":\"嗯\"}}]}"), { text: "嗯", tools: [] });
+  assert.deepStrictEqual(parse_json_reply("{\"choices\":[{\"index\":0,\"message\":{\"content\":\"嗯\"}}]}"), { text: "嗯", tools: [], usage: null });
 });

@@ -1,25 +1,25 @@
 // ============================================================
-// gateway/relay.js — everything that is not /health: read the request, let Loci put
-// what the AI ought to know into it, forward it upstream, pipe the answer back
+// gateway/relay.js — everything that is not /health: read the request, let the present
+// layer build the copy that goes upstream, forward it, pipe the answer back
 //
-// Mounted by server.js as the catch-all route. The order inside one request is the
-// contract, and server.js's header explains why each poke lands where it does:
+// Mounted by server.js as the catch-all route. The order inside one request:
 //   ① read and parse the body
-//   ② present layer sees the client's messages untouched (present/index.js) — before
-//      any poke edits them, and before anything goes upstream ("store before forwarding")
-//   ③ poke delivery (dreams / muse) · ④ relevance reminder, pinned at the true tail
-//   ⑤ the /v1/* guard · ⑥ forward · ⑦ the present layer listens to the answer as it
-//      passes through, without changing a byte of what the client receives
+//   ② the /v1/* guard: anything else is answered 404 here, before anyone is asked anything
+//   ③ a chat request: the present layer (present/index.js) sees the client's messages
+//      untouched, stores the owner's line, asks Loci for this turn's card and poke
+//      delivery for a dream / muse line, and hands back the copy to forward — carry,
+//      window, overlays replayed, usage asked for
+//   ④ forward · ⑤ the present layer listens to the answer as it passes through and hands
+//      back the stream the client gets (upstream's bytes, less the usage chunk the client
+//      did not ask for)
 //
-// The present hooks are optional and fenced: a hook that throws costs this round its
-// present work and one console line, never the chat. The present layer reports on lines
-// of its own, so the per-request line keeps the shape its readers (and tests) parse.
+// The present hooks are fenced: a hook that throws costs this round its present work and
+// one console line, never the chat — the client's own body is forwarded as it came.
+// The present layer reports on lines of its own; the per-request line keeps the shape its
+// readers (and tests) parse.
 // ============================================================
 
-const path = require("path");
 const { Readable } = require("stream");
-const auto = require("./auto_attach.js");
-const poke = require("./poke_delivery.js");
 
 function read_body(req) {
   return new Promise((resolve, reject) => {
@@ -37,15 +37,10 @@ function is_chat(req, body) {
 }
 
 /**
- * @param upstream                upstream base URL, trailing slashes already stripped
- * @param loci                    Loci MCP address
- * @param idle_threshold_minutes  poke delivery's idle gate
- * @param min_score               relevance score floor
- * @param data_root               LOCI_GATEWAY_DATA
- * @param log_path                memory-actions.jsonl (shared with health.js)
- * @param present                 optional { on_request, on_response } (present/index.js)
+ * @param upstream  upstream base URL, trailing slashes already stripped
+ * @param present   optional { prepare, on_response } (present/index.js)
  */
-function create_relay({ upstream, loci, idle_threshold_minutes, min_score, data_root, log_path, present = null }) {
+function create_relay({ upstream, present = null }) {
   return async function handle_relay(req, res, { start }) {
     const raw = await read_body(req).catch(() => Buffer.alloc(0));
     let body = null;
@@ -53,48 +48,6 @@ function create_relay({ upstream, loci, idle_threshold_minutes, min_score, data_
 
     const route = req.url.split("?")[0];
     const notes = [];
-    let present_turn = null;
-    if (is_chat(req, body)) {
-      // ---- Present layer: sees the client's own messages before any poke edits them. ----
-      // Only real API traffic counts; a chat-shaped body on any other path gets the 404 below.
-      // It reports on a console line of its own: the request line below keeps its shape.
-      if (present && route.startsWith("/v1/")) {
-        try {
-          const seen = present.on_request({ route, body });
-          present_turn = seen.turn;
-          if (seen.note) console.log(`[gateway] ${seen.note}`);
-        } catch (err) { console.error(`[gateway] present failed: ${err?.message || err}`); }
-      }
-
-      const common = {
-        messages: body.messages,
-        requestId: String(req.headers["x-request-id"] || start),
-        logPath: log_path,
-        地址: loci,
-      };
-
-      // ---- Poke delivery: dreams / muse, pinned in the same prefix as the breath paste. ----
-      try {
-        const d = await poke.attach_once({
-          ...common,
-          statePath: path.join(data_root, "state", "poke-window.json"),
-          闲时阈值分钟: idle_threshold_minutes,
-        });
-        notes.push(d.patchInjected ? `戳戳(梦=${d.hasDream} 发呆=${d.musePending})`
-          : d.calledLoci ? "戳戳无" : "戳戳没问(不够闲)");
-      } catch (err) { notes.push("戳戳炸:" + (err?.message || err)); }
-
-      // ---- Relevance reminder. **Last step, pinned at the true tail.** ----
-      // Only runs when triggered (strong = keyword hit, weak = local heuristic).
-      // No trigger, no recall call at all.
-      try {
-        const b = await auto.build_relevance_notice({ ...common, 最低分: min_score });
-        if (b && b.patch) {
-          auto.attach_at_true_tail(body.messages, b.patch);
-          notes.push("提醒(贴了真尾巴)");
-        } else notes.push("提醒无");
-      } catch (err) { notes.push("提醒炸:" + (err?.message || err)); }
-    } else notes.push("不是聊天，直接转发");
 
     // 🔴 **Anything that does not look like an API path gets a local 404.** (A whole
     //    class of bug that the gateway tests caught.)
@@ -123,7 +76,27 @@ function create_relay({ upstream, loci, idle_threshold_minutes, min_score, data_
       return;
     }
 
-    const forward_body = body ? Buffer.from(JSON.stringify(body)) : raw;
+    // ---- The present layer builds the copy that goes upstream. ----
+    let outgoing = body;
+    let present_ctx = null;
+    if (is_chat(req, body)) {
+      if (present) {
+        try {
+          const prepared = await present.prepare({
+            body, headers: req.headers, request_id: String(req.headers["x-request-id"] || start),
+          });
+          if (prepared.note) console.log(`[gateway] ${prepared.note}`);
+          if (prepared.body) outgoing = prepared.body;
+          present_ctx = prepared.ctx;
+          notes.push(...prepared.notes);
+        } catch (err) {
+          console.error(`[gateway] present failed: ${err?.message || err}`);
+          notes.push("present炸，原样转发");
+        }
+      }
+    } else notes.push("不是聊天，直接转发");
+
+    const forward_body = body ? Buffer.from(JSON.stringify(outgoing)) : raw;
     const headers = { ...req.headers };
     delete headers.host; delete headers["content-length"]; delete headers["accept-encoding"];
 
@@ -164,12 +137,13 @@ function create_relay({ upstream, loci, idle_threshold_minutes, min_score, data_
     res.writeHead(resp.status, resp_headers);
     if (resp.body) {
       const stream = Readable.fromWeb(resp.body);
-      // The present layer listens alongside the pipe; it reads the same chunks and writes nothing to res.
-      if (present && present_turn) {
-        try { present.on_response(present_turn, { status: resp.status, headers: resp_headers, stream }); }
+      // The present layer listens alongside the pipe and may hand back the stream the client gets.
+      let to_client = stream;
+      if (present && present_ctx) {
+        try { to_client = present.on_response(present_ctx, { status: resp.status, headers: resp_headers, stream }) || stream; }
         catch (err) { console.error(`[gateway] present failed to listen: ${err?.message || err}`); }
       }
-      stream.pipe(res);
+      to_client.pipe(res);
     } else res.end();
 
     console.log(`[gateway] ${req.method} ${req.url} → ${resp.status}  ${Date.now() - start}ms  ${notes.join(" · ")}`);

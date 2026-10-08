@@ -5,7 +5,11 @@
 // be open-sourced alongside Loci, which is why the extraction changed **not one line of
 // logic** — only where the paths land.
 //
-// One file, two jobs, and the gateway pokes both of them every round:
+// One file, two jobs, plus the MCP client both of them use. The shell in this directory
+// (server.js) wires neither: breathing is the AI's own hand (server.js says why), and on
+// the chat path the relevance reminder gave way to Loci's cue cards (present/cue.js).
+// The MCP client stays for the turns the gateway runs on its own (wake, the daily
+// report), and both jobs stay for anyone wiring this module into a gateway of their own:
 //   · breath paste        first turn of a window: call breath() once and paste the
 //                         whole thing into the system prompt (the prefix region)
 //   · relevance reminder  strong = keyword hit / weak = local heuristic; calls recall

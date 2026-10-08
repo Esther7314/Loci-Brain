@@ -7,6 +7,8 @@
 //
 // What counts as the reply: choice 0's text, plus the **names** of the tools it called
 // (arguments are never collected). Reasoning fields are not part of what was said.
+// The provider's `usage` rides along when the answer carried one (the window's fill %
+// is computed from its prompt_tokens); it is not part of what was said either.
 // What counts as finished:
 //   · a streamed answer (text/event-stream) that reached `data: [DONE]` or a
 //     finish_reason
@@ -38,11 +40,13 @@ function create_sse_reader() {
   let text = "";
   const tool_names = [];   // by tool-call index; a name may arrive in pieces
   let finished = false;
+  let usage = null;
 
   function take_event(payload) {
     if (payload === "[DONE]") { finished = true; return; }
     let chunk;
     try { chunk = JSON.parse(payload); } catch { return; }
+    if (chunk?.usage && typeof chunk.usage === "object") usage = chunk.usage;
     for (const choice of chunk?.choices || []) {
       if ((choice.index ?? 0) !== 0) continue;
       const delta = choice.delta || choice.message || {};
@@ -69,7 +73,7 @@ function create_sse_reader() {
     end() {
       if (buffer.startsWith("data:")) take_event(buffer.slice(5).trim());
       buffer = "";
-      return finished ? { text, tools: tool_names.filter(Boolean) } : null;
+      return finished ? { text, tools: tool_names.filter(Boolean), usage } : null;
     },
   };
 }
@@ -79,13 +83,14 @@ function parse_json_reply(raw) {
   try { body = JSON.parse(raw); } catch { return null; }
   const message = body?.choices?.find?.((c) => (c.index ?? 0) === 0)?.message;
   if (!message) return null;
-  return { text: content_text(message.content), tools: names_of(message.tool_calls || (message.function_call ? [message.function_call] : [])) };
+  return { text: content_text(message.content), tools: names_of(message.tool_calls || (message.function_call ? [message.function_call] : [])),
+           usage: body.usage && typeof body.usage === "object" ? body.usage : null };
 }
 
 /**
  * @param stream     the Readable the relay pipes to the client
  * @param headers    response headers (content-type decides SSE vs JSON)
- * @param on_reply   called once with { text, tools } when a finished answer was read
+ * @param on_reply   called once with { text, tools, usage } when a finished answer was read
  */
 function capture_reply(stream, headers, on_reply) {
   const is_sse = /text\/event-stream/i.test(String(headers?.["content-type"] || ""));

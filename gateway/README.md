@@ -29,6 +29,7 @@ API key 原样转发，不存不看。
 | **发呆**<br>`poke_delivery.js` | 攒了几团没整理的日子和想法 → 递一句「该发呆了」 | **行。** `muse()` 是 MCP 工具，AI 自己伸手就能调，网关只是替它记得 |
 | **做梦**<br>`poke_delivery.js` | 昨夜织的那个梦，递全文 | **不行。** 梦要能**拿走**（30 分钟降级、60 分钟删掉），而 hook 注入只增不减 —— 一个掉不下去的梦第二天还躺在上下文里，那就不是梦了 |
 | **强弱提醒**<br>`auto_attach.js` | 「〔记忆提醒〕和这句有关：事件 3 条 · 认知 1 条」 | **行。** 每轮跑一次 `recall`、把一行塞进去，hook 能做。网关的好处是插得进**真尾巴** |
+| **卡片**<br>`present/cue.js` | 她每说一句新的，问一次 Loci 的 `/api/v2/cue`，卡片贴在她那句后面，之后每轮原地重放到换窗 | 这个外壳（`server.js`）用的就是它，**不再跑上面那条强弱提醒**；`auto_attach.js` 留给自己有网关的人 |
 
 ### 可选的一样
 
@@ -102,10 +103,8 @@ LOCI_UPSTREAM=https://api.deepseek.com/v1 node gateway/server.js
 | `PORT` | `3100` | 网关自己听哪个端口 |
 | `LOCI_MCP` | `http://127.0.0.1:18002/mcp` | Loci 在哪 |
 | `POKE_IDLE_MINUTES` | `210` | 闲时闸，见下 |
-| `RELEVANCE_STRONG_WORDS` | 中文默认表 | 强档词，逗号分隔。**不用中文的话必须换** |
-| `RELEVANCE_MIN_SCORE` | `50` | 多少分以上才算相关 |
-| `RELEVANCE_TIMEOUT_MS` | `12000` | 等 `recall` 多久。**库越大要给越多** |
-| `RELEVANCE_WEAK` | 关 | `1` 打开弱档 |
+| `LOCI_CUE_TIMEOUT_MS` | `3000` | 等 Loci 的卡片多久。等不到就这一轮不贴，照发 |
+| `LOCI_HOOK_TOKEN` | 无 | Loci 上了锁时，问卡片、戳戳要带的那把钥匙（走请求头，不进 URL） |
 | `LOCI_GATEWAY_DATA` | `gateway/data` | 状态和日志落哪儿 |
 | `LOCI_GATEWAY_DAYS` | `<LOCI_GATEWAY_DATA>/host` | 原话（一天一份 `days/<日期>.jsonl`）落哪儿。设成 `<buckets>/_hosts/<名>` 才会跟着 Loci 的导出走；不设就留在网关自己的数据目录里，不碰任何库 |
 | `LOCI_TZ` | 本机时区 | 「一天」按哪个时区切（IANA 名，如 `Asia/Shanghai`） |
@@ -121,6 +120,9 @@ LOCI_UPSTREAM=https://api.deepseek.com/v1 node gateway/server.js
 它挡的是插嘴：在连着说话的空档里递一句「昨夜织了个梦」，那不是提醒，是打断。
 
 ### 什么时候才去查一次记忆（强档 / 弱档）
+
+> 这一节说的是 `auto_attach.js` 这个模块自己的规矩（`RELEVANCE_*` 那几个环境变量也只管它）。
+> 这个外壳不走它：她每句新话都问一次 Loci 的卡片，问什么、给什么是 Loci 那边按名字和线索定的。
 
 **不是每句话都去查** —— 查一次要几秒，而且大部分话根本不需要。
 所以先在本地判断这句话值不值得查，两道闸：
@@ -175,7 +177,8 @@ RELEVANCE_STRONG_WORDS="remember,last time,earlier,you said"
 库大一倍就该跟着调。装完先自己跑一次 `recall(query="随便什么")` 掐个表，
 把 `RELEVANCE_TIMEOUT_MS` 设成它的两倍 —— **给少了的后果不是报错，是它安静地什么都不做。**
 
-**怎么确认它在工作**：看日志里 `relevance_reminder_observed` 那条的
+**这个外壳怎么确认在工作**：`GET /health`，它读日志里每一轮 `cue_observed` 那条（问了、Loci 回没回、贴没贴上卡）。
+用这个模块的自己的网关：看日志里 `relevance_reminder_observed` 那条的
 `injected` 和 `error` —— **别看聊天界面，界面上永远是正常的。**
 
 ---

@@ -143,7 +143,7 @@ test("acceptance: 3 rounds + a resend + a regenerate → 6 live lines + 1 replac
   plans.push({ text: A1 });
   const r1 = await chat(h1, { stream: true });
   assert.strictEqual(r1.status, 200);
-  assert.strictEqual(r1.text, fake_upstream.sent.at(-1), "the client gets the upstream's stream byte for byte");
+  assert.strictEqual(r1.text, fake_upstream.without_usage_chunk.at(-1), "the client gets the upstream's stream byte for byte, less the usage chunk it never asked for");
   await until(has_text(A1), "round 1's reply");
 
   const h2 = [...h1, { role: "assistant", content: A1 }, { role: "user", content: "今天考试了" }];
