@@ -11,6 +11,8 @@ Event is released. The phrase the material carried must then be nowhere under th
 was dropped. Each has a control where nothing changes during the wait and the result is
 written as before. Backfill is raced against a body revise too: the answer is about the
 old body, so nothing of it lands on the new one, and the backfill says it was dropped.
+Slicing is raced against a new revision announced for a registered run holding the
+batch's lines: the gists are of the old version, so the whole batch is dropped.
 
 Real store on a temp dir; every model and the host are stand-ins.
 """
@@ -238,6 +240,32 @@ def test_slices_of_a_line_withdrawn_while_slicing_are_dropped(store, tmp_path):
     assert "nothing was stored" in str(refused)
     assert store.slices.pending_count() == 0 and store.slices.batches() == []
     assert not store.sources.orders_path.exists()
+    assert _files_holding(tmp_path, PHRASE) == []
+
+
+def test_slices_of_a_run_revised_while_slicing_are_dropped(store, tmp_path):
+    # The run's lines are registered; the host announces a new revision for the run alone.
+    assert store.sources.record_order(dict(WHERE), ["m_0002", "m_0003", "m_0004"]) == "recorded"
+    run_ = "lento:home/private:U#m_0002..m_0004"
+
+    async def revise():
+        status, out = await SC.handle(store, {"change_id": "c-run", "source": run_,
+                                              "host_seq": 1, "change": "revised",
+                                              "revision": "r2"}, OPEN_HOST)
+        # No memory names the run yet: recorded all the same, as unknown_source.
+        assert status == 200 and out["status"] == "unknown_source", out
+
+    gate = Gate()
+
+    async def go():
+        with pytest.raises(SL.BatchStale) as refused:
+            await race(SL.take_batch(store, {**_batch(), "revision": "r1"},
+                                     model=_slicer(gate)), gate, revise)
+        return refused.value
+    refused = run(go())
+    assert refused.lines == {i: "revised" for i in ("m_0002", "m_0003", "m_0004")}
+    assert "nothing was stored" in str(refused)
+    assert store.slices.pending_count() == 0 and store.slices.batches() == []
     assert _files_holding(tmp_path, PHRASE) == []
 
 

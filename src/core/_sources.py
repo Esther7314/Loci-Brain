@@ -64,7 +64,10 @@ line's revision as delivered (`revisions`). A run record whose `revision` names 
 watermark adopted those line revisions (`adopted_revisions`); a line whose newest announced
 revision differs from the adopted one, or whose adopted revision is unknown while the host
 has announced one, counts as revised (`run_revisions`) — when the memory was written
-proves nothing about which version the model read.
+proves nothing about which version the model read. A `revised` change for a run reaches
+every line it holds, the way a withdrawal does (`revisions_reaching`): a line's newest
+revision is the one applied last among its own and those of the registered runs holding
+it, and a run's is compared by `revision` alone (its fingerprint hashes the whole run).
 
 The registry holds each source's own state, which cannot be read back from the md
 files: active / unreadable / withdrawn / deleted, the revisions the host announced,
@@ -136,7 +139,8 @@ Exports: SOURCES_FIELD · SOURCES_MAX · COMPLETED_FROM · SourceId · SourceRec
          Place · places_of · places_cover · parse_use · STATES · HELD · CHANGE_KINDS ·
          OUTCOMES · next_state · SourceRegistry (apply_change · prior_change · state_of ·
          read_state · granted · reaches · order_known · use_of · uses_of · revisions_of ·
-         describe · record_order · order_conflict · members_of · lines_named ·
+         revisions_reaching · newer_revision · describe · record_order ·
+         order_conflict · members_of · lines_named ·
          adopted_revisions · run_revisions · lines_of · hold · held_of · held_over · settled_after ·
          rebuild_index · check_writable · claimed · run_once) · names_identity · quoted_records ·
          basis_records · memories_of · write_key · bounded_key · current_write_key ·
@@ -1204,21 +1208,32 @@ class SourceRegistry:
     def run_revisions(self, record) -> list[tuple]:
         """[(line identity, the host's newest announced revision of it, the revision the
         record adopted or None)] for every line of a run (`lines_of`) whose newest
-        announced revision is not the one adopted (`adopted_revisions`). A line whose
-        adopted revision is unknown counts whenever the host has announced any: when the
-        memory was written proves nothing about which version the model read."""
+        announced revision is not the one adopted (`adopted_revisions`). The newest is
+        the newest reaching the line (`revisions_reaching`): its own, or one announced for
+        a registered run holding it. A line whose adopted revision is unknown counts
+        whenever the host has announced one for it: when the memory was written proves
+        nothing about which version the model read. A run's announcement is compared by
+        `revision` alone, against the line's adopted revision, else the record's
+        watermark (the delivery it was cut from) — the way a batch's line is compared at
+        the door (core/_slicer._behind_lines)."""
         sid = record_id(record) if isinstance(record, dict) else _identity(record)
         adopted = self.adopted_revisions(record) or {}
+        watermark = record.get("revision") if isinstance(record, dict) else None
         out = []
         for line in self.lines_of(sid):
-            revisions = self.revisions_of(line)
+            revisions = self.revisions_reaching(line)
             if not revisions:
                 continue
             latest = revisions[-1]
-            newer = str(latest.get("revision") or latest.get("fingerprint") or "")
+            mine = adopted.get(line.id)
+            if latest["source"] == line.to_string():
+                newer = str(latest.get("revision") or latest.get("fingerprint") or "")
+            else:
+                newer = str(latest.get("revision") or "")
+                if mine in (None, ""):
+                    mine = watermark
             if not newer:
                 continue
-            mine = adopted.get(line.id)
             if mine not in (None, "") and str(mine) == newer:
                 continue
             out.append((line, newer, mine if mine not in (None, "") else None))
@@ -1514,6 +1529,49 @@ class SourceRegistry:
         found = self.describe(identity)
         return found["revisions"] if found else []
 
+    def revisions_reaching(self, identity) -> list[dict]:
+        """The revisions the host announced (`revised`) that reach a line: those for the
+        line itself and those for every run of its container a change was recorded for
+        whose registered lines hold it (`_runs_over`, the reach a withdrawal on a run
+        has). Each carries `source`, the key it was announced for. Oldest first by the
+        registry's `seq`, the order the changes were applied: host_seq is one order per
+        source, so a line's and a run's do not compare, while within one source a change
+        older by host_seq is refused as stale and `seq` follows host_seq. A run's
+        `revision` names the version of the whole run; its fingerprint hashes the whole
+        run and says nothing of one line's text. A run given as `identity` reaches only
+        its own key and the runs overlapping its lines, not its lines' own revisions
+        (`run_revisions` reads those)."""
+        sid = _identity(identity)
+        own = sid.to_string()
+        out: list[dict] = []
+        for key in dict.fromkeys([own] + self._runs_over(sid, self.lines_of(sid))):
+            entry = self._entry(key)
+            if entry is None:
+                continue
+            with self._guard:
+                out += [{**r, "source": key} for r in entry["revisions"]]
+        return sorted(out, key=lambda r: int(r.get("seq") or 0))
+
+    def newer_revision(self, record: dict) -> tuple[str, Optional[str]]:
+        """For a record of one line: (the newest revision reaching it
+        (`revisions_reaching`) when the record does not hold it, else "", what the record
+        holds). Compared by `revision` when the newest names one, else by fingerprint —
+        an announcement for a run only by `revision`: its fingerprint hashes the whole
+        run. A record holding neither counts as behind any announcement it is compared
+        with."""
+        sid = record_id(record)
+        revisions = self.revisions_reaching(sid)
+        latest = revisions[-1] if revisions else {}
+        if latest.get("revision"):
+            newer, mine = str(latest["revision"]), record.get("revision")
+        elif latest.get("fingerprint") and latest["source"] == sid.to_string():
+            newer, mine = str(latest["fingerprint"]), record.get("fingerprint")
+        else:
+            return "", None
+        if mine not in (None, "") and str(mine) == newer:
+            return "", mine
+        return newer, mine
+
     # ---------- applying a change ----------
 
     async def apply_change(self, record: dict, *, may_restore: bool = False,
@@ -1606,7 +1664,7 @@ class SourceRegistry:
         otherwise, so it is refused under any grant and with none), is granted only when
         every line in it is (`granted`), and its state is the worst of its lines
         (`state_of`). A source whose newest announced revision is not the one the record
-        adopted (`run_revisions` for a run, the record's own revision for a piece) is taken
+        adopted (`run_revisions` for a run, `newer_revision` for a piece) is taken
         with a note: the memory comes up in 依据变了的 at once. Writing never changes a
         source's state: only the host's change notices do."""
         granted = places_of(grant)
@@ -1645,11 +1703,8 @@ class SourceRegistry:
         if sid.through:
             changed = self.run_revisions(rec)
         else:
-            revisions = self.revisions_of(sid)
-            latest = revisions[-1] if revisions else {}
-            newer = str(latest.get("revision") or latest.get("fingerprint") or "")
-            mine = rec.get("revision") if latest.get("revision") else rec.get("fingerprint")
-            changed = [(sid, newer, mine or None)] if newer and newer != mine else []
+            newer, mine = self.newer_revision(rec)
+            changed = [(sid, newer, mine or None)] if newer else []
         out = []
         for line, newer, mine in changed:
             had = f"你依据的是 {mine}" if mine else "依据的是哪一版宿主没说"

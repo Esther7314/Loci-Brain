@@ -542,6 +542,127 @@ def test_a_revision_of_a_line_outside_the_batch_does_not_drop_it(store, monkeypa
     assert len(out["slices"]) == 3 and store.slices.pending_count() == 3
 
 
+# A `revised` change for a run reaches the lines it holds, the way a withdrawal does: the
+# run's lines are registered (here m_0005..m_0008, inside the batch's twelve), and the
+# announcement is for the run's key alone.
+RUN = "lento:home/private:U#m_0005..m_0008"
+RUN_LINES = IDS[4:8]
+
+
+def _register_run(store, container="private:U", ids=RUN_LINES):
+    assert store.sources.record_order({**SOURCE, "container": container}, ids) == S.RECORDED
+
+
+def _revise_run(store, revision, run_=RUN, host_seq=1, change_id="c-run", **extra):
+    from core import _source_change as SC
+    from core.scope import Host
+
+    async def go():
+        status, out = await SC.handle(store, {"change_id": change_id, "host_seq": host_seq,
+                                              "source": run_, "change": "revised",
+                                              "revision": revision, **extra},
+                                      Host("life", scope_mode="open"))
+        assert status == 200, out
+    return go()
+
+
+def test_a_run_revised_before_the_batch_refuses_its_lines_at_the_door(store):
+    _register_run(store)
+    run(_revise_run(store, "r2"))
+    calls: list = []
+    with pytest.raises(SL.BatchError, match="m_0005 is revised") as refused:
+        take(store, stub(THREE, calls=calls), b=body(revision="r1"))
+    assert RUN in str(refused.value) and "nothing was stored" in str(refused.value)
+    assert calls == [] and store.slices.pending_count() == 0
+    # A line's own revision is what it is delivered at, whatever the watermark.
+    b = body(revision="r2")
+    b["lines"][6]["revision"] = "r1"
+    with pytest.raises(SL.BatchError, match="m_0007 is revised"):
+        take(store, stub(THREE, calls=calls), b=b)
+    assert calls == []
+
+
+def test_a_run_revised_while_slicing_answers_400_and_nothing_is_kept(store, monkeypatch):
+    _register_run(store)
+    orders = store.sources.orders_path.read_bytes()
+
+    async def revising(system, user):
+        # The host announces r2 of the whole run while the side model slices r1.
+        await _revise_run(store, "r2")
+        return json.dumps({"slices": THREE})
+    call = _routes(monkeypatch, store, revising)
+    status, out = call("POST", body(revision="r1"))
+    assert status == 400, out
+    assert out["note"] == "source_changed_while_slicing"
+    assert out["lines"] == {i: "revised" for i in RUN_LINES}
+    assert "nothing was stored" in out["error"]
+    assert store.slices.pending_count() == 0 and store.slices.batches() == []
+    assert store.sources.orders_path.read_bytes() == orders, "no line order is kept"
+    # Sent again as it is, r1 is refused before the side model.
+    status, out = call("POST", body(revision="r1"))
+    assert status == 400 and "m_0005 is revised" in out["error"] and "note" not in out
+
+
+def test_a_batch_at_the_runs_new_revision_is_taken(store):
+    _register_run(store)
+    run(_revise_run(store, "r2"))
+    out = take(store, stub(THREE), b=body(revision="r2"))
+    assert len(out["slices"]) == 3 and store.slices.pending_count() == 3
+
+
+def test_the_newest_revision_of_a_line_is_the_one_applied_last(store):
+    # host_seq is one order per source: the line's 9 and the run's 1 do not compare.
+    _register_run(store)
+    run(_revise(store, "m_0006", "e9", host_seq=9))
+    run(_revise_run(store, "r2", host_seq=1))
+    out = take(store, stub(THREE), b=body(revision="r2"))
+    assert len(out["slices"]) == 3, "the run's r2 came after the line's e9"
+    run(_revise(store, "m_0006", "e10", host_seq=10, change_id="c-r10"))
+    with pytest.raises(SL.BatchError, match="m_0006 is revised"):
+        take(store, stub(THREE), b=body(day="2026-01-01", revision="r2"))
+    line = store.sources.revisions_reaching(f"lento:home/private:U#{IDS[5]}")
+    assert [(r["source"], r["revision"]) for r in line] == [
+        ("lento:home/private:U#m_0006", "e9"), (RUN, "r2"), ("lento:home/private:U#m_0006", "e10")]
+
+
+def test_a_run_that_does_not_hold_the_line_has_no_effect(store):
+    # Registered over other lines of the container, or over these ids in another one,
+    # or never registered at all: none of them reaches the batch's lines.
+    _register_run(store, ids=["m_0013", "m_0014", "m_0015"])
+    _register_run(store, container="private:V")
+    run(_revise_run(store, "r2", run_="lento:home/private:U#m_0013..m_0015"))
+    run(_revise_run(store, "r2", run_="lento:home/private:V#m_0005..m_0008",
+                    change_id="c-v"))
+    run(_revise_run(store, "r2", run_="lento:home/private:U#m_0001..m_0003",
+                    change_id="c-unknown"))
+
+    async def revising_elsewhere(system, user):
+        await _revise_run(store, "r3", run_="lento:home/private:U#m_0013..m_0015",
+                          host_seq=2, change_id="c-run-2")
+        return json.dumps({"slices": THREE})
+    out = take(store, revising_elsewhere, b=body(revision="r1"))
+    assert len(out["slices"]) == 3 and store.slices.pending_count() == 3
+
+
+def test_a_memory_cut_before_a_run_was_revised_counts_as_revised(store):
+    # What tells breath and the write receipt that a source moved on reads the same reach.
+    _register_run(store)
+    run(_revise_run(store, "r2", fingerprint="sha256:whole-run", fingerprint_by="loci"))
+    line = {**SOURCE, "id": IDS[5], "revision": "r1", "fingerprint": _fp(TEXTS[5])}
+    assert store.sources.newer_revision(line) == ("r2", "r1")
+    assert store.sources.newer_revision({**line, "revision": "r2"}) == ("", "r2")
+    run_rec = {**SOURCE, "id": IDS[4], "through": IDS[7], "revision": "r1"}
+    assert [(str(ln), new, mine) for ln, new, mine in store.sources.run_revisions(run_rec)] \
+        == [(f"lento:home/private:U#{i}", "r2", "r1") for i in RUN_LINES]
+    assert store.sources.run_revisions({**run_rec, "revision": "r2"}) == []
+    # Without a revision, a run's fingerprint is not compared with one line's.
+    run(_revise_run(store, None, host_seq=2, change_id="c-fp",
+                    fingerprint="sha256:whole-run-2", fingerprint_by="loci"))
+    assert store.sources.newer_revision(line) == ("", None)
+    out = take(store, stub(THREE), b=body(revision="r1"))
+    assert len(out["slices"]) == 3
+
+
 def test_both_routes_want_the_hook_key_when_the_panel_is_locked(store, monkeypatch):
     call = _routes(monkeypatch, store, stub(THREE), locked=True)
     assert call("POST", body())[0] == 401

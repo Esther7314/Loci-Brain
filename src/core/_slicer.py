@@ -55,13 +55,19 @@ handing it over is neither the change authority nor the registrar (`registers:`)
 line of it (what a run holds decides what a change to it reaches;
 core/_source_change.registration_refusal).
 A batch is refused the same way when it delivers a line at another version than the
-newest the host announced for it (a `revised` change): the line's own `revision`, else the
-batch's watermark, against the announced revision; the line's hash against an announced
-fingerprint Loci computes (`fingerprint_by: loci`). A line carrying neither, under an
-announcement naming neither, cannot be told apart and is taken.
+newest the host announced for it (a `revised` change). An announcement reaches a line the
+way a withdrawal does: one for the line itself, or one for a run of its container whose
+registered lines hold it (`SourceRegistry.revisions_reaching`); the newest is the one
+applied last, since host_seq is an order within one source and a line's and a run's do not
+compare. The line's own `revision`, else the batch's watermark, is compared against the
+announced revision; the line's hash against an announced fingerprint Loci computes
+(`fingerprint_by: loci`), for the line's own announcement only — a run's fingerprint
+hashes the whole run. A line carrying neither, under an announcement naming neither,
+cannot be told apart and is taken.
 The registry is read again when the slices are written, under the pending store's lease:
-a line that became withdrawn, deleted or held, or was announced revised, while the side
-model was slicing drops the whole batch (BatchStale), so no gist of it is written after its
+a line that became withdrawn, deleted or held, or was reached by a new revised
+announcement (its own or a covering run's), while the side model was slicing drops the
+whole batch (BatchStale), so no gist of it is written after its
 clearing has run, and no gist cut from a version the host has replaced is kept. Nothing of
 such a batch is kept for later: the host slices the new version.
 Past that and the host's name kept on the batch line, nothing here knows which host it
@@ -517,33 +523,41 @@ def _unusable_lines(registry, source: dict, ids: list[str]) -> dict:
 
 
 def _revision_marks(registry, source: dict, ids: list[str]) -> dict:
-    """{line id: the registry line (`seq`) of the newest revision the host announced for
-    it, 0 for none}: a mark that moves when a `revised` change for the line is applied."""
+    """{line id: the registry line (`seq`) of the newest revision reaching it, 0 for none}:
+    a mark that moves when a `revised` change for the line, or for a registered run
+    holding it, is applied (SourceRegistry.revisions_reaching)."""
     base = _src.SourceId(source["system"], source["instance"], source["container"], "\0")
     return {line_id: max((int(r.get("seq") or 0)
-                          for r in registry.revisions_of(base.piece(line_id))), default=0)
+                          for r in registry.revisions_reaching(base.piece(line_id))),
+                         default=0)
             for line_id in ids}
 
 
 def _behind_lines(registry, batch: dict) -> dict:
     """{line id: why} for the lines this batch delivers at another version than the newest
-    the host announced for them: the line's `revision` (else the batch's watermark)
-    against the announced revision, and the line's hash against an announced fingerprint
-    computed as Loci computes it (FINGERPRINT_BY). What neither side names is not
-    compared."""
+    the host announced for them — for the line itself or for a registered run holding it
+    (SourceRegistry.revisions_reaching, in the order the changes were applied): the
+    line's `revision` (else the batch's watermark) against the announced revision, and,
+    for the line's own announcement only, the line's hash against an announced
+    fingerprint computed as Loci computes it (FINGERPRINT_BY); a run's fingerprint hashes
+    the whole run. What neither side names is not compared."""
     base = _src.SourceId(batch["source"]["system"], batch["source"]["instance"],
                          batch["source"]["container"], "\0")
     out: dict = {}
     for ln in batch["lines"]:
-        revisions = registry.revisions_of(base.piece(ln["id"]))
+        line = base.piece(ln["id"])
+        revisions = registry.revisions_reaching(line)
         if not revisions:
             continue
         latest = revisions[-1]
+        own = latest["source"] == line.to_string()
+        where = "" if own else f" for the run {latest['source']}"
         delivered = ln.get("revision") or batch["revision"]
         if latest.get("revision") and delivered and str(latest["revision"]) != str(delivered):
-            out[ln["id"]] = (f"the host announced revision {latest['revision']}, "
+            out[ln["id"]] = (f"the host announced revision {latest['revision']}{where}, "
                              f"the batch delivers {delivered}")
-        elif (latest.get("fingerprint") and latest.get("fingerprint_by") == FINGERPRINT_BY
+        elif (own and latest.get("fingerprint")
+              and latest.get("fingerprint_by") == FINGERPRINT_BY
               and str(latest["fingerprint"]) != ln["fingerprint"]):
             out[ln["id"]] = "the host announced another text for it"
     return out
@@ -565,9 +579,9 @@ async def take_batch(store, body, *, model: ModelCall,
     BatchForbidden (the batch registers lines whose declared change authority is another
     host than `host`, under `hosts`, the deployment's table; nothing is called),
     SlicerError (the side model failed; nothing is written) or BatchStale (a line became
-    withdrawn, deleted or held, or a new revision of it was announced, while the side
-    model was slicing; the slices are dropped and nothing is written). The raw text goes
-    no further than the side model.
+    withdrawn, deleted or held, or a new revision of it or of a registered run holding it
+    was announced, while the side model was slicing; the slices are dropped and nothing
+    is written). The raw text goes no further than the side model.
 
     The registry is read again when the slices are written, under the pending store's
     lease — the lease a source change takes to blank and drop the slices over its lines

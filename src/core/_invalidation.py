@@ -34,7 +34,10 @@ What puts a memory in the block:
   sources    a source the memory rests on (its `sources` and what its quoted lines name,
              core/_sources.basis_records) that the registry now reports withdrawn, deleted
              or held (a run: any line inside it), or revised past the revision this memory
-             adopted (and not confirmed at that revision). A run's own revision names the
+             adopted (and not confirmed at that revision). A line's newest revision is the
+             newest the host announced for it or for a registered run holding it
+             (core/_sources.SourceRegistry.revisions_reaching, in the order applied); a
+             run's announcement compares by `revision` only. A run's own revision names the
              host's watermark for the delivery it was formed from, and the registration
              under that watermark says which revision of each line was adopted
              (core/_sources.SourceRegistry.run_revisions): a line counts as revised when
@@ -263,17 +266,10 @@ class SourceFindings:
 
 
 def _newer_revision(rec: dict, registry) -> str:
-    """The revision (or fingerprint) the host announced past the one this record holds,
-    or ""."""
-    revisions = registry.revisions_of(_src.record_id(rec))
-    if not revisions:
-        return ""
-    latest = revisions[-1]
-    if latest.get("revision"):
-        return str(latest["revision"]) if latest["revision"] != rec.get("revision") else ""
-    if latest.get("fingerprint"):
-        return str(latest["fingerprint"]) if latest["fingerprint"] != rec.get("fingerprint") else ""
-    return ""
+    """The revision (or fingerprint) the host announced past the one this record of one
+    line holds, or "": the newest reaching the line, its own or a registered run's over it
+    (core/_sources.SourceRegistry.newer_revision)."""
+    return registry.newer_revision(rec)[0]
 
 
 def _run_revisions(rec: dict, registry) -> list[tuple[str, str]]:
