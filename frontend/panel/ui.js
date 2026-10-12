@@ -293,6 +293,18 @@ export async function pagedList({ load, item, items, limit = 5 }) {
   };
 }
 
+/** A page that is one long list (surface, grow, recall, regrow/fold, name): this many
+ *  rows to a page, and the ‹ › line at the page's foot (footPager). */
+export const LONG_PAGE = 15;
+
+/** Put a paged list's ‹ › line at the foot of the page: `view` is the page's outlet,
+ *  `list` what pagedList resolved to. Called after the list is on the page. */
+export function footPager(view, list) {
+  view.classList.add("fill");
+  list.nav.classList.add("end");
+  view.append(list.nav);
+}
+
 // ---------------------------------------------------------------- controls
 
 /** A pill button. `dark` is the main action (black, white words); `quiet` a greyed one;

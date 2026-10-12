@@ -26,13 +26,13 @@
                      was handed out under a narrower one; 「最早的一条记在 <day>」 at the
                      bottom. Nothing handed out yet: the API's `note`.
    #/breath/surface  (Figma frame breath——surface) GET /api/loci/awake, paged
-                     SURFACE_PAGE to a page: the awake pool now, each entry with its day
+                     LONG_PAGE to a page: the awake pool now, each entry with its day
                      and every reason it is awake (reasons[].text) under it, its id at the
                      right; the ‹ › line at the page's foot.
    ========================================================== */
 
 import * as api from "../api.js";
-import { h, fill, subbar, group, sub, numberSubs, row, idTag, moreLine, note, pagedList, dayTime, num } from "../ui.js";
+import { h, fill, subbar, group, sub, numberSubs, row, idTag, moreLine, note, pagedList, footPager, LONG_PAGE, dayTime, num } from "../ui.js";
 import { href } from "../router.js";
 import { openDetail } from "../detail.js";
 
@@ -57,7 +57,6 @@ const RECENT_NEXT = "下一次醒来起算";
 
 // surface's rows to a page: about a desktop screen of them (each row is a line and its
 // reasons under it); the API takes up to 50 (core/paging.PAGE_MAX).
-const SURFACE_PAGE = 15;
 
 // The panel reads its whole library; this is the line every panel request carries
 // (contract §一.4), and the only one breath's date line leaves out.
@@ -231,16 +230,15 @@ async function renderBreath(view) {
 }
 
 async function renderSurface(view) {
-  view.classList.add("fill");
   view.append(subbar({ tabs: tabs("surface"), tip: TIP_SURFACE }));
   const list = await pagedList({
     load: (q) => api.get("/api/loci/awake", q),
-    limit: SURFACE_PAGE,
+    limit: LONG_PAGE,
     item: (it) => entryRow(it, { why: [it.date, ...(it.reasons || []).map((r) => r.text)] }),
   });
   if (!list.total) return;
-  list.nav.classList.add("end");
-  view.append(h("main", { class: "sections" }, group("醒着", {}, list.el)), list.nav);
+  view.append(h("main", { class: "sections" }, group("醒着", {}, list.el)));
+  footPager(view, list);
 }
 
 export default {
