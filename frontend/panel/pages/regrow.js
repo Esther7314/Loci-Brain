@@ -18,7 +18,7 @@
    ========================================================== */
 
 import * as api from "../api.js";
-import { h, subbar, group, row, btn, errorLine, fill, clickable, pagedList, footPager, LONG_PAGE } from "../ui.js";
+import { h, subbar, group, row, btn, errorLine, fill, clickable, pagedList, footPager } from "../ui.js";
 import { href } from "../router.js";
 import { openDetail } from "../detail.js";
 
@@ -68,7 +68,6 @@ async function renderChanges(view) {
   const list = await pagedList({
     load: (q) => api.get("/api/loci/changes/recent", q),
     items: byDay,
-    limit: LONG_PAGE,
   });
   if (!list.total) return;
   list.el.classList.add("days");
@@ -118,7 +117,6 @@ async function renderSimilar(view) {
       return { items: all.slice(offset, offset + limit), total: all.length, offset, limit, next_offset: next };
     },
     item: pairRow,
-    limit: LONG_PAGE,
   });
   if (!list.total) return;
   view.append(h("main", null, list.el));

@@ -26,13 +26,13 @@
                      was handed out under a narrower one; 「最早的一条记在 <day>」 at the
                      bottom. Nothing handed out yet: the API's `note`.
    #/breath/surface  (Figma frame breath——surface) GET /api/loci/awake, paged
-                     LONG_PAGE to a page: the awake pool now, each entry with its day
+                     paged, the ‹ › line at the page's foot: the awake pool now, each entry with its day
                      and every reason it is awake (reasons[].text) under it, its id at the
                      right; the ‹ › line at the page's foot.
    ========================================================== */
 
 import * as api from "../api.js";
-import { h, fill, subbar, group, sub, numberSubs, row, idTag, moreLine, note, pagedList, footPager, LONG_PAGE, dayTime, num } from "../ui.js";
+import { h, fill, subbar, group, sub, numberSubs, row, idTag, moreLine, note, pagedList, footPager, dayTime, num } from "../ui.js";
 import { href } from "../router.js";
 import { openDetail } from "../detail.js";
 
@@ -233,7 +233,6 @@ async function renderSurface(view) {
   view.append(subbar({ tabs: tabs("surface"), tip: TIP_SURFACE }));
   const list = await pagedList({
     load: (q) => api.get("/api/loci/awake", q),
-    limit: LONG_PAGE,
     item: (it) => entryRow(it, { why: [it.date, ...(it.reasons || []).map((r) => r.text)] }),
   });
   if (!list.total) return;

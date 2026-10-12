@@ -21,6 +21,9 @@ import { h, subbar, group, row, btn, errorLine, fill, pagedList } from "../ui.js
 import { refresh } from "../router.js";
 import { openDetail } from "../detail.js";
 
+// Two halves share the page: each shows a few rows at a time.
+const HALF_PAGE = 5;
+
 const LINE = "还挂着的事，做完或撤掉就不在这儿了。";
 const TIP = "三种还挂着的：答应了的 = 他答应过、还没做完的。条子 = 他挂着的一张便条，在等某件事发生，到期限自己撤。线索 = 他埋下的一个提醒，等你哪天说到某句话，就把那条记忆递给他。";
 const HALVES = [
@@ -79,6 +82,7 @@ async function half({ part, label, tip }) {
   list = await pagedList({
     load: (q) => api.get("/api/loci/hanging", { part, ...q }),
     item: (it) => hangingRow(it, again),
+    limit: HALF_PAGE,
   });
   return list.total ? group(label, { tip }, list.el) : null;
 }

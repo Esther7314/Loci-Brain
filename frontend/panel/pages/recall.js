@@ -7,7 +7,7 @@
    can be linked and reloaded.
 
    The box empty, no filter (boards recall, recall-phone):
-       GET /api/loci/recall/timeline, paged (LONG_PAGE rows, the ‹ › line at the page's
+       GET /api/loci/recall/timeline, paged (the ‹ › line at the page's
        foot; the results likewise): the last three natural days, newest first,
        grouped by day (今天 · 昨天 · the day before). 「我搜「X」」 — 捞回 N 条 · 看是哪几条
        (searches X again here) or 没捞到; 「你说「X」」 — 递卡：<the memory>（<what became of
@@ -28,7 +28,7 @@
    ========================================================== */
 
 import * as api from "../api.js";
-import { h, group, row, tip, pagedList, footPager, LONG_PAGE, clock, clickable, pick, whenPick } from "../ui.js";
+import { h, group, row, tip, pagedList, footPager, clock, clickable, pick, whenPick } from "../ui.js";
 import { go } from "../router.js";
 import { openDetail } from "../detail.js";
 
@@ -171,7 +171,6 @@ async function renderTimeline(view) {
       }
       return days.map((d) => group(dayLabel(d.day, today), {}, h("div", null, d.rows)));
     },
-    limit: LONG_PAGE,
   });
   if (!list.total) return;
   list.el.classList.add("grouped");
@@ -204,7 +203,6 @@ async function renderResults(view, gates) {
       return out.rows || { items: [], total: 0 };
     },
     item: resultRow,
-    limit: LONG_PAGE,
   });
   // Only words typed are matched one way or another; filters alone just list.
   const head = gates.query ? h("p", { class: "why lead" }, "每条下面写着它是怎么被找到的", tip(TIP_HOW)) : null;

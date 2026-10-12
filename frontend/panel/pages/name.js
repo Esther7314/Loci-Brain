@@ -26,7 +26,7 @@
    ========================================================== */
 
 import * as api from "../api.js";
-import { h, fill, subbar, row, tip, note, pagedList, footPager, LONG_PAGE, btn, errorLine } from "../ui.js";
+import { h, fill, subbar, row, tip, note, pagedList, footPager, btn, errorLine } from "../ui.js";
 import { href, refresh } from "../router.js";
 import { openDetail } from "../detail.js";
 import { openNameCard, kindLabel, kindsOf, KIND_PERSON } from "../namecard.js";
@@ -69,7 +69,6 @@ async function renderNames(view, route) {
       open: () => openNameCard(it.name),
       right: h("span", { class: "r", text: `出现 ${it.n} 次` }),
     }),
-    limit: LONG_PAGE,
   });
   if (!list.total) return;
   view.append(h("main", { class: "sections" },
@@ -211,7 +210,6 @@ async function renderPending(view) {
   const list = await pagedList({
     load: (q) => api.get("/api/loci/names/pending", q),
     item: (it) => pendingRow(it, ctx),
-    limit: LONG_PAGE,
   });
   await known;
   count.textContent = `${list.total} 个 · 认完就离开这页`;

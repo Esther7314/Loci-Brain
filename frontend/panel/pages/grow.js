@@ -2,7 +2,7 @@
    pages/grow.js — what was written today, the slices waiting to be written, and the
    prompt cards behind 设置
 
-   #/grow           (board grow) GET /api/loci/grow/today, LONG_PAGE to a page with the
+   #/grow           (board grow) GET /api/loci/grow/today, paged with the
                     ‹ › line at the page's foot, as surface has it: the memories written
                     since today began (the server cuts "today" at the last daily report,
                     else at local midnight), newest first; each row its title, its human
@@ -27,7 +27,7 @@
    ========================================================== */
 
 import * as api from "../api.js";
-import { h, fill, subbar, row, note, pagedList, footPager, LONG_PAGE, clock, clickable, promptCard, errorLine } from "../ui.js";
+import { h, fill, subbar, row, note, pagedList, footPager, clock, clickable, promptCard, errorLine } from "../ui.js";
 import { href } from "../router.js";
 import { openDetail, openSliceSource } from "../detail.js";
 
@@ -71,7 +71,6 @@ async function renderToday(view) {
   view.append(subbar({ tabs: tabs("today"), aside: settingsLink() }));
   const list = await pagedList({
     load: (q) => api.get("/api/loci/grow/today", q),
-    limit: LONG_PAGE,
     item: (it) => row({
       text: it.text,
       why: (it.tags_human || []).map((t) => t.text),

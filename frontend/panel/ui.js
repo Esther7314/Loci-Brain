@@ -232,7 +232,10 @@ export function errorLine(err) {
 
 // ---------------------------------------------------------------- paging
 
-/** A list read one page at a time (`limit` to a page, 5 unless the page asks for more),
+/** How many rows a paged list shows at a time, unless the page asks otherwise. */
+export const PAGE = 15;
+
+/** A list read one page at a time (`limit` to a page, PAGE unless the page says so),
  *  with ‹ 1 / N › under it.
  *
  *  `load(query)` reads one page: query is {offset, limit, as_of}; it returns the reply
@@ -246,7 +249,7 @@ export function errorLine(err) {
  *  only, the ‹ › line is left out. `nav` is that line: a page may move it elsewhere (surface
  *  puts it at the page's foot) and it keeps working. `again()` reads the page shown once more, as of now —
  *  after a write took a row off it (one page back when that one is now empty). */
-export async function pagedList({ load, item, items, limit = 5 }) {
+export async function pagedList({ load, item, items, limit = PAGE }) {
   const rows = h("div", { class: "rows" });
   const status = h("span", { class: "why" });
   const prev = h("button", { class: "pg", type: "button", "aria-label": "上一页" }, "‹");
@@ -293,12 +296,9 @@ export async function pagedList({ load, item, items, limit = 5 }) {
   };
 }
 
-/** A page that is one long list (surface, grow, recall, regrow/fold, name): this many
- *  rows to a page, and the ‹ › line at the page's foot (footPager). */
-export const LONG_PAGE = 15;
-
-/** Put a paged list's ‹ › line at the foot of the page: `view` is the page's outlet,
- *  `list` what pagedList resolved to. Called after the list is on the page. */
+/** Put a paged list's ‹ › line at the foot of the page, for a page that is one long
+ *  list (surface, grow, recall, regrow/fold, name): `view` is the page's outlet, `list`
+ *  what pagedList resolved to. Called after the list is on the page. */
 export function footPager(view, list) {
   view.classList.add("fill");
   list.nav.classList.add("end");
