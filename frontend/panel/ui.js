@@ -295,10 +295,11 @@ export async function pagedList({ load, item, items, limit = 5 }) {
 
 // ---------------------------------------------------------------- controls
 
-/** A pill button. `dark` is the main action (black, white words); `quiet` a greyed one. */
-export function btn(label, { dark = false, quiet = false, onClick, type = "button" } = {}) {
+/** A pill button. `dark` is the main action (black, white words); `quiet` a greyed one;
+ *  `badge` her small glass pill (a prompt card's 恢复默认 · 保存). */
+export function btn(label, { dark = false, quiet = false, badge = false, onClick, type = "button" } = {}) {
   return h("button", {
-    class: `btn${dark ? " dark" : ""}${quiet ? " quiet" : ""}`, type,
+    class: `btn${badge ? " badge" : ""}${dark ? " dark" : ""}${quiet ? " quiet" : ""}`, type,
     on: onClick ? { click: onClick } : null,
   }, label);
 }
@@ -331,36 +332,44 @@ export function num(attrs = {}) {
   return h("input", { class: "num", inputmode: "decimal", ...attrs });
 }
 
-/** A prompt card (grow, dream, present's 高级设置): its title, 「改过 <day>」 when it was
- *  rewritten, the prompt in a box the full width, the server's 不建议改 lines as they
- *  come, and 恢复默认 · 保存 under the box. `card` is one item of GET /api/loci/prompts:
- *  {key, text, default, edited, changed, changed_at, notes[]}; `title` and `label` the
- *  board's words for it, `changedWords(day)` its 改过 line. `onSave(text)` and
- *  `onReset()` write; while one runs both buttons wait, and a failure shows the server's
- *  words under them. `extra` goes after the buttons (dream's 样文). */
-export function promptCard({ title, card, label, onSave, onReset, changedWords = (day) => `改过 ${day}`, extra }) {
+/** A prompt card (grow's 设置, dream's and present's 高级设置; her frame grow——设置): its
+ *  title — `no`, a page's 01 02 …, in front of it, 「改过 <day>」 after it when it was
+ *  rewritten — the prompt in a sunken box the full width, and under the box the server's
+ *  不建议改 lines as they come with 恢复默认 · 保存 at their right (under them on the
+ *  phone). `card` is one item of GET /api/loci/prompts: {key, text, default, edited,
+ *  changed, changed_at, notes[]}; `title` and `label` the board's words for it,
+ *  `changedWords(day)` its 改过 line. `onSave(text)` and `onReset()` write; while one runs
+ *  both buttons wait, and a failure shows the server's words under them. `extra` goes
+ *  after the buttons (dream's 样文, grow's 切片结果样例). `off`: the card of something
+ *  not connected — the box and both buttons are there and do nothing. */
+export function promptCard({ title, no, card, label, onSave, onReset, changedWords = (day) => `改过 ${day}`, extra, off = false }) {
   const id = `prompt-${card.key}`;
-  const area = h("textarea", { class: "prompt", id, rows: "11" });
+  const area = h("textarea", { class: "prompt", id, spellcheck: "false", disabled: off });
   area.value = card.text ?? "";
   const status = h("div");
   const changed = card.edited && card.changed ? changedWords(card.changed) : "";
-  const notes = (card.notes || []).map((n) => h("p", { class: "why", style: { margin: "12px 0 0" }, text: n }));
-  const reset = btn("恢复默认");
-  const keep = btn("保存", { dark: true });
+  const reset = btn("恢复默认", { badge: true });
+  const keep = btn("保存", { badge: true, dark: true });
+  reset.disabled = keep.disabled = off;
   const run = (fn) => async () => {
     fill(status);
     reset.disabled = keep.disabled = true;
     try { await fn(); } catch (e) { fill(status, errorLine(e)); }
     reset.disabled = keep.disabled = false;
   };
-  reset.addEventListener("click", run(() => onReset()));
-  keep.addEventListener("click", run(() => onSave(area.value)));
-  return h("div", null,
-    h("h3", { class: "st", style: { marginBottom: "6px" }, text: title }),
-    changed ? h("p", { class: "why", style: { margin: "0 0 12px" }, text: changed }) : null,
+  if (!off) {
+    reset.addEventListener("click", run(() => onReset()));
+    keep.addEventListener("click", run(() => onSave(area.value)));
+  }
+  return h("div", { class: "pcard" },
+    h("div", { class: "phead" },
+      h("h3", { class: "pt" }, no ? h("span", { class: "sn", text: no }) : null, title),
+      changed ? h("span", { class: "why", text: changed }) : null),
     h("label", { for: id, class: "sr", text: label || title }),
-    area, notes,
-    h("div", { class: "acts", style: { marginTop: "20px" } }, reset, keep),
+    area,
+    h("div", { class: "pfoot" },
+      h("div", { class: "pnotes" }, (card.notes || []).map((n) => h("p", { class: "why", text: n }))),
+      h("div", { class: "acts" }, reset, keep)),
     status,
     extra || null);
 }

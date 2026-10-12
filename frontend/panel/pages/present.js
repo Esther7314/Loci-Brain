@@ -761,11 +761,8 @@ async function renderPresent(view) {
 }
 
 /** One prompt card, not connected: its title, the box, 恢复默认 / 保存 under it, all off. */
-function offCard(title) {
-  return h("div", null,
-    h("h3", { class: "st", style: { margin: "0 0 12px" }, text: title }),
-    off(h("textarea", { class: "prompt", rows: "9", "aria-label": title })),
-    h("div", { class: "acts end", style: { marginTop: "20px" } }, off(btn("恢复默认")), off(btn("保存", { dark: true }))));
+function offCard(key) {
+  return promptCard({ title: PROMPT_TITLES[key], card: { key, text: "" }, off: true });
 }
 
 /** One prompt card, connected: drawn again from each reply's `item`. */
@@ -794,7 +791,7 @@ async function renderSettings(view) {
     h("main", { class: "sections" },
       group("提示词", {}, live
         ? out.items.map(liveCard)
-        : [offCard(PROMPT_TITLES.compress), offCard(PROMPT_TITLES.report), offCard(PROMPT_TITLES.wake)]))]);
+        : [offCard("compress"), offCard("report"), offCard("wake")]))]);
 }
 
 export default {

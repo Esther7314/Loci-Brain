@@ -8,7 +8,10 @@ rewrite per library. The code that calls the side model asks `current(key)` and 
 rewrite when there is one, the shipped text otherwise; nothing else holds a copy.
 
     backfill  core/dehydrator.BACKFILL_PROMPT — the one call that fills a new entry's
-              blanks (grow's 高级设置). `{kinds}` is replaced per call.
+              blanks (grow's 设置). `{kinds}` is replaced per call.
+    slicer    core/_slicer.SLICER_PROMPT — cutting a day's lines a host handed in into
+              slices (grow's 设置). An import's slicing has its own prompt
+              (core/import_memory.draft_prompt) and is not this one.
     dream     core/_dream.DREAM_PROMPT — weaving a dream (dream's 高级设置).
 
 A rewrite the parser could not read is refused before it is saved (`missing`): every key
@@ -29,7 +32,7 @@ Nothing here goes into the ledger; the panel's 改过 date is the `at` kept with
 
 Adding a prompt is one row in `PROMPTS`.
 
-Exports: BACKFILL · DREAM · PROMPTS · Prompt · FILE · TEXT_MAX
+Exports: BACKFILL · SLICER · DREAM · PROMPTS · Prompt · FILE · TEXT_MAX
          keys() · default(key) · missing(key, text) · current(key, base_dir)
          card(key, base_dir) · cards(base_dir) · save(key, text, base_dir, now)
          reset(key, base_dir)
@@ -56,6 +59,7 @@ _VERSION = 1
 TEXT_MAX = 20000
 
 BACKFILL = "backfill"
+SLICER = "slicer"
 DREAM = "dream"
 
 
@@ -81,16 +85,26 @@ PROMPTS: dict[str, Prompt] = {
                   '"kind"', '"bound"', '"time"', '"phrase"', '"yearly"', '"absolute"',
                   '"internally_generated"', '"evidential"', '"cue_phrasings"',
                   '"looks_like_promise"'),
-        note=("不建议改：最后「输出格式」那一段，还有 `{kinds}` 这个占位 —— 程序按这些键名读结果，"
-              "改了名字或删了键，那一格就再也填不上；`{kinds}` 会换成你在面板 name 页用的类别。"),
+        note=("不建议改哦，特别是这一部分：最后「输出格式」那一段，还有 `{kinds}` 这个占位 —— "
+              "程序按这些键名读结果，改了名字或删了键，那一格就再也填不上；"
+              "`{kinds}` 会换成你在面板 name 页用的类别。"),
+    ),
+    SLICER: Prompt(
+        key=SLICER,
+        source="core._slicer:SLICER_PROMPT",
+        # parse_slices reads each slice's from, to and gist (the list bare, or under
+        # "slices").
+        required=('"from"', '"to"', '"gist"'),
+        note=("不建议改哦，特别是这一部分：最后「只输出 JSON」那一行 —— 程序靠 \"from\"、\"to\"、"
+              "\"gist\" 这三个名字读每一片从第几行到第几行、在讲什么，改了名字，这一天就切不出来。"),
     ),
     DREAM: Prompt(
         key=DREAM,
         source="core._dream:DREAM_PROMPT",
         # parse_dream reads 完整 碎片 v a, and 线索 for the thread candidates.
         required=('"完整"', '"碎片"', '"v"', '"a"', '"线索"'),
-        note=("不建议改：最后「只返回 JSON」那一行 —— 程序靠「完整」「碎片」「v」「a」「线索」"
-              "这几个名字拆出梦的全文、碎片、情绪和线索，改了名字，梦就存不进去。"),
+        note=("不建议改哦，特别是这一部分：最后「只返回 JSON」那一行 —— 程序靠「完整」「碎片」"
+              "「v」「a」「线索」这几个名字拆出梦的全文、碎片、情绪和线索，改了名字，梦就存不进去。"),
     ),
 }
 

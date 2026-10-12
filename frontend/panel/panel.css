@@ -35,6 +35,11 @@
   --rule-strong: rgba(var(--ink-rgb), 0.12); /* above and below the header */
   --edge: rgba(var(--ink-rgb), 0.22);     /* borders of boxes and buttons */
   --grey: rgba(var(--ink-rgb), 0.05);     /* custom-settings boxes, log boxes, a pressed button */
+  --well: rgba(var(--ink-rgb), 0.08);     /* a sunken box: a prompt card's */
+  --mid: rgba(var(--ink-rgb), 0.50);      /* a small link under a card (切片结果样例) */
+  --glass: rgba(240, 237, 232, 0.20);     /* her badge: a small glass pill */
+  --glass-edge: rgba(255, 255, 255, 0.40);
+  --glass-ink: rgba(var(--ink-rgb), 0.55);
   --graphite: #2B2520;                    /* pinned, a switch that is on, the selected cell */
   --klein: #1F3FD6;
   --klein-dark: #7B8FFF;                  /* the blue on a dark ground */
@@ -44,9 +49,10 @@
   --shadow: rgba(var(--ink-rgb), 0.14);
   --wash: rgba(var(--ink-rgb), 0.42);     /* the soft ink-wash behind the content */
 
-  /* ---- type: the four styles of her file ---- */
+  /* ---- type: the styles of her file ---- */
   --font: 'Noto Sans SC', system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
   --title: 500 20px/28px var(--font);     /* Title: group labels, the brand */
+  --lead: 400 16px/26px var(--font);      /* Body: a prompt card's title */
   --body: 400 14px/22px var(--font);      /* Callout: rows, tabs, the recent card */
   --caption: 400 12px/18px var(--font);   /* caption: sub-labels, ids, nav items, small lines */
   --note: 400 10px/18px var(--font);      /* the note under a row */
@@ -407,9 +413,33 @@ input[type=radio], input[type=checkbox] { accent-color: var(--ink); }
 .glw.stack .why { margin: 0; line-height: 1.5; }
 span.lnk { font-size: 13px; }
 
-/* the prompt card's box: the full width, 恢复默认 · 保存 under it */
-.prompt { display: block; width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; font: inherit; font-size: 15px; line-height: 1.7; color: var(--ink); background: var(--raised); resize: vertical; }
-.prompt:focus { outline: none; border-color: var(--edge); }
+/* the prompt card (her frame grow——设置): the numbered title, the prompt in a sunken box
+   the full width, the 不建议改 line under it with 恢复默认 · 保存 at its right */
+.pcards { display: flex; flex-direction: column; gap: var(--s-3); }
+.subbar.tight { padding-bottom: var(--s-5); }
+/* the way back in the tabs' place: < and the page's name */
+.tabs a.back { display: inline-flex; gap: var(--s-3); }
+/* a page's entry to its settings, at the right of the tabs: as dark as the current tab */
+.subbar .aside.enter { font: var(--body); color: var(--ink); }
+.phead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--s-3); margin: 0 0 var(--s-3); }
+.pt { margin: 0; font: var(--lead); color: var(--small); }
+.pt .sn { margin-right: 0.6em; }
+.prompt { display: block; width: 100%; height: 354px; box-sizing: border-box; border: 0; border-radius: 10px; padding: 11px var(--s-4) var(--s-4); font: var(--caption); color: var(--ink); background: var(--well); resize: vertical; }
+.prompt { scrollbar-width: thin; scrollbar-color: var(--edge) transparent; }
+.prompt:focus { outline: 1px solid var(--edge); }
+.prompt:disabled { opacity: 0.5; }
+.pfoot { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2) var(--s-5); min-height: 28px; margin-top: var(--s-2); }
+.pfoot .why { margin: 0; }
+.pfoot .acts { flex-wrap: nowrap; flex-shrink: 0; }
+.btn.badge { height: auto; padding: var(--s-1) 10px; border-color: var(--glass-edge); border-radius: 999px; background: var(--glass); font: var(--caption); color: var(--glass-ink); }
+.btn.badge:hover { color: var(--ink); }
+.btn.badge.dark { background: var(--ink-solid); color: #FFFFFF; }
+/* a small link under a card that unfolds a sample in the same sunken box */
+.plink { display: block; margin-top: var(--s-1); border: 0; background: transparent; padding: 0; font: var(--caption); color: var(--mid); cursor: pointer; }
+.plink:hover, .plink[aria-expanded="true"] { color: var(--ink); }
+.psample { margin-top: var(--s-2); border-radius: 10px; padding: 11px var(--s-4) var(--s-4); background: var(--well); }
+.psample .why { margin: 0 0 var(--s-2); }
+.psample pre { margin: 0; font: var(--caption); color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* recall's search box, 高级搜索 and its room / when / tag */
 .searchhead { padding: 20px 0 40px; }
@@ -435,6 +465,13 @@ span.lnk { font-size: 13px; }
 @media (max-width: 640px) {
   .grouped > .rows { gap: 36px; }
   .grouped > .pager { padding-left: 0; }
+
+  /* the prompt card: the buttons under the 不建议改 line, at the right; the box in a size
+     the phone does not zoom into */
+  .pcards { gap: var(--s-5); }
+  .prompt { height: 50vh; font: var(--lead); }
+  .pfoot { flex-direction: column; align-items: stretch; }
+  .pfoot .acts { justify-content: flex-end; padding: 0; }
 
   .searchhead { padding: 18px 0 28px; }
   .sbar { gap: 10px; }
@@ -518,10 +555,9 @@ select.btn { appearance: none; -webkit-appearance: none; padding-right: 28px; ba
 .how li { margin: 0 0 8px; line-height: 1.7; }
 .how .c { white-space: normal; }
 
-/* present: the report stands in as grey bars; a prompt card's box; the Bark box */
+/* present: the report stands in as grey bars; the Bark box */
 .bar { height: 9px; border-radius: 5px; background: var(--line); }
 .bars { display: flex; flex-direction: column; gap: 10px; padding: 8px 0 4px; }
-.prompt { width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; font: inherit; font-size: 15px; line-height: 1.7; color: var(--ink); resize: vertical; background: var(--raised); }
 .bark { width: 100%; box-sizing: border-box; border: 0; border-radius: 8px; background: var(--grey); padding: 12px 14px; font: inherit; font-size: 15px; line-height: 1.6; color: var(--ink); resize: vertical; }
 .tbtn { border: 0; background: transparent; padding: 0; font: inherit; font-size: 16px; color: var(--ink); cursor: pointer; }
 .tbtn:disabled { opacity: 0.5; cursor: default; }

@@ -109,7 +109,9 @@ from utils import clean_llm_json
 # ============================================================
 
 # Bump whenever SLICER_PROMPT changes what comes back; every batch line records the
-# version it was sliced under.
+# version it was sliced under. This is the shipped text: the owner may rewrite it from
+# grow's 设置, and take_batch takes core/prompts.current("slicer"), which keeps the keys
+# parse_slices reads — so the version names the contract under a rewrite too.
 SLICER_PROMPT_VERSION = 1
 
 SLICER_PROMPT = """你在帮一个记忆系统把一段聊天原文切成几片。每片是一件事、一个话题：连续的几行，从第几行到第几行，再用一句话说这片在讲什么。
@@ -589,6 +591,7 @@ async def take_batch(store, body, *, model: ModelCall,
     are either written before that clearing reaches them or never written at all. A
     revision announced during the slicing is seen there too (`_revision_marks` moved),
     and the gists cut from the old version are dropped with the whole batch."""
+    from . import prompts as _prompts
     from ._source_change import registration_refusal     # lazy: it imports this module
 
     batch = read_batch(body, max_lines=max_lines)
@@ -622,7 +625,10 @@ async def take_batch(store, body, *, model: ModelCall,
         return {line_id: stale.get(line_id, REVISED) for line_id in ids
                 if line_id in stale or moved[line_id] != marks[line_id]}
 
-    slices = await slice_lines(batch["lines"], model=model)
+    base_dir = getattr(store, "base_dir", None)
+    slices = await slice_lines(
+        batch["lines"], model=model,
+        prompt=_prompts.current(_prompts.SLICER, str(base_dir) if base_dir else None))
     guesses = await guess_covering(store, [s.gist for s in slices], batch["day"],
                                    threshold=threshold)
     row, replaced = await store.slices.record_batch(

@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-tests/test_panel_prompts.py — the prompt cards on grow's and dream's 高级设置
+tests/test_panel_prompts.py — the prompt cards on grow's 设置 and dream's 高级设置
 (GET / POST /api/loci/prompts, core/prompts.py).
 
-The owner may rewrite two side-model prompts from the panel: `backfill` (the one call
-that fills a new entry's blanks) and `dream` (weaving). What the side model receives is
-her rewrite when there is one and the shipped text otherwise. A rewrite that lost a piece
-the parser reads — backfill's `{kinds}` or one of its output keys, one of the dream JSON
-line's five keys — is refused with a 400 naming it, and nothing is written. 恢复默认 goes
+The owner may rewrite three side-model prompts from the panel: `backfill` (the one call
+that fills a new entry's blanks), `slicer` (cutting a day's lines into slices) and `dream`
+(weaving). What the side model receives is her rewrite when there is one and the shipped
+text otherwise. A rewrite that lost a piece the parser reads — backfill's `{kinds}` or one
+of its output keys, a slice's from / to / gist, one of the dream JSON line's five keys —
+is refused with a 400 naming it, and nothing is written. 恢复默认 goes
 back to the shipped text. The rewrite lives in `<buckets>/_state/prompts.json` (per
 library, inside the library folder, carried into an empty library by an export package),
 never in the ledger. The write is the panel's alone: a host's credential is refused.
@@ -19,16 +20,20 @@ import pytest
 
 from _panel_kit import make_store, routes, run
 from core import _dream as D
+from core import _slicer as SL
 from core import dehydrator as DH
 from core import export_package as EP
 from core import prompts as P
 from core import runtime as rt
 from tools.grow import _backfill as BF
 
-BACKFILL_NOTE = ("不建议改：最后「输出格式」那一段，还有 `{kinds}` 这个占位 —— 程序按这些键名读结果，"
-                 "改了名字或删了键，那一格就再也填不上；`{kinds}` 会换成你在面板 name 页用的类别。")
-DREAM_NOTE = ("不建议改：最后「只返回 JSON」那一行 —— 程序靠「完整」「碎片」「v」「a」「线索」"
-              "这几个名字拆出梦的全文、碎片、情绪和线索，改了名字，梦就存不进去。")
+BACKFILL_NOTE = ("不建议改哦，特别是这一部分：最后「输出格式」那一段，还有 `{kinds}` 这个占位 —— "
+                 "程序按这些键名读结果，改了名字或删了键，那一格就再也填不上；"
+                 "`{kinds}` 会换成你在面板 name 页用的类别。")
+SLICER_NOTE = ("不建议改哦，特别是这一部分：最后「只输出 JSON」那一行 —— 程序靠 \"from\"、\"to\"、"
+               "\"gist\" 这三个名字读每一片从第几行到第几行、在讲什么，改了名字，这一天就切不出来。")
+DREAM_NOTE = ("不建议改哦，特别是这一部分：最后「只返回 JSON」那一行 —— 程序靠「完整」「碎片」"
+              "「v」「a」「线索」这几个名字拆出梦的全文、碎片、情绪和线索，改了名字，梦就存不进去。")
 
 
 @pytest.fixture
@@ -70,6 +75,23 @@ def _dream_system(monkeypatch) -> str:
     return model.systems[-1]
 
 
+def _slicer_system(store) -> str:
+    systems = []
+
+    async def model(system, user):
+        systems.append(system)
+        return json.dumps({"slices": [{"from": 1, "to": 2, "gist": "约了周六去海边"}]},
+                          ensure_ascii=False)
+    model.model_name = "stub"
+    out = run(SL.take_batch(store, {
+        "source": {"system": "lento", "instance": "home", "container": "thread:t1"},
+        "day": "2026-10-07",
+        "lines": [{"id": "m_1", "text": "周六去海边吗"}, {"id": "m_2", "text": "好，晴天就去"}],
+    }, model=model))
+    assert [s["gist"] for s in out["slices"]] == ["约了周六去海边"]
+    return systems[-1]
+
+
 def _card(call, key):
     out = call("GET", "/api/loci/prompts")
     assert out.status == 200, out.json
@@ -81,16 +103,19 @@ def _card(call, key):
 def test_the_cards_show_the_shipped_text_and_the_approved_notes(panel):
     out = panel["call"]("GET", "/api/loci/prompts")
     assert out.status == 200
-    assert [c["key"] for c in out.json["items"]] == ["backfill", "dream"]
+    assert [c["key"] for c in out.json["items"]] == ["backfill", "slicer", "dream"]
     assert out.json["scope"]
-    backfill, dream = out.json["items"]
+    backfill, slicer, dream = out.json["items"]
     assert backfill == {"key": "backfill", "text": DH.BACKFILL_PROMPT,
                         "default": DH.BACKFILL_PROMPT, "edited": False, "changed": None,
                         "changed_at": None, "notes": [BACKFILL_NOTE]}
+    assert slicer["text"] == slicer["default"] == SL.SLICER_PROMPT
+    assert slicer["notes"] == [SLICER_NOTE] and slicer["edited"] is False
     assert dream["text"] == dream["default"] == D.DREAM_PROMPT
     assert dream["notes"] == [DREAM_NOTE] and dream["edited"] is False
     # The shipped texts pass their own check: nothing is missing from them.
     assert P.missing("backfill", DH.BACKFILL_PROMPT) == []
+    assert P.missing("slicer", SL.SLICER_PROMPT) == []
     assert P.missing("dream", D.DREAM_PROMPT) == []
 
 
@@ -99,6 +124,7 @@ def test_the_cards_show_the_shipped_text_and_the_approved_notes(panel):
 def test_without_a_rewrite_the_side_model_gets_the_shipped_text(panel, monkeypatch):
     assert _backfill_system(monkeypatch) == DH.BACKFILL_PROMPT.replace("{kinds}", "人 / 书")
     assert _dream_system(monkeypatch) == D.DREAM_PROMPT
+    assert _slicer_system(panel["store"]) == SL.SLICER_PROMPT
     assert not panel["file"].exists()
 
 
@@ -124,6 +150,18 @@ def test_a_saved_dream_prompt_is_what_the_weave_receives(panel, monkeypatch):
     assert _backfill_system(monkeypatch) == DH.BACKFILL_PROMPT.replace("{kinds}", "人 / 书")
 
 
+def test_a_saved_slicer_prompt_is_what_a_days_lines_are_cut_with(panel, monkeypatch):
+    mine = SL.SLICER_PROMPT.replace("一片一般 5～40 行", "一片一般 5～20 行")
+    assert mine != SL.SLICER_PROMPT
+    out = panel["call"]("POST", "/api/loci/prompts", body={"key": "slicer", "text": mine})
+    assert out.status == 200 and out.json["item"]["edited"] is True, out.json
+    assert _slicer_system(panel["store"]) == mine
+    # The other prompts are untouched, and 恢复默认 puts the shipped one back.
+    assert _dream_system(monkeypatch) == D.DREAM_PROMPT
+    out = panel["call"]("POST", "/api/loci/prompts", body={"key": "slicer", "reset": True})
+    assert out.status == 200 and out.json["item"]["text"] == SL.SLICER_PROMPT
+
+
 def test_the_rewrite_lives_in_the_librarys_state_and_not_the_ledger(panel):
     ledger = list(panel["store"].ledger_mirror.iter_events())
     mine = D.DREAM_PROMPT + "\n"
@@ -142,6 +180,8 @@ def test_the_rewrite_lives_in_the_librarys_state_and_not_the_ledger(panel):
     ("backfill", "{kinds}", "{kinds}"),
     ("backfill", '"looks_like_promise"', '"looks_like_promise"'),
     ("backfill", '"phrase"', '"phrase"'),
+    ("slicer", '"gist"', '"gist"'),
+    ("slicer", '"from"', '"from"'),
     ("dream", '"线索"', '"线索"'),
     ("dream", '"完整"', '"完整"'),
 ])
@@ -168,7 +208,7 @@ def test_a_refusal_names_every_missing_piece_and_keeps_an_earlier_rewrite(panel)
 
 def test_a_bad_request_is_a_400(panel):
     call = panel["call"]
-    assert call("POST", "/api/loci/prompts", body={"key": "slicer", "text": "x"}).status == 400
+    assert call("POST", "/api/loci/prompts", body={"key": "nosuch", "text": "x"}).status == 400
     assert call("POST", "/api/loci/prompts", body={"key": "dream"}).status == 400
     long = D.DREAM_PROMPT + "。" * P.TEXT_MAX
     assert call("POST", "/api/loci/prompts", body={"key": "dream", "text": long}).status == 400

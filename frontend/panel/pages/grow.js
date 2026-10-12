@@ -1,6 +1,6 @@
 /* ==========================================================
    pages/grow.js — what was written today, the slices waiting to be written, and the
-   prompt card behind 高级设置
+   prompt cards behind 设置
 
    #/grow           (board grow) GET /api/loci/grow/today, paged: the memories written
                     since today began (the server cuts "today" at the last daily report,
@@ -17,19 +17,45 @@
                     看原话 asks `?fetch=1`). A slice whose source is withdrawn, deleted or
                     held shows the API's `source_words` in place of what it says. Read
                     only: the panel never handles a slice for the model.
-   #/grow/settings  (board grow-settings) the side model's tagging prompt (key
-                    `backfill`): GET /api/loci/prompts, POST /api/loci/prompts {key, text}
-                    to save, {key, reset: true} for 恢复默认; the card drawn again from
-                    the reply's `item`, a refusal in the server's words under the buttons.
+   #/grow/settings  (her frame grow——设置) the side model's two prompts, numbered: 01
+                    tagging (key `backfill`), 02 slicing (key `slicer`, with 切片结果样例
+                    under it: what a slicing gives back, folded). GET /api/loci/prompts,
+                    POST /api/loci/prompts {key, text} to save, {key, reset: true} for
+                    恢复默认; a card drawn again from the reply's `item`, a refusal in the
+                    server's words under the buttons.
    ========================================================== */
 
 import * as api from "../api.js";
-import { h, subbar, row, note, pagedList, clock, clickable, promptCard, errorLine } from "../ui.js";
+import { h, fill, subbar, row, note, pagedList, clock, clickable, promptCard, errorLine } from "../ui.js";
 import { href } from "../router.js";
 import { openDetail, openSliceSource } from "../detail.js";
 
 const TIP_SLICES = "每天夜里写日报的时候，副模型把这一天的聊天切成一小段一小段，每段配一句「在说什么」。导入时打的草稿也在这儿。这些还不是记忆，等他有空一段段看，自己决定写不写、怎么写。";
-const PROMPT_KEY = "backfill";
+
+const SAMPLE_NOTE = "副模型交回来的样子（示意）：每片是连续的几行，from、to 是行号，gist 是一句「在讲什么」。「等着写的」里看到的就是这些。";
+const SAMPLE = `{"slices": [
+  {"from": 1, "to": 12, "gist": "阿青说周末想去看海，两个人商量坐哪班车"},
+  {"from": 13, "to": 30, "gist": "阿青讲下午面试被问住的那道题"},
+  {"from": 31, "to": 38, "gist": "约好周三晚上一起看电影"}
+]}`;
+
+/** 切片结果样例 under the slicing card: a link that unfolds the sample. */
+function sliceSample() {
+  const body = h("div", { class: "psample", hidden: true },
+    h("p", { class: "why", text: SAMPLE_NOTE }), h("pre", { text: SAMPLE }));
+  const toggle = h("button", { class: "plink", type: "button", "aria-expanded": "false", text: "切片结果样例" });
+  toggle.addEventListener("click", () => {
+    body.hidden = !body.hidden;
+    toggle.setAttribute("aria-expanded", String(!body.hidden));
+  });
+  return h("div", null, toggle, body);
+}
+
+// The cards of 设置, in the frame's order.
+const CARDS = [
+  { key: "backfill", title: "副模型打标签的提示词" },
+  { key: "slicer", title: "副模型切片的提示词", extra: sliceSample },
+];
 
 function tabs(on) {
   return [
@@ -38,7 +64,7 @@ function tabs(on) {
   ];
 }
 
-const settingsLink = () => h("a", { class: "aside", href: href("grow", "settings"), text: "高级设置" });
+const settingsLink = () => h("a", { class: "aside enter", href: href("grow", "settings"), text: "设置  >" });
 
 async function renderToday(view) {
   view.append(subbar({ tabs: tabs("today"), aside: settingsLink() }));
@@ -96,27 +122,34 @@ async function renderSlices(view) {
 }
 
 async function renderSettings(view) {
-  // The way back and where this is, in the place of the sub-tabs (one node: a list here
-  // would be read as tabs).
-  const here = document.createDocumentFragment();
-  here.append(h("a", { href: href("grow"), text: "‹ grow" }), h("span", { text: "高级设置" }));
-  view.append(subbar({ tabs: here }));
-  const body = h("div", { class: "subs" });
-  view.append(h("main", { class: "sections" },
-    h("section", { class: "grp" }, h("div", { class: "glw" }, h("h2", { class: "gl", text: "提示词" })), body)));
+  // The way back, in the place of the sub-tabs.
+  const bar = subbar({ tabs: h("a", { class: "on back", href: href("grow") },
+    h("span", { "aria-hidden": "true", text: "<" }), "grow") });
+  bar.classList.add("tight");
+  const body = h("main", { class: "pcards" });
+  view.append(bar, body);
 
-  const draw = (card) => body.replaceChildren(promptCard({
-    title: "给副模型打标签的提示词",
-    label: "打标签的提示词",
-    card,
-    onSave: async (text) => draw((await api.post("/api/loci/prompts", { key: PROMPT_KEY, text })).item),
-    onReset: async () => draw((await api.post("/api/loci/prompts", { key: PROMPT_KEY, reset: true })).item),
-  }));
+  let items;
   try {
-    const card = ((await api.get("/api/loci/prompts")).items || []).find((c) => c.key === PROMPT_KEY);
-    if (card) draw(card);
+    items = (await api.get("/api/loci/prompts")).items || [];
   } catch (e) {
-    body.replaceChildren(errorLine(e));
+    body.append(errorLine(e));
+    return;
+  }
+  let n = 0;
+  for (const { key, title, extra } of CARDS) {
+    const card = items.find((c) => c.key === key);
+    if (!card) continue;
+    const no = String(++n).padStart(2, "0");
+    const holder = h("div");
+    const under = extra ? extra() : null;
+    const draw = (c) => fill(holder, promptCard({
+      no, title, card: c, extra: under,
+      onSave: async (text) => draw((await api.post("/api/loci/prompts", { key, text })).item),
+      onReset: async () => draw((await api.post("/api/loci/prompts", { key, reset: true })).item),
+    }));
+    draw(card);
+    body.append(holder);
   }
 }
 
