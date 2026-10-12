@@ -16,7 +16,7 @@ const path = require("node:path");
 const http = require("node:http");
 const fence = require("./network_fence.js");
 
-const { create_own_turn, is_silence, model_refused, loci_name, NOT_HERE, LAST_ROUND, OUT_OF_ROUNDS } = require("../present/own_turn.js");
+const { create_own_turn, is_silence, model_refused, loci_name, NOT_HERE, ONE_LEFT, LAST_ROUND, OUT_OF_ROUNDS } = require("../present/own_turn.js");
 const { create_relay } = require("../relay.js");
 
 const KEY = "sk-own-turn-SENTINEL-7f3a9c";
@@ -229,13 +229,15 @@ test("tool calls on every answer: 6 rounds run on Loci, the 7th is told the roun
   // the 7th request carries the six rounds: assistant tool_calls and their results, in order
   const last = up.got[6].body.messages;
   const results = last.filter((m) => m.role === "tool").map((m) => m.content);
-  assert.deepStrictEqual(results.slice(0, 5), Array(5).fill("〔recall 回来了〕"), "earlier results go back as Loci gave them");
+  assert.deepStrictEqual(results.slice(0, 4), Array(4).fill("〔recall 回来了〕"), "earlier results go back as Loci gave them");
+  assert.strictEqual(results[4], `〔recall 回来了〕\n\n${ONE_LEFT}`, "the round before the last says one is left");
   assert.strictEqual(results[5], `〔recall 回来了〕\n\n${LAST_ROUND}`, "the last round's result says it is the last");
   assert.strictEqual(last.at(-1).tool_call_id, last.at(-2).tool_calls[0].id);
   // the 8th request answers the 7th answer's call without running it
   const asked_again = up.got[7].body.messages;
   assert.strictEqual(asked_again.at(-1).content, OUT_OF_ROUNDS);
   assert.strictEqual(asked_again.at(-1).tool_call_id, asked_again.at(-2).tool_calls[0].id);
+  assert.strictEqual(ONE_LEFT, "〔工具还能再用一轮。〕");
   assert.strictEqual(LAST_ROUND, "〔工具这一轮只能用到这儿，再调不会执行。〕");
   assert.strictEqual(OUT_OF_ROUNDS, "没有执行：这一轮的工具次数用完了。");
   assert.strictEqual(res.usage.prompt_tokens, 800);
@@ -260,6 +262,13 @@ test("a model that spends every round looking still writes: after the refusal it
   up.plan((body, i) => (i <= 6 ? { text: "", calls: [["recall", { query: `q${i}` }]] } : { text: "写好了。" }));
   const res2 = await r.run({ kind: "report", messages: MSG, tools: "loci" });
   assert.deepStrictEqual([res2.outcome, res2.cut, res2.text, res2.calls, res2.tools_refused.length], ["ok", false, "写好了。", 7, 0]);
+
+  // a single allowed round: it is the last, never "one left"
+  up.plan((body, i) => (i === 1 ? { text: "", calls: [["recall", { query: "q" }]] } : { text: "好。" }));
+  const one = runner({ own: { tool_rounds: 1 } });
+  one.remember_owner({ headers: { authorization: `Bearer ${KEY}` }, model: "m" });
+  await one.run({ kind: "report", messages: MSG, tools: "loci" });
+  assert.strictEqual(up.got[1].body.messages.at(-1).content, `〔recall 回来了〕\n\n${LAST_ROUND}`);
 });
 
 test("a tool that is not Loci's gets 「ta 不在」; Loci's in the same answer runs; offered tools go out as given", async () => {

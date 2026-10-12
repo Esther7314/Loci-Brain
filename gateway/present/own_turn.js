@@ -49,9 +49,11 @@
 //     its writes by it (src/core/scope.py parse_turn), so a resent call is not written
 //     twice; reads ignore it.
 //   · any other tool gets a tool result saying it is not available now (NOT_HERE).
-//   · a round = one upstream answer whose tool calls were executed. The last allowed
-//     round's final tool result ends with LAST_ROUND, so he knows before he plans another
-//     look. Tool calls after that are not executed: each gets OUT_OF_ROUNDS as its result
+//   · a round = one upstream answer whose tool calls were executed. He is told where
+//     he stands at the end of a round's final tool result: ONE_LEFT after the round
+//     before the last (what he means to write into Loci has one round to go in — a model
+//     that looks first and writes last otherwise loses the writes), LAST_ROUND after the
+//     last. Tool calls after that are not executed: each gets OUT_OF_ROUNDS as its result
 //     and upstream is asked once more — a model that spent every round looking still gets
 //     to write what the turn was for. If that answer calls tools yet again the run stops
 //     there, `cut: true`, with what was said.
@@ -112,6 +114,7 @@ const NOT_HERE = "ta 不在，这个现在用不了。";
 const LOCI_DOWN = "现在连不上 Loci，这个工具这一轮用不了。";
 const BAD_ARGS = "参数不是一个 JSON 对象，没有执行。";
 const loci_failed = (why) => `Loci 这次没办成：${why}`;
+const ONE_LEFT = "〔工具还能再用一轮。〕";
 const LAST_ROUND = "〔工具这一轮只能用到这儿，再调不会执行。〕";
 const OUT_OF_ROUNDS = "没有执行：这一轮的工具次数用完了。";
 
@@ -551,6 +554,7 @@ function create_own_turn({
         if (signal.aborted) { out = {}; break; }
         rounds += 1;
         if (rounds >= max_rounds) convo.at(-1).content += `\n\n${LAST_ROUND}`;
+        else if (rounds === max_rounds - 1) convo.at(-1).content += `\n\n${ONE_LEFT}`;
       }
     } catch (err) {
       out = signal.aborted ? {} : failure("internal", String(err?.stack || err));
@@ -636,5 +640,5 @@ function create_own_turn({
 
 module.exports = {
   create_own_turn, is_silence, model_refused, loci_name,
-  NOT_HERE, LOCI_DOWN, LAST_ROUND, OUT_OF_ROUNDS, DEFAULT_ALARM_MS, CREDENTIAL_HEADERS, ARRIVAL_ABORTS,
+  NOT_HERE, LOCI_DOWN, ONE_LEFT, LAST_ROUND, OUT_OF_ROUNDS, DEFAULT_ALARM_MS, CREDENTIAL_HEADERS, ARRIVAL_ABORTS,
 };
