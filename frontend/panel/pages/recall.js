@@ -1,7 +1,8 @@
 /* ==========================================================
    pages/recall.js — what was searched and handed over lately, and searching
 
-   One page, no sub-tabs: a search box and 高级搜索 beside it. What is searched lives in
+   One page, no sub-tabs: a search box and 高级搜索 beside it (her two frames RECALL:
+   folded, and open). What is searched lives in
    the address (#/recall?query=看牙&room=EVENT/SELF&when=2026-10&tag=海边), so a search
    can be linked and reloaded.
 
@@ -34,7 +35,9 @@ const TIP_HOW = "字面 = 字对上了。意思相近 = 字不一样，但意思
 const SIDES = { EVENT: ["SELF", "WORLD"], MIND: ["TRAITS", "VIEWS"] };
 const ANY = "—";
 
-const SEARCH_ICON = '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="#8A9096" stroke-width="1.6" aria-hidden="true"><circle cx="8.5" cy="8.5" r="6.5"></circle><path d="M13.5 13.5 18 18" stroke-linecap="round"></path></svg>';
+// Her frame's two icons, drawn in the colour of where they sit.
+const SEARCH_ICON = '<svg width="27" height="26" viewBox="0 0 27 26" fill="currentColor" aria-hidden="true"><path d="M22.5 21.4665L17.6336 16.5999C18.8463 15.2605 19.5926 13.4909 19.5926 11.5462C19.5918 7.38523 16.2067 4 12.0459 4C7.88509 4 4.5 7.38523 4.5 11.5462C4.5 15.7072 7.88509 19.0924 12.0459 19.0924C13.9905 19.0924 15.76 18.3469 17.0994 17.1334L21.9658 22L22.5 21.4665ZM12.0459 18.3378C8.30163 18.3378 5.25459 15.2907 5.25459 11.5462C5.25459 7.80179 8.30163 4.75462 12.0459 4.75462C15.7902 4.75462 18.8372 7.80179 18.8372 11.5462C18.8372 15.2907 15.7909 18.3378 12.0459 18.3378Z"></path></svg>';
+const CHEVRON = '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 7.5 10 12.5 15 7.5"></path></svg>';
 
 // 高级搜索 opened by hand stays open across the page's own re-renders.
 let advOpen = false;
@@ -79,7 +82,7 @@ function dateBox(label, value, onCommit) {
 
 function searchBar(gates, topTags) {
   const input = h("input", { type: "search", placeholder: "搜点什么吧", value: gates.query, enterkeyhint: "search" });
-  const icon = h("span", { style: { display: "inline-flex" } });
+  const icon = h("span", { class: "ico" });
   icon.innerHTML = SEARCH_ICON;
   const form = h("form", { class: "sbar", role: "search" },
     h("label", { class: "sq" }, icon, h("span", { class: "sr", text: "搜记忆" }), input));
@@ -90,6 +93,7 @@ function searchBar(gates, topTags) {
 
   const open = advOpen || filtered(gates);
   const adv = h("button", { class: "adv", type: "button", "aria-expanded": String(open) }, "高级搜索");
+  adv.insertAdjacentHTML("beforeend", CHEVRON);
   form.append(adv);
 
   const apply = (change) => go(addressOf({ ...gates, query: input.value.trim(), ...change }));
@@ -120,7 +124,7 @@ function searchBar(gates, topTags) {
   const tagBox = select("tagbox", "tag", [["", ANY], ...tags.map((t) => [t, t])], gates.tag, (v) => apply({ tag: v }));
 
   const flt = h("div", { class: "flt", role: "group", "aria-label": "高级搜索", hidden: !open },
-    h("div", { class: "fg" }, h("span", { class: "fl", text: "room" }), doorBox, sideBox),
+    h("div", { class: "fg" }, h("span", { class: "fl", text: "Room" }), doorBox, sideBox),
     h("div", { class: "fg" }, h("span", { class: "fl", text: "when" }), yy, mm, dd),
     h("div", { class: "fg" }, h("span", { class: "fl", text: "tag" }), tagBox));
   adv.addEventListener("click", () => {
