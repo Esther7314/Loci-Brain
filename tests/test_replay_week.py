@@ -233,3 +233,30 @@ def test_a_request_whose_caller_left_while_queued_is_not_answered(fx):
         assert stand_in.counts["stubbed"] == 1 and stand_in.counts["abandoned"] == 1
     finally:
         stand_in.stop()
+
+
+def test_settle_waits_out_a_request_in_hand_and_the_quiet_after_it(fx):
+    """The stand-in is not stopped under a call still being answered: settle() comes back
+    only once nothing is in hand and nothing has arrived for the quiet time."""
+    stand_in = R.StandIn(R.turns_of(fx), replies="scripted", key="", model="", upstream="",
+                         stub=True, stub_delay=0.6, listen=0, log=lambda _l: None).start()
+
+    def ask():
+        req = urllib.request.Request(f"http://127.0.0.1:{stand_in.port}/v1/chat/completions",
+                                     method="POST", data=json.dumps(_side("x", "y")).encode(),
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return r.status
+
+    try:
+        caller = threading.Thread(target=ask)
+        caller.start()
+        time.sleep(0.2)
+        assert stand_in.settle(quiet=0.1, limit=0.2) is False, "a request is still in hand"
+        began = time.monotonic()
+        assert stand_in.settle(quiet=0.3, limit=5) is True
+        assert time.monotonic() - began >= 0.4, "the rest of the answer, then the quiet"
+        caller.join()
+        assert stand_in.counts["stubbed"] == 1
+    finally:
+        stand_in.stop()

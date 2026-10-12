@@ -109,6 +109,10 @@ def request_kind(body: dict) -> str:
 
 # Seconds to wait before each retry of a request the upstream answered 429.
 RETRY_WAITS = (5, 15, 30, 60)
+# After the last step: how long the stand-in must sit idle before it is stopped, and
+# how long to wait for that at most (StandIn.settle).
+SETTLE_QUIET = 20.0
+SETTLE_LIMIT = 600.0
 
 _NUMBERED_LINE = re.compile(r"^\[(\d+)\]", re.M)
 _PACK_OPEN, _PACK_CLOSE = "【窗口摘要】", "【/窗口摘要】"
@@ -453,6 +457,9 @@ class StandIn:
     `stub`, answered here too (stub_answer), after `stub_delay` seconds, and nothing is sent
     anywhere. Either way at most `concurrency` are in hand at once, and a request whose
     caller left while it waited for a slot is dropped (counted `abandoned`).
+    settle() waits until nothing is in hand and nothing has arrived for a while: Loci
+    backfills a night's memories after the report is written, and a stand-in stopped under
+    those calls leaves them with stand-in names.
     Logs a request's method, path, status and which way it went — never a header or a body."""
 
     def __init__(self, turns: list[Turn], *, replies: str, upstream: str, key: str, model: str,
@@ -471,6 +478,8 @@ class StandIn:
         self.counts = {"scripted": 0, "forwarded": 0, "stubbed": 0, "abandoned": 0, "refused": 0}
         self.kinds: dict[str, int] = {}      # forwarded, stubbed and abandoned requests by what asked (request_kind)
         self.tally_lock = threading.Lock()
+        self.in_hand = 0                     # requests being answered now
+        self.last_seen = time.monotonic()    # when a request last arrived or was answered
         self.server = ThreadingHTTPServer(("127.0.0.1", listen), self._handler())
         self.server.daemon_threads = True
         self.port = self.server.server_address[1]
@@ -483,6 +492,23 @@ class StandIn:
     def stop(self):
         self.server.shutdown()
         self.server.server_close()
+
+    def _in_hand(self, change: int) -> None:
+        with self.tally_lock:
+            self.in_hand += change
+            self.last_seen = time.monotonic()
+
+    def settle(self, quiet: float = SETTLE_QUIET, limit: float = SETTLE_LIMIT) -> bool:
+        """Wait until no request is in hand and none has come for `quiet` seconds; False
+        when `limit` seconds pass first."""
+        end = time.monotonic() + limit
+        while time.monotonic() < end:
+            with self.tally_lock:
+                still = self.in_hand == 0 and time.monotonic() - self.last_seen >= quiet
+            if still:
+                return True
+            time.sleep(min(0.5, quiet / 4 or 0.01))
+        return False
 
     # -- answering --
 
@@ -566,6 +592,13 @@ class StandIn:
                 return self._json(404, {"error": f"the stand-in has no {path}"})
 
             def do_POST(self):
+                outer._in_hand(+1)
+                try:
+                    return self._post()
+                finally:
+                    outer._in_hand(-1)
+
+            def _post(self):
                 path = self.path.split("?")[0]
                 raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
                 try:
@@ -869,6 +902,9 @@ def replay(fx: dict, handle: dict, args, key: str) -> int:
                 said = gw.chat(args.model, messages, t)
                 messages.append({"role": "assistant", "content": said})
                 print(f"turn {t.index + 1:3d}/{len(turns)}  {t.user_at:%m-%d %H:%M}  {t.user[:18]} → {said[:24]}")
+        print("waiting for the side model's last calls (the night's backfills)")
+        if not stand_in.settle():
+            print(f"  still busy after {SETTLE_LIMIT:g} s; stopping anyway", file=sys.stderr)
     finally:
         stand_in.stop()
     data = handle.get("gateway_data", "")
