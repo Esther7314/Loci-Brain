@@ -16,7 +16,7 @@ const path = require("node:path");
 const http = require("node:http");
 const fence = require("./network_fence.js");
 
-const { create_own_turn, is_silence, model_refused, loci_name, NOT_HERE } = require("../present/own_turn.js");
+const { create_own_turn, is_silence, model_refused, loci_name, NOT_HERE, LAST_ROUND, OUT_OF_ROUNDS } = require("../present/own_turn.js");
 const { create_relay } = require("../relay.js");
 
 const KEY = "sk-own-turn-SENTINEL-7f3a9c";
@@ -205,7 +205,7 @@ test("a request that carried no key still lends: her upstream takes none, and ow
   assert.strictEqual(up.got[0].headers.authorization, undefined);
 });
 
-test("tool calls 7 times in a row: 6 rounds run on Loci, the 7th answer is cut, what was said comes back", async () => {
+test("tool calls on every answer: 6 rounds run on Loci, the 7th is told the rounds are spent, the 8th is cut, what was said comes back", async () => {
   up.plan((body, i) => ({ text: `第${i}次`, calls: [["recall", { query: `q${i}` }]] }));
   const r = runner();
   r.remember_owner({ headers: { authorization: `Bearer ${KEY}` }, model: "m" });
@@ -213,12 +213,13 @@ test("tool calls 7 times in a row: 6 rounds run on Loci, the 7th answer is cut, 
   assert.strictEqual(res.outcome, "ok");
   assert.strictEqual(res.cut, true);
   assert.strictEqual(res.rounds, 6);
-  assert.strictEqual(res.calls, 7);
-  assert.strictEqual(up.got.length, 7, "no 8th request");
-  assert.strictEqual(loci.calls.length, 6, "the 7th answer's tool call is not executed");
+  assert.strictEqual(res.calls, 8);
+  assert.strictEqual(up.got.length, 8, "one more ask after the refusal, no 9th request");
+  assert.strictEqual(loci.calls.length, 6, "nothing past the 6th round is executed");
   assert.deepStrictEqual(res.cut_tools, ["recall"]);
-  assert.strictEqual(res.text, "第7次");
-  assert.strictEqual(res.said.split("\n\n").length, 7);
+  assert.deepStrictEqual(res.tools_refused, ["recall"], "the 7th answer's call, answered without running");
+  assert.strictEqual(res.text, "第8次");
+  assert.strictEqual(res.said.split("\n\n").length, 8);
   assert.deepStrictEqual(res.tools_used, Array(6).fill("recall"));
   assert.deepStrictEqual(loci.calls.map((c) => c.headers["loci-turn"]), [1, 2, 3, 4, 5, 6].map((k) => `wake-0042#${k}`));
   assert.ok(loci.calls.every((c) => c.headers["x-loci-hook-token"] === HOOK));
@@ -227,12 +228,38 @@ test("tool calls 7 times in a row: 6 rounds run on Loci, the 7th answer is cut, 
   assert.deepStrictEqual(up.got[0].body.tools.map((t) => t.function.name), ["recall", "grow"], "tools: \"loci\" offers what Loci lists");
   // the 7th request carries the six rounds: assistant tool_calls and their results, in order
   const last = up.got[6].body.messages;
-  assert.strictEqual(last.filter((m) => m.role === "tool").length, 6);
-  assert.strictEqual(last.at(-1).content, "〔recall 回来了〕");
+  const results = last.filter((m) => m.role === "tool").map((m) => m.content);
+  assert.deepStrictEqual(results.slice(0, 5), Array(5).fill("〔recall 回来了〕"), "earlier results go back as Loci gave them");
+  assert.strictEqual(results[5], `〔recall 回来了〕\n\n${LAST_ROUND}`, "the last round's result says it is the last");
   assert.strictEqual(last.at(-1).tool_call_id, last.at(-2).tool_calls[0].id);
-  assert.strictEqual(res.usage.prompt_tokens, 700);
+  // the 8th request answers the 7th answer's call without running it
+  const asked_again = up.got[7].body.messages;
+  assert.strictEqual(asked_again.at(-1).content, OUT_OF_ROUNDS);
+  assert.strictEqual(asked_again.at(-1).tool_call_id, asked_again.at(-2).tool_calls[0].id);
+  assert.strictEqual(LAST_ROUND, "〔工具这一轮只能用到这儿，再调不会执行。〕");
+  assert.strictEqual(OUT_OF_ROUNDS, "没有执行：这一轮的工具次数用完了。");
+  assert.strictEqual(res.usage.prompt_tokens, 800);
   const [started, result] = lines(r);
   assert.deepStrictEqual([started.phase, result.phase, result.outcome, result.cut, result.rounds], ["started", "result", "ok", true, 6]);
+});
+
+test("a model that spends every round looking still writes: after the refusal its words are the turn's, not cut", async () => {
+  // tools on answers 1-7, words on the 8th
+  up.plan((body, i) => (i <= 7 ? { text: "", calls: [["recall", { query: `q${i}` }], ["recall", { query: `r${i}` }]] } : { text: "今天的日报。" }));
+  const r = runner();
+  r.remember_owner({ headers: { authorization: `Bearer ${KEY}` }, model: "m" });
+  const res = await r.run({ kind: "report", messages: MSG, tools: "loci" });
+  assert.deepStrictEqual([res.outcome, res.cut, res.silent, res.text], ["ok", false, false, "今天的日报。"]);
+  assert.deepStrictEqual([res.rounds, res.calls, loci.calls.length], [6, 8, 12]);
+  assert.deepStrictEqual(res.tools_refused, ["recall", "recall"]);
+  const sixth = up.got[6].body.messages.filter((m) => m.role === "tool").slice(-2).map((m) => m.content);
+  assert.deepStrictEqual(sixth, ["〔recall 回来了〕", `〔recall 回来了〕\n\n${LAST_ROUND}`], "only the round's final result carries the notice");
+  assert.deepStrictEqual(up.got[7].body.messages.slice(-2).map((m) => m.content), [OUT_OF_ROUNDS, OUT_OF_ROUNDS]);
+
+  // words right after the notice: no refusal, no extra request
+  up.plan((body, i) => (i <= 6 ? { text: "", calls: [["recall", { query: `q${i}` }]] } : { text: "写好了。" }));
+  const res2 = await r.run({ kind: "report", messages: MSG, tools: "loci" });
+  assert.deepStrictEqual([res2.outcome, res2.cut, res2.text, res2.calls, res2.tools_refused.length], ["ok", false, "写好了。", 7, 0]);
 });
 
 test("a tool that is not Loci's gets 「ta 不在」; Loci's in the same answer runs; offered tools go out as given", async () => {

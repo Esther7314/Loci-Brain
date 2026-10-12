@@ -49,10 +49,12 @@
 //     its writes by it (src/core/scope.py parse_turn), so a resent call is not written
 //     twice; reads ignore it.
 //   · any other tool gets a tool result saying it is not available now (NOT_HERE).
-//   · a round = one upstream answer whose tool calls were executed. After the last
-//     allowed round upstream is asked once more for its words; if that answer calls
-//     tools again, they are not executed: the run stops there, `cut: true`, with what was
-//     said.
+//   · a round = one upstream answer whose tool calls were executed. The last allowed
+//     round's final tool result ends with LAST_ROUND, so he knows before he plans another
+//     look. Tool calls after that are not executed: each gets OUT_OF_ROUNDS as its result
+//     and upstream is asked once more — a model that spent every round looking still gets
+//     to write what the turn was for. If that answer calls tools yet again the run stops
+//     there, `cut: true`, with what was said.
 //
 // Stopping:
 //   · abort(reason) cancels at once (the upstream request, a Loci call in flight).
@@ -110,6 +112,8 @@ const NOT_HERE = "ta 不在，这个现在用不了。";
 const LOCI_DOWN = "现在连不上 Loci，这个工具这一轮用不了。";
 const BAD_ARGS = "参数不是一个 JSON 对象，没有执行。";
 const loci_failed = (why) => `Loci 这次没办成：${why}`;
+const LAST_ROUND = "〔工具这一轮只能用到这儿，再调不会执行。〕";
+const OUT_OF_ROUNDS = "没有执行：这一轮的工具次数用完了。";
 
 // Transport errors that mean the request never left this machine.
 const UNSENT_CODES = new Set([
@@ -485,6 +489,7 @@ function create_own_turn({
     let model_i = 0;
     let rounds = 0;
     let calls = 0;
+    let told_out = false;   // a tool call past the limit was already answered OUT_OF_ROUNDS
     let out;
 
     const failure = (reason, error) => ({ outcome: state.reached ? "paid" : "unpaid", reason, error: redact(error) });
@@ -522,14 +527,22 @@ function create_own_turn({
         if (split.summary && (split.summary.closed || !summary?.closed)) summary = split.summary;
         if (split.visible) said.push(split.visible);
         if (!got.calls.length) { out = { outcome: "ok", reason: null, text: split.visible, cut: false }; break; }
-        if (rounds >= max_rounds) {
+        if (rounds >= max_rounds && told_out) {
           out = { outcome: "ok", reason: null, text: split.visible, cut: true, cut_tools: got.calls.map((c) => c.name) };
           break;
         }
 
-        const tool_calls = got.calls.map((c, i) => ({ id: c.id || `call_${rounds + 1}_${i + 1}`, type: "function",
+        const tool_calls = got.calls.map((c, i) => ({ id: c.id || `call_${calls}_${i + 1}`, type: "function",
                                                       function: { name: c.name, arguments: c.arguments } }));
         convo.push({ role: "assistant", content: got.text || null, tool_calls });
+        if (rounds >= max_rounds) {
+          for (const tc of tool_calls) {
+            state.tools_refused.push(tc.function.name);
+            convo.push({ role: "tool", tool_call_id: tc.id, content: OUT_OF_ROUNDS });
+          }
+          told_out = true;
+          continue;
+        }
         for (const tc of tool_calls) {
           const content = await run_tool({ name: tc.function.name, arguments: tc.function.arguments }, state, signal);
           if (signal.aborted) break;
@@ -537,6 +550,7 @@ function create_own_turn({
         }
         if (signal.aborted) { out = {}; break; }
         rounds += 1;
+        if (rounds >= max_rounds) convo.at(-1).content += `\n\n${LAST_ROUND}`;
       }
     } catch (err) {
       out = signal.aborted ? {} : failure("internal", String(err?.stack || err));
@@ -583,8 +597,9 @@ function create_own_turn({
    *   silent          text is empty, 【无话】 or "No response requested."
    *   summary         the run's newest summary block, { text, closed }, or null.
    *                   closed: false = it never closed; only a pack may use its text
-   *   cut             stopped at the tool-round limit
-   *   tools_used      Loci tools executed, in order · tools_refused  names answered "not here"
+   *   cut             stopped at the tool-round limit, still calling tools after OUT_OF_ROUNDS
+   *   tools_used      Loci tools executed, in order · tools_refused  names answered without
+   *                   running (not Loci's, bad arguments, Loci down, past the round limit)
    *   usage           summed prompt / completion / total tokens, plus last_prompt_tokens
    */
   function result(r) {
@@ -621,5 +636,5 @@ function create_own_turn({
 
 module.exports = {
   create_own_turn, is_silence, model_refused, loci_name,
-  NOT_HERE, LOCI_DOWN, DEFAULT_ALARM_MS, CREDENTIAL_HEADERS, ARRIVAL_ABORTS,
+  NOT_HERE, LOCI_DOWN, LAST_ROUND, OUT_OF_ROUNDS, DEFAULT_ALARM_MS, CREDENTIAL_HEADERS, ARRIVAL_ABORTS,
 };
