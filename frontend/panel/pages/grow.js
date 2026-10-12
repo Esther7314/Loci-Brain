@@ -2,7 +2,8 @@
    pages/grow.js — what was written today, the slices waiting to be written, and the
    prompt cards behind 设置
 
-   #/grow           (board grow) GET /api/loci/grow/today, paged: the memories written
+   #/grow           (board grow) GET /api/loci/grow/today, TODAY_PAGE to a page with the
+                    ‹ › line at the page's foot, as surface has it: the memories written
                     since today began (the server cuts "today" at the last daily report,
                     else at local midnight), newest first; each row its title, its human
                     tags (tags_human[].text) and the time it was written at the right.
@@ -30,6 +31,7 @@ import { h, fill, subbar, row, note, pagedList, clock, clickable, promptCard, er
 import { href } from "../router.js";
 import { openDetail, openSliceSource } from "../detail.js";
 
+const TODAY_PAGE = 15;
 const TIP_SLICES = "每天夜里写日报的时候，副模型把这一天的聊天切成一小段一小段，每段配一句「在说什么」。导入时打的草稿也在这儿。这些还不是记忆，等他有空一段段看，自己决定写不写、怎么写。";
 
 const SAMPLE_NOTE = "副模型交回来的样子（示意）：每片是连续的几行，from、to 是行号，gist 是一句「在讲什么」。「等着写的」里看到的就是这些。";
@@ -67,9 +69,11 @@ function tabs(on) {
 const settingsLink = () => h("a", { class: "aside enter", href: href("grow", "settings"), text: "设置  >" });
 
 async function renderToday(view) {
+  view.classList.add("fill");
   view.append(subbar({ tabs: tabs("today"), aside: settingsLink() }));
   const list = await pagedList({
     load: (q) => api.get("/api/loci/grow/today", q),
+    limit: TODAY_PAGE,
     item: (it) => row({
       text: it.text,
       why: (it.tags_human || []).map((t) => t.text),
@@ -81,7 +85,8 @@ async function renderToday(view) {
     view.append(note("今天还没写下什么", "empty"));
     return;
   }
-  view.append(h("main", { class: "sections" }, h("section", { "aria-label": "今天" }, list.el)));
+  list.nav.classList.add("end");
+  view.append(h("main", { class: "sections" }, h("section", { "aria-label": "今天" }, list.el)), list.nav);
 }
 
 /** 「第 12–40 行」, when the span's place among the batch's lines is known. */
@@ -111,6 +116,7 @@ function batchGroup(b) {
 }
 
 async function renderSlices(view) {
+  view.classList.add("fill");
   view.append(subbar({ tabs: tabs("slices"), tip: TIP_SLICES, aside: settingsLink() }));
   const list = await pagedList({
     load: (q) => api.get("/api/loci/grow/slices", q),
@@ -118,7 +124,8 @@ async function renderSlices(view) {
   });
   if (!list.total) return;
   list.el.classList.add("grouped", "batches");
-  view.append(h("main", { class: "sections" }, list.el));
+  list.nav.classList.add("end");
+  view.append(h("main", { class: "sections" }, list.el), list.nav);
 }
 
 async function renderSettings(view) {

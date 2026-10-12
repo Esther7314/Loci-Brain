@@ -21,12 +21,13 @@
    高级搜索 (folded until clicked; open while a filter is set): Room — event / mind, and
        the second box follows the first (event: self / world; mind: traits / views);
        When — year, month, day; Tag — the most used, from GET /api/loci/rooms (top_tags).
-       A box with nothing chosen is empty; room and tag open her glass list (ui.js pick).
+       A box with nothing chosen is empty; room and tag open her glass list (ui.js pick),
+       when its three wheels (ui.js whenPick).
    Read only.
    ========================================================== */
 
 import * as api from "../api.js";
-import { h, group, row, tip, pagedList, clock, clickable, pick } from "../ui.js";
+import { h, group, row, tip, pagedList, clock, clickable, pick, whenPick } from "../ui.js";
 import { go } from "../router.js";
 import { openDetail } from "../detail.js";
 
@@ -67,15 +68,6 @@ const filtered = (g) => !!(g.room || g.when || g.tag);
 
 // ---------------------------------------------------------------- the bar
 
-/** One part of `when`: yyyy, mm or dd (also its class, which sizes it). */
-function dateBox(label, value, onCommit) {
-  const el = h("input", { class: `pill ${label}`, inputmode: "numeric", maxlength: label === "yyyy" ? "4" : "2",
-    "aria-label": label, placeholder: label, value });
-  el.addEventListener("change", () => onCommit());
-  el.addEventListener("keydown", (e) => { if (e.key === "Enter") onCommit(); });
-  return el;
-}
-
 function searchBar(gates, topTags) {
   const input = h("input", { type: "search", placeholder: "搜点什么吧", value: gates.query, enterkeyhint: "search" });
   const icon = h("span", { class: "ico" });
@@ -96,34 +88,24 @@ function searchBar(gates, topTags) {
 
   // room: the door, then its side; a side alone means nothing, so it waits for the door.
   const [door = "", side = ""] = gates.room.split("/");
-  const doorBox = pick({ cls: "door", label: "room 类型", options: [ANY, ...Object.keys(SIDES).map((d) => [d, roomWord(d)])],
+  const doorBox = pick({ cls: "pill door", label: "room 类型", options: [ANY, ...Object.keys(SIDES).map((d) => [d, roomWord(d)])],
     value: SIDES[door] ? door : "", onChange: (v) => apply({ room: v }) });
   const sides = SIDES[door] || [];
-  const sideBox = pick({ cls: "side", label: "哪一边", options: [ANY, ...sides.map((s) => [s, roomWord(s)])],
+  const sideBox = pick({ cls: "pill side", label: "哪一边", options: [ANY, ...sides.map((s) => [s, roomWord(s)])],
     value: sides.includes(side) ? side : "", onChange: (v) => apply({ room: v ? `${door}/${v}` : door }),
     disabled: !sides.length });
 
-  // when: year, month, day — as much of it as is filled from the left.
-  const [y = "", m = "", d = ""] = gates.when.split("-");
-  const yy = dateBox("yyyy", y, () => commitWhen());
-  const mm = dateBox("mm", m, () => commitWhen());
-  const dd = dateBox("dd", d, () => commitWhen());
-  function commitWhen() {
-    const parts = [yy.value.trim()];
-    if (parts[0] && mm.value.trim()) parts.push(mm.value.trim().padStart(2, "0"));
-    if (parts[1] && dd.value.trim()) parts.push(dd.value.trim().padStart(2, "0"));
-    const when = parts[0] ? parts.join("-") : "";
-    if (when !== gates.when) apply({ when });
-  }
+  // when: year, month, day on three wheels — as much of it as is set from the left.
+  const whenBox = whenPick({ value: gates.when, onChange: (when) => apply({ when }) });
 
   const tags = (topTags || []).map((t) => t.tag);
   if (gates.tag && !tags.includes(gates.tag)) tags.unshift(gates.tag);
-  const tagBox = pick({ cls: "tagbox", label: "tag", options: [ANY, ...tags.map((t) => [t, t])],
+  const tagBox = pick({ cls: "pill tagbox", label: "tag", options: [ANY, ...tags.map((t) => [t, t])],
     value: gates.tag, onChange: (v) => apply({ tag: v }) });
 
   const flt = h("div", { class: "flt", role: "group", "aria-label": "高级搜索", hidden: !open },
     h("div", { class: "fg" }, h("span", { class: "fl", text: "Room" }), doorBox, sideBox),
-    h("div", { class: "fg" }, h("span", { class: "fl", text: "When" }), yy, mm, dd),
+    h("div", { class: "fg" }, h("span", { class: "fl", text: "When" }), whenBox),
     h("div", { class: "fg" }, h("span", { class: "fl", text: "Tag" }), tagBox));
   adv.addEventListener("click", () => {
     advOpen = flt.hidden;

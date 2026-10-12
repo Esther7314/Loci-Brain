@@ -464,6 +464,8 @@ span.lnk { font-size: 13px; }
 .pill { height: 36px; border: 1px solid var(--rule); border-radius: 99px; background: transparent; font: var(--lead); color: var(--ink); text-align: center; padding: 0 14px; box-sizing: border-box; }
 button.pill { cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 button.pill:disabled { cursor: default; }
+/* what an unchosen box says, in small ink (yyyy, 选一个模型) */
+.ph { color: var(--small); }
 /* a pill that opens a glass list under it (her frame glass-card-example): one row lit,
    the others small-ink; a long list scrolls inside the card. Every row has the lit row's
    height, so lighting one moves nothing; the gap and the card's padding are the frame's
@@ -472,6 +474,18 @@ button.pill:disabled { cursor: default; }
 .pop { position: absolute; z-index: 5; left: -1px; top: calc(100% + var(--s-2)); min-width: calc(100% + 2px); max-height: 326px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--edge) transparent; display: flex; flex-direction: column; gap: 2px; padding: 1px 10px 7px; box-sizing: border-box; border: 1px solid #FFFFFF; border-radius: 24px; background: var(--glass-card); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); box-shadow: var(--glass-drop); }
 .po { flex-shrink: 0; padding: 3px var(--s-3); border-radius: 10px; font: var(--lead); color: var(--small); text-align: center; white-space: nowrap; cursor: pointer; }
 .po.on { background: var(--grey); color: var(--ink); }
+/* a date's three pills and the card of three wheels under them: each wheel under its
+   pill, five rows showing, the middle one lit and the others fading out */
+.whenw { gap: 10px; }
+.pop.wheels { flex-direction: row; gap: 10px; padding: var(--s-2) 0; max-height: none; overflow: hidden; }
+.wheel { height: 160px; padding: 64px 0; box-sizing: border-box; overflow-y: auto; overscroll-behavior: contain; scroll-snap-type: y mandatory; scrollbar-width: none; outline: none; -webkit-mask-image: linear-gradient(transparent, #000 36%, #000 64%, transparent); mask-image: linear-gradient(transparent, #000 36%, #000 64%, transparent); }
+.wheel::-webkit-scrollbar { display: none; }
+.wheel.y { flex: 122 1 0; }
+.wheel.m { flex: 78 1 0; }
+.wheel.d { flex: 65 1 0; }
+.wheel.dim { opacity: 0.35; }
+.wo { height: 32px; margin: 0 6px; border-radius: 10px; font: var(--lead); line-height: 32px; color: var(--small); text-align: center; white-space: nowrap; scroll-snap-align: center; cursor: pointer; }
+.wo.on { background: var(--grey); color: var(--ink); }
 .pill:focus { outline: none; border-color: var(--edge); }
 .pill:disabled { opacity: 0.5; }
 .pill::placeholder { color: var(--small); }
@@ -503,6 +517,10 @@ button.pill:disabled { cursor: default; }
   .fg .fl { width: 48px; margin-right: 0; flex-shrink: 0; }
   .flt .pill { flex: 1; min-width: 0; width: auto; height: 40px; padding: 0 10px; }
   .flt .pickw { flex: 1; min-width: 0; }
+  .whenw { gap: 8px; }
+  .pop.wheels { gap: 8px; }
+  .wheel.y { flex: 1.5 1 0; }
+  .wheel.m, .wheel.d { flex: 1 1 0; }
   .flt .pill.yyyy { flex: 1.5; }
 }
 
@@ -527,10 +545,13 @@ button.pill:disabled { cursor: default; }
    line (`.set`) unless the row is long (`.set.stack`, the control goes under) */
 .item.set .acts, .item.set .r { align-items: center; }
 .item .r.wrap { white-space: normal; overflow-wrap: anywhere; }
-.num:disabled, .inp:disabled, .sw:disabled, .seg button:disabled, .area:disabled, select.btn:disabled { opacity: 0.5; cursor: default; }
+.num:disabled, .inp:disabled, .sw:disabled, .seg button:disabled, .area:disabled, select.btn:disabled, .btn.sel:disabled { opacity: 0.5; cursor: default; }
 .lnk:disabled { opacity: 0.5; cursor: default; text-decoration: none; }
 .acts .lnk { white-space: nowrap; flex-shrink: 0; }
-select.btn { appearance: none; -webkit-appearance: none; padding-right: 28px; background: var(--raised) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23717880'/%3E%3C/svg%3E") no-repeat right 12px center; min-width: 200px; max-width: 100%; text-overflow: ellipsis; }
+select.btn, .btn.sel { appearance: none; -webkit-appearance: none; padding-right: 28px; background: var(--raised) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23717880'/%3E%3C/svg%3E") no-repeat right 12px center; min-width: 200px; max-width: 100%; text-overflow: ellipsis; }
+/* the model box: a button drawn as the select it stands in for, opening the glass list */
+.btn.sel { justify-content: flex-start; overflow: hidden; }
+.pickw:has(> .btn.sel) { max-width: 100%; }
 .hint { display: block; margin-top: 6px; }
 /* a list whose first row carries the rule under the row above it (向量's missing list) */
 .ruled-first .rows > .item:first-child { border-top: 1px solid var(--hair); }

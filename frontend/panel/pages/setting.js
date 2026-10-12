@@ -38,7 +38,7 @@
    ========================================================== */
 
 import * as api from "../api.js";
-import { h, fill, subbar, group, row, tip, btn, sw, inp, num, customBox, errorLine, pagedList, clickable } from "../ui.js";
+import { h, fill, subbar, group, row, tip, btn, sw, inp, num, customBox, errorLine, pagedList, clickable, pick } from "../ui.js";
 import { openDetail } from "../detail.js";
 
 const TIP = {
@@ -134,16 +134,14 @@ function seg(options, value, { label, onChange, disabled = false } = {}) {
 /** The Model drop-down: the configured model, and whatever the list pulled from the
  *  provider adds. */
 function modelPicker(current, label) {
-  const el = h("select", { class: "btn set", "aria-label": label });
+  const el = pick({ cls: "btn set sel", label, value: current || "", placeholder: "选一个模型" });
   function setList(models) {
-    const keep = el.value || current || "";
+    const keep = el.getValue() || current || "";
     const names = [...new Set([keep, ...(models || [])].filter(Boolean))];
-    fill(el, names.length ? names.map((m) => h("option", { value: m, text: m }))
-      : h("option", { value: "", text: "选一个模型" }));
-    el.value = keep;
+    el.setOptions(names.map((m) => [m, m]), keep);
   }
   setList([]);
-  return { el, get value() { return el.value; }, setList };
+  return { el, get value() { return el.getValue(); }, setList };
 }
 
 /** A number from a box, or undefined when it holds none. */

@@ -334,43 +334,50 @@ export function num(attrs = {}) {
 
 let pickSeq = 0;
 
-/** A pill that opens her glass list under it (frame glass-card-example) — in the place of
- *  a native select. `options`: [[value, words]]; the option whose value is "" clears the
- *  choice: it reads —— in the list, and the pill is empty while nothing is chosen. `cls`
- *  sizes the pill, `label` names it for a screen reader, `onChange(value)` is called when
- *  another option is chosen. One row of the list is lit at a time: the chosen one when it
- *  opens, then the one under the pointer or the arrow keys. Enter chooses, Esc and a
- *  click elsewhere close. */
-export function pick({ cls = "", label, options, value = "", onChange, disabled = false }) {
+/** A button that opens her glass list under it (frame glass-card-example) — in the place
+ *  of a native select. `options`: [[value, words]]; an option whose value is "" clears
+ *  the choice: it reads —— in the list. While nothing is chosen the button shows
+ *  `placeholder` in small ink, or nothing. `cls` is the button's class (recall's pills,
+ *  setting's model box), `label` names it for a screen reader, `onChange(value)` is
+ *  called when another option is chosen. One row of the list is lit at a time: the chosen
+ *  one when it opens, then the one under the pointer or the arrow keys. Enter chooses,
+ *  Esc and a click elsewhere close. The node returned also has `getValue()` and
+ *  `setOptions(options, value)` (a list that arrives later). */
+export function pick({ cls = "pill", label, options = [], value = "", onChange, disabled = false, placeholder = "" }) {
   const id = `pick${++pickSeq}`;
-  const wordsOf = (v) => (v === "" ? "" : (options.find(([ov]) => ov === v) || ["", ""])[1]);
-  const pill = h("button", { class: `pill ${cls}`, type: "button", "aria-haspopup": "listbox",
-    "aria-expanded": "false", "aria-controls": id, "aria-label": label, disabled }, wordsOf(value));
+  const button = h("button", { class: cls, type: "button", "aria-haspopup": "listbox",
+    "aria-expanded": "false", "aria-controls": id, "aria-label": label, disabled });
   const list = h("div", { class: "pop", id, role: "listbox", "aria-label": label, hidden: true });
-  const wrap = h("span", { class: "pickw" }, pill, list);
+  const wrap = h("span", { class: "pickw" }, button, list);
+  let rows = [];
   let lit = -1;
 
+  const show = () => {
+    const found = value === "" ? null : options.find(([v]) => v === value);
+    fill(button, found ? found[1] : (placeholder ? h("span", { class: "ph", text: placeholder }) : null));
+  };
   const light = (i) => {
     lit = i;
     rows.forEach((el, n) => el.classList.toggle("on", n === i));
     if (i >= 0) {
-      pill.setAttribute("aria-activedescendant", rows[i].id);
+      button.setAttribute("aria-activedescendant", rows[i].id);
       rows[i].scrollIntoView({ block: "nearest" });
     } else {
-      pill.removeAttribute("aria-activedescendant");
+      button.removeAttribute("aria-activedescendant");
     }
   };
   const outside = (e) => { if (!wrap.contains(e.target)) close(); };
   function open() {
+    if (!rows.length) return;
     list.hidden = false;
-    pill.setAttribute("aria-expanded", "true");
+    button.setAttribute("aria-expanded", "true");
     light(options.findIndex(([v]) => v === value && v !== ""));
     document.addEventListener("pointerdown", outside, true);
   }
   function close() {
     list.hidden = true;
-    pill.setAttribute("aria-expanded", "false");
-    pill.removeAttribute("aria-activedescendant");
+    button.setAttribute("aria-expanded", "false");
+    button.removeAttribute("aria-activedescendant");
     document.removeEventListener("pointerdown", outside, true);
   }
   function choose(i) {
@@ -378,24 +385,31 @@ export function pick({ cls = "", label, options, value = "", onChange, disabled 
     close();
     if (v === value) return;
     value = v;
-    pill.textContent = wordsOf(v);
+    show();
     rows.forEach((el, n) => el.setAttribute("aria-selected", String(n === i)));
     if (onChange) onChange(v);
   }
-  const rows = options.map(([v, words], i) => {
-    const el = h("div", { class: "po", role: "option", id: `${id}-${i}`, "aria-selected": String(v === value) },
-      v === "" ? "——" : words);
-    el.addEventListener("pointermove", () => { if (lit !== i) light(i); });
-    el.addEventListener("click", () => choose(i));
-    return el;
-  });
-  append(list, rows);
+  function setOptions(next, now = value) {
+    close();
+    options = next || [];
+    value = now;
+    rows = options.map(([v, words], i) => {
+      const el = h("div", { class: "po", role: "option", id: `${id}-${i}`, "aria-selected": String(v === value) },
+        v === "" ? "——" : words);
+      el.addEventListener("pointermove", () => { if (lit !== i) light(i); });
+      el.addEventListener("click", () => choose(i));
+      return el;
+    });
+    fill(list, rows);
+    show();
+  }
+  setOptions(options);
 
-  pill.addEventListener("click", () => (list.hidden ? open() : close()));
-  pill.addEventListener("keydown", (e) => {
+  button.addEventListener("click", () => (list.hidden ? open() : close()));
+  button.addEventListener("keydown", (e) => {
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
-      if (list.hidden) { open(); if (lit < 0) light(0); return; }
+      if (list.hidden) { open(); if (lit < 0 && rows.length) light(0); return; }
       const step = e.key === "ArrowDown" ? 1 : -1;
       light(lit < 0 ? 0 : (lit + step + rows.length) % rows.length);
     } else if ((e.key === "Enter" || e.key === " ") && !list.hidden && lit >= 0) {
@@ -406,6 +420,146 @@ export function pick({ cls = "", label, options, value = "", onChange, disabled 
       close();
     } else if (e.key === "Tab") {
       close();
+    }
+  });
+  wrap.getValue = () => value;
+  wrap.setOptions = setOptions;
+  return wrap;
+}
+
+// A wheel row's height, as panel.css draws it (.wo).
+const WHEEL_ROW = 32;
+const WHEEL_FROM = 1970;
+
+/** A date as three pills — yyyy, mm, dd — that open one glass card of three wheels under
+ *  them: turn a wheel (or click a row, or the arrow keys) and the row in the middle is
+ *  the one taken. —— on a wheel leaves that part out, and what is right of it with it: a
+ *  year alone, a year and a month, or a whole day. Closing the card (a click elsewhere,
+ *  Enter) takes what the wheels show; Esc leaves it as it was. `value`: "2026", "2026-10",
+ *  "2026-10-07" or ""; `onChange(value)` when it changed. The years run from five ahead
+ *  down to 1970, —— between next year and this one. */
+export function whenPick({ value = "", onChange }) {
+  const pad = (n) => String(n).padStart(2, "0");
+  const thisYear = new Date().getFullYear();
+  const parts = (v) => { const [y = "", m = "", d = ""] = String(v || "").split("-"); return { y, m: y ? m : "", d: y && m ? d : "" }; };
+  const years = [];
+  for (let y = thisYear + 5; y > thisYear; y--) years.push(String(y));
+  years.push("");
+  for (let y = thisYear; y >= WHEEL_FROM; y--) years.push(String(y));
+  const first = parts(value);
+  if (first.y && !years.includes(first.y)) years.push(first.y);
+  const months = ["", ...Array.from({ length: 12 }, (_, i) => pad(i + 1))];
+  const daysOf = (y, m) => ["", ...Array.from({ length: y && m ? new Date(Number(y), Number(m), 0).getDate() : 31 }, (_, i) => pad(i + 1))];
+
+  const pills = {
+    y: h("button", { class: "pill yyyy", type: "button", "aria-label": "年", "aria-haspopup": "dialog" }),
+    m: h("button", { class: "pill mm", type: "button", "aria-label": "月", "aria-haspopup": "dialog" }),
+    d: h("button", { class: "pill dd", type: "button", "aria-label": "日", "aria-haspopup": "dialog" }),
+  };
+  const HINT = { y: "yyyy", m: "mm", d: "dd" };
+  const card = h("div", { class: "pop wheels", role: "dialog", "aria-label": "选日期", hidden: true });
+  const wrap = h("span", { class: "pickw whenw" }, pills.y, pills.m, pills.d, card);
+
+  function wheel(key, name, values, current) {
+    const el = h("div", { class: `wheel ${key}`, role: "listbox", tabindex: "0", "aria-label": name });
+    const w = { el, values: [], lit: 0 };
+    w.light = (i) => {
+      w.lit = i;
+      [...el.children].forEach((r, n) => { r.classList.toggle("on", n === i); r.setAttribute("aria-selected", String(n === i)); });
+      turned(w);
+    };
+    w.to = (i, smooth = false) => {
+      i = Math.max(0, Math.min(w.values.length - 1, i));
+      el.scrollTo({ top: i * WHEEL_ROW, behavior: smooth ? "smooth" : "auto" });
+      if (!smooth) w.light(i);
+    };
+    w.set = (vals, cur) => {
+      w.values = vals;
+      fill(el, vals.map((v, i) => {
+        const r = h("div", { class: "wo", role: "option" }, v === "" ? "——" : v);
+        r.addEventListener("click", () => w.to(i, true));
+        return r;
+      }));
+      w.to(Math.max(0, vals.indexOf(cur)));
+    };
+    w.value = () => w.values[w.lit] || "";
+    el.addEventListener("scroll", () => {
+      const i = Math.round(el.scrollTop / WHEEL_ROW);
+      if (i !== w.lit && i >= 0 && i < w.values.length) w.light(i);
+    });
+    el.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); w.to(w.lit + (e.key === "ArrowDown" ? 1 : -1), true); }
+    });
+    w.set(values, current);
+    return w;
+  }
+
+  let wheels = null;
+  // A wheel turned: the days follow the month, and a wheel right of a —— is dimmed.
+  function turned(w) {
+    if (!wheels) return;
+    const y = wheels.y.value();
+    const m = y ? wheels.m.value() : "";
+    if (w !== wheels.d) {
+      const days = daysOf(y, m);
+      if (days.length !== wheels.d.values.length) wheels.d.set(days, days[Math.min(wheels.d.lit, days.length - 1)]);
+    }
+    wheels.m.el.classList.toggle("dim", !y);
+    wheels.d.el.classList.toggle("dim", !m);
+  }
+  const taken = () => {
+    const y = wheels.y.value();
+    const m = y ? wheels.m.value() : "";
+    const d = m ? wheels.d.value() : "";
+    return [y, m, d].filter(Boolean).join("-");
+  };
+  const show = () => {
+    const now = parts(value);
+    for (const k of ["y", "m", "d"]) fill(pills[k], now[k] || h("span", { class: "ph", text: HINT[k] }));
+  };
+  const outside = (e) => { if (!wrap.contains(e.target)) close(true); };
+  function open(key) {
+    card.hidden = false;
+    const now = parts(value);
+    wheels.y.to(Math.max(0, wheels.y.values.indexOf(now.y)));
+    wheels.m.to(Math.max(0, wheels.m.values.indexOf(now.m)));
+    wheels.d.set(daysOf(now.y, now.m), now.d);
+    for (const k of ["y", "m", "d"]) pills[k].setAttribute("aria-expanded", "true");
+    document.addEventListener("pointerdown", outside, true);
+    wheels[key].el.focus({ preventScroll: true });
+  }
+  function close(take) {
+    if (card.hidden) return;
+    const next = take ? taken() : value;
+    card.hidden = true;
+    for (const k of ["y", "m", "d"]) pills[k].setAttribute("aria-expanded", "false");
+    document.removeEventListener("pointerdown", outside, true);
+    if (next === value) return;
+    value = next;
+    show();
+    if (onChange) onChange(value);
+  }
+
+  wheels = {
+    y: wheel("y", "年", years, first.y),
+    m: wheel("m", "月", months, first.m),
+    d: wheel("d", "日", daysOf(first.y, first.m), first.d),
+  };
+  append(card, [wheels.y.el, wheels.m.el, wheels.d.el]);
+  turned(wheels.y);
+  show();
+  for (const k of ["y", "m", "d"]) {
+    pills[k].setAttribute("aria-expanded", "false");
+    pills[k].addEventListener("click", () => (card.hidden ? open(k) : close(true)));
+  }
+  card.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); close(true); pills.y.focus(); }
+    else if (e.key === "Escape") { e.preventDefault(); close(false); pills.y.focus(); }
+    else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      const order = ["y", "m", "d"];
+      const at = order.findIndex((k) => wheels[k].el === document.activeElement);
+      const to = order[at + (e.key === "ArrowRight" ? 1 : -1)];
+      if (to) { e.preventDefault(); wheels[to].el.focus({ preventScroll: true }); }
     }
   });
   return wrap;
