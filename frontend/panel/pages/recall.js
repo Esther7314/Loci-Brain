@@ -18,9 +18,10 @@
        (字面 · 意思相近) and its score, 「+ N 条派生」 for the other hits of its root; its
        date at the right (first under the line on the phone). Filters alone, no words:
        the same lines without how or score. Nothing found: 没捞到.
-   高级搜索 (folded until clicked; open while a filter is set): room — event / mind, and
+   高级搜索 (folded until clicked; open while a filter is set): Room — event / mind, and
        the second box follows the first (event: self / world; mind: traits / views);
-       when — year, month, day; tag — the most used, from GET /api/loci/rooms (top_tags).
+       When — year, month, day; Tag — the most used, from GET /api/loci/rooms (top_tags).
+       A box with nothing chosen is empty.
    Read only.
    ========================================================== */
 
@@ -33,7 +34,8 @@ const TIP_HOW = "字面 = 字对上了。意思相近 = 字不一样，但意思
 
 // The four rooms, as two boxes: the door, then the side the door has.
 const SIDES = { EVENT: ["SELF", "WORLD"], MIND: ["TRAITS", "VIEWS"] };
-const ANY = "—";
+// Nothing chosen: the pill stays empty.
+const ANY = "";
 
 // Her frame's two icons, drawn in the colour of where they sit.
 const SEARCH_ICON = '<svg width="27" height="26" viewBox="0 0 27 26" fill="currentColor" aria-hidden="true"><path d="M22.5 21.4665L17.6336 16.5999C18.8463 15.2605 19.5926 13.4909 19.5926 11.5462C19.5918 7.38523 16.2067 4 12.0459 4C7.88509 4 4.5 7.38523 4.5 11.5462C4.5 15.7072 7.88509 19.0924 12.0459 19.0924C13.9905 19.0924 15.76 18.3469 17.0994 17.1334L21.9658 22L22.5 21.4665ZM12.0459 18.3378C8.30163 18.3378 5.25459 15.2907 5.25459 11.5462C5.25459 7.80179 8.30163 4.75462 12.0459 4.75462C15.7902 4.75462 18.8372 7.80179 18.8372 11.5462C18.8372 15.2907 15.7909 18.3378 12.0459 18.3378Z"></path></svg>';
@@ -125,8 +127,8 @@ function searchBar(gates, topTags) {
 
   const flt = h("div", { class: "flt", role: "group", "aria-label": "高级搜索", hidden: !open },
     h("div", { class: "fg" }, h("span", { class: "fl", text: "Room" }), doorBox, sideBox),
-    h("div", { class: "fg" }, h("span", { class: "fl", text: "when" }), yy, mm, dd),
-    h("div", { class: "fg" }, h("span", { class: "fl", text: "tag" }), tagBox));
+    h("div", { class: "fg" }, h("span", { class: "fl", text: "When" }), yy, mm, dd),
+    h("div", { class: "fg" }, h("span", { class: "fl", text: "Tag" }), tagBox));
   adv.addEventListener("click", () => {
     advOpen = flt.hidden;
     flt.hidden = !advOpen;

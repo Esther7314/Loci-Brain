@@ -488,7 +488,7 @@ select.pill { -webkit-appearance: none; appearance: none; text-align-last: cente
   .adv { height: 44px; }
   .flt { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 12px; padding-top: 16px; }
   .fg { flex: 0 0 auto; gap: 8px; }
-  .fg .fl { width: 44px; margin-right: 0; flex-shrink: 0; }
+  .fg .fl { width: 48px; margin-right: 0; flex-shrink: 0; }
   .flt .pill { flex: 1; min-width: 0; width: auto; height: 40px; padding: 0 10px; }
   .flt .pill.yyyy { flex: 1.5; }
 }
