@@ -66,7 +66,7 @@
   --s-6: 32px;
   --s-7: 48px;
   --s-8: 64px;
-  --gutter: clamp(32px, 4vw, 96px);       /* the page's side margin: wider on a wide screen */
+  --gutter: clamp(30px, 2.34375vw, 96px); /* the page's side margin: 30px on her 1280 boards, wider with the window */
   --row-pad: var(--s-2);                  /* above and below a row's words */
   --gl-w: 56px;                           /* the group-label column; a page sets its own when it needs more */
   --gl-gap: var(--s-6);                   /* between the group label and its content */
@@ -104,7 +104,7 @@ a:hover { color: var(--ink-solid); }
 
 /* the row under the header: the sub-tabs as a breadcrumb (breath / surface), or a page's
    one line, with the i after it; a page's secondary entry or its date on the right */
-.subbar { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--s-2) var(--s-5); padding: var(--s-5) 0 var(--s-6); }
+.subbar { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--s-2) var(--s-5); padding: var(--s-3) 0 var(--s-6); }
 .tabs { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); font: var(--body); }
 .tabs a { color: var(--small); }
 .tabs a.on { color: var(--ink); }
@@ -428,7 +428,7 @@ span.lnk { font-size: 13px; }
 .prompt { scrollbar-width: thin; scrollbar-color: var(--edge) transparent; }
 .prompt:focus { outline: 1px solid var(--edge); }
 .prompt:disabled { opacity: 0.5; }
-.pfoot { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2) var(--s-5); min-height: 28px; margin-top: var(--s-2); }
+.pfoot { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2) var(--s-3); min-height: 28px; margin-top: var(--s-2); }
 .pfoot .why { margin: 0; }
 .pfoot .acts { flex-wrap: nowrap; flex-shrink: 0; }
 .btn.badge { height: auto; padding: var(--s-1) 10px; border-color: var(--glass-edge); border-radius: 999px; background: var(--glass); font: var(--caption); color: var(--glass-ink); }
