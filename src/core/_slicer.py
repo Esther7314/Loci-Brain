@@ -801,6 +801,17 @@ class PendingSlices:
                         return order[sid.through] - order[sid.id] + 1
             return None
 
+    def said_day(self, sid: _src.SourceId) -> Optional[str]:
+        """The day (YYYY-MM-DD) the host handed this line in under — a run's first line —
+        or None when no batch here holds it or its batch names no day. Of several batches
+        holding it the newest counts."""
+        source = {"system": sid.system, "instance": sid.instance, "container": sid.container}
+        self._fresh()
+        with self._guard:
+            held = [b for b in self._batches.values()
+                    if b["source"] == source and sid.id in b["order"] and b["day"]]
+            return str(max(held, key=lambda b: b["seq"])["day"]) if held else None
+
     def last_report(self, host: Optional[str] = None, *, not_after=None):
         """(moment, host name) of the latest daily report a batch carried (`report_at`),
         read as local time; only `host`'s batches when a name is given, any host's when

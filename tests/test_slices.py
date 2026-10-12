@@ -717,3 +717,12 @@ def test_a_batch_registers_each_lines_revision_under_its_watermark(store):
     clash["lines"] = [{**ln, "revision": "e2"} for ln in clash["lines"]]
     with pytest.raises(SL.BatchError):
         take(store, stub(THREE), b=clash)
+
+
+def test_the_store_says_which_day_a_line_was_said(store):
+    take(store, stub(THREE), b=body(day="2026-10-05"))
+    said = store.slices.said_day
+    assert said(S.SourceId(**SOURCE, id="m_0002")) == "2026-10-05"
+    assert said(S.SourceId(**SOURCE, id="m_0005", through="m_0008")) == "2026-10-05"
+    assert said(S.SourceId(**SOURCE, id="m_9999")) is None, "a line no batch holds"
+    assert said(S.SourceId(**{**SOURCE, "container": "private:V"}, id="m_0002")) is None

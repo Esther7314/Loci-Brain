@@ -291,6 +291,42 @@ def test_no_created_day_means_no_date(backfill):
     assert "when" not in store.meta
 
 
+class SaidOn:
+    """The slice store's one answer the backfill asks for: the day a line was said."""
+
+    def __init__(self, days: dict):
+        self.days = days
+
+    def said_day(self, sid):
+        return self.days.get(sid.id)
+
+
+def sourced(*line_ids, **fields) -> dict:
+    return event(sources=[{"system": "gateway", "instance": "gateway", "container": "thread:t1",
+                           "id": i, "fingerprint": "sha256:" + "0" * 64} for i in line_ids],
+                 **fields)
+
+
+def test_time_words_are_read_against_the_day_the_lines_were_said(backfill, monkeypatch):
+    # the report wrote this entry on the 7th from lines said on the 5th
+    monkeypatch.setattr(DictStore, "slices", SaidOn({"m1": "2026-10-05", "m2": "2026-10-04"}),
+                        raising=False)
+    store, model, _ = backfill(sourced("m1"), {"summary": "s", "time": {"phrase": "今天"}})
+    assert store.meta["when"] == "2026-10-05"
+    assert "原话说在：2026-10-05（星期一）" in model.requests[0][1]
+    assert "存下的那天" not in model.requests[0][1]
+
+    # lines of two days: the later one
+    store, _, _ = backfill(sourced("m2", "m1"), {"summary": "s", "time": {"phrase": "今天"}})
+    assert store.meta["when"] == "2026-10-05"
+
+    # lines no batch holds, and an entry with no lines: the day it was written
+    for meta in (sourced("m9"), event()):
+        store, model, _ = backfill(meta, {"summary": "s", "time": {"phrase": "今天"}})
+        assert store.meta["when"] == "2026-10-07"
+        assert "存下的那天：2026-10-07（星期三）" in model.requests[0][1]
+
+
 def test_the_request_carries_the_local_day_and_what_is_already_there(backfill):
     _, model, _ = backfill(event(direction_of_fit="telic", name="主模型起的名字"), {"summary": "s"})
     system, user = model.requests[0]

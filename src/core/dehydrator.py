@@ -426,17 +426,20 @@ def backfill_kinds() -> tuple[str, ...]:
 
 def backfill_request(content: str, context: dict, kinds=None) -> tuple[str, str]:
     """The (system, user) pair for one backfill call. `context` describes the entry as it
-    is on disk: room, telic, created_day (a date), cue_condition, and `existing` —
+    is on disk: room, telic, created_day (a date), said_day (the day its lines were said,
+    when known: shown in place of the day it was written), cue_condition, and `existing` —
     {slot: value} for the slots the main model already filled, which the model is told
     to leave alone. The system text is the library's prompt (core/prompts: the owner's
     rewrite when there is one, BACKFILL_PROMPT otherwise)."""
     kinds = tuple(kinds or backfill_kinds())
     system = _prompts.current(_prompts.BACKFILL).replace("{kinds}", " / ".join(kinds))
-    day = context.get("created_day")
+    said = context.get("said_day")
+    day = said or context.get("created_day")
     lines = ["【这条记忆】",
              f"房间：{context.get('room') or '（没写）'}"]
     if day is not None:
-        lines.append(f"存下的那天：{day.isoformat()}（星期{_WEEKDAY_NAMES[day.weekday()]}）")
+        label = "原话说在" if said else "存下的那天"
+        lines.append(f"{label}：{day.isoformat()}（星期{_WEEKDAY_NAMES[day.weekday()]}）")
     lines.append(f"想让它发生：{'是' if context.get('telic') else '否'}")
     lines.append(f"在等的事：{context.get('cue_condition') or '（无）'}")
     existing = {k: v for k, v in (context.get("existing") or {}).items() if v}

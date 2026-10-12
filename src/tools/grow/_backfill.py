@@ -198,10 +198,38 @@ def _material_gone(meta: dict) -> str:
     return ""
 
 
+def _said_day(meta: dict) -> date | None:
+    """The day the lines behind the entry were said, when it was written from lines a host
+    handed in by the day (core/_slicer.py); the latest of them when it rests on several
+    days. None for an entry with no such lines."""
+    from core import _sources as _src
+
+    slices = getattr(rt.bucket_mgr, "slices", None)
+    if slices is None:
+        return None
+    days = []
+    for rec in _src.basis_records(meta):
+        try:
+            day = slices.said_day(_src.record_id(rec))
+            if day:
+                days.append(date.fromisoformat(day))
+        except (KeyError, TypeError, ValueError, _src.SourceRecordError):
+            continue
+    return max(days) if days else None
+
+
+def _time_anchor(meta: dict) -> date | None:
+    """The day the entry's time words are read against: the day its lines were said when
+    that is known — the daily report writes its memories the night after, and 「晚上」 in
+    one is that day's evening — otherwise the day the entry was written."""
+    return _said_day(meta) or _dates.local_day(meta.get("created"))
+
+
 def _backfill_context(meta: dict, mind: bool) -> dict:
     """What the side model is told about the entry: its room, whether it is wanted, the
-    day it was written, what it waits on, and the slots already filled, so it does not
-    fill them again (code would not take them anyway)."""
+    day it was written (and the day its lines were said, when known), what it waits on,
+    and the slots already filled, so it does not fill them again (code would not take
+    them anyway)."""
     cue = meta.get("cue") if isinstance(meta.get("cue"), dict) else {}
     existing = {
         "name": "" if _name_is_blank(meta) else meta.get("name"),
@@ -216,6 +244,7 @@ def _backfill_context(meta: dict, mind: bool) -> dict:
     return {"room": str(meta.get("room") or ("MIND" if mind else "EVENT")),
             "telic": is_telic(meta),
             "created_day": _dates.local_day(meta.get("created")),
+            "said_day": _said_day(meta),
             "cue_condition": str(cue.get("condition") or ""),
             "existing": existing}
 
@@ -284,8 +313,8 @@ async def _possibly_same(bucket_id: str, text: str) -> list[str]:
 
 def _time_fill(ans: BackfillAnswer, meta: dict, *, mind: bool, telic: bool,
                today) -> dict:
-    """`when` (and `recurrence`) from the copied time phrase, read against the day the
-    memory was written. Only into an empty `when`; a phrase core/_dates cannot read falls
+    """`when` (and `recurrence`) from the copied time phrase, read against `today`
+    (_time_anchor). Only into an empty `when`; a phrase core/_dates cannot read falls
     back to the model's own date only when that is a real YYYY-MM-DD. A wanted thing's date
     is not before that day and a lived event's is not after it — either would be a misread
     — and a yearly date (a birthday) is this year's occurrence or the date as stated."""
@@ -339,7 +368,7 @@ def _fills_from(ans: BackfillAnswer, meta: dict, *, mind: bool) -> dict:
         if names and not err:
             out["bound"] = names
     out.update(_time_fill(ans, meta, mind=mind, telic=telic,
-                          today=_dates.local_day(meta.get("created"))))
+                          today=_time_anchor(meta)))
     if not mind and ans.internally_generated and not meta.get("internally_generated"):
         out["internally_generated"] = True
     if mind and ans.evidential and not meta.get("evidential"):
