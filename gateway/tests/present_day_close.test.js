@@ -62,7 +62,8 @@ let n = 0;
 const fresh_dir = () => { const d = path.join(root, `d${++n}`); fs.mkdirSync(d, { recursive: true }); return d; };
 
 function kind_of(body) {
-  const last = body?.messages?.[body.messages.length - 1];
+  // the request's own last message: tool rounds appended after it do not change its kind
+  const last = (body?.messages || []).filter((m) => m.role !== "tool" && !m.tool_calls).at(-1);
   const text = typeof last?.content === "string" ? last.content : "";
   if (text.startsWith(REPORT_MARK)) return "report";
   if (text.startsWith(LETTER_MARK)) return "wake";
@@ -70,7 +71,7 @@ function kind_of(body) {
   return "chat";
 }
 
-// ———— fake upstream: plan(body, { kind, i }) → { text, status, error, delay_ms } ————
+// ———— fake upstream: plan(body, { kind, i }) → { text, calls: [name], status, error, delay_ms } ————
 function start_upstream() {
   const got = [];
   let plan = () => ({ text: "嗯。" });
@@ -94,7 +95,9 @@ function start_upstream() {
       const text = String(p.text ?? "");
       const events = [{ choices: [{ index: 0, delta: { role: "assistant" } }] }];
       for (let i = 0; i < text.length; i += 4) events.push({ choices: [{ index: 0, delta: { content: text.slice(i, i + 4) } }] });
-      events.push({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] });
+      (p.calls || []).forEach((name, n) => events.push({ choices: [{ index: 0, delta: { tool_calls: [
+        { index: n, id: `call_${got.length}_${n}`, type: "function", function: { name, arguments: "{}" } }] } }] }));
+      events.push({ choices: [{ index: 0, delta: {}, finish_reason: p.calls?.length ? "tool_calls" : "stop" }] });
       events.push({ choices: [], usage: { prompt_tokens: 900, completion_tokens: 9, total_tokens: 909 } });
       res.writeHead(200, { "Content-Type": "text/event-stream" });
       res.end(events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("") + "data: [DONE]\n\n");
@@ -388,6 +391,24 @@ test("three failed reports in a row: the fourth beat does not try; the whole rea
   assert.strictEqual(g.present.report_now("missing").status, 409, "nothing is missing any more");
 });
 
+test("a report turn that only ever looks is no report: its remarks between tool calls are not written", { timeout: 30000 }, async () => {
+  // tool calls on every answer, one remark on the way, nothing at the end: cut at the round limit
+  up.plan((body, { kind, i }) => (kind === "report" ? { text: i === 2 ? "让我再查一下第 1-4 行。" : "", calls: ["recall"] } : { text: REPLY(i) }));
+  const g = await boot();
+  await day_one(g);
+  await g.beat(at("2026-10-08T04:31:00"));
+  assert.deepStrictEqual(g.reports(), ["2026-10-07.err.json"], "no report file from a remark");
+  const card = JSON.parse(fs.readFileSync(path.join(g.reports_dir, "2026-10-07.err.json"), "utf8"));
+  assert.deepStrictEqual([card.reason, card.failures], ["empty_report", 1]);
+  assert.strictEqual(g.thread().window.no, 1, "no flip without a report");
+
+  // words beside the tool calls and a run that ended by itself: those words are the report
+  up.plan((body, { kind, i }) => (kind === "report" ? (i === 1 ? { text: "写在工具旁边的日报。", calls: ["recall"] } : { text: "" }) : { text: REPLY(i) }));
+  await g.beat(at("2026-10-08T04:32:00"));
+  assert.deepStrictEqual(g.reports(), ["2026-10-07.md"]);
+  assert.strictEqual(fs.readFileSync(path.join(g.reports_dir, "2026-10-07.md"), "utf8"), "写在工具旁边的日报。\n");
+});
+
 test("every_n: the hand-off every night, the report and the flip only on day N", { timeout: 30000 }, async () => {
   up.plan((body, { kind }) => ({ text: kind === "report" ? `日报${up.of("report").length}。` : "嗯。" }));
   const g = await boot({ settings: { compress: { keep_raw: 2 }, report: { flip: "every_n", every_n: 2 } } });
@@ -620,6 +641,18 @@ test("a pack over the window: the oldest lines are dropped until it fits, the pa
   assert.ok(wall && wall.lines_before === 10 && wall.lines_after < 10 && wall.limit === 1000 && wall.actual === 2000);
   assert.strictEqual(logged.at(-1).outcome, "ok");
   assert.ok(logged.at(-1).left_out > 0);
+
+  // a run cut at the tool-round limit: its remarks are no summary; a run that ended by
+  // itself with its words beside the tool calls: they are
+  const looked = pack_rig({ answers: [{ ...OK(""), said: "让我再查一下。", cut: true }] });
+  await looked.packer.request("t_aaaaaa", "forced");
+  await looked.packer.wait_for(["t_aaaaaa"], 5000);
+  assert.strictEqual(looked.thread.window.no, 1, "nothing folded");
+  assert.deepStrictEqual(log_lines(looked.dir).filter((l) => l.event === "pack").map((l) => [l.outcome, l.reason]), [["paid", "empty_summary"]]);
+  const beside = pack_rig({ answers: [{ ...OK(""), said: "写在工具旁边的摘要。", cut: false }] });
+  await beside.packer.request("t_aaaaaa", "forced");
+  await beside.packer.wait_for(["t_aaaaaa"], 5000);
+  assert.strictEqual(beside.thread.window.carry_parts.summary, "写在工具旁边的摘要。");
 
   // no room at all: it fails as before, without a loop
   const tight = pack_rig({ answers: [WALL(10, 100000), OK("不该用到")], lines: 4 });

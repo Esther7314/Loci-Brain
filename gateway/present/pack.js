@@ -268,7 +268,9 @@ function create_packer({
     let reason = res.reason;
     let summary = "";
     if (res.ok) {
-      summary = clean_summary(res.summary?.text) || clean_summary(res.text) || clean_summary(res.said);
+      // a run cut at the tool-round limit never got to the summary: its remarks between
+      // tool calls are not one
+      summary = clean_summary(res.summary?.text) || clean_summary(res.text) || (res.cut ? "" : clean_summary(res.said));
       if (!summary) { outcome = "paid"; reason = "empty_summary"; }
     }
     const now_thread = threads.get(thread_id);

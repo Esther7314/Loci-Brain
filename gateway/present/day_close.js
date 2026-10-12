@@ -712,7 +712,9 @@ function create_day_close({
     }
 
     if (res.outcome === "busy") return { outcome: "busy" };
-    const text = res.ok ? (clean_summary(res.text) || clean_summary(res.said)) : "";
+    // A run cut at the tool-round limit never got to the report: what it said on the way
+    // is remarks between tool calls, and those are not kept as one.
+    const text = res.ok ? (clean_summary(res.text) || (res.cut ? "" : clean_summary(res.said))) : "";
     const finished = clock.now();
     if (res.ok && text && text !== "【无话】") {
       const file = report_file(job.day);
