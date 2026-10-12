@@ -41,6 +41,9 @@
   --glass-edge: rgba(255, 255, 255, 0.40);
   --glass-ink: rgba(var(--ink-rgb), 0.55);
   --lift: 0 4px 4px rgba(0, 0, 0, 0.04);  /* the soft drop under the search box */
+  /* her glass card: a pale see-through ground over a blur, a white edge, a soft drop */
+  --glass-card: linear-gradient(90deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0)), rgba(240, 237, 232, 0.28);
+  --glass-drop: 0 12px 28px -8px rgba(var(--ink-rgb), 0.08);
   --graphite: #2B2520;                    /* pinned, a switch that is on, the selected cell */
   --klein: #1F3FD6;
   --klein-dark: #7B8FFF;                  /* the blue on a dark ground */
@@ -224,9 +227,9 @@ input[type=radio], input[type=checkbox] { accent-color: var(--ink); }
 .scrim { position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column; background: var(--scrim); overflow-y: auto; overscroll-behavior: contain; padding: 48px 16px; box-sizing: border-box; }
 /* the window: her glass card — a pale see-through ground over a blur, a white edge, a soft drop */
 .dlg { position: relative; width: 100%; max-width: 560px; margin: auto; border: 1px solid #FFFFFF; border-radius: 24px; padding: 14px 24px 20px; box-sizing: border-box;
-  background: linear-gradient(90deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0)), rgba(240, 237, 232, 0.28);
+  background: var(--glass-card);
   -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
-  box-shadow: 0 12px 28px -8px rgba(var(--ink-rgb), 0.08); }
+  box-shadow: var(--glass-drop); }
 .dlg:focus { outline: none; }
 .dlg .grab { display: none; }
 .dlg .head { display: flex; align-items: center; gap: 10px; }
@@ -459,7 +462,16 @@ span.lnk { font-size: 13px; }
 .fg { flex: 1 0 0; display: flex; align-items: center; gap: 10px; font: var(--lead); color: var(--small); }
 .fg .fl { margin-right: -2px; }
 .pill { height: 36px; border: 1px solid var(--rule); border-radius: 99px; background: transparent; font: var(--lead); color: var(--ink); text-align: center; padding: 0 14px; box-sizing: border-box; }
-select.pill { -webkit-appearance: none; appearance: none; text-align-last: center; cursor: pointer; }
+button.pill { cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+button.pill:disabled { cursor: default; }
+/* a pill that opens a glass list under it (her frame glass-card-example): one row lit,
+   the others small-ink; a long list scrolls inside the card. Every row has the lit row's
+   height, so lighting one moves nothing; the gap and the card's padding are the frame's
+   less that. */
+.pickw { position: relative; display: inline-flex; }
+.pop { position: absolute; z-index: 5; left: -1px; top: calc(100% + var(--s-2)); min-width: calc(100% + 2px); max-height: 326px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--edge) transparent; display: flex; flex-direction: column; gap: 2px; padding: 1px 10px 7px; box-sizing: border-box; border: 1px solid #FFFFFF; border-radius: 24px; background: var(--glass-card); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); box-shadow: var(--glass-drop); }
+.po { flex-shrink: 0; padding: 3px var(--s-3); border-radius: 10px; font: var(--lead); color: var(--small); text-align: center; white-space: nowrap; cursor: pointer; }
+.po.on { background: var(--grey); color: var(--ink); }
 .pill:focus { outline: none; border-color: var(--edge); }
 .pill:disabled { opacity: 0.5; }
 .pill::placeholder { color: var(--small); }
@@ -490,6 +502,7 @@ select.pill { -webkit-appearance: none; appearance: none; text-align-last: cente
   .fg { flex: 0 0 auto; gap: 8px; }
   .fg .fl { width: 48px; margin-right: 0; flex-shrink: 0; }
   .flt .pill { flex: 1; min-width: 0; width: auto; height: 40px; padding: 0 10px; }
+  .flt .pickw { flex: 1; min-width: 0; }
   .flt .pill.yyyy { flex: 1.5; }
 }
 

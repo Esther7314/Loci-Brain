@@ -21,12 +21,12 @@
    高级搜索 (folded until clicked; open while a filter is set): Room — event / mind, and
        the second box follows the first (event: self / world; mind: traits / views);
        When — year, month, day; Tag — the most used, from GET /api/loci/rooms (top_tags).
-       A box with nothing chosen is empty.
+       A box with nothing chosen is empty; room and tag open her glass list (ui.js pick).
    Read only.
    ========================================================== */
 
 import * as api from "../api.js";
-import { h, group, row, tip, pagedList, clock, clickable } from "../ui.js";
+import { h, group, row, tip, pagedList, clock, clickable, pick } from "../ui.js";
 import { go } from "../router.js";
 import { openDetail } from "../detail.js";
 
@@ -34,8 +34,10 @@ const TIP_HOW = "字面 = 字对上了。意思相近 = 字不一样，但意思
 
 // The four rooms, as two boxes: the door, then the side the door has.
 const SIDES = { EVENT: ["SELF", "WORLD"], MIND: ["TRAITS", "VIEWS"] };
-// Nothing chosen: the pill stays empty.
-const ANY = "";
+// The choice that clears a box (ui.js pick: —— in the list, an empty pill).
+const ANY = ["", ""];
+/** "EVENT" -> "Event", as her list writes a room. */
+const roomWord = (s) => s.charAt(0) + s.slice(1).toLowerCase();
 
 // Her frame's two icons, drawn in the colour of where they sit.
 const SEARCH_ICON = '<svg width="27" height="26" viewBox="0 0 27 26" fill="currentColor" aria-hidden="true"><path d="M22.5 21.4665L17.6336 16.5999C18.8463 15.2605 19.5926 13.4909 19.5926 11.5462C19.5918 7.38523 16.2067 4 12.0459 4C7.88509 4 4.5 7.38523 4.5 11.5462C4.5 15.7072 7.88509 19.0924 12.0459 19.0924C13.9905 19.0924 15.76 18.3469 17.0994 17.1334L21.9658 22L22.5 21.4665ZM12.0459 18.3378C8.30163 18.3378 5.25459 15.2907 5.25459 11.5462C5.25459 7.80179 8.30163 4.75462 12.0459 4.75462C15.7902 4.75462 18.8372 7.80179 18.8372 11.5462C18.8372 15.2907 15.7909 18.3378 12.0459 18.3378Z"></path></svg>';
@@ -64,14 +66,6 @@ function addressOf(gates) {
 const filtered = (g) => !!(g.room || g.when || g.tag);
 
 // ---------------------------------------------------------------- the bar
-
-function select(cls, label, options, value, onChange, disabled = false) {
-  const el = h("select", { class: `pill ${cls}`, "aria-label": label, disabled },
-    options.map(([v, text]) => h("option", { value: v, text })));
-  el.value = value;
-  el.addEventListener("change", () => onChange(el.value));
-  return el;
-}
 
 /** One part of `when`: yyyy, mm or dd (also its class, which sizes it). */
 function dateBox(label, value, onCommit) {
@@ -102,11 +96,12 @@ function searchBar(gates, topTags) {
 
   // room: the door, then its side; a side alone means nothing, so it waits for the door.
   const [door = "", side = ""] = gates.room.split("/");
-  const doorBox = select("door", "room 类型", [["", ANY], ["EVENT", "event"], ["MIND", "mind"]], SIDES[door] ? door : "",
-    (v) => apply({ room: v }));
+  const doorBox = pick({ cls: "door", label: "room 类型", options: [ANY, ...Object.keys(SIDES).map((d) => [d, roomWord(d)])],
+    value: SIDES[door] ? door : "", onChange: (v) => apply({ room: v }) });
   const sides = SIDES[door] || [];
-  const sideBox = select("side", "哪一边", [["", ANY], ...sides.map((s) => [s, s.toLowerCase()])],
-    sides.includes(side) ? side : "", (v) => apply({ room: v ? `${door}/${v}` : door }), !sides.length);
+  const sideBox = pick({ cls: "side", label: "哪一边", options: [ANY, ...sides.map((s) => [s, roomWord(s)])],
+    value: sides.includes(side) ? side : "", onChange: (v) => apply({ room: v ? `${door}/${v}` : door }),
+    disabled: !sides.length });
 
   // when: year, month, day — as much of it as is filled from the left.
   const [y = "", m = "", d = ""] = gates.when.split("-");
@@ -123,7 +118,8 @@ function searchBar(gates, topTags) {
 
   const tags = (topTags || []).map((t) => t.tag);
   if (gates.tag && !tags.includes(gates.tag)) tags.unshift(gates.tag);
-  const tagBox = select("tagbox", "tag", [["", ANY], ...tags.map((t) => [t, t])], gates.tag, (v) => apply({ tag: v }));
+  const tagBox = pick({ cls: "tagbox", label: "tag", options: [ANY, ...tags.map((t) => [t, t])],
+    value: gates.tag, onChange: (v) => apply({ tag: v }) });
 
   const flt = h("div", { class: "flt", role: "group", "aria-label": "高级搜索", hidden: !open },
     h("div", { class: "fg" }, h("span", { class: "fl", text: "Room" }), doorBox, sideBox),

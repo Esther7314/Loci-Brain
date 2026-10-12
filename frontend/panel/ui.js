@@ -332,6 +332,85 @@ export function num(attrs = {}) {
   return h("input", { class: "num", inputmode: "decimal", ...attrs });
 }
 
+let pickSeq = 0;
+
+/** A pill that opens her glass list under it (frame glass-card-example) — in the place of
+ *  a native select. `options`: [[value, words]]; the option whose value is "" clears the
+ *  choice: it reads —— in the list, and the pill is empty while nothing is chosen. `cls`
+ *  sizes the pill, `label` names it for a screen reader, `onChange(value)` is called when
+ *  another option is chosen. One row of the list is lit at a time: the chosen one when it
+ *  opens, then the one under the pointer or the arrow keys. Enter chooses, Esc and a
+ *  click elsewhere close. */
+export function pick({ cls = "", label, options, value = "", onChange, disabled = false }) {
+  const id = `pick${++pickSeq}`;
+  const wordsOf = (v) => (v === "" ? "" : (options.find(([ov]) => ov === v) || ["", ""])[1]);
+  const pill = h("button", { class: `pill ${cls}`, type: "button", "aria-haspopup": "listbox",
+    "aria-expanded": "false", "aria-controls": id, "aria-label": label, disabled }, wordsOf(value));
+  const list = h("div", { class: "pop", id, role: "listbox", "aria-label": label, hidden: true });
+  const wrap = h("span", { class: "pickw" }, pill, list);
+  let lit = -1;
+
+  const light = (i) => {
+    lit = i;
+    rows.forEach((el, n) => el.classList.toggle("on", n === i));
+    if (i >= 0) {
+      pill.setAttribute("aria-activedescendant", rows[i].id);
+      rows[i].scrollIntoView({ block: "nearest" });
+    } else {
+      pill.removeAttribute("aria-activedescendant");
+    }
+  };
+  const outside = (e) => { if (!wrap.contains(e.target)) close(); };
+  function open() {
+    list.hidden = false;
+    pill.setAttribute("aria-expanded", "true");
+    light(options.findIndex(([v]) => v === value && v !== ""));
+    document.addEventListener("pointerdown", outside, true);
+  }
+  function close() {
+    list.hidden = true;
+    pill.setAttribute("aria-expanded", "false");
+    pill.removeAttribute("aria-activedescendant");
+    document.removeEventListener("pointerdown", outside, true);
+  }
+  function choose(i) {
+    const [v] = options[i];
+    close();
+    if (v === value) return;
+    value = v;
+    pill.textContent = wordsOf(v);
+    rows.forEach((el, n) => el.setAttribute("aria-selected", String(n === i)));
+    if (onChange) onChange(v);
+  }
+  const rows = options.map(([v, words], i) => {
+    const el = h("div", { class: "po", role: "option", id: `${id}-${i}`, "aria-selected": String(v === value) },
+      v === "" ? "——" : words);
+    el.addEventListener("pointermove", () => { if (lit !== i) light(i); });
+    el.addEventListener("click", () => choose(i));
+    return el;
+  });
+  append(list, rows);
+
+  pill.addEventListener("click", () => (list.hidden ? open() : close()));
+  pill.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (list.hidden) { open(); if (lit < 0) light(0); return; }
+      const step = e.key === "ArrowDown" ? 1 : -1;
+      light(lit < 0 ? 0 : (lit + step + rows.length) % rows.length);
+    } else if ((e.key === "Enter" || e.key === " ") && !list.hidden && lit >= 0) {
+      e.preventDefault();
+      choose(lit);
+    } else if (e.key === "Escape" && !list.hidden) {
+      e.preventDefault();
+      close();
+    } else if (e.key === "Tab") {
+      close();
+    }
+  });
+  return wrap;
+}
+
 /** A prompt card (grow's 设置, dream's and present's 高级设置; her frame grow——设置): its
  *  title — `no`, a page's 01 02 …, in front of it, 「改过 <day>」 after it when it was
  *  rewritten — the prompt in a sunken box the full width, and under the box the server's
