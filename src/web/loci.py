@@ -213,7 +213,7 @@ reads too (panel_auth.HOST_READ_PATHS); the rest are the panel's alone. Two of t
                                          waiting item due now (EmbeddingOutbox.reconcile +
                                          retry_now; writes the outbox file, not the ledger)
 
-The prompt cards on grow's and dream's 高级设置 (web/loci_prompts.py, core/prompts.py).
+The prompt cards on grow's and dream's 设置 (web/loci_prompts.py, core/prompts.py).
 The POST writes:
 
     GET  /api/loci/prompts            -> each side-model prompt the owner may rewrite
@@ -413,7 +413,7 @@ def register(mcp) -> None:
         _act.api_loci_embedding_backfill)
 
     # ---------------------------------------------------------
-    # The prompt cards on grow's and dream's 高级设置 (web/loci_prompts.py).
+    # The prompt cards on grow's and dream's 设置 (web/loci_prompts.py).
     # ---------------------------------------------------------
     from . import loci_prompts as _prompts
     mcp.custom_route("/api/loci/prompts", methods=["GET"])(_prompts.api_loci_prompts)

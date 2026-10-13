@@ -12,7 +12,7 @@ rewrite when there is one, the shipped text otherwise; nothing else holds a copy
     slicer    core/_slicer.SLICER_PROMPT — cutting a day's lines a host handed in into
               slices (grow's 设置). An import's slicing has its own prompt
               (core/import_memory.draft_prompt) and is not this one.
-    dream     core/_dream.DREAM_PROMPT — weaving a dream (dream's 高级设置).
+    dream     core/_dream.DREAM_PROMPT — weaving a dream (dream's 设置).
 
 A rewrite the parser could not read is refused before it is saved (`missing`): every key
 in `required` has to stay in the text. A saved rewrite that a later version's parser no

@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-tests/test_panel_muse_settings.py — muse's 高级设置: the reminder the panel sets.
+tests/test_panel_muse_settings.py — muse's 设置: the reminder the panel sets.
 
-GET /api/config gives the `muse` reminder as it runs (醒来的时候提一句 · 攒够几团才提 ·
-最老的放了几天才提) with its defaults; POST /api/config takes `muse` like the surfacing
+GET /api/config gives the `muse` reminder as it runs (是否开启自动提醒 · 攒了几团提醒 ·
+最早的那团等几天才能提醒) with its defaults; POST /api/config takes `muse` like the surfacing
 numbers: clamped into range, a value that is not a number skipped, applied live and
-written to config.yaml when persisted. With 醒来的时候提一句 off, the muse count the poke
+written to config.yaml when persisted. With 是否开启自动提醒 off, the muse count the poke
 reads (build_muse_pending) never says it is time.
 """
 
@@ -131,7 +131,7 @@ def _waiting(monkeypatch, n_clusters: int, n_fingers: int, days_old: int = 10) -
 
 
 def test_days_and_thoughts_are_counted_together_against_the_threshold(world, monkeypatch):
-    # Criterion: 「攒够几团才提」 counts 「日子和想法加在一起」 — one day group plus one
+    # Criterion: 「攒了几团提醒」 counts 「日子加想法一起算」 — one day group plus one
     # thought cluster meets the default of two, while either one alone does not.
     from web import loci_dream as L
 

@@ -134,6 +134,22 @@ export function subbar({ tabs, tip: tipText, aside } = {}) {
   return h("div", { class: "subbar" }, left, aside || null);
 }
 
+/** A page's head under the header (her frames muse, Trace, Dream): its line as a title —
+ *  or its sub-tabs, [{label, href, on}], written as large as one — with the i after it,
+ *  `caption` a small line under it, and `aside` at the right (the way into the page's
+ *  settings). */
+export function pagehead({ title, tabs, caption, tip: tipText, aside } = {}) {
+  const top = tabs
+    ? h("div", { class: "nav tabs big" }, tabs.map((t, i) => [
+      i ? h("span", { class: "sep", "aria-hidden": "true", text: "/" }) : null,
+      h("a", { href: t.href, class: t.on ? "on" : null, "aria-current": t.on ? "page" : null, text: t.label }),
+    ]), tipText ? tip(tipText) : null)
+    : h("h1", { class: "pht" }, title, tipText ? tip(tipText) : null);
+  return h("div", { class: "phd" },
+    h("div", null, top, caption ? h("p", { class: "why", text: caption }) : null),
+    aside || null);
+}
+
 // ---------------------------------------------------------------- the i
 
 let tipSeq = 0;
@@ -316,7 +332,7 @@ export function btn(label, { dark = false, quiet = false, badge = false, onClick
   }, label);
 }
 
-/** A switch: graphite when on. `onChange(checked)`. */
+/** A switch (her toggle): dark glass when on, pale when off. `onChange(checked)`. */
 export function sw({ checked = false, label, onChange } = {}) {
   const el = h("button", { class: "sw", type: "button", role: "switch", "aria-checked": String(!!checked), "aria-label": label }, h("span"));
   el.addEventListener("click", () => {
@@ -339,9 +355,63 @@ export function inp(attrs = {}) {
   return h("input", { class: "inp", ...attrs });
 }
 
-/** A small pill number box. */
+/** A small number on a line. */
 export function num(attrs = {}) {
   return h("input", { class: "num", inputmode: "decimal", ...attrs });
+}
+
+/** A number that saves itself: `save(text)` is called when the box is left, or Enter is
+ *  pressed, with something else in it, and resolves to the value as the server keeps it,
+ *  which the box then shows. While it runs the box waits. A refusal marks the box and
+ *  goes to `onError(err)`; `onError(null)` clears it at the next try. Left empty, the box
+ *  takes its value back. */
+export function savingNum({ value, label, save, onError = () => {} }) {
+  let kept = String(value ?? "");
+  const box = num({ value: kept, "aria-label": label });
+  const commit = async () => {
+    const typed = box.value.trim();
+    if (typed === "") { box.value = kept; return; }
+    if (typed === kept) return;
+    onError(null);
+    box.removeAttribute("aria-invalid");
+    box.disabled = true;
+    try {
+      kept = String(await save(typed));
+      box.value = kept;
+    } catch (e) {
+      box.setAttribute("aria-invalid", "true");
+      onError(e);
+    }
+    box.disabled = false;
+  };
+  box.addEventListener("change", commit);
+  box.addEventListener("keydown", (e) => { if (e.key === "Enter") box.blur(); });
+  return box;
+}
+
+/** A numbered block of a settings page (her frames muse——设置, Dream——设置): 「01 提醒设置」
+ *  in small ink with its i, and its rows under it. */
+export function setBlock(no, title, { tip: tipText } = {}, ...children) {
+  return h("section", { class: "sblock" },
+    h("div", { class: "phead" },
+      h("h3", { class: "pt" }, h("span", { class: "sn", text: no }), title),
+      tipText ? tip(tipText) : null),
+    children);
+}
+
+/** A sample under a prompt card (her frame Dream——设置): a small underlined link that
+ *  folds and unfolds a glass card holding it. `note` is a small line above the sample;
+ *  `pre` keeps the sample's own line breaks (a JSON one). */
+export function sampleFold({ label, text, note: noteText, pre = false, open = false }) {
+  const body = h("div", { class: "psample", hidden: !open },
+    noteText ? h("p", { class: "why", text: noteText }) : null,
+    h(pre ? "pre" : "p", { text }));
+  const toggle = h("button", { class: "plink", type: "button", "aria-expanded": String(open), text: label });
+  toggle.addEventListener("click", () => {
+    body.hidden = !body.hidden;
+    toggle.setAttribute("aria-expanded", String(!body.hidden));
+  });
+  return h("div", null, toggle, body);
 }
 
 let pickSeq = 0;
@@ -577,7 +647,7 @@ export function whenPick({ value = "", onChange }) {
   return wrap;
 }
 
-/** A prompt card (grow's 设置, dream's and present's 高级设置; her frame grow——设置): its
+/** A prompt card (grow's and dream's 设置, present's 高级设置; her frames grow——设置, Dream——设置): its
  *  title — `no`, a page's 01 02 …, in front of it, 「改过 <day>」 after it when it was
  *  rewritten — the prompt in a sunken box the full width, and under the box the server's
  *  不建议改 lines as they come with 恢复默认 · 保存 at their right (under them on the
@@ -585,7 +655,7 @@ export function whenPick({ value = "", onChange }) {
  *  changed, changed_at, notes[]}; `title` and `label` the board's words for it,
  *  `changedWords(day)` its 改过 line. `onSave(text)` and `onReset()` write; while one runs
  *  both buttons wait, and a failure shows the server's words under them. `extra` goes
- *  after the buttons (dream's 样文, grow's 切片结果样例). `off`: the card of something
+ *  after the buttons (dream's 梦境结果样例, grow's 切片结果样例). `off`: the card of something
  *  not connected — the box and both buttons are there and do nothing. */
 export function promptCard({ title, no, card, label, onSave, onReset, changedWords = (day) => `改过 ${day}`, extra, off = false }) {
   const id = `prompt-${card.key}`;

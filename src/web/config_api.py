@@ -132,7 +132,7 @@ _DREAM_NUMBERS = (
 # A dream fades to its fragment first, then to its one line (core/_dream.layer_of tests
 # the one-line limits first), so a one-line limit must not come before its fragment one.
 _DREAM_ORDER = (("fragment_minutes", "oneline_minutes"), ("fragment_turns", "oneline_turns"))
-# dream-settings 「提醒」: 醒来的时候递给他. /api/loci/poke reads it
+# dream's 设置, 提醒设置: 是否开启自动提醒. /api/loci/poke reads it
 # (web/loci_dream.build_poke).
 _DREAM_SWITCH = "deliver_on_wake"
 

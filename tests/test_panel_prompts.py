@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-tests/test_panel_prompts.py — the prompt cards on grow's 设置 and dream's 高级设置
+tests/test_panel_prompts.py — the prompt cards on grow's 设置 and dream's 设置
 (GET / POST /api/loci/prompts, core/prompts.py).
 
 The owner may rewrite three side-model prompts from the panel: `backfill` (the one call

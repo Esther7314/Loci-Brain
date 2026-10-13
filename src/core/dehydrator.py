@@ -345,7 +345,7 @@ MERGE_PROMPT = """你是一个信息合并专家。请将旧记忆与新内容�
 #   subjects who or what — people and things (a game, a book, a group), each with a kind.
 #
 # `{kinds}` is filled in per call (see backfill_kinds); everything else is literal JSON.
-# This is the shipped text: the owner may rewrite it from grow's 高级设置, and the call
+# This is the shipped text: the owner may rewrite it from grow's 设置, and the call
 # takes core/prompts.current("backfill"), which keeps `{kinds}` and every key
 # parse_backfill reads.
 BACKFILL_PROMPT = """你是记忆系统的回填器。下面是一条刚存下的记忆：正文是主模型写的，一个字都不能改；你只读这段话，把能从字面上读出来的格子填上。

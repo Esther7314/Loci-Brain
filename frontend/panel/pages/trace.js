@@ -1,34 +1,32 @@
 /* ==========================================================
    pages/trace.js — what still hangs open, and the buttons that close it
 
-   #/trace   (board trace, note n6) GET /api/loci/hanging, two halves each paged on its
-             own: surface (`?part=surface`, awake) and deep (`?part=deep`, asleep). Only
-             what can still be done or withdrawn is here: a promise not closed, a live
-             hold, a cue still waiting. Each row: its title, what it is and why it hangs
-             (答应了的 / 条子 / 线索 · the API's why_words), and its buttons from
-             `actions`:
-               done      做完了   ┐ a promise
-               drop      不做了   ┘
-               withdraw  撤掉     a hold or a cue (a promise waiting on a cue: the cue
-                                  comes off, the promise stays)
-             A button is POST /api/loci/trace {id, action}, the model's own trace road;
-             the half is read again after it, on the same page. A click anywhere else
-             on the row opens the detail window.
+   #/trace        (her frame Trace) the two halves as tabs written as large as a title,
+   #/trace/deep   Surface / Deep, one small line under them. Each tab is GET
+                  /api/loci/hanging `?part=surface` (awake) or `?part=deep` (asleep), paged
+                  with the ‹ › line at the page's foot. Only what can still be done or
+                  withdrawn is here: a promise not closed, a live hold, a cue still waiting.
+                  Each row: its title, what it is and why it hangs (答应了的 / 条子 / 线索 ·
+                  the API's why_words), and its buttons from `actions`:
+                    done      做完了   ┐ a promise
+                    drop      不做了   ┘
+                    withdraw  撤掉     a hold or a cue (a promise waiting on a cue: the
+                                       cue comes off, the promise stays)
+                  A button is POST /api/loci/trace {id, action}, the model's own trace
+                  road; the list is read again after it, on the same page. A click anywhere
+                  else on the row opens the detail window.
    ========================================================== */
 
 import * as api from "../api.js";
-import { h, subbar, group, row, btn, errorLine, fill, pagedList } from "../ui.js";
-import { refresh } from "../router.js";
+import { h, pagehead, row, btn, errorLine, fill, pagedList, footPager } from "../ui.js";
+import { href } from "../router.js";
 import { openDetail } from "../detail.js";
 
-// Two halves share the page: each shows a few rows at a time.
-const HALF_PAGE = 5;
-
-const LINE = "还挂着的事，做完或撤掉就不在这儿了。";
-const TIP = "三种还挂着的：答应了的 = 他答应过、还没做完的。条子 = 他挂着的一张便条，在等某件事发生，到期限自己撤。线索 = 他埋下的一个提醒，等你哪天说到某句话，就把那条记忆递给他。";
+const LINE = "还惦记着的事情，做完的或者撤掉的就不在这儿了。";
+const TIP = "三种还挂着的：答应了的 = 他答应过、还没做完的。条子 = 他挂着的一张便条，在等某件事发生，到期限自己撤。线索 = 他埋下的一个提醒，等你哪天说到某句话，就把那条记忆递给他。Surface 是醒着的，更容易被他注意到；Deep 是沉下去的，还挂着，只是平时不太浮上来。";
 const HALVES = [
-  { part: "surface", label: "surface", tip: "醒着的：更容易被他注意到。" },
-  { part: "deep", label: "deep", tip: "沉下去的：还挂着，只是平时不太浮上来。" },
+  { part: "surface", label: "Surface", tab: "" },
+  { part: "deep", label: "Deep", tab: "deep" },
 ];
 
 // The three kinds as the board names them, and each button's words.
@@ -49,6 +47,7 @@ function hangingRow(it, again) {
   const err = h("span");
   const buttons = (it.actions || []).filter((a) => BUTTON[a]).map((action) => {
     const b = btn(BUTTON[action], {
+      badge: true,
       onClick: async () => {
         for (const x of buttons) x.disabled = true;
         fill(err);
@@ -68,29 +67,24 @@ function hangingRow(it, again) {
     why: whyOf(it),
     open: () => openDetail(it.id),
     right: h("span", { class: "acts" }, buttons, err),
-    layout: "wide",
+    layout: "big",
   });
-}
-
-async function half({ part, label, tip }) {
-  let list = null;
-  // After a button: the same page read again; the half leaves the page when it is empty.
-  const again = async () => {
-    const reply = await list.again();
-    if (!reply.total) await refresh();
-  };
-  list = await pagedList({
-    load: (q) => api.get("/api/loci/hanging", { part, ...q }),
-    item: (it) => hangingRow(it, again),
-    limit: HALF_PAGE,
-  });
-  return list.total ? group(label, { tip }, list.el) : null;
 }
 
 export default {
-  async render(view) {
-    view.append(subbar({ tabs: h("span", { style: { color: "var(--ink)" }, text: LINE }), tip: TIP }));
-    const halves = await Promise.all(HALVES.map(half));
-    view.append(h("main", { class: "sections", style: "--gl-w: 116px" }, halves));
+  async render(view, route) {
+    const here = HALVES.find((x) => x.tab === (route.tab || "")) || HALVES[0];
+    view.append(pagehead({
+      tabs: HALVES.map((x) => ({ label: x.label, href: x.tab ? href("trace", x.tab) : href("trace"), on: x === here })),
+      tip: TIP,
+      caption: LINE,
+    }));
+    const list = await pagedList({
+      load: (q) => api.get("/api/loci/hanging", { part: here.part, ...q }),
+      item: (it) => hangingRow(it, () => list.again()),
+    });
+    if (!list.total) return;
+    view.append(h("main", { class: "sections" }, h("section", { "aria-label": here.label }, list.el)));
+    footPager(view, list);
   },
 };

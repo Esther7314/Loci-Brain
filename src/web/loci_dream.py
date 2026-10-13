@@ -52,10 +52,10 @@ async def build_muse_pending() -> dict:
          "oldest_days": how many days the oldest one has been pending,
          "worth_poking": whether a nudge is warranted}
     `worth_poking` = (clusters and fingers counted together reached `poke_min_clusters`:
-    the panel's 「攒够几团才提」 counts 「日子和想法加在一起」, so one day group and one
+    the panel's 「攒了几团提醒」 counts 「日子加想法一起算」, so one day group and one
     thought cluster make two) **and** (the oldest has been pending for
     `poke_min_age_days`) **and** `poke_on_wake` is on (the panel's
-    「醒来的时候提一句」: off, a host's wake never hears it is time; a poke from the panel
+    「是否开启自动提醒」: off, a host's wake never hears it is time; a poke from the panel
     still reaches the model, core/_nudge.py).
     All three live in the `muse:` section of `config.yaml` and are read live —
     **nothing is hardcoded ahead of time.**
@@ -134,7 +134,7 @@ async def build_poke(query: str = "", when: str = "", room: str = "",
     A dream with an ingredient that may no longer be seen (archived, deleted, put out of
     mind, hung with an avoid hold since) is left out of `dreams` this round —
     `core._dream.withheld_ingredients()`. Left out is a shape the bridge already reads:
-    no dream is the ordinary daytime answer. With the panel's 「醒来的时候递给他」 off
+    no dream is the ordinary daytime answer. With the panel's 「是否开启自动提醒」 off
     (`deliver_on_wake` in config.yaml's `dream:` section) `dreams` is always empty.
 
     `muse_pending`: how many are waiting, thought clusters and day groups together — the
@@ -160,7 +160,7 @@ async def build_poke(query: str = "", when: str = "", room: str = "",
     try:
         c = _D._c()
         now = _D._w.now()
-        # 「醒来的时候递给他」 off: the host's wake is handed no dream, so it neither
+        # 「是否开启自动提醒」 off: the host's wake is handed no dream, so it neither
         # delivers one nor sends the wake signal after it. The dream is left as it is for
         # him to fetch himself (/api/dream/current).
         records = await _D.handable_dreams(_D.load_dreams()) if c["deliver_on_wake"] else []

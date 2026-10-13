@@ -1,42 +1,41 @@
 /* ==========================================================
    pages/muse.js — what is not tidied yet, and muse's reminder
 
-   #/muse           (board muse, note n7) GET /api/loci/muse, two parts each paged on its
-                    own:
+   #/muse           (her frame muse) the page's line and a small one under it, 设置 > at
+                    the right; then GET /api/loci/muse, two parts each paged on its own:
                       日子  `?part=days`: stretches of days that look like one and have no
-                            name — the days, 「N 条 ：<evidence>」, 看是哪几条
+                            name — the days, 「N 条 ：<evidence>」, 看看是哪几条？
                       想法  `?part=clusters`: thoughts that look like one thing —
-                            「有N条想法像一回事」, the evidence, 看是哪几条 / 收起, and the
-                            cluster's 「戳一下」 by its `nudge.state`:
+                            「有N条想法像一回事」, the evidence, 看看是哪几条？ / 收起, and
+                            the cluster's badge by its `nudge.state`:
                               none   戳一下 -> POST /api/loci/muse/nudge {cluster}
                               poked  戳过了   (the next tool reply tells him, once)
-                              seen   他看到了
-                    看是哪几条 unfolds the members under the row, each read through
+                              seen   已送达
+                    看看是哪几条？ unfolds the members under the row, each read through
                     GET /api/loci/bucket/{id} for its title and day, each opening the detail
                     window. The days have no 戳一下: the nudge takes clusters only.
-   #/muse/settings  (board muse-settings) the 提醒 block of GET /api/config `muse`:
-                    醒来的时候提一句 (poke_on_wake) · 攒够几团才提 (poke_min_clusters) ·
-                    最老的放了几天才提 (poke_min_age_days). 保存 is POST /api/config
-                    {persist: true, muse}; 恢复默认 puts the defaults the server gives back
-                    in and saves them.
+   #/muse/settings  (her frame muse——设置) 01 提醒设置, the `muse` block of GET /api/config:
+                    是否开启自动提醒 (poke_on_wake) · 攒了几团提醒 (poke_min_clusters) ·
+                    最早的那团等几天才能提醒 (poke_min_age_days). Each saves itself when it
+                    is changed (POST /api/config {persist: true, muse}); 恢复默认 puts the
+                    defaults the server gives back in and saves them.
    ========================================================== */
 
 import * as api from "../api.js";
-import { h, subbar, group, row, btn, sw, num, errorLine, fill, clickable, pagedList } from "../ui.js";
+import { h, subbar, pagehead, group, row, btn, sw, savingNum, setBlock, errorLine, fill, clickable, pagedList } from "../ui.js";
 import { href } from "../router.js";
 import { openDetail } from "../detail.js";
 
-const LINE = "有些日子、想法还没整理";
+const LINE = "有些日子和想法暂时还没整理";
 const HINT = "如果你看到了，可以戳他一下，下一次调用工具的时候，他会知道的。";
-const SETTINGS = "高级设置";
 const TIPS = {
   days: "有几天的事看着像一段（比如一次出门、一阵子忙），还没被圈起来、起个名字。",
   thoughts: "有几条想法说的像是一回事，还没合成一条概括。",
-  remind: "攒够了、放够久了，自动唤醒的时候跟他提一句「有 N 团还没整理」。只说个数，不说内容，他自己去看。",
+  remind: "攒够了、放够久了，自动唤醒的时候跟他提一句「有 N 团还没整理」。只说个数，不说内容，他自己去看。你在 muse 页上戳一下，就不用等后两条。",
 };
-const SHOW = "看是哪几条";
+const SHOW = "看看是哪几条？";
 const HIDE = "收起";
-const NUDGE = { none: "戳一下", poked: "戳过了", seen: "他看到了" };
+const NUDGE = { none: "戳一下", poked: "戳过了", seen: "已送达" };
 
 // ---------------------------------------------------------------- the page
 
@@ -71,10 +70,10 @@ function memberRow(id) {
   return h("div", { class: "item member" }, txt, day);
 }
 
-/** A group's row, with 看是哪几条 / 收起 unfolding its members right under it. */
+/** A group's row, with 看看是哪几条？ / 收起 unfolding its members right under it. */
 function groupRow({ text, evidence, ids, right }) {
   let shown = [];
-  const toggle = h("span", { class: "lnk", text: SHOW });
+  const toggle = h("span", { class: "ask", text: SHOW });
   let head = null;
   const flip = () => {
     if (shown.length) {
@@ -87,22 +86,26 @@ function groupRow({ text, evidence, ids, right }) {
     head.after(...shown);
     toggle.textContent = HIDE;
   };
-  head = row({ text, why: [evidence, ids.length ? toggle : null], open: ids.length ? flip : null, right });
+  head = row({ text, why: [evidence, ids.length ? toggle : null], open: ids.length ? flip : null, right, layout: "big" });
   return head;
 }
 
+/** A badge that only says where the nudge stands. */
+const said = (state) => h("span", { class: "btn badge quiet", text: NUDGE[state] || NUDGE.poked });
+
 function nudgeButton(it) {
   const state = (it.nudge && it.nudge.state) || "none";
-  if (state !== "none") return h("span", { class: "acts" }, h("span", { class: "btn quiet", text: NUDGE[state] || NUDGE.poked }));
+  if (state !== "none") return h("span", { class: "acts" }, said(state));
   const err = h("span");
   const acts = h("span", { class: "acts" });
   const b = btn(NUDGE.none, {
+    badge: true,
     onClick: async () => {
       b.disabled = true;
       fill(err);
       try {
         const out = await api.post("/api/loci/muse/nudge", { cluster: it.id });
-        fill(acts, h("span", { class: "btn quiet", text: NUDGE[out.state] || NUDGE.poked }));
+        fill(acts, said(out.state));
       } catch (e) {
         b.disabled = false;
         fill(err, errorLine(e));
@@ -117,11 +120,10 @@ function part(name, item) {
 }
 
 async function renderMuse(view) {
-  view.append(subbar({
-    tabs: h("span", { text: LINE }),
-    aside: h("span", { class: "aside", style: "display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 20px" },
-      h("span", { class: "why", text: HINT }),
-      h("a", { href: href("muse", "settings"), text: SETTINGS })),
+  view.append(pagehead({
+    title: LINE,
+    caption: HINT,
+    aside: h("a", { class: "aside enter", href: href("muse", "settings"), text: "设置   >" }),
   }));
   const [days, clusters] = await Promise.all([
     part("days", (it) => groupRow({
@@ -136,55 +138,74 @@ async function renderMuse(view) {
       right: nudgeButton(it),
     })),
   ]);
-  view.append(h("main", { class: "sections", style: "--gl-w: 96px" },
+  view.append(h("main", { class: "sections muse" },
     days.total ? group("日子", { tip: TIPS.days }, days.el) : null,
     clusters.total ? group("想法", { tip: TIPS.thoughts }, clusters.el) : null));
 }
 
-// ---------------------------------------------------------------- 高级设置
+// ---------------------------------------------------------------- 设置
+
+const unit = (text) => h("span", { class: "why", text });
 
 async function renderSettings(view) {
-  view.append(subbar({ tabs: h("span", { style: "display: contents" },
-    h("a", { href: href("muse"), text: "‹ muse" }), h("span", { text: SETTINGS })) }));
-  const body = h("main", { class: "sections" });
-  view.append(body);
+  // The way back, in the place of the sub-tabs.
+  const bar = subbar({ tabs: h("a", { class: "on back", href: href("muse") },
+    h("span", { "aria-hidden": "true", text: "<" }), "muse") });
+  bar.classList.add("tight");
+  const body = h("main", { class: "sets" });
+  view.append(bar, body);
+
+  /** Save some of the block, and read it back as the server keeps it. */
+  const write = async (values) => {
+    await api.post("/api/config", { persist: true, muse: values });
+    return (await api.get("/api/config")).muse;
+  };
 
   const draw = (muse) => {
-    const wake = sw({ checked: !!muse.poke_on_wake, label: "醒来的时候提一句" });
-    const many = num({ value: String(muse.poke_min_clusters), "aria-label": "攒够几团" });
-    const old = num({ value: String(muse.poke_min_age_days), "aria-label": "放了几天" });
     const err = h("div");
-    const save = async (values, buttons) => {
-      for (const b of buttons) b.disabled = true;
-      fill(err);
-      try {
-        await api.post("/api/config", { persist: true, muse: values });
-        const fresh = await api.get("/api/config");
-        draw(fresh.muse);
-      } catch (e) {
-        for (const b of buttons) b.disabled = false;
-        fill(err, errorLine(e));
-      }
-    };
-    const reset = btn("恢复默认");
-    const keep = btn("保存", { dark: true });
-    reset.addEventListener("click", () => save(muse.defaults, [reset, keep]));
-    keep.addEventListener("click", () => save({
-      poke_on_wake: wake.getAttribute("aria-checked") === "true",
-      poke_min_clusters: many.value.trim(),
-      poke_min_age_days: old.value.trim(),
-    }, [reset, keep]));
+    const fail = (e) => fill(err, e ? errorLine(e) : null);
+    const number = (key, label) => savingNum({
+      value: muse[key], label, onError: fail,
+      save: async (v) => (await write({ [key]: v }))[key],
+    });
+    const wake = sw({
+      checked: !!muse.poke_on_wake,
+      label: "是否开启自动提醒",
+      onChange: async (on) => {
+        fail(null);
+        wake.disabled = true;
+        try {
+          await write({ poke_on_wake: on });
+        } catch (e) {
+          wake.setAttribute("aria-checked", String(!on));
+          fail(e);
+        }
+        wake.disabled = false;
+      },
+    });
+    const reset = btn("恢复默认", {
+      badge: true,
+      onClick: async () => {
+        fail(null);
+        reset.disabled = true;
+        try {
+          draw(await write(muse.defaults));
+        } catch (e) {
+          reset.disabled = false;
+          fail(e);
+        }
+      },
+    });
 
-    fill(body, group("提醒", { tip: TIPS.remind }, h("div", null,
-      row({ text: "醒来的时候提一句", why: "没开自动唤醒的话，就只有你戳了他才知道",
-        right: h("span", { class: "acts" }, wake), layout: "set" }),
-      row({ text: "攒够几团才提", why: "日子和想法加在一起",
-        right: h("span", { class: "acts" }, many, h("span", { class: "why", text: "团" })), layout: "set" }),
-      row({ text: "最老的放了几天才提",
-        right: h("span", { class: "acts" }, old, h("span", { class: "why", text: "天" })), layout: "set" }),
-      h("p", { class: "why setnote", text: "你在 muse 页上戳一下，就不用等这两条：他下一次调用工具的时候就会知道。" }),
-      h("div", { class: "acts setacts" }, reset, keep),
-      err)));
+    fill(body, setBlock("01", "提醒设置", { tip: TIPS.remind },
+      row({ text: "是否开启自动提醒", why: "不开的时候，只有你手动戳他，他才会知道。",
+        right: h("span", { class: "acts" }, wake), layout: "big set" }),
+      row({ text: "攒了几团提醒", why: "日子加想法一起算。",
+        right: h("span", { class: "acts nu" }, number("poke_min_clusters", "攒了几团提醒"), unit("团")), layout: "big set" }),
+      row({ text: "最早的那团等几天才能提醒",
+        right: h("span", { class: "acts nu" }, number("poke_min_age_days", "最早的那团等几天才能提醒"), unit("天")), layout: "big set" }),
+      h("div", { class: "acts setacts" }, reset),
+      err));
   };
   draw((await api.get("/api/config")).muse);
 }

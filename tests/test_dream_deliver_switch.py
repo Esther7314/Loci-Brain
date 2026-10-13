@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-tests/test_dream_deliver_switch.py — dream's 高级设置 「提醒」: 醒来的时候递给他.
+tests/test_dream_deliver_switch.py — dream's 设置, 提醒设置: 是否开启自动提醒.
 
 The switch is `deliver_on_wake` in config.yaml's `dream:` section, set through
 /api/config `dream` like the rules beside it, on by default (a woven dream is handed to

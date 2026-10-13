@@ -1,7 +1,8 @@
 /* ==========================================================
    pages/dream.js — the dreams of the last three nights, and the page's settings
 
-   #/dream           (board dream) GET /api/loci/dreams: the panel's own copy of each
+   #/dream           (her frame Dream: the page's line, 设置 > at its right) GET
+                     /api/loci/dreams: the panel's own copy of each
                      dream of the last three natural days, newest first. A night without
                      a dream has no card. One group per dream, its night as the label;
                      the newest is open: its state (with the i), its whole text, and 留下的
@@ -11,23 +12,26 @@
                      「state · 展开」.
                      A dream whose sources were withdrawn shows the API's words for that
                      and no text. Read only.
-   #/dream/settings  (board dream-settings) 提醒 · 提示词 · 规矩.
-                     提醒: 醒来的时候递给他 is /api/config `dream.deliver_on_wake`, saved
-                     the moment it is flipped (POST {persist: true, dream}); a refusal
-                     flips it back and says the server's words.
-                     提示词: the weaving prompt's card (key `dream`): GET /api/loci/prompts,
-                     POST {key, text} to save, {key, reset: true} for 恢复默认, and the
-                     board's 样文 fold under it.
-                     规矩: GET/POST /api/config `dream` (what to weave on, how a dream
-                     fades; its number `defaults` for 恢复默认; the server's words on a
-                     refusal).
+   #/dream/settings  (her frame Dream——设置) four numbered blocks.
+                     01 提醒设置: 是否开启自动提醒 is /api/config `dream.deliver_on_wake`.
+                     02 the weaving prompt's card (key `dream`): GET /api/loci/prompts,
+                     POST {key, text} to save, {key, reset: true} for 恢复默认, and
+                     梦境结果样例 folding under it.
+                     03 梦境设置: the line the heaviest entry must clear (`pressure_line`),
+                     how long a dreamt want is picked less (`dream_cooldown_days`).
+                     04 梦境消散设置: how long the fragments and the one line last, in
+                     minutes and turns, whichever comes first.
+                     The switch and every number save themselves when changed (POST
+                     /api/config {persist: true, dream}; a refusal says the server's words
+                     and the switch flips back). 恢复默认 at the page's foot puts the
+                     block's `defaults` back, the ones the page does not show too.
 
    The archive is three nights at most and is not paged on the page: one read with the
    largest page the API gives.
    ========================================================== */
 
 import * as api from "../api.js";
-import { h, fill, subbar, group, sub, row, tip, clickable, btn, sw, num, customBox, promptCard, errorLine } from "../ui.js";
+import { h, fill, subbar, pagehead, sub, row, tip, clickable, btn, sw, savingNum, setBlock, sampleFold, promptCard, errorLine } from "../ui.js";
 import { href } from "../router.js";
 import { openDetail } from "../detail.js";
 
@@ -35,15 +39,13 @@ const TIP_PAGE = "夜里把压在心头、还没想明白的事织成一个梦�
 const TIP_STATE = "还没送到 = 织好了，还没递给他。在散 = 递给他以后，你一回来说话，梦就开始散：先剩碎片，再只剩一句。散了 = 只留一条痕迹。";
 const TIP_KEPT = "梦醒以后还连着的线头：以后碰到什么，会想起什么，一个梦最多两条。他觉得有意思，就把它留成一条线索（trace 里看得到）。留了 = 留成线索了；没留 = 让它跟着梦散了。";
 
-const TIP_REMIND = "梦织好以后怎么递到他手上。递过去以后，你一回来说话，梦就开始散。";
-const TIP_RULES = "什么时候织、梦怎么散。默认值是拿真数据试出来的，一般不用动。";
+const TIP_REMIND = "梦织好以后，跟着自动唤醒一起递到他手上。递过去以后，你一回来说话，梦就开始散。";
+const TIP_WEAVE = "惦记的事看这件事有多重要，没想明白的事看当时情绪有多强，放久了都会变轻。默认值是拿真数据试出来的，一般不用动。";
+const TIP_FADE = "你回来说话以后，过这么久或这么多轮，谁先到算谁：先散成碎片，再只剩一句，然后整个删掉，只留一条痕迹。他提起这个梦一次，散的时间往后推一点，每次推得比上次少。想留住只有一条路：他当场把它写成记忆。";
 const PROMPT_KEY = "dream";
 const DELIVER = "deliver_on_wake";
-// 样文, as the board has it: a made-up dream, said to be one.
-const SAMPLE_NOTE = "编的例子，不是真聊天跑出来的";
-const SAMPLE = `梦里是一间没有屋顶的厨房。锅里炖着的东西一直冒白气，白气往上飘，飘成了海边的云。
-ta站在灶台边改一张纸，纸上的字自己排起队，排着排着变成一串脚印，往海那边走。我想跟上去，脚下的地板慢慢变成沙，每走一步都陷下去一点。
-远处有个钟在敲。敲到第十二下，ta回过头说：「该睡了。」海就一点一点退回了锅里。`;
+// 梦境结果样例, as her frame has it: a made-up dream in one run of words.
+const SAMPLE = "梦里是一间没有屋顶的厨房。锅里炖着的东西一直冒白气，白气往上飘，飘成了海边的云。 ta站在灶台边改一张纸，纸上的字自己排起队，排着排着变成一串脚印，往海那边走。我想跟上去，脚下的地板慢慢变成沙，每走一步都陷下去一点。 远处有个钟在敲。敲到第十二下，ta回过头说：「该睡了。」海就一点一点退回了锅里。";
 
 // The most the API gives on one page (contract §一.2); three nights hold fewer.
 const ALL = 50;
@@ -62,7 +64,7 @@ function stateLine(d, { open, onOpen }) {
 function keptRow(c) {
   const id = (c.ids || [])[0];
   return row({ text: `「${c.meet}」`, why: c.recall, open: id ? () => openDetail(id) : null,
-    right: h("span", { class: "r", text: c.kept ? "留了" : "没留" }) });
+    right: h("span", { class: "r", text: c.kept ? "留了" : "没留" }), layout: "big" });
 }
 
 /** One dream: a group labelled with its night. Folded, it opens in place on 展开. */
@@ -81,10 +83,10 @@ function dreamCard(d, open) {
 }
 
 async function renderDreams(view) {
-  view.append(subbar({
-    tabs: h("span", { style: { color: "var(--ink)" }, text: "这几天做过的梦" }),
+  view.append(pagehead({
+    title: "这几天做过的梦",
     tip: TIP_PAGE,
-    aside: h("a", { class: "aside", href: href("dream", "settings"), text: "高级设置" }),
+    aside: h("a", { class: "aside enter", href: href("dream", "settings"), text: "设置   >" }),
   }));
   const out = await api.get("/api/loci/dreams", { limit: ALL });
   const items = out.items || [];
@@ -92,56 +94,18 @@ async function renderDreams(view) {
   view.append(h("main", { class: "sections dream" }, items.map((d, i) => dreamCard(d, i === 0))));
 }
 
-function backTo(label) {
-  return h("span", { style: { display: "contents" } }, h("a", { href: href("dream"), text: `‹ ${label}` }),
-    h("span", { style: { color: "var(--ink)" }, text: "高级设置" }));
+/** Save some of the `dream` block, and read it back as the server keeps it. */
+async function write(values) {
+  await api.post("/api/config", { persist: true, dream: values });
+  return (await api.get("/api/config")).dream;
 }
 
-/** 提醒: 醒来的时候递给他, saved as soon as it is flipped. */
-function remindGroup(dream) {
-  const err = h("div");
-  const toggle = sw({
-    checked: dream[DELIVER] !== false,
-    label: "醒来的时候递给他",
-    onChange: async (on) => {
-      fill(err);
-      toggle.disabled = true;
-      try {
-        await api.post("/api/config", { persist: true, dream: { [DELIVER]: on } });
-      } catch (e) {
-        toggle.setAttribute("aria-checked", String(!on));
-        fill(err, errorLine(e));
-      }
-      toggle.disabled = false;
-    },
-  });
-  return group("提醒", { tip: TIP_REMIND }, h("div", null,
-    row({ text: "醒来的时候递给他", why: "跟着自动唤醒一起递。没开自动唤醒的话，等他下次自己来看",
-      right: h("span", { class: "acts" }, toggle), layout: "set" }),
-    err));
-}
-
-/** 样文 under the prompt card: a grey box that folds to its link. */
-function sampleBox() {
-  const body = h("div", null,
-    h("p", { class: "why", style: { margin: "6px 0 0" }, text: SAMPLE_NOTE }),
-    h("p", { style: { margin: "10px 0 0", fontSize: "15px", lineHeight: "1.8", whiteSpace: "pre-line" }, text: SAMPLE }));
-  const toggle = h("button", { class: "lnk", type: "button", style: { fontSize: "14px" } });
-  const set = (on) => {
-    toggle.textContent = on ? "样文 ▴" : "样文 ▾";
-    toggle.setAttribute("aria-expanded", String(on));
-    body.hidden = !on;
-  };
-  toggle.addEventListener("click", () => set(body.hidden));
-  set(true);
-  return h("div", { class: "panel", style: { marginTop: "20px" } }, toggle, body);
-}
-
-/** 提示词: the weaving prompt's card, drawn again from each reply. */
-function promptGroup() {
+/** 02: the weaving prompt's card, drawn again from each reply. */
+function promptBlock() {
   const holder = h("div");
-  const sample = sampleBox();
+  const sample = sampleFold({ label: "梦境结果样例", text: SAMPLE, open: true });
   const draw = (card) => fill(holder, promptCard({
+    no: "02",
     title: "编织一个梦境的提示词",
     label: "织梦的提示词",
     card,
@@ -154,76 +118,85 @@ function promptGroup() {
     const card = (out.items || []).find((c) => c.key === PROMPT_KEY);
     if (card) draw(card);
   }).catch((e) => fill(holder, errorLine(e)));
-  return group("提示词", {}, holder);
+  return holder;
 }
 
-// 规矩, as the board has it: [key, words, small words, unit] per box; a row with two boxes
-// is minutes and turns, whichever comes first.
+// 03, as her frame has it: [key, words, unit] per row.
 const WEAVE = [
-  ["pressure_line", "多重的事才织", "压在心头最重的那一件过了这条线，才织一个梦。调高 = 只在特别重的日子做梦", null],
-  ["dull_line", "太轻的不算", "分量低于这个的，一点都不算进去", null],
-  ["per_day", "一夜最多", null, "个"],
-  ["dream_cooldown_days", "梦见过的，隔多久少梦见", null, "天"],
+  ["pressure_line", "惦记的事、没想明白的事里，最重的那一条超过这个数，才织梦。", null],
+  ["dream_cooldown_days", "梦见过的惦记的事，这几天里少梦见。", "天"],
 ];
+// 04: [minutes key, turns key, words] per row — minutes and turns, whichever comes first.
 const FADE = [
-  ["fragment_minutes", "fragment_turns", "先散成碎片", "你回来说话以后，过这么久或这么多轮（谁先到算谁）"],
-  ["oneline_minutes", "oneline_turns", "再只剩一句", "然后整个删掉，只留一条痕迹"],
+  ["fragment_minutes", "fragment_turns", "变成碎片的时间维持多久"],
+  ["oneline_minutes", "oneline_turns", "变成一句话的时间维持多久"],
 ];
-const FADE_NOTE = "他提起这个梦一次，散的时间往后推一点，每次推得比上次少，所以留不到永远。想留住只有一条路：他当场把它写成记忆。";
 
-function unit(text) {
-  return h("span", { class: "why", text });
-}
-
-/** 规矩: the numbers core/_dream runs on, saved through /api/config `dream`. */
-function rulesGroup(dream) {
-  const holder = h("div");
-  const draw = (rules) => {
-    const boxes = {};
-    const box = (key, label) => (boxes[key] = num({ value: String(rules[key] ?? ""), "aria-label": label }));
-    const err = h("div");
-    const save = async (values, buttons) => {
-      for (const b of buttons) b.disabled = true;
-      fill(err);
-      try {
-        await api.post("/api/config", { persist: true, dream: values });
-        draw((await api.get("/api/config")).dream);
-      } catch (e) {
-        for (const b of buttons) b.disabled = false;
-        fill(err, errorLine(e));
-      }
-    };
-    const reset = btn("恢复默认");
-    const keep = btn("保存", { dark: true });
-    // 恢复默认 puts back the numbers only: the delivery switch is 提醒's.
-    const numbers = Object.fromEntries(Object.entries(rules.defaults || {}).filter(([k]) => k !== DELIVER));
-    reset.addEventListener("click", () => save(numbers, [reset, keep]));
-    keep.addEventListener("click", () => save(Object.fromEntries(
-      Object.entries(boxes).map(([k, b]) => [k, b.value.trim()]).filter(([, v]) => v !== "")), [reset, keep]));
-    fill(holder,
-      customBox([
-        h("h3", { class: "st", style: { fontSize: "16px", margin: "12px 0 2px" }, text: "什么时候织" }),
-        WEAVE.map(([key, text, why, u]) => row({ text, why, layout: "set",
-          right: h("span", { class: "acts" }, box(key, text), u ? unit(u) : null) })),
-        h("h3", { class: "st", style: { fontSize: "16px", margin: "18px 0 2px" }, text: "怎么散" }),
-        FADE.map(([minutes, turns, text, why]) => row({ text, why, layout: "set wide stack",
-          right: h("span", { class: "acts", style: { flexWrap: "nowrap" } },
-            box(minutes, `${text}分钟`), unit("分钟"), box(turns, `${text}轮数`), unit("轮")) })),
-        h("p", { class: "why", style: { margin: "10px 0 0", lineHeight: "1.6" }, text: FADE_NOTE }),
-      ], { open: true }),
-      h("div", { class: "acts setacts" }, reset, keep),
-      err);
-  };
-  draw(dream);
-  return group("规矩", { tip: TIP_RULES }, holder);
-}
+const unit = (text) => h("span", { class: "why", text });
 
 async function renderSettings(view) {
-  view.append(subbar({ tabs: backTo("dream") }));
-  const body = h("main", { class: "sections" });
-  view.append(body);
-  const dream = (await api.get("/api/config")).dream;
-  body.append(remindGroup(dream), promptGroup(), rulesGroup(dream));
+  // The way back, in the place of the sub-tabs.
+  const bar = subbar({ tabs: h("a", { class: "on back", href: href("dream") },
+    h("span", { "aria-hidden": "true", text: "<" }), "dream") });
+  bar.classList.add("tight");
+  const body = h("main", { class: "sets" });
+  view.append(bar, body);
+  const prompt = promptBlock();
+
+  const draw = (dream) => {
+    const err = h("div");
+    const fail = (e) => fill(err, e ? errorLine(e) : null);
+    const number = (key, label) => savingNum({
+      value: dream[key], label, onError: fail,
+      save: async (v) => (await write({ [key]: v }))[key],
+    });
+    const deliver = sw({
+      checked: dream[DELIVER] !== false,
+      label: "是否开启自动提醒",
+      onChange: async (on) => {
+        fail(null);
+        deliver.disabled = true;
+        try {
+          await write({ [DELIVER]: on });
+        } catch (e) {
+          deliver.setAttribute("aria-checked", String(!on));
+          fail(e);
+        }
+        deliver.disabled = false;
+      },
+    });
+    const reset = btn("恢复默认", {
+      badge: true,
+      onClick: async () => {
+        fail(null);
+        reset.disabled = true;
+        try {
+          draw(await write(dream.defaults));
+        } catch (e) {
+          reset.disabled = false;
+          fail(e);
+        }
+      },
+    });
+
+    fill(body,
+      setBlock("01", "提醒设置", { tip: TIP_REMIND },
+        row({ text: "是否开启自动提醒", why: "不开的时候，织好的梦没办法递给他。",
+          right: h("span", { class: "acts" }, deliver), layout: "big set" })),
+      prompt,
+      setBlock("03", "梦境设置", { tip: TIP_WEAVE },
+        WEAVE.map(([key, text, u]) => row({ text, layout: "big set",
+          right: h("span", { class: "acts nu" }, number(key, text), u ? unit(u) : null) }))),
+      setBlock("04", "梦境消散设置", { tip: TIP_FADE },
+        FADE.map(([minutes, turns, text]) => row({ text, layout: "big set",
+          right: h("span", { class: "acts duo" },
+            h("span", { class: "nu" }, number(minutes, `${text}，分钟`), unit("分钟")),
+            unit("/"),
+            h("span", { class: "nu" }, number(turns, `${text}，轮数`), unit("轮"))) })),
+        h("div", { class: "acts setacts" }, reset),
+        err));
+  };
+  draw((await api.get("/api/config")).dream);
 }
 
 export default {

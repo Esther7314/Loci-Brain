@@ -1,6 +1,6 @@
 """
 ========================================
-web/loci_prompts.py — the prompt cards on grow's 设置 and dream's 高级设置
+web/loci_prompts.py — the prompt cards on grow's 设置 and dream's 设置
 ========================================
 
     GET  /api/loci/prompts   -> {"items": [card, ...], "scope": <line>}, one card per

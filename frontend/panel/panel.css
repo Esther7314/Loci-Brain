@@ -48,7 +48,14 @@
   /* her glass card: a pale see-through ground over a blur, a white edge, a soft drop */
   --glass-card: linear-gradient(90deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0)), rgba(240, 237, 232, 0.28);
   --glass-drop: 0 12px 28px -8px rgba(var(--ink-rgb), 0.08);
-  --graphite: #2B2520;                    /* pinned, a switch that is on, the selected cell */
+  --graphite: #2B2520;                    /* pinned, the selected cell */
+  /* her switch: a glass track, dark when on, and a pale knob */
+  --sw-on: rgba(var(--ink-rgb), 0.65);
+  --sw-off: rgba(var(--ink-rgb), 0.10);
+  --sw-edge: rgba(255, 255, 255, 0.21);
+  --sw-drop: 0 2px 8px rgba(var(--ink-rgb), 0.09);
+  --knob: rgba(248, 246, 242, 0.80);
+  --knob-drop: 0 1px 2px rgba(var(--ink-rgb), 0.10), 0 1px 4px rgba(255, 255, 255, 0.40);
   --klein: #1F3FD6;
   --klein-dark: #7B8FFF;                  /* the blue on a dark ground */
   --red: #B42318;
@@ -120,6 +127,13 @@ a:hover { color: var(--ink-solid); }
 /* one line of words in the tabs' place, its i right after it (boards changes, trace, dream) */
 .tabs.line { gap: var(--s-1); }
 .subbar .aside { font: var(--caption); color: var(--small); }
+/* a page's head (her frames muse, Trace, Dream): its line as a title, or its sub-tabs as
+   large as one, a small line under it; the way into the page's settings at the right */
+.phd { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2) var(--s-5); padding: var(--s-4) 0 var(--s-5); }
+.pht { display: flex; align-items: center; gap: var(--s-1); margin: 0; font: var(--title); color: var(--ink); }
+.phd .why { margin: 0; }
+.tabs.big { font: var(--title); }
+.tabs.big .sep { font: var(--body); }
 
 .sections { display: flex; flex-direction: column; gap: var(--s-7); }
 
@@ -140,6 +154,17 @@ a:hover { color: var(--ink-solid); }
 .item.wide { grid-template-columns: minmax(0, 1fr) 300px; }
 /* breath and surface: the words on the left, the id at the far right, centred on them */
 .item.start { grid-template-columns: minmax(0, 1fr) auto; }
+/* a row in her larger hand (frames muse, the settings pages): the line in Body, the words
+   under it in caption, a line between rows, what sits at the right as wide as it is */
+.item.big { grid-template-columns: minmax(0, 1fr) auto; }
+.item.big + .item.big { border-top-color: var(--line); }
+.item.big .txt { gap: 0; padding: 5px 0; }
+.item.big .c { font: var(--lead); }
+.item.big .txt .why { font: var(--caption); }
+.item.big .btn.badge { color: var(--ink); }
+/* words in a row's small line that open something (看看是哪几条？) */
+.ask { color: var(--mid); cursor: pointer; }
+.ask:hover { color: var(--ink); }
 .txt { display: flex; flex-direction: column; gap: 2px; padding: var(--row-pad) 0; min-width: 0; }
 .c { font: var(--body); color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .c2 { margin: 0; font: var(--body); color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -187,14 +212,17 @@ a:hover { color: var(--ink-solid); }
 .lnk { border: 0; background: transparent; padding: 0; font: inherit; font-size: 13px; color: var(--small); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
 .inp { height: 36px; border: 0; border-bottom: 1px solid var(--edge); background: transparent; font: inherit; font-size: 16px; color: var(--ink); padding: 0 2px; box-sizing: border-box; }
 .inp:focus { outline: none; border-bottom-color: var(--ink); }
-.num { width: 72px; height: 32px; border: 1px solid var(--edge); border-radius: 16px; padding: 0 10px; font: inherit; font-size: 14px; text-align: center; box-sizing: border-box; color: var(--ink); background: var(--raised); }
-.num:focus { outline: none; border-color: var(--ink); }
+/* a small number on a line (her settings frames) */
+.num { width: 36px; height: 21px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: 0 0 2px; font: var(--caption); text-align: center; box-sizing: border-box; color: var(--ink); background: transparent; }
+@supports (field-sizing: content) { .num { width: auto; min-width: 36px; max-width: 180px; field-sizing: content; } }
+.num:focus { outline: none; border-bottom-color: var(--ink); }
 .area { width: 100%; min-height: 160px; border: 1px solid var(--edge); border-radius: 12px; padding: 12px 14px; font: inherit; font-size: 16px; line-height: 1.6; color: var(--ink); box-sizing: border-box; resize: vertical; background: var(--raised); }
 .area:focus { outline: none; border-color: var(--ink); }
-.sw { position: relative; width: 40px; height: 24px; border: 0; border-radius: 12px; background: var(--graphite); cursor: pointer; flex-shrink: 0; padding: 0; }
-.sw span { position: absolute; top: 3px; right: 3px; width: 18px; height: 18px; border-radius: 50%; background: var(--raised); }
-.sw[aria-checked="false"] { background: var(--edge); }
-.sw[aria-checked="false"] span { right: auto; left: 3px; }
+/* her switch (frames toggle-on-2 / toggle-off-2, drawn 80 by 40 and kept at four fifths) */
+.sw { position: relative; width: 64px; height: 32px; border: 1px solid var(--sw-edge); border-radius: 16px; background: var(--sw-on); box-shadow: var(--sw-drop); -webkit-backdrop-filter: blur(7px); backdrop-filter: blur(7px); cursor: pointer; flex-shrink: 0; padding: 0; box-sizing: border-box; transition: background-color 0.15s; }
+.sw span { position: absolute; top: 2px; left: 32px; width: 26px; height: 26px; box-sizing: border-box; border: 1px solid var(--glass-edge); border-radius: 50%; background: var(--knob); box-shadow: var(--knob-drop); transition: left 0.15s; }
+.sw[aria-checked="false"] { background: var(--sw-off); }
+.sw[aria-checked="false"] span { left: 4px; }
 .opt { display: flex; align-items: center; gap: 8px; font-size: 15px; color: var(--ink); min-height: 34px; }
 .opt input[type=radio] { width: 16px; height: 16px; margin: 0; flex-shrink: 0; }
 input[type=radio], input[type=checkbox] { accent-color: var(--ink); }
@@ -294,6 +322,20 @@ input[type=radio], input[type=checkbox] { accent-color: var(--ink); }
 .item.set .why { white-space: normal; }
 .setnote { margin: 10px 0 0; line-height: 1.6; }
 .setacts { margin-top: 16px; }
+/* a settings page in numbered blocks (her frames muse——设置, Dream——设置): 「01 提醒设置」,
+   its rows, and what a row sets at its right — a switch, a number with its unit, or two
+   numbers with a slash between */
+.sets { display: flex; flex-direction: column; gap: var(--s-7); }
+.sblock > .phead { align-items: center; gap: 0 var(--s-1); margin-bottom: 0; }
+.item.big.set .txt { padding: var(--s-2) 0; }
+.phead + .item.big.set .txt { padding-top: 6px; }
+.item.big.set:not(:has(+ .item)) .txt { padding-bottom: 0; }
+.item.big.set .c { white-space: normal; }
+.nu { display: inline-flex; align-items: flex-start; gap: var(--s-1); }
+.acts.nu { gap: var(--s-1); }
+.acts.duo { gap: 20px; }
+.sets .setacts { margin-top: 20px; }
+.sets .prompt { height: 189px; }
 
 @media (max-width: 640px) {
   .days > .rows { gap: 44px; }
@@ -305,7 +347,9 @@ input[type=radio], input[type=checkbox] { accent-color: var(--ink); }
 /* ---------------- dream, name, the name card ---------------- */
 /* dream: a group's label is the night (2026-10-06), wider than the 72px column */
 .sections.dream { --gl-w: 124px; }
-.dream-text { padding: 8px 0 4px; }
+.dream-text { padding: 8px 0 4px; font: var(--lead); }
+/* muse: 日子 and 想法 are two characters wide, the rows start 79px in (her frame) */
+.sections.muse { --gl-w: 47px; }
 /* a name that opens its name card (the detail window's subjects, the card's 什么关系) */
 .nm { text-decoration: underline; text-decoration-color: var(--edge); text-underline-offset: 3px; }
 /* the name card: its sentences and its memory lines */
@@ -424,11 +468,11 @@ span.lnk { font-size: 13px; }
 /* the prompt card (her frame grow——设置): the numbered title, the prompt in a sunken box
    the full width, the 不建议改 line under it with 恢复默认 · 保存 at its right */
 .pcards { display: flex; flex-direction: column; gap: var(--s-3); }
-.subbar.tight { padding-bottom: var(--s-5); }
+.subbar.tight { padding-top: var(--s-4); padding-bottom: var(--s-5); }
 /* the way back in the tabs' place: < and the page's name */
 .tabs a.back { display: inline-flex; gap: var(--s-3); }
 /* a page's entry to its settings, at the right of the tabs: as dark as the current tab */
-.subbar .aside.enter { font: var(--body); color: var(--ink); }
+.aside.enter { font: var(--body); color: var(--ink); white-space: pre; }
 .phead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--s-3); margin: 0 0 var(--s-3); }
 .pt { margin: 0; font: var(--lead); color: var(--small); }
 .pt .sn { margin-right: 0.6em; }
@@ -442,10 +486,13 @@ span.lnk { font-size: 13px; }
 .btn.badge { height: auto; padding: var(--s-1) 10px; border-color: var(--glass-edge); border-radius: 999px; background: var(--glass); font: var(--caption); color: var(--glass-ink); }
 .btn.badge:hover { color: var(--ink); }
 .btn.badge.dark { background: var(--ink-solid); color: #FFFFFF; }
-/* a small link under a card that unfolds a sample in the same sunken box */
-.plink { display: block; margin-top: var(--s-1); border: 0; background: transparent; padding: 0; font: var(--caption); color: var(--mid); cursor: pointer; }
-.plink:hover, .plink[aria-expanded="true"] { color: var(--ink); }
-.psample { margin-top: var(--s-2); border-radius: 10px; padding: 11px var(--s-4) var(--s-4); background: var(--well); }
+/* a badge that only says something (已送达) */
+.btn.badge.quiet, .item.big .btn.badge.quiet { border-color: var(--glass-edge); color: var(--small); }
+/* a small underlined link under a card that unfolds a sample in her glass card */
+.plink { display: block; margin-top: 10px; border: 0; background: transparent; padding: 0; font: var(--caption); color: var(--mid); text-decoration: underline; text-underline-position: from-font; cursor: pointer; }
+.plink:hover { color: var(--ink); }
+.psample { margin-top: 7px; border: 1px solid #FFFFFF; border-radius: 24px; padding: var(--s-3) 15px 20px; background: var(--glass-card); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); box-shadow: var(--glass-drop); font: var(--caption); color: var(--ink); }
+.psample p { margin: 0; }
 .psample .why { margin: 0 0 var(--s-2); }
 .psample pre { margin: 0; font: var(--caption); color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
 
@@ -571,7 +618,7 @@ select.btn, .btn.sel { appearance: none; -webkit-appearance: none; padding-right
 /* 称呼 and 安全问题: two labelled boxes and a button on one line */
 .pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: center; column-gap: 24px; row-gap: 12px; padding: 4px 0; }
 .pair > label { display: flex; align-items: center; gap: 12px; font-size: 16px; color: var(--ink); min-width: 0; }
-.pair .num.name { width: 180px; text-align: left; padding: 0 14px; }
+.pair .num.name { width: 180px; min-width: 0; max-width: none; field-sizing: fixed; text-align: left; padding: 0 2px 2px; font: var(--body); height: 28px; }
 .pair .inp { flex: 1; min-width: 0; }
 
 /* the inline 改密码 box */
@@ -622,9 +669,8 @@ select.btn, .btn.sel { appearance: none; -webkit-appearance: none; padding-right
   .item.set.stack > .acts, .item.set.stack > .r { justify-content: flex-start; flex-shrink: 1; max-width: 100%; }
   .item .r.wrap { text-align: left; }
   .item.set:has(> .r.wrap) { flex-direction: column; align-items: flex-start; gap: 4px; }
-  .num { height: 36px; border-radius: 18px; font-size: 15px; }
-  .sw { width: 44px; height: 26px; border-radius: 13px; }
-  .sw span { width: 20px; height: 20px; }
+  /* a size the phone does not zoom into */
+  .num { min-width: 44px; height: 29px; font: var(--lead); }
   .seg button { height: 36px; font-size: 15px; }
   .btn.set { height: 36px; padding: 0 16px; border-radius: 18px; font-size: 15px; }
   .panel, .sections.setting .panel { padding: 14px 16px 16px; }
@@ -662,7 +708,7 @@ select.btn, .btn.sel { appearance: none; -webkit-appearance: none; padding-right
 .adj { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-1) var(--s-3); margin: 0 0 var(--s-2); }
 .adj[hidden] { display: none; }
 .adj > label { display: inline-flex; align-items: center; gap: var(--s-1); }
-.adj .num { width: 52px; height: 28px; padding: 0 6px; border-radius: 14px; font: var(--body); }
+.adj .num { font: var(--body); height: 25px; }
 @media (max-width: 640px) {
-  .adj .num { height: 32px; border-radius: 16px; }
+  .adj .num { height: 29px; font: var(--lead); }
 }

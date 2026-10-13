@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-tests/test_config_api_dream.py — dream's 高级设置 「规矩」: the numbers the panel sets.
+tests/test_config_api_dream.py — dream's 设置, 梦境设置 and 梦境消散设置: the numbers the panel sets.
 
 GET /api/config gives the `dream` rules as core/_dream.dream_config runs them, with their
 defaults (DREAM_DEFAULTS) for 恢复默认. POST /api/config takes `dream` like `muse`: each

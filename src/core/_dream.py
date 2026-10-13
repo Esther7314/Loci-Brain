@@ -253,7 +253,7 @@ from . import _when as _w
 # form of words somebody dashed off. Three lines in it have not been tried against real
 # dreams yet: 很久以前的 and 读过听过的 (the cold share and the quote share) and 线索 (the
 # thread candidates handed out with the dream, plan 一·六) — no examples there either.
-# This is the shipped text: the owner may rewrite it from dream's 高级设置, and the weave
+# This is the shipped text: the owner may rewrite it from dream's 设置, and the weave
 # takes core/prompts.current("dream"), which keeps the JSON line's five keys.
 DREAM_PROMPT ="""你不是叙述者。你是梦的发生过程。
 
@@ -344,7 +344,7 @@ DREAM_DEFAULTS: dict = {
     "oneline_turns": 30,
     "recall_delay_minutes": 10,   # how far one recall pushes the start point (halved each time: it can never reach forever)
     # ---- Delivery ----
-    # The panel's 「醒来的时候递给他」: on, the host's wake is handed the dream
+    # The panel's 「是否开启自动提醒」: on, the host's wake is handed the dream
     # (web/loci_dream.build_poke); off, it is not, and the dream waits for him to fetch it
     # himself (/api/dream/current).
     "deliver_on_wake": True,

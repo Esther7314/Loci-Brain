@@ -27,7 +27,7 @@
    ========================================================== */
 
 import * as api from "../api.js";
-import { h, fill, subbar, row, note, pagedList, footPager, clock, clickable, promptCard, errorLine } from "../ui.js";
+import { h, fill, subbar, row, note, pagedList, footPager, clock, clickable, promptCard, sampleFold, errorLine } from "../ui.js";
 import { href } from "../router.js";
 import { openDetail, openSliceSource } from "../detail.js";
 
@@ -41,16 +41,7 @@ const SAMPLE = `{"slices": [
 ]}`;
 
 /** 切片结果样例 under the slicing card: a link that unfolds the sample. */
-function sliceSample() {
-  const body = h("div", { class: "psample", hidden: true },
-    h("p", { class: "why", text: SAMPLE_NOTE }), h("pre", { text: SAMPLE }));
-  const toggle = h("button", { class: "plink", type: "button", "aria-expanded": "false", text: "切片结果样例" });
-  toggle.addEventListener("click", () => {
-    body.hidden = !body.hidden;
-    toggle.setAttribute("aria-expanded", String(!body.hidden));
-  });
-  return h("div", null, toggle, body);
-}
+const sliceSample = () => sampleFold({ label: "切片结果样例", note: SAMPLE_NOTE, text: SAMPLE, pre: true });
 
 // The cards of 设置, in the frame's order.
 const CARDS = [
@@ -65,7 +56,7 @@ function tabs(on) {
   ];
 }
 
-const settingsLink = () => h("a", { class: "aside enter", href: href("grow", "settings"), text: "设置  >" });
+const settingsLink = () => h("a", { class: "aside enter", href: href("grow", "settings"), text: "设置   >" });
 
 async function renderToday(view) {
   view.append(subbar({ tabs: tabs("today"), aside: settingsLink() }));
