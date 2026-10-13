@@ -162,6 +162,7 @@ a:hover { color: var(--ink-solid); }
 .item.big .c { font: var(--lead); }
 .item.big .txt .why { font: var(--caption); }
 .item.big .btn.badge { color: var(--ink); }
+.item.big .btn.badge.dark { color: #FFFFFF; }
 /* words in a row's small line that open something (看看是哪几条？) */
 .ask { color: var(--mid); cursor: pointer; }
 .ask:hover { color: var(--ink); }
@@ -611,7 +612,15 @@ select.btn, .btn.sel { appearance: none; -webkit-appearance: none; padding-right
 /* a list whose first row carries the rule under the row above it (向量's missing list) */
 .ruled-first .rows > .item:first-child { border-top: 1px solid var(--hair); }
 /* setting's grey boxes sit a little tighter than present's (board setting) */
-.sections.setting .panel { padding: 12px 18px 14px; margin: 2px 0 12px; }
+.sets.setting .panel { padding: 12px 18px 14px; margin: 2px 0 12px; }
+/* setting, in numbered blocks: a model's state under its title, the form under that; a
+   health row with the checks it opens; the log under the health rows */
+.modelstate { margin: var(--s-1) 0 0; }
+.modelstate:empty { display: none; }
+.sets.setting .form, .sets.setting .steps, .sets.setting .pair { margin-top: var(--s-3); }
+.hrow + .hrow { border-top: 1px solid var(--line); }
+.sets .hrow > .item.big.set .txt { padding: var(--s-2) 0; }
+.sets.setting .loghead { margin-top: var(--s-5); }
 
 /* a form: the field's name in a 110px column, the field after it */
 .form { display: grid; grid-template-columns: 110px minmax(0, 560px); column-gap: 20px; row-gap: 14px; align-items: center; }
@@ -677,7 +686,7 @@ select.btn, .btn.sel { appearance: none; -webkit-appearance: none; padding-right
   .num { min-width: 44px; height: 29px; font: var(--lead); }
   .seg button { height: 36px; font-size: 15px; }
   .btn.set { height: 36px; padding: 0 16px; border-radius: 18px; font-size: 15px; }
-  .panel, .sections.setting .panel { padding: 14px 16px 16px; }
+  .panel, .sets.setting .panel { padding: 14px 16px 16px; }
   .acts.end { justify-content: flex-end; padding: 0; }
 
   .form { display: flex; flex-direction: column; align-items: stretch; gap: 0; }

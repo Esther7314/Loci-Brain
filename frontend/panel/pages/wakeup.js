@@ -41,14 +41,17 @@ const CARD_TITLE = "自动唤醒的提示词";
 
 // ---------------------------------------------------------------- 01 自动唤醒
 
-/** The wake segments: the first beside 自定义时间段, more under it, 「+ 增加一个时间段」 for
- *  another (twelve at most). A segment is saved once both its times are filled; 删除 at
- *  its right takes it away (while there is more than one), and so does emptying both. */
+/** The wake segments: the first beside 自定义时间段, more in rows under it, 「+ 增加一个
+ *  时间段」 for another (twelve at most). A segment is saved once both its times are
+ *  filled; 删除 at its right takes it away (while there is more than one), and so does
+ *  emptying both. `rest` is the rows under the first and the link, in order; later rows
+ *  go in before the link. */
 function segments(p) {
   const first = h("span", { style: { display: "contents" } });
-  const more = h("div");
   const add = p.ctl(linkButton("+ 增加一个时间段"));
+  const end = h("div", { class: "acts setacts" }, add);
   let pairs = [];
+  let rows = [];
   const filled = () => pairs.filter(([a, b]) => a.value.trim() || b.value.trim());
   const register = () => {
     p.unreg("wake.segments.list");
@@ -81,7 +84,9 @@ function segments(p) {
   const layout = () => {
     const many = pairs.length > 1;
     fill(first, acts(pairs[0][0], to(), pairs[0][1], many ? drop(pairs[0]) : null));
-    fill(more, pairs.slice(1).map((one) => set({ right: acts(one[0], to(), one[1], drop(one)) })));
+    for (const r of rows) r.remove();
+    rows = pairs.slice(1).map((one) => set({ right: acts(one[0], to(), one[1], drop(one)) }));
+    end.before(...rows);
     add.disabled = !p.live || pairs.length >= 12;
     if (p.live) register();
   };
@@ -105,7 +110,7 @@ function segments(p) {
   });
   // 自定义时间段 sends the segments typed so far with it: the gateway wants at least one.
   const listForOnly = () => (filled().every(([a, b]) => a.value.trim() && b.value.trim()) ? listNow() : undefined);
-  return { first, more, add, listForOnly };
+  return { first, rest: [...rows, end], listForOnly };
 }
 
 function wakeBlock(p) {
@@ -156,8 +161,7 @@ function wakeBlock(p) {
       numBox(p, ["wake", "dnd", "to"], { label: "到", kind: "time" })) }),
     set({ lead: modes[0], right: h("span", { class: "r", text: "默认" }) }),
     set({ lead: modes[1], right: seg.first }),
-    seg.more,
-    h("div", { class: "acts setacts" }, seg.add),
+    seg.rest,
     home,
     p.live ? lines : null);
 }

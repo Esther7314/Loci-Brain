@@ -1,8 +1,10 @@
 /* ==========================================================
-   pages/setting.js — setting (boards setting, setting-phone, setting-local-embed)
+   pages/setting.js — setting
 
-   One page, top to bottom as the board has it. Each block reads on its own, so one that
-   fails shows its error in place and the rest still stand. Wired to what the server has:
+   One page of numbered blocks, in the look of the settings pages (muse——设置,
+   Dream——设置; pages/wakeup.js and pages/present.js are drawn the same way). Each block
+   reads on its own, so one that fails shows its error in place and the rest still stand.
+   Wired to what the server has:
 
      宿主      no route lists the hosts or changes their grants: drawn, every control off
      称呼      GET /api/config ai_name / owner_name · POST /api/config {ai_name, owner_name,
@@ -11,12 +13,12 @@
                current_password} · 设置安全问题 POST /api/loci/auth/security-question
                {question, answer} (a logged-in session; the answer never comes back, so
                its box starts empty). No account names: 账号's 改 is off
-     模型      副模型: GET/POST /api/config `dehydration` (its key masked, sent only when
+     副模型    GET/POST /api/config `dehydration` (its key masked, sent only when
                typed) · 测试 POST /api/test/dehydration · 拉取列表 POST /api/models. 在哪儿跑
                本地 is `runs_on: "local"`: the local Ollama, no Base URL or Key to fill, the
                model picked from what GET /api/loci/ollama finds. Thinking is `thinking`,
                shown for the formats that have a thinking knob (Gemini, Anthropic).
-               向量模型: `embedding` the same way (its key too), 测试 POST
+     向量模型  `embedding` the same way (its key too), 测试 POST
                /api/test/embedding; a change of model answers 409 with the cost, which is
                put to the person and sent again with reembed "confirm"; the recompute's
                progress from GET /api/loci/embedding/migration. 在哪儿跑 本地 is the
@@ -38,7 +40,7 @@
    ========================================================== */
 
 import * as api from "../api.js";
-import { h, fill, subbar, group, row, tip, btn, sw, inp, num, customBox, errorLine, pagedList, clickable, pick } from "../ui.js";
+import { h, fill, pagehead, setBlock, row, btn as plainBtn, sw, inp, num, customBox, errorLine, pagedList, clickable, pick } from "../ui.js";
 import { openDetail } from "../detail.js";
 
 const TIP = {
@@ -57,11 +59,15 @@ const OLLAMA_DOWNLOAD = "https://ollama.com/download";
 
 // ---------------------------------------------------------------- small pieces
 
-/** A settings row: name (and its small words) left, the control right. `wide` gives the
- *  control 300px; `stack` puts it under the words on the phone. */
-function setRow({ text, why, right, wide = false, stack = false }) {
-  const layout = ["set", wide ? "wide" : "", stack ? "stack" : ""].filter(Boolean).join(" ");
-  return row({ text, why, right: right || h("span"), layout });
+/** A settings row: name (and its small words) left, the control right. `stack` puts the
+ *  control under the words on the phone. */
+function setRow({ text, why, right, stack = false }) {
+  return row({ text, why, right: right || h("span"), layout: stack ? "big set stack" : "big set" });
+}
+
+/** A button of this page: her small glass pill, `dark` for the main one. */
+function btn(label, opts = {}) {
+  return plainBtn(label, { badge: true, ...opts });
 }
 
 function acts(...kids) {
@@ -95,7 +101,7 @@ async function busy(b, fn) {
 }
 
 /** A block filled when `build()` resolves; its error in its place when it throws. It takes
- *  no box of its own (display: contents), so what it holds sits in the group's column. */
+ *  no box of its own (display: contents), so what it holds sits in the block itself. */
 function later(build) {
   const box = h("div", { style: { display: "contents" } });
   Promise.resolve().then(build).then((node) => fill(box, node)).catch((e) => {
@@ -186,15 +192,14 @@ function poll(el, fn, ms = 3000) {
 
 // ---------------------------------------------------------------- 宿主
 
-function hostsGroup() {
-  const box = customBox([
+function hostsRows() {
+  return [
     setRow({ text: "能碰哪些来源", right: acts(off(btn("▾"))) }),
     setRow({ text: "能恢复撤回的来源", right: acts(off(sw({ checked: false, label: "能恢复撤回的来源" }))) }),
     setRow({ text: "不说用途也能读整个库", right: acts(off(sw({ checked: false, label: "不说用途也能读整个库" }))) }),
     small("一般不用改。改错了，宿主可能读不到该读的记忆，或者读到不该读的。真要改，改之前要再输一次面板密码。"),
-    h("div", { class: "acts end", style: { marginTop: "12px" } }, off(btn("保存", { dark: true }))),
-  ], { open: true });
-  return group("宿主", { tip: TIP.hosts }, h("div", null, box));
+    h("div", { class: "acts setacts" }, off(btn("保存", { dark: true }))),
+  ];
 }
 
 // ---------------------------------------------------------------- 称呼
@@ -241,9 +246,17 @@ async function accountBlock() {
     field("新密码", pw1), field("再输一次", pw2), err,
     h("div", { class: "acts end", style: { justifyContent: "flex-start" } }, save));
   const change = btn("改密码", { dark: true });
+  // The boxes open inside 密码's own row; while they are open the row's right side stays
+  // at its top, beside the name.
+  const pwRow = setRow({ text: "密码", why: "第一次进来用的是默认密码，记得改；改完这里只显示 ********", stack: true,
+    right: acts(stars, change) });
+  const openForm = (on) => {
+    form.hidden = !on;
+    pwRow.style.alignItems = on ? "start" : "";
+    change.setAttribute("aria-expanded", String(on));
+  };
   change.addEventListener("click", () => {
-    form.hidden = !form.hidden;
-    change.setAttribute("aria-expanded", String(!form.hidden));
+    openForm(form.hidden);
     if (!form.hidden) (st.setup_needed ? pw1 : current).focus();
   });
   form.addEventListener("submit", (e) => {
@@ -257,7 +270,7 @@ async function accountBlock() {
         if (!st.setup_needed) body.current_password = current.value;
         const r = await api.post("/api/loci/auth/set-password", body, { gate: false });
         for (const b of [current, pw1, pw2]) b.value = "";
-        form.hidden = true;
+        openForm(false);
         stars.textContent = "********";
         st.setup_needed = false;
         currentField.hidden = false;
@@ -284,25 +297,24 @@ async function accountBlock() {
       qaSaid.ok(r.message);
     } catch (e) { qaSaid.err(e); }
   }));
-  return h("div", null,
-    setRow({ text: "账号", wide: true, right: acts(h("span", { class: "r", text: "user" }), off(btn("改"))) }),
-    setRow({ text: "密码", why: "第一次进来用的是默认密码，记得改；改完这里只显示 ********", wide: true, stack: true,
-      right: acts(stars, change) }),
-    form, done.el,
-    setRow({ text: "忘记密码", why: "设了安全问题：答对就能重设。没设：只能在装 Loci 的那台电脑上重设", wide: true, stack: true,
+  pwRow.querySelector(".txt").append(form, done.el);
+  return h("div", { style: { display: "contents" } },
+    setRow({ text: "账号", right: acts(h("span", { class: "r", text: "user" }), off(btn("改"))) }),
+    pwRow,
+    setRow({ text: "忘记密码", why: "设了安全问题：答对就能重设。没设：只能在装 Loci 的那台电脑上重设", stack: true,
       right: acts(h("span", { class: "r", style: { fontSize: "13px" }, text: "在登录页" })) }),
-    setRow({ text: "设置安全问题", why: "忘记密码的时候用", wide: true }),
+    setRow({ text: "设置安全问题", why: "忘记密码的时候用" }),
     h("div", { class: "pair qa", style: { padding: "0 0 8px" } },
       h("label", null, "问：", question), h("label", null, "答：", answer), qaSave),
     qaSaid.el);
 }
 
-// ---------------------------------------------------------------- 模型
+// ---------------------------------------------------------------- 副模型 · 向量模型
 
-function modelHead(title, tipText, status) {
-  return h("div", { class: "sth", style: { flexWrap: "wrap", marginBottom: "14px" } },
-    h("h3", { class: "st", style: { margin: "0" }, text: title }), tip(tipText),
-    h("span", { style: { marginLeft: "12px" } }, status));
+/** A model's state, the first line of its block: 还没配 · 通了 <model> · 不通：… · what the
+ *  local Ollama holds. Takes no room while it says nothing. */
+function stateLine(text = "") {
+  return h("p", { class: "why modelstate", text });
 }
 
 function formRow(name, field) {
@@ -342,7 +354,7 @@ const THINKING_FORMATS = ["gemini", "anthropic"];
 function auxModel(cfg, findOllama) {
   const d = cfg.dehydration || {};
   let runs = d.runs_on === "local" ? "local" : "cloud";
-  const status = h("span", { class: "why" });
+  const status = stateLine();
   const s = sayer();
   const fmt = seg([["openai_compat", "OpenAI 兼容"], ["gemini", "Gemini"], ["anthropic", "Anthropic"]],
     d.api_format || "openai_compat", { label: "API format", onChange: () => layout() });
@@ -368,7 +380,7 @@ function auxModel(cfg, findOllama) {
     onChange: (v) => { runs = v; layout(); if (v === "local") findLocal(); } });
   const thinkRow = setRow({ text: "Thinking", why: "只有会先想再答的模型有这一项，干杂活一般关着", right: acts(thinking) });
   const custom = customBox([
-    setRow({ text: "在哪儿跑", why: RUNS_WHY, wide: true, stack: true, right: acts(runsSeg.el) }),
+    setRow({ text: "在哪儿跑", why: RUNS_WHY, stack: true, right: acts(runsSeg.el) }),
     setRow({ text: "Max output tokens", why: "一次最多输出多少；开着 thinking 的话，想的那部分也算在里面，要给大一点", right: acts(maxTok) }),
     setRow({ text: "Temperature", why: "越低越稳，整理记忆用低的", right: acts(temp) }),
     thinkRow,
@@ -436,7 +448,7 @@ function auxModel(cfg, findOllama) {
   layout();
   if (runs === "local") findLocal();
   return h("div", null,
-    modelHead("副模型", TIP.aux, status),
+    status,
     h("div", { class: "form" },
       fmtRow, baseRow, localBaseRow, keyRow,
       formRow("Model", h("span", { class: "pick" }, model.el, pull, installed))),
@@ -503,7 +515,7 @@ function embModel(cfg, findOllama) {
   }
 
   function runsRow(mode, why) {
-    return setRow({ text: "在哪儿跑", why, wide: true, stack: true,
+    return setRow({ text: "在哪儿跑", why, stack: true,
       right: acts(seg([["cloud", "云端"], ["local", "本地"]], mode, { label: "在哪儿跑", onChange: show }).el) });
   }
 
@@ -518,7 +530,7 @@ function embModel(cfg, findOllama) {
   }
 
   function cloud() {
-    const status = h("span", { class: "why", text: e.enabled && !wasLocal ? "" : "还没配" });
+    const status = stateLine(e.enabled && !wasLocal ? "" : "还没配");
     const s = sayer();
     const fmt = seg([["openai_compat", "OpenAI 兼容"], ["gemini", "Gemini"]],
       wasLocal || e.api_format === "gemini" ? (e.api_format === "gemini" ? "gemini" : "openai_compat") : "openai_compat",
@@ -546,7 +558,7 @@ function embModel(cfg, findOllama) {
       });
     };
     return [
-      modelHead("向量模型", TIP.emb, status),
+      status,
       h("div", { class: "form" },
         formRow("API format", h("span", null, fmt.el,
           h("span", { class: "why hint", text: "硅基流动、OpenAI 这些云端的都选「OpenAI 兼容」" }),
@@ -562,7 +574,7 @@ function embModel(cfg, findOllama) {
   }
 
   function local() {
-    const status = h("span", { class: "why", text: "本地" });
+    const status = stateLine("本地");
     const s = sayer();
     const model = modelPicker(wasLocal && e.model ? e.model : "bge-m3", "Model");
     const timeout = num({ value: e.timeout_seconds ?? "", "aria-label": "超时" });
@@ -595,7 +607,7 @@ function embModel(cfg, findOllama) {
       model.setList(o.models || []);
     });
     return [
-      modelHead("向量模型", TIP.emb, status),
+      status,
       h("div", { class: "steps" },
         first,
         step("2", "下一个向量模型", "推荐 bge-m3：中文好，大约 1.2 GB。不用开命令行，点「下载」就行。",
@@ -616,12 +628,6 @@ function embModel(cfg, findOllama) {
   }
   show(wasLocal ? "local" : "cloud");
   return holder;
-}
-
-async function modelsBlock(cfgP) {
-  const cfg = await cfgP;
-  const findOllama = ollamaFinder();
-  return [auxModel(cfg, findOllama), embModel(cfg, findOllama)];
 }
 
 // ---------------------------------------------------------------- 向量
@@ -653,7 +659,7 @@ async function vectorBlock() {
     } catch (e) { s.err(e); }
   }));
   return h("div", null,
-    row({ text: "", lead: count, why: "「现在补」= 不等后台了，马上把缺的这几条算上", right: acts(now), layout: "set" }),
+    row({ text: "", lead: count, why: "「现在补」= 不等后台了，马上把缺的这几条算上", right: acts(now), layout: "big set" }),
     note, s.el,
     h("div", { class: "ruled-first" }, listBox),
     small("在排队 = 等着轮到它；一直失败 = 试了几次都没成，多半是向量模型没配好，或者网断了。", { marginTop: "12px" }));
@@ -742,7 +748,7 @@ function batchesBlock(s) {
     const stoppedWhy = !failed && !b.is_running && (b.errors || []).length ? b.errors[0] : null;
     const why = stoppedWhy ? h("span", { style: { display: "flex", flexDirection: "column", gap: "2px" } },
       h("span", { text: line }), h("span", { text: stoppedWhy })) : line;
-    return setRow({ text: b.filename || b.batch, why, wide: true, stack: true,
+    return setRow({ text: b.filename || b.batch, why, stack: true,
       right: h("span", { class: "acts", style: { flexWrap: "nowrap" } }, buttons) });
   }
   again();
@@ -848,7 +854,7 @@ function packageImport() {
       Object.fromEntries(choices.map(([id, sg]) => [id, sg.value])))));
     fill(area, h("div", { class: "panel", style: { margin: "6px 0 12px" } },
       st.integrity_warning ? small(st.integrity_warning, { marginTop: "0" }) : null,
-      conflicts.map((c, i) => setRow({ text: c.import_name || c.bucket_id, wide: true, stack: true,
+      conflicts.map((c, i) => setRow({ text: c.import_name || c.bucket_id, stack: true,
         why: c.current_name && c.current_name !== c.import_name ? c.current_name : null,
         right: acts(choices[i][1].el) })),
       h("div", { class: "acts end", style: { marginTop: "12px" } }, cancel, go)));
@@ -864,22 +870,23 @@ function packageImport() {
   ];
 }
 
-function importGroup() {
+function importRows() {
   const s = sayer();
   const batches = batchesBlock(s);
-  return group("导入", {}, h("div", null,
+  return [
     chatImport(batches, s),
     h("div", { style: { marginTop: "6px" } }, foldBox("导入之后会怎样",
       [h("ol", { class: "how" }, HOW.map(([t, w]) => h("li", null, h("span", { class: "c", text: t }), h("br"), h("span", { class: "why", text: w })))),
         h("p", { class: "why", style: { margin: "4px 0 0" }, text: "反悔了：在下面「导入过的」里撤回那一批。" })], { open: true })),
     s.el,
     batches.el,
-    packageImport()));
+    packageImport(),
+  ];
 }
 
 // ---------------------------------------------------------------- 导出
 
-function exportGroup() {
+function exportRows() {
   const s = sayer();
   const exportBtn = (label, path) => {
     const b = btn(label);
@@ -889,7 +896,7 @@ function exportGroup() {
     }));
     return b;
   };
-  return group("导出", {}, h("div", null,
+  return [
     setRow({ text: "导出备份", stack: true,
       why: "把这边全部的记忆打成一个 zip，换电脑、重装以后用上面「导入记忆包」放回来。包里有：所有记忆 · 算好的向量 · 库的状态 · 沉下去的原文 · 附件。不带：设置、Key、面板密码、宿主表——这些是这台电脑自己的，换一台要重新填。",
       right: acts(exportBtn("导出备份", "/api/loci/export")) }),
@@ -897,7 +904,8 @@ function exportGroup() {
       why: "Loci 手上有的原话，一段对话一个 Markdown 文件，打开就能看：导入进来的聊天，和记忆沉下去时留下的原文。宿主那边的聊天记录在宿主自己那儿，去宿主那边导。",
       right: acts(exportBtn("导出原话", "/api/loci/export/originals")) }),
     s.el,
-    small("⚠ 这两样里都是你的记忆和原话，别随手发给别人。", { marginTop: "12px" })));
+    small("⚠ 这两样里都是你的记忆和原话，别随手发给别人。", { marginTop: "12px" }),
+  ];
 }
 
 // ---------------------------------------------------------------- 阈值
@@ -932,13 +940,13 @@ function thresholdsBlock(cfgP) {
     const boxes = {};
     const dayRow = ([k, text, why]) => {
       boxes[k] = num({ value: sf[k] ?? "", "aria-label": text });
-      return setRow({ text, why, wide: true, right: acts(boxes[k], h("span", { class: "why", text: "天" })) });
+      return setRow({ text, why, right: acts(boxes[k], h("span", { class: "why", text: "天" })) });
     };
     const lineRow = ([k, text, why]) => {
       const l = lines[k];
       if (!l) return null;
       boxes[k] = num({ value: l.value ?? "", "aria-label": text });
-      return setRow({ text, why: [why, l.note].filter(Boolean), wide: true, right: acts(boxes[k]) });
+      return setRow({ text, why: [why, l.note].filter(Boolean), right: acts(boxes[k]) });
     };
     const retune = th.retune && th.retune.needed ? th.retune.words : "";
     const custom = customBox([
@@ -1041,13 +1049,13 @@ async function healthBlock(logs) {
   };
   const checkRow = (c, withLook) => {
     const bad = c.status === "warn" || c.status === "error";
-    return setRow({ text: c.label, why: bad && c.action ? c.action : null, wide: true, stack: true,
+    return setRow({ text: c.label, why: bad && c.action ? c.action : null, stack: true,
       right: h("span", { class: "acts", style: { flexWrap: "nowrap" } },
         h("span", { class: "r wrap", style: bad ? { color: "var(--ink)" } : null, text: c.message }),
         bad && withLook ? look() : null) });
   };
   const checks = r.checks || [];
-  if (!r.groups) return h("div", null, checks.map((c) => checkRow(c, true)));
+  if (!r.groups) return h("div", { style: { display: "contents" } }, checks.map((c) => checkRow(c, true)));
   const byKey = Object.fromEntries(checks.map((c) => [c.key, c]));
   // The board's five rows; a row opens the checks under it (`checks`) in place.
   return h("div", null, r.groups.map((g) => {
@@ -1062,7 +1070,7 @@ async function healthBlock(logs) {
       });
       name.setAttribute("aria-expanded", "false");
     }
-    return h("div", null, head, details);
+    return h("div", { class: "hrow" }, head, details);
   }));
 }
 
@@ -1088,16 +1096,16 @@ async function versionBlock() {
           see.setAttribute("aria-expanded", String(!notes.hidden));
         });
         fill(second,
-          setRow({ text: "有新版本了", wide: true, why: h("span", null, `${c.latest.tag} · `, see),
+          setRow({ text: "有新版本了", why: h("span", null, `${c.latest.tag} · `, see),
             right: acts(off(btn("一键更新", { dark: true }))) }),
           notes);
       } else {
-        fill(second, setRow({ text: c.words || "", wide: true }));
+        fill(second, setRow({ text: c.words || "" }));
       }
     } catch (e) { s.err(e); }
   }));
   return h("div", null,
-    setRow({ text: "现在的版本", wide: true,
+    setRow({ text: "现在的版本",
       right: h("span", { class: "acts", style: { flexWrap: "nowrap" } }, h("span", { class: "r", style: { color: "var(--ink)" }, text: `v${v.version}` }), check) }),
     second, s.el);
 }
@@ -1108,17 +1116,23 @@ export default {
   render(view) {
     const cfgP = api.get("/api/config");
     cfgP.catch(() => {});
+    const findOllama = ollamaFinder();
     const logs = logsBlock();
-    view.append(subbar({}), h("main", { class: "sections setting", style: "--gl-w: 96px" },
-      hostsGroup(),
-      group("称呼", { tip: TIP.names }, later(() => namesBlock(cfgP))),
-      group("账号", {}, later(accountBlock)),
-      group("模型", {}, later(() => modelsBlock(cfgP))),
-      group("向量", { tip: TIP.vec }, later(vectorBlock)),
-      importGroup(),
-      exportGroup(),
-      group("阈值", { tip: TIP.thresholds }, later(() => thresholdsBlock(cfgP))),
-      group("体检", { tip: TIP.health }, later(() => healthBlock(logs)), logs),
-      group("版本", {}, later(versionBlock))));
+    // [title, its i, what it holds], numbered 01 02 … in this order.
+    const blocks = [
+      ["宿主", TIP.hosts, hostsRows()],
+      ["称呼", TIP.names, later(() => namesBlock(cfgP))],
+      ["账号", null, later(accountBlock)],
+      ["副模型", TIP.aux, later(async () => auxModel(await cfgP, findOllama))],
+      ["向量模型", TIP.emb, later(async () => embModel(await cfgP, findOllama))],
+      ["向量", TIP.vec, later(vectorBlock)],
+      ["导入", null, importRows()],
+      ["导出", null, exportRows()],
+      ["阈值", TIP.thresholds, later(() => thresholdsBlock(cfgP))],
+      ["体检", TIP.health, [later(() => healthBlock(logs)), logs]],
+      ["版本", null, later(versionBlock)],
+    ];
+    view.append(pagehead({ title: "setting" }), h("main", { class: "sets setting" },
+      blocks.map(([title, tipText, body], i) => setBlock(String(i + 1).padStart(2, "0"), title, { tip: tipText }, body))));
   },
 };
