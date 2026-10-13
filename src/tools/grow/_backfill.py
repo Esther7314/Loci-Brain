@@ -393,7 +393,7 @@ def _backfilled_names(fills: dict) -> list[str]:
     return names
 
 
-def _record_kinds(bucket_id: str, pairs: list) -> None:
+def _record_kinds(bucket_id: str, pairs: list, same: dict | None = None) -> None:
     """Keep what the side model said each name is as a guess for the names page
     (core/name_guesses), for a name the table does not have and for one it has without a
     kind. The table itself is never written here: every new name waits in 待认 with its
@@ -401,20 +401,23 @@ def _record_kinds(bucket_id: str, pairs: list) -> None:
     model got wrong does not settle in the table unseen. A kind already in the table and a
     name that is no subject at all (a pronoun, a word marked "not a person") are left
     alone. A guess for a kindless entry is kept under the entry's own name, which is the
-    name the 待认 row shows."""
+    name the 待认 row shows. `same` is {name: the card the side model says it is}: kept
+    beside the kind for a name the table does not have, for the owner's 合并."""
     for name, kind in pairs:
-        if not kind or not _S.canonical(name):
+        card = (same or {}).get(name, "")
+        if not (kind or card) or not _S.canonical(name):
             continue
         if len(_S.candidates(name)) > 1:
             _keep_guess(bucket_id, name, kind)
             continue
         rec = _S.record_of(name)
-        if rec is not None and rec.instance_of:
-            continue
-        _keep_guess(bucket_id, rec.name if rec is not None else name, kind)
+        if rec is None:
+            _keep_guess(bucket_id, name, kind, card)
+        elif not rec.instance_of:
+            _keep_guess(bucket_id, rec.name, kind)
 
 
-def _keep_guess(bucket_id: str, name: str, kind: str) -> None:
+def _keep_guess(bucket_id: str, name: str, kind: str, card: str = "") -> None:
     from core import _when
     from core import name_guesses as _G
     base = str(getattr(rt.bucket_mgr, "base_dir", "") or (rt.config or {}).get("buckets_dir")
@@ -422,7 +425,7 @@ def _keep_guess(bucket_id: str, name: str, kind: str) -> None:
     if not base:
         return
     try:
-        _G.record(base, name, kind, _when.now())
+        _G.record(base, name, kind, _when.now(), card)
     except OSError as e:
         rt.logger.warning(f"backfill {bucket_id}: 「{name}」看着像什么没记下: {e}")
 

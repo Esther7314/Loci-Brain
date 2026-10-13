@@ -13,16 +13,19 @@
                        table does not know yet or knows without a kind, newest first seen
                        on top, paged. Each row: the name, 「第一次出现在：<the entry's
                        title>」 (the row opens that entry in the detail window) and, when
-                       the API has a `guess`, 「看着像 <kind>」; then two buttons, 新增 and
-                       更多, each choice POST /api/loci/names/action:
+                       the API has a guess, 「看着像 <kind>」 or 「看着像 <card>」 (`same`:
+                       a card it may be another spelling of); then two buttons, each
+                       choice POST /api/loci/names/action. The one outside takes the
+                       guess, 更多 is a glass list (ui.pick) with the other three:
                          新增   set_kind — a card of the guessed kind in one click; with
-                                no guess, the kinds under the row to choose from
-                         更多   a glass list (ui.pick):
-                           合并   merge — it already has a card: a box under the row
-                                  (the known names as suggestions), 取消 · 保存
-                           更改   set_kind — the guess is wrong: the kinds under the row,
-                                  + 新类别 a box for a new one (only with a guess)
-                           忽略   not_person — no card, and it is not listed again
+                                no kind guessed, the kinds under the row to choose from
+                         合并   merge — outside, into the guessed card in one click; in
+                                the list, a box under the row (the known names as
+                                suggestions), 取消 · 保存
+                         更改   the guess is wrong: another card (the same box) when a
+                                card was guessed, another kind (the kinds under the row,
+                                + 新类别 a box for a new one) when a kind was
+                         忽略   not_person — no card, and it is not listed again
                        A name recognised leaves the page: the page is read again, with the
                        server's `note` on top.
    ========================================================== */
@@ -84,7 +87,7 @@ function pendingRow(it, ctx) {
   const first = it.first;
   const why = [
     first ? h("span", null, "第一次出现在：", h("span", { class: "lnk", text: first.text || `#${first.short}` })) : null,
-    it.guess ? `看着像 ${kindLabel(it.guess)}` : null,
+    it.same ? `看着像 ${it.same}` : (it.guess ? `看着像 ${kindLabel(it.guess)}` : null),
   ];
   const slot = h("div", { class: "namebox" });
   const actsBox = h("span", { class: "acts" });
@@ -145,18 +148,27 @@ function pendingRow(it, ctx) {
     kinds[0].focus();
   };
 
-  const add = btn("新增", { badge: true });
-  add.addEventListener("click", () => (it.guess ? act({ action: "set_kind", kind: it.guess }, add) : kindsLine("新增")));
+  const mergeInto = (name) => ({ action: "merge", target: name });
+  const addCard = (button) => (it.guess ? act({ action: "set_kind", kind: it.guess }, button) : kindsLine("新增"));
+  // The button outside takes the guess: 合并 into the guessed card, else 新增.
+  const take = btn(it.same ? "合并" : "新增", { badge: true });
+  take.addEventListener("click", () => (it.same ? act(mergeInto(it.same), take) : addCard(take)));
   const more = pick({
     cls: "btn badge", label: "更多", placeholder: "更多", act: true,
-    options: [["merge", "合并"], it.guess ? ["kind", "更改"] : null, ["ignore", "忽略"]].filter(Boolean),
+    options: [
+      it.same ? ["add", "新增"] : ["merge", "合并"],
+      it.same || it.guess ? ["change", "更改"] : null,
+      ["ignore", "忽略"],
+    ].filter(Boolean),
     onChange: (v) => {
-      if (v === "merge") box("合并", ctx.names, (name) => ({ action: "merge", target: name }));
-      else if (v === "kind") kindsLine("更改");
-      else act({ action: "not_person" }, more.querySelector("button"));
+      const button = more.querySelector("button");
+      if (v === "add") addCard(button);
+      else if (v === "merge") box("合并", ctx.names, mergeInto);
+      else if (v === "change") { if (it.same) box("更改", ctx.names, mergeInto); else kindsLine("更改"); }
+      else act({ action: "not_person" }, button);
     },
   });
-  fill(actsBox, add, more);
+  fill(actsBox, take, more);
   return item;
 }
 

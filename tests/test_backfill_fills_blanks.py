@@ -494,3 +494,58 @@ def test_a_kind_the_table_already_uses_is_accepted(table):
     ans = D.parse_backfill(json.dumps({"subjects": [{"name": "Connor", "kind": "角色扮演"}]},
                                       ensure_ascii=False), BODY)
     assert ans.subjects == [("Connor", "角色扮演")]
+
+
+# ───────────────────────── which card a new name is ─────────────────────────
+
+CARD_PROMPT = D.BACKFILL_PROMPT + '\n每个主体可以多写一项 "card"。'
+
+
+def test_the_cards_are_listed_only_for_a_prompt_that_asks_which_card(table, monkeypatch):
+    from core import prompts as P
+    context = {"room": "EVENT/SELF"}
+    monkeypatch.setattr(P, "current", lambda key: D.BACKFILL_PROMPT.replace('"card"', ""))
+    _, user = D.backfill_request(BODY, context)
+    assert "已有的名片" not in user
+    monkeypatch.setattr(P, "current", lambda key: CARD_PROMPT)
+    _, user = D.backfill_request(BODY, context)
+    assert "已有的名片：小李、小张（也叫 张哥）" in user
+
+
+def test_a_card_is_kept_only_when_the_table_has_it(table):
+    ans = D.parse_backfill(json.dumps({"subjects": [
+        {"name": "李哥", "kind": "人", "card": "小李"},
+        {"name": "老张", "kind": "人", "card": "张哥"},       # an alias: the entry's own name
+        {"name": "小王", "kind": "人", "card": "没这个人"},    # a wrong guess: left out
+        {"name": "沙丘", "kind": "影视", "card": ""},
+    ]}), BODY)
+    assert ans.subjects == [("李哥", "人"), ("老张", "人"), ("小王", "人"), ("沙丘", "影视")]
+    assert ans.same == {"李哥": "小李", "老张": "小张"}
+    # a card that is not a string is a bad shape, and spoils the part like any other
+    bad = D.parse_backfill(json.dumps({"summary": "s", "subjects": [
+        {"name": "李哥", "kind": "人", "card": ["小李"]}]}), BODY)
+    assert bad.subjects is None and bad.same == {} and "subjects" in bad.problems
+
+
+def test_the_guessed_card_waits_beside_the_kind_and_the_table_is_untouched(
+        backfill, table, tmp_path, monkeypatch):
+    from core import name_guesses as G
+    monkeypatch.setattr(rt, "config", {"buckets_dir": str(tmp_path)})
+    before = _table(table)
+    backfill(event(), {"summary": "s", "subjects": [
+        {"name": "李哥", "kind": "人", "card": "小李"},     # new: both kept
+        {"name": "阿李", "kind": "", "card": "小李"},       # new, no kind: the card alone
+        {"name": "张哥", "kind": "人", "card": "小李"},     # the table knows it: no card kept
+    ]})
+    S._cache = None
+    assert _table(table) == before
+    guesses = G.load(str(tmp_path))
+    cards = list(S.load_names_table())
+    assert G.guess_of(guesses, "李哥") == "人" and G.card_of(guesses, "李哥", cards) == "小李"
+    assert G.guess_of(guesses, "阿李") == "" and G.card_of(guesses, "阿李", cards) == "小李"
+    assert G.card_of(guesses, "小张", cards) == ""
+    # nothing readable is kept: neither spelling, nor the card's name
+    raw = (tmp_path / "_state" / G.FILE).read_text(encoding="utf-8")
+    assert "李" not in raw
+    # the card gone from the table, the guess says nothing
+    assert G.card_of(guesses, "李哥", ["小张"]) == ""

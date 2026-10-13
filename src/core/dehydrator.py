@@ -345,6 +345,8 @@ MERGE_PROMPT = """你是一个信息合并专家。请将旧记忆与新内容�
 #   subjects who or what — people and things (a game, a book, a group), each with a kind.
 #            A name has to tell who is meant: a bare title (妈, 老板娘) is a word many
 #            people share, so it is asked for with whose or where it is (「小思的妈」).
+#            A prompt that asks for "card" is also shown the cards the table has, and a
+#            subject may then say which of them it is (`_cards_line`, BackfillAnswer.same).
 #
 # `{kinds}` is filled in per call (see backfill_kinds); everything else is literal JSON.
 # This is the shipped text: the owner may rewrite it from grow's 设置, and the call
@@ -409,6 +411,8 @@ _SUMMARY_MAX_CHARS = 200
 _BOUND_MAX = 8
 _SUBJECTS_MAX = 16
 _SUBJECT_NAME_MAX = 40       # the names table refuses a longer name (core/names._check_name)
+_CARDS_MAX = 80              # how many of the table's cards one call is shown
+_CARD_KEY = '"card"'         # a prompt that asks for this key is shown the cards
 _KIND_MAX = 8
 _ABSOLUTE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -426,13 +430,26 @@ def backfill_kinds() -> tuple[str, ...]:
     return tuple(kinds)
 
 
+def _cards_line() -> str:
+    """The cards the names table has, as one line of the request: each name with its
+    other spellings, in the table's order, the first `_CARDS_MAX`. "" for an empty or
+    unreadable table."""
+    try:
+        records = list(_names.load_names_table().values())[:_CARDS_MAX]
+    except Exception:
+        return ""
+    shown = [r.name + (f"（也叫 {'、'.join(r.aliases)}）" if r.aliases else "") for r in records]
+    return "、".join(shown)
+
+
 def backfill_request(content: str, context: dict, kinds=None) -> tuple[str, str]:
     """The (system, user) pair for one backfill call. `context` describes the entry as it
     is on disk: room, telic, created_day (a date), said_day (the day its lines were said,
     when known: shown in place of the day it was written), cue_condition, and `existing` —
     {slot: value} for the slots the main model already filled, which the model is told
     to leave alone. The system text is the library's prompt (core/prompts: the owner's
-    rewrite when there is one, BACKFILL_PROMPT otherwise)."""
+    rewrite when there is one, BACKFILL_PROMPT otherwise). When that prompt asks for a
+    subject's "card", the request lists the cards there are (`_cards_line`)."""
     kinds = tuple(kinds or backfill_kinds())
     system = _prompts.current(_prompts.BACKFILL).replace("{kinds}", " / ".join(kinds))
     said = context.get("said_day")
@@ -449,6 +466,9 @@ def backfill_request(content: str, context: dict, kinds=None) -> tuple[str, str]
         shown = "；".join(f"{k}={'、'.join(map(str, v)) if isinstance(v, list) else v}"
                          for k, v in existing.items())
         lines.append(f"已经有的：{shown}")
+    cards = _cards_line() if _CARD_KEY in system else ""
+    if cards:
+        lines.append(f"已有的名片：{cards}")
     lines += ["", "【正文】", content[:_BACKFILL_INPUT_LIMIT]]
     return system, "\n".join(lines)
 
@@ -464,6 +484,7 @@ class BackfillAnswer:
     aliases: list = field(default_factory=list)
     domain: list = field(default_factory=list)
     subjects: Optional[list] = None           # [(name, kind)], kind "" when not known
+    same: dict = field(default_factory=dict)  # {name: the card the model says it is}
     bound: list = field(default_factory=list)
     time_phrase: str = ""
     time_yearly: bool = False
@@ -499,30 +520,39 @@ def _string_list(value, *, max_items: int, max_chars: int) -> Optional[list]:
     return out[:max_items]
 
 
-def _subjects_part(value, kinds) -> Optional[list]:
-    """[(name, kind)] from [{"name", "kind"}], or None when any item is malformed: a name
-    that is not a short one-line string, a kind that is not a string, or a kind outside
-    `kinds`. One bad item spoils the part — a model returning a bad shape must not get
-    the rest of its names into the table."""
+def _subjects_part(value, kinds) -> Optional[tuple[list, dict]]:
+    """([(name, kind)], {name: card}) from [{"name", "kind", "card"}], or None when any
+    item is malformed: a name that is not a short one-line string, a kind or a card that
+    is not a string, or a kind outside `kinds`. One bad item spoils the part — a model
+    returning a bad shape must not get the rest of its names into the table. A card is
+    kept only when the names table has an entry by that spelling, under that entry's
+    name; one it does not have is a wrong guess and is left out."""
     if not isinstance(value, list) or len(value) > _SUBJECTS_MAX:
         return None
     out: list[tuple[str, str]] = []
+    same: dict[str, str] = {}
     for item in value:
-        if not isinstance(item, dict) or set(item) - {"name", "kind"}:
+        if not isinstance(item, dict) or set(item) - {"name", "kind", "card"}:
             return None
-        name, kind = item.get("name"), item.get("kind", "")
+        name, kind, card = item.get("name"), item.get("kind", ""), item.get("card", "")
         if kind is None:
             kind = ""
-        if not isinstance(name, str) or not isinstance(kind, str):
+        if card is None:
+            card = ""
+        if not isinstance(name, str) or not isinstance(kind, str) or not isinstance(card, str):
             return None
-        name, kind = name.strip(), kind.strip()
+        name, kind, card = name.strip(), kind.strip(), card.strip()
         if not name or len(name) > _SUBJECT_NAME_MAX or "\n" in name or "\r" in name:
             return None
         if kind and (len(kind) > _KIND_MAX or kind not in kinds):
             return None
-        if name not in [n for n, _ in out]:
-            out.append((name, kind))
-    return out
+        if name in [n for n, _ in out]:
+            continue
+        out.append((name, kind))
+        rec = _names.record_of(card) if card and len(card) <= _SUBJECT_NAME_MAX else None
+        if rec is not None:
+            same[name] = rec.name
+    return out, same
 
 
 def _real_day(value: str) -> bool:
@@ -592,9 +622,11 @@ def parse_backfill(raw: str, content: str, kinds=None) -> Optional["BackfillAnsw
     ans.domain = strings("domain", _DOMAIN_MAX, _MAX_TAG_LEN)
 
     if parsed.get("subjects") not in (None, ""):
-        ans.subjects = _subjects_part(parsed.get("subjects"), kinds)
-        if ans.subjects is None:
+        part = _subjects_part(parsed.get("subjects"), kinds)
+        if part is None:
             ans.problems.append("subjects")
+        else:
+            ans.subjects, ans.same = part
     # A name already in subjects says nothing more as a label: it never reaches tags or
     # aliases. This needs no configuration — it uses the names this answer extracted.
     named = {n for n, _ in ans.subjects or []}

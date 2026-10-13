@@ -192,7 +192,7 @@ async def _backfill_one(bucket_id: str, text: str, kind: str) -> str:
                           "这次的回填作废，一个字没写")
         return outcome
     if answer is not None and answer.subjects:
-        _record_kinds(bucket_id, answer.subjects)
+        _record_kinds(bucket_id, answer.subjects, answer.same)
     return BACKFILLED if written else NOT_WRITTEN
 
 

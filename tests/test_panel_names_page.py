@@ -302,3 +302,20 @@ def test_without_their_names_set_nobody_is_given(store, routes, monkeypatch):
     entry(store, "AI 这个词又上热搜了。", ["AI"])
     code, waiting = get(routes, "/api/loci/names/pending")
     assert [it["name"] for it in waiting["items"]] == ["AI"]
+
+
+def test_a_pending_name_carries_the_card_it_may_be_and_one_click_merges_it(store, routes):
+    from core import name_guesses as G
+    entry(store, "林林的同事小林子又迟到。", ["小林子"])
+    entry(store, "老周来电话。", ["老周"])
+    G.record(store.base_dir, "小林子", "人", W.now(), "小林")
+    _, pending = get(routes, "/api/loci/names/pending")
+    rows = {r["name"]: r for r in pending["items"]}
+    assert rows["小林子"]["same"] == "小林" and rows["小林子"]["guess"] == "人"
+    assert rows["老周"]["same"] is None
+    # the click the row offers
+    assert post(routes, "/api/loci/names/action",
+                {"action": "merge", "name": "小林子", "target": "小林"})[0] == 200
+    _, pending = get(routes, "/api/loci/names/pending")
+    assert [r["name"] for r in pending["items"]] == ["老周"]
+    assert "小林子" in S.record_of("小林").aliases

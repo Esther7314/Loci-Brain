@@ -8,7 +8,8 @@ web/loci_names.py — the names page and the name card
                                          many wait to be recognised; paged
     GET  /api/loci/names/pending      -> the names the table does not know yet or knows
                                          without a kind, each with the entry it first
-                                         appeared in and `guess`, what it looks like
+                                         appeared in, `guess`, what it looks like, and
+                                         `same`, the card it may be another spelling of
                                          (core/name_guesses); paged
     GET  /api/loci/names/{name}       -> one name: what it is, where it hangs, its card, the
                                          entries it appears in (paged)

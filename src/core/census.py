@@ -277,8 +277,11 @@ def pending_names(all_buckets: list, *, offset: int = 0, limit: int = PAGE_LIMIT
                   as_of: datetime | None = None, guesses: dict | None = None) -> dict:
     """The names waiting to be recognised (`_recognised`), the most recently first seen on
     top, each with the entry it first appeared in, whether the table already lists it
-    (`in_table`), and `guess`: what it looks like (`_guess`), or None. `guesses` is
-    core/name_guesses.load()."""
+    (`in_table`), `guess`: what it looks like (`_guess`), or None, and `same`: the card
+    the side model says it is another spelling of, for a name the table does not list
+    (core/name_guesses.card_of), or None. `guesses` is core/name_guesses.load()."""
+    from . import name_guesses as _G
+    cards = list(subj.load_names_table())
     listing = written_before(all_buckets, as_of)
     by_id = {str((b.get("metadata") or {}).get("id") or b.get("id") or ""): b for b in listing}
     rows = [r for r in subjects(listing)["names"] if not _recognised(r)]
@@ -288,6 +291,8 @@ def pending_names(all_buckets: list, *, offset: int = 0, limit: int = PAGE_LIMIT
         b = by_id.get(r["first_bucket"])
         items.append({"name": r["name"], "n": r["n"], "pronoun": r["pronoun"],
                       "in_table": bool(r["canonical"]), "guess": _guess(r, guesses),
+                      "same": (None if r["canonical"]
+                               else _G.card_of(guesses or {}, r["name"], cards) or None),
                       "first": _memory_line(b) if b else None})
     return page(items, offset, limit, as_of)
 
