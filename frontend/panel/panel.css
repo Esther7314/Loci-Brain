@@ -364,7 +364,10 @@ input[type=radio], input[type=checkbox] { accent-color: var(--ink); }
 /* 待认的: a row's box (合并, the kinds, + 新类别) spans under it; its two buttons take
    the width they need and stay on one line */
 .item.wide.pending { grid-template-columns: minmax(0, 1fr) auto; }
-.item.pending > .acts { flex-wrap: nowrap; }
+.item.pending > .acts { flex-wrap: nowrap; position: relative; }
+/* its list hangs under both buttons, as wide as the two, so it covers the next row's
+   buttons whole instead of half of one */
+.item.pending > .acts > .pickw { position: static; }
 .namebox { grid-column: 1 / -1; padding: 0 0 12px; }
 .namebox:empty { display: none; }
 .namebox .cap { margin: 0 0 4px; font-size: 13px; color: var(--small); }
@@ -582,6 +585,7 @@ button.pill:disabled { cursor: default; }
   .tabs.slide { flex-wrap: nowrap; gap: 16px; overflow-x: auto; white-space: nowrap; margin: 0 -20px -2px; padding: 0 20px 10px; scrollbar-width: none; }
   .tabs.slide::-webkit-scrollbar { display: none; }
   .item.pending > .acts { flex-wrap: wrap; }
+  .item.pending > .acts > .pickw { position: relative; }
   .namebox { padding-top: 10px; }
 }
 
