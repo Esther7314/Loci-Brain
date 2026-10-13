@@ -24,12 +24,6 @@ Key behaviours:
   alive on the next cycle.
 - ensure_started() starts the background loop idempotently, and can be monkeypatched to
   a no-op in tests.
-- ⏳ calculate_score(): **a shell awaiting retirement.** It belongs to the upstream half
-  (importance × count × exponential decay), has nothing to do with the three stages here
-  and **decides the fate of no bucket at all** (its own comments say as much). The plan
-  is to retire it wholesale once its consumers are gone; none of them have been removed
-  yet, so the shell stays and its numbers are left alone. **Do not build anything new on
-  top of it.**
 
 What it deliberately does not do:
 - No moving buckets into archive, and no automatic closing (that is the system lying on
@@ -43,11 +37,10 @@ What it deliberately does not do:
   can see everything.
 
 Exports: the DecayEngine class
-         (stage_of / run_decay_cycle / calculate_score / ensure_started)
+         (stage_of / run_decay_cycle / ensure_started)
 ========================================
 """
 
-import math
 import asyncio
 import logging
 
@@ -63,7 +56,7 @@ logger = logging.getLogger("loci_brain.decay")
 # ============================================================
 # Tunable constants
 # ------------------------------------------------------------
-# rule.md §⑩: no bare magic numbers. The constants of calculate_score() and
+# rule.md §⑩: no bare magic numbers. The constants of stage_of() and
 # run_decay_cycle() are gathered here so ① the formulas read easily, ② any tuning happens
 # in one place, and ③ unit tests can import the constants directly and assert against them.
 #
@@ -73,15 +66,13 @@ logger = logging.getLogger("loci_brain.decay")
 # ============================================================
 
 # --- DecayEngine defaults (overridden by decay.* in config.yaml) ---
+# The engine acts on the check interval alone: the three-stage decision uses neither
+# lambda, nor the threshold, nor the emotion weights.
 _DEFAULT_LAMBDA = 0.05            # exponential decay rate: score × e^(-λ) per day
 _DEFAULT_THRESHOLD = 0.3          # below this score -> archive
 _DEFAULT_CHECK_INTERVAL_HRS = 24  # background loop interval, in hours
 _DEFAULT_EMOTION_BASE = 1.0       # emotion weight baseline
 _DEFAULT_AROUSAL_BOOST = 0.8      # each +1 of arousal -> +0.8 emotion weight
-
-# --- Locked scores: some buckets do not take part in decay at all ---
-_SCORE_PINNED = 999.0    # pinned / protected / permanent: permanently high (never archived)
-_SCORE_FEEL = 50.0       # feel: fixed middling score
 
 # --- Periodic self-heal: how many missing vectors one cycle may backfill at most,
 #     so the embedding API is not blown out in a single burst ---
@@ -89,28 +80,6 @@ _SCORE_FEEL = 50.0       # feel: fixed middling score
 # breath's vector channel silently misses it (particularly common for permanent buckets).
 # Whatever is left over is picked up on the following cycle.
 _BACKFILL_MAX_PER_CYCLE = 50
-
-# --- Freshness bonus：bonus = 1 + e^(-hours/HALF_LIFE) ---
-_FRESHNESS_HALF_LIFE_HRS = 36.0  # 36h half-life: ×2.0 fresh, ×1.5 at 36h, ≈×1.14 at 72h
-_FRESHNESS_AMPLITUDE = 1.0       # the ceiling of the bonus (0 -> none; 1 -> at most ×2)
-
-# --- Short-term vs long-term weighting (the core psychological model) ---
-# Short term: for something that just happened, time dominates ("the impression is fresh")
-# Long term: past this boundary, emotion dominates ("unforgettable vs. no longer matters")
-_SHORT_TERM_DAYS = 3.0
-_SHORT_TERM_TIME_RATIO = 0.7
-_LONG_TERM_EMOTION_RATIO = 0.7
-
-# --- Sub-linear amplification of activation count: more visits = more vivid, but not linearly ---
-_ACTIVATION_EXPONENT = 0.3
-
-# --- Resolved/digested decay acceleration factors ---
-_FACTOR_RESOLVED_DIGESTED = 0.02  # dealt with + a feel written -> fade into the background quickly
-_FACTOR_RESOLVED_ONLY = 0.05      # dealt with only (no feel written) -> fade moderately
-
-# --- Urgency boost: high arousal and not yet dealt with -> temporarily heavier, so it does not get archived by mistake ---
-_AROUSAL_URGENCY_THRESHOLD = 0.7
-_URGENCY_BOOST = 1.5
 
 # --- Auto-resolve: 🔴 CUT. Of everything that was cut, this one deserved it most. ---
 # The old logic: importance<=4 and untouched for 30 days -> automatically resolved ->
@@ -153,10 +122,9 @@ _EMO_W_V = 0.7             # valence outweighs arousal
 _EMO_W_A = 0.3
 _RESOLVED_HOLD_FACTOR = 0.5  # marked resolved by hand -> halve the holding days (forgotten twice as fast)
 
-# --- Arousal/importance fallbacks ---
+# --- Arousal fallback ---
 _DEFAULT_AROUSAL = 0.3
-_DEFAULT_IMPORTANCE = 5
-_DEFAULT_DAYS_FALLBACK = 30  # a broken time field in calculate_score -> treat as 30 days (conservative)
+_DEFAULT_DAYS_FALLBACK = 30  # a broken time field -> treat as 30 days, unless the caller says otherwise
 
 # --- Time conversions ---
 _SECONDS_PER_DAY = 86400
@@ -166,12 +134,8 @@ _SECONDS_PER_HOUR = 3600
 def _days_since_active(meta: dict, fallback_days: float = _DEFAULT_DAYS_FALLBACK) -> float:
     """Parse "days since last activation" out of metadata.
 
-    Why it was extracted: calculate_score and run_decay_cycle each wrote out the same
-    "fromisoformat -> difference -> fallback" three-step, and their fallback values did
-    not even agree (30 in one, 999 in the other). One function now, with the caller
-    passing fallback_days to say how bad data should be treated:
-      * calculate_score uses the default 30: conservatively score it as "untouched for a month"
-      * run_decay_cycle's auto-resolve path passed 999, so bad data would readily trigger closing
+    The caller passes fallback_days to say how bad data should be treated: stage_of
+    passes 0, so an entry whose time field will not parse never ages; the default is 30.
 
     Edges (rule.md §⑨):
       * meta is not a dict / the field is missing / the string will not parse -> return fallback_days
@@ -189,9 +153,8 @@ def _days_since_active(meta: dict, fallback_days: float = _DEFAULT_DAYS_FALLBACK
 
 class DecayEngine:
     """
-    Memory decay engine — periodically scans all dynamic buckets,
-    calculates decay scores, auto-archives low-activity buckets
-    to simulate natural forgetting.
+    Memory decay engine — periodically scans the buckets and moves each through the
+    three stages (alive -> faded -> sunk) by how long it has gone unrecalled.
     """
 
     def __init__(self, config: dict, bucket_mgr):
@@ -216,111 +179,6 @@ class DecayEngine:
     def is_running(self) -> bool:
         """Whether the decay engine is running in the background."""
         return self._running
-
-    # ---------------------------------------------------------
-    # Core: calculate decay score for a single bucket
-    #
-    # Higher score = more vivid memory; below threshold → archive
-    # Permanent buckets never decay
-    # ---------------------------------------------------------
-    # ---------------------------------------------------------
-    # Freshness bonus: continuous exponential decay
-    # bonus = 1.0 + 1.0 × e^(-t/36), t in hours
-    # t=0 → 2.0×, t≈25h (half-life) → 1.5×, t≈72h → ≈1.14×, t→∞ → 1.0×
-    # ---------------------------------------------------------
-    @staticmethod
-    def _calc_time_weight(days_since: float) -> float:
-        """
-        Freshness bonus multiplier: 1.0 + e^(-t/36), t in hours.
-        ×2.0 the moment it is stored, half-life around 36 hours, approaching ×1.0 after 72.
-        """
-        hours = days_since * 24.0
-        return 1.0 + _FRESHNESS_AMPLITUDE * math.exp(-hours / _FRESHNESS_HALF_LIFE_HRS)
-
-    def calculate_score(self, metadata: dict) -> float:
-        """
-        Calculate current activity score for a memory bucket.
-
-        New model: short-term vs long-term weight separation.
-        - Short-term (≤3 days): time_weight dominates, emotion amplifies
-        - Long-term (>3 days): emotion_weight dominates, time decays to floor
-        """
-        if not isinstance(metadata, dict):
-            return 0.0
-
-        # --- Pinned/protected buckets: never decay, importance locked to 10 ---
-        if metadata.get("pinned") or metadata.get("protected"):
-            return _SCORE_PINNED
-
-        # --- Permanent buckets never decay ---
-        if metadata.get("type") == "permanent":
-            return _SCORE_PINNED
-
-        # --- Feel buckets: never decay, fixed moderate score ---
-        if metadata.get("type") == "feel":
-            return _SCORE_FEEL
-
-        try:
-            importance = max(1, min(10, int(metadata.get("importance", _DEFAULT_IMPORTANCE))))
-        except (TypeError, ValueError):
-            importance = _DEFAULT_IMPORTANCE
-        activation_count = max(1.0, float(metadata.get("activation_count") or 1))
-
-        # --- Days since last activation ---
-        days_since = _days_since_active(metadata, fallback_days=_DEFAULT_DAYS_FALLBACK)
-
-        # --- Emotion weight ---
-        try:
-            arousal = max(0.0, min(1.0, float(metadata.get("arousal", _DEFAULT_AROUSAL))))
-        except (ValueError, TypeError):
-            arousal = _DEFAULT_AROUSAL
-        emotion_weight = self.emotion_base + arousal * self.arousal_boost
-
-        # --- Time weight ---
-        time_weight = self._calc_time_weight(days_since)
-
-        # --- Short-term vs Long-term weight separation ---
-        # Short term (≤3 days): time_weight 70%, emotion 30%
-        # Long term  (>3 days): emotion 70%, time_weight 30%
-        if days_since <= _SHORT_TERM_DAYS:
-            # Short-term: time dominates, emotion amplifies
-            combined_weight = (
-                time_weight * _SHORT_TERM_TIME_RATIO
-                + emotion_weight * (1.0 - _SHORT_TERM_TIME_RATIO)
-            )
-        else:
-            # Long-term: emotion dominates, time provides baseline
-            combined_weight = (
-                emotion_weight * _LONG_TERM_EMOTION_RATIO
-                + time_weight * (1.0 - _LONG_TERM_EMOTION_RATIO)
-            )
-
-        # --- Base score ---
-        base_score = (
-            importance
-            * (activation_count ** _ACTIVATION_EXPONENT)
-            * math.exp(-self.decay_lambda * days_since)
-            * combined_weight
-        )
-
-        # --- Weight pool modifiers ---
-        # resolved + digested (a feel exists) -> fade quickly
-        # resolved only -> fade moderately
-        resolved = is_closed(metadata)  # only `status` marks an ending; the old booleans stay read-only for compatibility
-        digested = metadata.get("digested", False)  # set when feel is written for this memory
-        if resolved and digested:
-            resolved_factor = _FACTOR_RESOLVED_DIGESTED
-        elif resolved:
-            resolved_factor = _FACTOR_RESOLVED_ONLY
-        else:
-            resolved_factor = 1.0
-        urgency_boost = (
-            _URGENCY_BOOST
-            if (arousal > _AROUSAL_URGENCY_THRESHOLD and not resolved)
-            else 1.0
-        )
-
-        return round(base_score * resolved_factor * urgency_boost, 4)
 
     # ---------------------------------------------------------
     # The three-stage decision (progress-based)
