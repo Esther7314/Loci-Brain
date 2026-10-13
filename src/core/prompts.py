@@ -78,10 +78,10 @@ PROMPTS: dict[str, Prompt] = {
     BACKFILL: Prompt(
         key=BACKFILL,
         source="core.dehydrator:BACKFILL_PROMPT",
-        # backfill_request fills `{kinds}`; parse_backfill reads the twelve top-level keys,
+        # backfill_request fills `{kinds}`; parse_backfill reads the eleven top-level keys,
         # each subject's "kind" and the time's three parts.
         required=("{kinds}",
-                  '"name"', '"summary"', '"tags"', '"aliases"', '"domain"', '"subjects"',
+                  '"name"', '"summary"', '"tags"', '"aliases"', '"subjects"',
                   '"kind"', '"bound"', '"time"', '"phrase"', '"yearly"', '"absolute"',
                   '"internally_generated"', '"evidential"', '"cue_phrasings"',
                   '"looks_like_promise"'),

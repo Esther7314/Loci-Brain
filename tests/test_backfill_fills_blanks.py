@@ -145,23 +145,25 @@ def test_blanks_are_filled_and_backfilled_lists_exactly_those(backfill):
     store, _, _ = backfill(
         event(subjects=["小李"]),
         {"name": "约看沙丘", "summary": "约好下周一看沙丘", "tags": ["沙丘", "老地方"],
-         "aliases": ["电影", "约会"], "domain": ["影视"],
+         "aliases": ["电影", "约会"],
          "subjects": [{"name": "小王", "kind": "人"}]})
     meta = store.meta
     assert meta["name"] == "约看沙丘" and "name_source" not in meta
     assert meta["summary"] == "约好下周一看沙丘"
     assert meta["aliases"] == ["电影", "约会"]
-    assert meta["domain"] == ["影视"]
     assert meta["subjects"] == ["小李", "小王"], "the main model's subjects stay, new names join"
     assert meta["tags"] == ["沙丘", "老地方"]
     assert sorted(meta["backfilled"]) == sorted(
-        ["name", "summary", "aliases", "domain", "subjects", "tags"])
+        ["name", "summary", "aliases", "subjects", "tags"])
 
 
-def test_a_domain_the_main_model_set_is_kept(backfill):
-    store, _, _ = backfill(event(domain=["工作"]), {"summary": "s", "domain": ["影视"]})
-    assert store.meta["domain"] == ["工作"]
-    assert "domain" not in store.meta["backfilled"]
+def test_the_folder_is_not_the_side_models_to_choose(backfill):
+    # Criterion: a domain in the answer is not read — neither over the placeholder nor
+    # over one the main model set.
+    for stored in (["未分类"], ["工作"]):
+        store, _, _ = backfill(event(domain=stored), {"summary": "s", "domain": ["影视"]})
+        assert store.meta["domain"] == stored
+        assert "domain" not in store.meta["backfilled"]
 
 
 def test_backfilled_adds_to_what_was_listed_before(backfill):

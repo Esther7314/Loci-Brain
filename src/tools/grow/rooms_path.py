@@ -123,7 +123,7 @@ _LONG_HINT = 600
 
 async def _backfill_one(bucket_id: str, text: str, kind: str) -> str:
     """Fill in one bucket's blanks in the background, from one side-model call: name,
-    summary, tags, aliases, domain, subjects, and the slots read off the sentence.
+    summary, tags, aliases, subjects, and the slots read off the sentence.
 
     kind = "event" | "mind" | "big".
     🔴 v/a is never backfilled: an event's v/a is now set by the caller too —

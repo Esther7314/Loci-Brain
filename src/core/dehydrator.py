@@ -12,7 +12,7 @@ Key behaviours:
 - merge(old, new): blend new content into old while keeping bucket size roughly constant
 - backfill_request(content, context) / parse_backfill(raw, content): the one call that
   fills a new entry's blanks — name, summary, tags (scene anchors, verified to appear
-  literally in the body), aliases (feed bm25 only), domain, subjects with kinds, and the
+  literally in the body), aliases (feed bm25 only), subjects with kinds, and the
   slots read off the sentence (bound, the time phrase, dreamt or imagined, evidential,
   cue phrasings, looks like a promise). The call itself and what gets written are
   tools/grow/rooms_path._backfill_one's
@@ -131,7 +131,7 @@ _DEFAULT_AROUSAL = 0.3  # 0 = completely calm, 1 = extremely aroused
 
 # --- Output truncation lengths ---
 _TAGS_MAX = 15           # how many tags are kept at most
-_MAX_TAG_LEN = 128       # one tag, alias or domain (bucket_manager caps at the same length)
+_MAX_TAG_LEN = 128       # one tag or alias (bucket_manager caps at the same length)
 # Tags that merely point at "the two people this store is about" — their names, and bare
 # pronouns — never make it into tags. The reasoning is in the comments inside
 # parse_backfill.
@@ -364,15 +364,6 @@ BACKFILL_PROMPT = """你是记忆系统的回填器。下面是一条刚存下�
 - summary：一句话摘要，中文，不超过60字。一件事就概括发生了什么；一条认知/感受就概括认识到了什么。
 - tags（场景锚点）：设想那一刻如果拍了一张照片——原文里哪些词是照片里能看见的东西（人、地方、物件），或者身体当时直接接收到的（光线明暗、冷热、声音、气味）。必须是原文里的原词。房间是 MIND 的，一律交白卷。
 - aliases（引申词）：5~8 个语义相关词（近义词、上位词、换个说法搜它时会用的词）。
-- domain（主题域）：选最精确的 1~2 个，只选真正相关的
-   日常: ["饮食", "穿搭", "出行", "居家", "购物"]
-   人际: ["家庭", "恋爱", "友谊", "社交"]
-   成长: ["工作", "学习", "考试", "求职"]
-   身心: ["健康", "心理", "睡眠", "运动"]
-   兴趣: ["游戏", "影视", "音乐", "阅读", "创作", "手工"]
-   数字: ["编程", "AI", "硬件", "网络"]
-   事务: ["财务", "计划", "待办"]
-   内心: ["情绪", "回忆", "梦境", "自省"]
 - subjects（主体）：这段话里出现的人和东西（游戏、书、群、作品……；地点不算）。每个写成 {"name": "能分清是谁的叫法", "kind": "它是什么"}：有名字就原样写名字；只有称呼（妈、老板娘、老大、房东……）就带上是谁的或哪儿的，如「小思的妈」「面馆的老板娘」；原文看不出是谁的就照抄称呼。kind 只能从这些里选：{kinds}；认不出是什么就写 ""。纯代词一律不要（我/你/他/她/它/我们/自己/对方等）——代词是指代不是名字。不要推测真名，不要给没出现的人。如果它就是「已有的名片」里的某一个（同一个人换了个叫法），再加一项 "card"，写那张名片的名字；拿不准就不写。
 - bound（谁被绑着）：只在「想让它发生」是「是」的时候填：这件事是谁答应的、谁要去做（「我们俩约好」就是两个人都在）。写名字；写这条记忆的「我」就写「我」，跟「我」说话的那个人写「你」。
 - time：句子里说到的时间，**原样抄下来，不要换算**，例如 {"phrase": "下周一两点", "yearly": false, "absolute": ""}。每年都会再来的（生日、纪念日，「每年8月7号」）yearly 写 true。absolute 只在原文写明了是哪一天、你能确定时写 YYYY-MM-DD，否则留空。没说时间就都留空。
@@ -387,7 +378,6 @@ BACKFILL_PROMPT = """你是记忆系统的回填器。下面是一条刚存下�
   "summary": "一句话摘要",
   "tags": ["场景锚点"],
   "aliases": ["引申词"],
-  "domain": ["主题域"],
   "subjects": [{"name": "称呼", "kind": "人", "card": ""}],
   "bound": [],
   "time": {"phrase": "", "yearly": false, "absolute": ""},
@@ -482,7 +472,6 @@ class BackfillAnswer:
     summary: str = ""
     tags: list = field(default_factory=list)
     aliases: list = field(default_factory=list)
-    domain: list = field(default_factory=list)
     subjects: Optional[list] = None           # [(name, kind)], kind "" when not known
     same: dict = field(default_factory=dict)  # {name: the card the model says it is}
     bound: list = field(default_factory=list)
@@ -496,7 +485,7 @@ class BackfillAnswer:
     problems: list = field(default_factory=list)
 
     def says_anything(self) -> bool:
-        return any((self.name, self.summary, self.tags, self.aliases, self.domain,
+        return any((self.name, self.summary, self.tags, self.aliases,
                     self.subjects, self.bound, self.time_phrase, self.time_absolute,
                     self.internally_generated, self.evidential, self.cue_phrasings,
                     self.looks_like_promise))
@@ -619,7 +608,6 @@ def parse_backfill(raw: str, content: str, kinds=None) -> Optional["BackfillAnsw
             if t in content and t not in person_stop]
     aliases = [t for t in strings("aliases", _TAGS_MAX * 2, _MAX_TAG_LEN)
                if t not in person_stop and t not in tags]
-    ans.domain = strings("domain", _DOMAIN_MAX, _MAX_TAG_LEN)
 
     if parsed.get("subjects") not in (None, ""):
         part = _subjects_part(parsed.get("subjects"), kinds)

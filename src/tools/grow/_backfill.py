@@ -118,7 +118,6 @@ def _fallback_summary(text: str) -> str:
 # A bucket is born named after the second it was written in (bucket_manager.create): a
 # name like that is a blank, not a title.
 _BIRTH_NAME_RE = _re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}-\d{2}-\d{2}$")
-_PLACEHOLDER_DOMAIN = "未分类"
 _YEARLY = "FREQ=YEARLY"
 _BACKFILL_TEMPERATURE = 0.1
 
@@ -359,10 +358,6 @@ def _fills_from(ans: BackfillAnswer, meta: dict, *, mind: bool) -> dict:
         added = [n for n in normalize_subjects([n for n, _ in ans.subjects]) if n not in have]
         if added:
             out["subjects"] = have + added
-    domain = [str(d) for d in meta.get("domain") or []]
-    if ans.domain and (not domain or domain == [_PLACEHOLDER_DOMAIN]):
-        # domain is used purely as a folder; retrieval does not consume it
-        out["domain"] = ans.domain
     if telic and ans.bound and not meta.get("bound"):
         names, err = normalize_bound(ans.bound)
         if names and not err:
