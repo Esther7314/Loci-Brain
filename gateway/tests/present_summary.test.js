@@ -314,6 +314,30 @@ test("due_line: one line per crossing, the highest when several are crossed at o
   assert.deepStrictEqual(compress.due_line({ fill_pct: 66, values: two, offered: ["weak:50"] }), { line: "weak", covers: ["weak:65"] });
 });
 
+test("due_line: a group that is switched off has no lines — not said, not the highest, not counted as offered", () => {
+  const no_ask = { ...VALUES, ask_on: false, advanced_on: true };
+  assert.deepStrictEqual(compress.due_line({ fill_pct: 90, values: no_ask }), { line: "weak", covers: ["weak:65"] },
+    "past the ask line with it off: the highest weak line is the one said");
+  assert.strictEqual(compress.due_line({ fill_pct: 99, values: no_ask, offered: ["weak:65"] }), null, "the ask line is never offered");
+
+  const no_advanced = { ...VALUES, ask_on: true, advanced_on: false };
+  assert.strictEqual(compress.due_line({ fill_pct: 70, values: no_advanced }), null, "the weak line is never offered");
+  assert.deepStrictEqual(compress.due_line({ fill_pct: 90, values: no_advanced }), { line: "ask", covers: ["ask"] },
+    "the jump covers the ask line alone: the weak line is not there to be covered");
+
+  const neither = { ...VALUES, ask_on: false, advanced_on: false };
+  for (const fill_pct of [66, 80, 99]) assert.strictEqual(compress.due_line({ fill_pct, values: neither }), null);
+
+  // switched back on in the same window: a line passed while it was off is still unsaid
+  const both = { ...VALUES, ask_on: true, advanced_on: true };
+  assert.deepStrictEqual(compress.due_line({ fill_pct: 90, values: both, offered: ["weak:65"] }), { line: "ask", covers: ["ask"] },
+    "the ask line, off when the fill passed it, is offered once it is on");
+  assert.strictEqual(compress.due_line({ fill_pct: 90, values: both, offered: ["ask"] }), null,
+    "the weak line, off when the fill passed it, is not said after the ask one");
+  assert.deepStrictEqual(compress.due_line({ fill_pct: 70, values: both }), { line: "weak", covers: ["weak:65"] },
+    "under the ask line the weak one is the highest crossed: offered");
+});
+
 test("offer_reminder: at her line's tail after the card, once per line per window, never while off", () => {
   const h = [u("一"), a("一的回话，长一点的一句。"), u("二")];
   const t = { id: "t_aaaaaa", branch: h.map((m, i) => ({ id: `m_${i + 1}`, role: m.role, fp: to_said(m).fp })) };
@@ -336,6 +360,18 @@ test("offer_reminder: at her line's tail after the card, once per line per windo
   const ask = compress.offer_reminder({ w, turn: "m_5", values: VALUES, card: () => "改过的卡" });
   assert.strictEqual(ask.text, compress_self_shell({ card: "改过的卡", keep_raw: 40, line: "ask" }));
   assert.deepStrictEqual(w.offered, ["weak:65", "ask"]);
+});
+
+test("offer_reminder: the window records only the lines of the groups that are on", () => {
+  const t = { id: "t_dddddd", branch: [{ id: "m_1", role: "user" }, { id: "m_2", role: "assistant" }, { id: "m_3", role: "user" }] };
+  const w = win.ensure(t, 0);
+  w.usage = { fill_pct: 90 };
+  const off = { ...VALUES, ask_on: false, advanced_on: false };
+  assert.strictEqual(compress.offer_reminder({ w, turn: "m_3", values: off, card: () => "卡" }), null);
+  assert.deepStrictEqual([w.offered, w.overlays], [[], []], "both groups off under compress.on: nothing offered, nothing recorded");
+
+  const o = compress.offer_reminder({ w, turn: "m_3", values: { ...VALUES, advanced_on: false }, card: () => "卡" });
+  assert.deepStrictEqual([o.line, o.lines, w.offered], ["ask", ["ask"], ["ask"]]);
 });
 
 // ———— the flip ————

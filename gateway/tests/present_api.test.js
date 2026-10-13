@@ -134,7 +134,10 @@ async function call(method, route, { body, auth = TOKEN, to = gateway } = {}) {
 const file_bytes = (f) => (fs.existsSync(f) ? fs.readFileSync(f, "utf8") : null);
 
 const DEFAULT_VIEW = {
-  compress: { on: true, context_tokens: null, ask_pct: 75, keep_raw: 40, weak_pct: [65], force_pct: 85 },
+  compress: {
+    on: true, context_tokens: null, ask_on: true, ask_pct: 75, keep_raw: 40,
+    advanced_on: true, weak_pct: [65], force_pct: 85,
+  },
   report: { from: "04:00", to: "08:00", quiet_min: 30, flip: "daily", every_n: 2 },
   wake: {
     on: false, every_min: 55, dnd: { on: true, from: "23:00", to: "08:00" },
@@ -237,6 +240,8 @@ test("POST /present: a bad patch → 400 naming the field; present.json untouche
     [{ compress: { force_pct: 60 } }, "compress.force_pct"],
     [{ compress: { weak_pct: [40, 40] } }, "compress.weak_pct"],
     [{ compress: { keep_raw: 2.5 } }, "compress.keep_raw"],
+    [{ compress: { ask_on: "off" } }, "compress.ask_on"],
+    [{ compress: { advanced_on: 0 } }, "compress.advanced_on"],
     [{ wake: { segments: { list: [{ from: "09:00", to: "12:00" }, { from: "11:00", to: "13:00" }] } } }, "wake.segments.list[1]"],
     [{ wake: { segments: { list: [{ from: "23:00", to: "02:00" }, { from: "01:00", to: "03:00" }] } } }, "wake.segments.list[1]"],
     [{ wake: { segments: { mode: "only", list: [] } } }, "wake.segments.list"],

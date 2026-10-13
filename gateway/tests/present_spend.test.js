@@ -80,7 +80,7 @@ test("a guess never replaces a limit the error named; a turn that goes through w
 });
 
 /** A wall escape over a real window store, with the thread ledger and the resend faked. */
-function wall_rig({ model, force_pct = 85, on = false } = {}) {
+function wall_rig({ model, force_pct = 85, on = false, advanced_on = true } = {}) {
   const dir = fresh_dir();
   const clock = create_fake_clock(at("2026-10-08T10:00:00"));
   const windows = create_context_windows({ data_root: dir, clock });
@@ -89,7 +89,7 @@ function wall_rig({ model, force_pct = 85, on = false } = {}) {
   const wall = create_wall_escape({
     windows, clock, zone: ZONE, data_root: dir, log: () => {},
     threads: { get: () => thread, save: () => true },
-    read_compress: () => ({ on, force_pct }),
+    read_compress: () => ({ on, advanced_on, force_pct }),
     request_pack: (id, hint) => asked.push({ id, hint }),
   });
   const sent = [];
@@ -207,6 +207,7 @@ test("🔴 a wake refused as too long: the earlier wake pairs go, then that snap
 
 /** A packer over a hand-made thread; own_turn only counts (and answers "no key": unpaid). */
 function pack_rig({ system_chars, lines, line_chars, fill_pct, keep_raw = 2, force_pct = 85 }) {
+  const compress = { on: true, keep_raw, force_pct };   // the settings the packer reads; a test may change them
   const dir = fresh_dir();
   const clock = create_fake_clock(at("2026-10-08T10:00:00"));
   const branch = [];
@@ -224,11 +225,11 @@ function pack_rig({ system_chars, lines, line_chars, fill_pct, keep_raw = 2, for
     day_store: { get: (id) => store.get(id) || null },
     own_turn: { run: async (args) => { runs.push(args); return { ok: false, outcome: "unpaid", reason: "no_key", run: "r" }; } },
     prompts: { current: () => "压缩卡" },
-    read_compress: () => ({ on: true, keep_raw, force_pct }),
+    read_compress: () => compress,
     system_of: () => [{ role: "system", content: "人设".repeat(system_chars / 2) }],
     data_root: dir, clock, zone: ZONE, log: () => {},
   });
-  return { dir, clock, thread, runs, packer };
+  return { dir, clock, thread, runs, packer, compress };
 }
 const settle = () => new Promise((r) => setImmediate(r));
 
@@ -267,6 +268,91 @@ test("a forced pack that would free only a couple of points waits; one that fold
   await settle();
   assert.strictEqual(thick.runs.length, 1);
   assert.strictEqual(thick.packer.status().stopped.length, 0);
+});
+
+// ———— compress.advanced_on: the force line's packs, never the wall's ————
+
+const WALL_8192 = "maximum context length is 8192 tokens. However, your messages resulted in 20000 tokens.";
+const wall_8192 = () => new Response(JSON.stringify({ error: { message: WALL_8192 } }), { status: 400 });
+
+test("the wall asks for its pack under compress.on alone: the advanced group off changes nothing; compress off is cut only", async () => {
+  for (const [on, advanced_on, asks] of [[true, true, 1], [true, false, 1], [false, true, 0], [false, false, 0]]) {
+    const what = `compress.on ${on}, advanced_on ${advanced_on}`;
+    const r = wall_rig({ on, advanced_on });
+    const ctx = { thread: "t_wall01", window: "w_1", model: "m", forward: { model: "m", messages: turns(30, 200) }, keep_head: 1 };
+    const out = await r.wall.escape(ctx, wall_8192(), r.send);
+    assert.strictEqual(out.status, 200, `${what}: the cut resend goes through`);
+    assert.strictEqual(r.sent.length, 1, what);
+    assert.strictEqual(r.asked.length, asks, what);
+    assert.strictEqual(log_lines(r.dir).find((l) => l.event === "撞墙").pack, asks === 1, what);
+  }
+});
+
+test("🔴 advanced_on false: the force line's pack does not start and its waiting retry is dropped; the wall's pack and retry go", async () => {
+  const off = pack_rig({ system_chars: 200, lines: 40, line_chars: 300, fill_pct: 90 });
+  off.compress.advanced_on = false;
+  off.packer.request(off.thread.id, "forced");
+  await settle();
+  assert.strictEqual(off.runs.length, 0, "the force line asked while its group is off: nothing sent");
+  assert.strictEqual(log_lines(off.dir).at(-1).outcome, "off");
+  assert.deepStrictEqual(off.packer.request(off.thread.id, "forced", { fill_pct: 101, wall: true }), { started: true });
+  await settle();
+  assert.strictEqual(off.runs.length, 1, "the wall asked: it goes");
+  off.packer.beat();   // that run ended unpaid: its retry is the wall's too
+  await settle();
+  assert.strictEqual(off.runs.length, 2);
+
+  const flipped = pack_rig({ system_chars: 200, lines: 40, line_chars: 300, fill_pct: 90 });
+  assert.deepStrictEqual(flipped.packer.request(flipped.thread.id, "forced"), { started: true });
+  await settle();
+  assert.deepStrictEqual([flipped.runs.length, flipped.packer.status().pending.length], [1, 1], "unpaid: waiting to be tried again");
+  flipped.compress.advanced_on = false;
+  flipped.packer.beat();
+  await settle();
+  assert.deepStrictEqual([flipped.runs.length, flipped.packer.status().pending.length], [1, 0], "switched off while it waited: dropped");
+  flipped.compress.advanced_on = true;
+  flipped.packer.beat();
+  await settle();
+  assert.strictEqual(flipped.runs.length, 1, "and not picked up again by the beat: the next finished turn asks afresh");
+});
+
+test("a pack held back on the force line's account is not reported while the advanced group is off; the wall's still is", () => {
+  const r = pack_rig({ system_chars: 9000, lines: 8, line_chars: 20, fill_pct: 95 });
+  assert.strictEqual(r.packer.request(r.thread.id, "forced").no_help, true);
+  assert.strictEqual(r.packer.status().stopped.length, 1);
+  r.compress.advanced_on = false;
+  assert.deepStrictEqual(r.packer.status().stopped, [], "「强制压缩先停了」 would promise a pack the switch has ruled out");
+
+  assert.strictEqual(r.packer.request(r.thread.id, "forced", { fill_pct: 101, wall: true }).no_help, true);
+  assert.deepStrictEqual(r.packer.status().stopped.map((s) => [s.reason, s.wall]), [["over_line", true]], "the wall's pack can still be held back, and says so");
+  r.compress.on = false;
+  assert.deepStrictEqual(r.packer.status().stopped, [], "compress off: the gateway packs nothing on its own, held back or not");
+});
+
+test("🔴 the present layer passes the wall's ask on as the wall's: with advanced_on false its pack is started, not switched off", async () => {
+  const dir = fresh_dir();
+  fs.writeFileSync(path.join(dir, "present.json"), JSON.stringify({ compress: { advanced_on: false, keep_raw: 2 } }));
+  const clock = create_fake_clock(at("2026-10-08T10:00:00"));
+  const present = create_present({ env: { LOCI_TZ: ZONE }, data_root: dir, clock, upstream: "http://127.0.0.1:9/v1",
+                                   loci: "http://127.0.0.1:9/mcp", log: () => {} });
+  // a conversation the ledger holds line by line, so there is something before the kept tail to fold
+  const messages = [{ role: "system", content: "你是 ta 的伴。" }];
+  for (let i = 0; i < 6; i++) {
+    messages.push({ role: "user", content: `第${i}句${"话".repeat(300)}` });
+    const reply = `回${i}${"嗯".repeat(300)}`;
+    present.threads.record_reply(present.threads.ingest(messages), { text: reply });
+    messages.push({ role: "assistant", content: reply });
+  }
+  messages.push({ role: "user", content: "最后一句" });
+  const seen = present.threads.ingest(messages);
+  const ctx = { thread: seen.thread, window: null, model: "m", forward: { model: "m", messages }, keep_head: 1 };
+  const out = await present.escape_wall(ctx, wall_8192(), async () => new Response("{}", { status: 200 }));
+  assert.strictEqual(out.status, 200);
+  await settle();
+  // no key was ever lent to this gateway, so the pack ends unpaid — but it was started
+  assert.deepStrictEqual(log_lines(dir).filter((l) => l.event === "pack").map((l) => [l.how, l.outcome, l.reason]),
+    [["forced", "unpaid", "no_key"]]);
+  assert.deepStrictEqual(present.packer.status().pending.map((p) => p.how), ["forced"], "and it will be tried again");
 });
 
 // ———— finding 6, through the real relay: the next wake goes out under the wall ————

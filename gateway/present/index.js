@@ -18,7 +18,8 @@
 //            muse, behind its idle gate) and Loci's cue, side by side, each with its own
 //            timeout; what they hand back becomes an overlay on her line (window.js)
 //         ②b the last turn's fill crossed a reminder line not yet offered in this
-//            window → his reminder goes at the tail of her line (compress.js)
+//            window → his reminder goes at the tail of her line (compress.js; only the
+//            lines whose group is switched on)
 //         ②c what he said while she was away (away.js): held lines her history shows
 //            are confirmed; held lines not seen yet go in before her line as his own
 //            words, and this turn's answer starts with the prefix block (on_response
@@ -35,7 +36,8 @@
 //       flips the window once the turn has ended (compress.js; Loci hears /cue/dropped).
 //       A finished turn whose fill reached compress.force_pct asks for a pack (pack.js),
 //       which starts at once in the background — unless pack.js predicts it could not
-//       bring the window back under the line (then it is held back and said once).
+//       bring the window back under the line (then it is held back and said once). The
+//       force line is off while compress.advanced_on is false.
 //   escape_wall(ctx, resp, send) → the Response to go on with
 //       Upstream refused the turn (non-2xx): when it is the context-length wall, the
 //       oldest lines after the mark are cut and the request sent once more (wall.js).
@@ -168,7 +170,7 @@ function create_present({
     on_flip: ({ thread, old_name }) => after_flip(thread, old_name),
   });
   const wall = create_wall_escape({ windows, threads, read_compress, data_root, clock, zone, log,
-                                    request_pack: (id, hint) => packer.request(id, "forced", hint) });
+                                    request_pack: (id, hint) => packer.request(id, "forced", { ...hint, wall: true }) });
 
   /** Any flip: Loci hears the old window's cards dropped, and the wake snapshot moves to the new window. */
   function after_flip(thread_id, old_name) {
@@ -349,12 +351,13 @@ function create_present({
 
   /**
    * A finished turn (a reply without tool calls) whose fill reached the force line asks
-   * for a pack. Not while compress is off, not when the window already flipped.
+   * for a pack. Not while compress or its advanced group (the force line's) is off, not
+   * when the window already flipped.
    */
   function maybe_force(thread_id, ctx, tools) {
     if (tools && tools.length) return;
     const values = read_compress();
-    if (values.on !== true) return;
+    if (values.on !== true || values.advanced_on === false) return;
     const thread = threads.get(thread_id);
     const w = thread && thread.window;
     if (!w || w.name !== ctx.window || w.summary_pending) return;

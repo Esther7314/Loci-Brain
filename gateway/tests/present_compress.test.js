@@ -19,6 +19,9 @@
 //     self; the first turn after the flip offers no reminder
 //   · a half block leaves the carry as it was and is stored nowhere
 //   · compress.on false: nothing is offered
+//   · compress.advanced_on false: the weak line is never offered, the ask line still is;
+//     compress.ask_on false: the ask line is never offered and the highest weak line is
+//     said instead; a line passed while its group was off is offered once it is on
 //
 // Nothing outside os.tmpdir() is written; no real port is touched (reconciled at the end).
 // ============================================================
@@ -384,6 +387,70 @@ test("/present status from the real window: fill, kept lines, last = self; time 
   assert.match(c.last.at, /^2026-10-07T\d{2}:\d{2}:\d{2}\+08:00$/);
   const h = await call("GET", "/health");
   assert.strictEqual(h.status, 200);
+});
+
+/** Patch one compress switch through /present, as the panel does: one boolean at a time. */
+async function flip_switch(key, value) {
+  const r = await call("POST", "/present", { patch: { compress: { [key]: value } } });
+  assert.strictEqual(r.status, 200, r.text);
+  assert.strictEqual(r.json.settings.compress[key], value);
+  return r.json.settings.compress;
+}
+
+test("compress.advanced_on false: the weak line is never offered; the ask line still is, and covers itself alone", { timeout: 30000 }, async () => {
+  clock.advance(60 * 1000);
+  const set = await flip_switch("advanced_on", false);
+  assert.deepStrictEqual([set.on, set.ask_on], [true, true], "the other switches are as they were");
+  try {
+    let h = [SYS, u("只开着普通压缩的一段")];
+    await turn(h, { text: "好。", usage: usage(6900) });
+    const id = (await until(() => threads().find((t) => t.window?.usage?.prompt_tokens === 6900), "turn 1 usage")).id;
+
+    h = [...h, a("好。"), u("过了弱提醒线")];
+    await turn(h, { text: "嗯。", usage: usage(8300) });
+    assert.ok(!upstream_last().some(is_reminder), "69% ≥ weak 65 with the advanced group off: nothing is said");
+    assert.deepStrictEqual((await settled(id, (t) => t.window.usage?.prompt_tokens === 8300, "turn 2 usage")).window.offered, []);
+
+    h = [...h, a("嗯。"), u("过了水位线")];
+    await turn(h, { text: "知道了。", usage: usage(8400) });
+    assert.strictEqual(upstream_last().at(-1).content, ASK, "83% ≥ ask 75: the ask reminder");
+    assert.strictEqual(upstream_last().filter(is_reminder).length, 1);
+    assert.deepStrictEqual((await settled(id, (t) => t.window.usage?.prompt_tokens === 8400, "turn 3 usage")).window.offered, ["ask"],
+      "the weak line is not counted as offered with it");
+  } finally {
+    await flip_switch("advanced_on", true);
+  }
+});
+
+test("compress.ask_on false: the ask line is never offered — past it the highest weak line is said; switched on, it is offered", { timeout: 30000 }, async () => {
+  clock.advance(60 * 1000);
+  const set = await flip_switch("ask_on", false);
+  assert.deepStrictEqual([set.on, set.advanced_on], [true, true]);
+  try {
+    let h = [SYS, u("只开着高级压缩的一段")];
+    await turn(h, { text: "好。", usage: usage(9100) });
+    const id = (await until(() => threads().find((t) => t.window?.usage?.prompt_tokens === 9100), "turn 1 usage")).id;
+
+    h = [...h, a("好。"), u("一下子过了两条线")];
+    await turn(h, { text: "嗯。", usage: usage(9200) });
+    assert.strictEqual(upstream_last().at(-1).content, WEAK, "91% with the ask line off: the weak reminder, not the ask one");
+    assert.deepStrictEqual((await settled(id, (t) => t.window.usage?.prompt_tokens === 9200, "turn 2 usage")).window.offered, ["weak:65"]);
+
+    h = [...h, a("嗯。"), u("还是没有水位线")];
+    await turn(h, { text: "在。", usage: usage(9300) });
+    assert.strictEqual(upstream_last().filter(is_reminder).length, 1, "92%: the ask line is still not offered");
+    await settled(id, (t) => t.window.usage?.prompt_tokens === 9300, "turn 3 usage");
+
+    // the same window, the switch back on: the line the fill passed while it was off is offered
+    await flip_switch("ask_on", true);
+    h = [...h, a("在。"), u("水位线打开了")];
+    await turn(h, { text: "好的。", usage: usage(9400) });
+    assert.strictEqual(upstream_last().at(-1).content, ASK);
+    assert.strictEqual(upstream_last().filter(is_reminder).length, 2);
+    assert.deepStrictEqual((await settled(id, (t) => t.window.usage?.prompt_tokens === 9400, "turn 4 usage")).window.offered, ["weak:65", "ask"]);
+  } finally {
+    await flip_switch("ask_on", true);
+  }
 });
 
 test("🔴 sentinel: 0 times in every byte bound for a client, the day store and the console", () => {

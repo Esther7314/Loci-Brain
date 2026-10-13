@@ -3,11 +3,13 @@
 // himself
 //
 // The fill % is the last turn's input over the model's window (present/fill.js). Three
-// kinds of line act on it (present.json, compress.*):
-//   weak_pct[]  "this window is getting full, pick your moment"   ┐ reminders only, each
-//   ask_pct     "fold it this turn or the next"                    ┘ offered once per window
-//   force_pct   the gateway packs the window itself (pack.js); the wall's way out is wall.js
-// Nothing is offered, and nothing packed, while compress.on is false.
+// kinds of line act on it (present.json, compress.*), in two groups with a switch each:
+//   ask_pct     "fold it this turn or the next"                    basic     ask_on
+//   weak_pct[]  "this window is getting full, pick your moment"    advanced  advanced_on
+//   force_pct   the gateway packs the window itself (pack.js)      advanced  advanced_on
+// The first two are reminders only, each offered once per window. Nothing is offered,
+// and nothing packed, while compress.on is false; under it the two switches are
+// independent. The wall's way out (wall.js) answers to compress.on alone.
 //
 // ─── A reminder ───
 // When the fill crosses a line not yet offered in this window, his reminder
@@ -15,6 +17,15 @@
 // in at the true tail of the turn: after her new line, after that line's card. When the
 // fill jumps past several lines at once only the highest is said, and the lower ones
 // count as offered with it (a weak reminder after the ask one would be noise).
+//
+// A group that is switched off has no lines: they are not said, they are not the
+// "highest", and they do not count as offered. With the ask line off, the highest weak
+// line crossed is the one said, however far past ask_pct the fill is; with the weak lines
+// off, the ask line covers itself alone. So a line the fill passed while its group was
+// off is still unsaid when the group is switched on, and it is offered on the next turn
+// if it is then the highest line crossed — as a line moved under the fill by a settings
+// change is. That is the ask line whenever the fill is past it; a weak line only while
+// the ask line is off or not yet crossed.
 //
 // The reminder is an overlay (window.js) and is replayed in place every later turn until
 // the window flips. Why, rather than said once and dropped:
@@ -52,9 +63,10 @@ const { compress_self_shell } = require("./prompts.js");
 const REMINDER = "reminder";
 
 /**
- * Which reminder line is due, if any.
+ * Which reminder line is due, if any. Only the lines of a group that is on take part; a
+ * switch that is absent counts as on.
  * @param fill_pct  the last turn's fill, or null
- * @param values    settings compress section { weak_pct, ask_pct }
+ * @param values    settings compress section { weak_pct, ask_pct, ask_on, advanced_on }
  * @param offered   window.offered
  * @returns { line: "weak" | "ask", covers: [keys] } | null
  */
@@ -62,8 +74,9 @@ function due_line({ fill_pct, values, offered = [] }) {
   const fill = Number(fill_pct);
   if (fill_pct === null || fill_pct === undefined || !Number.isFinite(fill)) return null;
   const crossed = [];
-  for (const p of [...(values.weak_pct || [])].sort((x, y) => x - y)) if (fill >= p) crossed.push(`weak:${p}`);
-  if (fill >= values.ask_pct) crossed.push("ask");
+  const weak = values.advanced_on === false ? [] : [...(values.weak_pct || [])].sort((x, y) => x - y);
+  for (const p of weak) if (fill >= p) crossed.push(`weak:${p}`);
+  if (values.ask_on !== false && fill >= values.ask_pct) crossed.push("ask");
   if (!crossed.length) return null;
   const top = crossed[crossed.length - 1];
   if (offered.includes(top)) return null;

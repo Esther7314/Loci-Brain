@@ -8,6 +8,11 @@
 //   manual   the panel's 「现在压」 (POST /present/compress)
 // and starts at once, in the background. While compress.on is false nothing is packed on
 // the gateway's own account; 「现在压」 still packs, because she asked for it.
+// A forced pack answers to the switch of whoever asked for it (switched_on below): one
+// the force line asked for needs compress.advanced_on too, one the wall asked for does
+// not (wall.js ⑤ says why). That is judged each time a pack is about to start and each
+// time status() is read, so a retry left waiting when its switch goes off is dropped and
+// a pack held back on the force line's account stops being reported.
 //
 // ─── What the pack reads ───
 // Exactly the lines the next window will no longer hold raw: from the current window's
@@ -210,9 +215,18 @@ function create_packer({
 }) {
   const log_file = path.join(data_root, "logs", "present.jsonl");
   const running = new Map();   // thread → { how, promise, window }
-  const pending = new Map();   // thread → { how, window, next_at, paid }
+  const pending = new Map();   // thread → { how, wall, window, next_at, paid }
   const record = { last_ok_at: null, last_ok_how: null, failures_since_ok: 0, last_failure: null };
-  const stopped = new Map();   // thread → { window, reason, words, fill_pct, predicted_pct, at }: forced packs held back
+  const stopped = new Map();   // thread → { window, wall, reason, words, fill_pct, predicted_pct, at }: forced packs held back
+
+  /**
+   * May a forced pack go, as the settings stand? Never while compress.on is false; one
+   * the force line asked for also needs compress.advanced_on (absent = on), one the wall
+   * asked for (`wall`) does not.
+   */
+  function switched_on(wall, values = read_compress() || {}) {
+    return values.on === true && (Boolean(wall) || values.advanced_on !== false);
+  }
 
   function stamp() { return zone ? local_stamp(clock.now(), zone).iso : new Date(clock.now()).toISOString(); }
 
@@ -231,13 +245,13 @@ function create_packer({
     record.last_failure = null;
   }
 
-  async function attempt(thread_id, how) {
+  async function attempt(thread_id, how, wall) {
     const thread = threads.get(thread_id);
     if (!thread) return { outcome: "gone" };
     // read only: a thread without a window object yet is planned as a fresh window
     const w = thread.window && typeof thread.window === "object" ? thread.window : win.fresh_window(thread.id, clock.now());
     const values = read_compress() || {};
-    if (values.on !== true && how !== "manual") { write_line({ thread: thread_id, how, outcome: "off" }); return { outcome: "off" }; }
+    if (how !== "manual" && !switched_on(wall, values)) { write_line({ thread: thread_id, how, outcome: "off" }); return { outcome: "off" }; }
     const plan = plan_pack(thread, values.keep_raw);
     if (!plan.ids.length) {
       write_line({ thread: thread_id, how, outcome: "nothing", window: w.name });
@@ -324,10 +338,10 @@ function create_packer({
   }
 
   /** A forced pack held back: one ledger line per window and reason, and kept for status(). */
-  function hold_back(thread_id, why) {
+  function hold_back(thread_id, why, wall) {
     const window_name = threads.get(thread_id)?.window?.name || null;
     const prior = stopped.get(thread_id);
-    stopped.set(thread_id, { window: window_name, ...why, at: clock.now() });
+    stopped.set(thread_id, { window: window_name, wall: Boolean(wall), ...why, at: clock.now() });
     const first = !prior || prior.window !== window_name || prior.reason !== why.reason;
     if (first) {
       write_line({ thread: thread_id, how: "forced", outcome: "no_help", reason: why.reason, window: window_name,
@@ -337,13 +351,13 @@ function create_packer({
     return { no_help: true, reason: why.reason, first };
   }
 
-  function start(thread_id, how) {
+  function start(thread_id, how, wall = false) {
     const thread = threads.get(thread_id);
     const window_name = thread?.window?.name || null;
     const prior = pending.get(thread_id);
     pending.delete(thread_id);
     const job = { how, window: window_name, promise: null };
-    job.promise = attempt(thread_id, how).catch((err) => {
+    job.promise = attempt(thread_id, how, wall).catch((err) => {
       log(`[gateway] present: pack ${thread_id} failed: ${err?.stack || err}`);
       return { outcome: "paid", reason: "internal" };
     }).then((r) => {
@@ -353,9 +367,9 @@ function create_packer({
         record.failures_since_ok += 1;
         record.last_failure = { at: clock.now(), reason: r.reason || null };
         const wait = Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** (paid - 1));
-        pending.set(thread_id, { how, window: window_name, next_at: clock.now() + wait, paid });
+        pending.set(thread_id, { how, wall, window: window_name, next_at: clock.now() + wait, paid });
       } else if (r.outcome === "unpaid" || r.outcome === "aborted" || r.outcome === "busy") {
-        pending.set(thread_id, { how, window: window_name, next_at: 0, paid: prior?.paid || 0 });
+        pending.set(thread_id, { how, wall, window: window_name, next_at: 0, paid: prior?.paid || 0 });
       }
       return r;
     });
@@ -364,23 +378,27 @@ function create_packer({
   }
 
   /**
-   * Ask for a pack of this thread. `fill_pct` (forced only): the fill to judge by instead of
-   * the last measured one (the wall's refused request).
+   * Ask for a pack of this thread. Forced only: `wall` — the wall is asking, not the force
+   * line (see switched_on); `fill_pct` — the fill to judge by instead of the last measured
+   * one (the wall's refused request).
    * @returns { started: true } | { running: true } (one is in flight for it already) |
    *          { waiting: true } (backing off) | { no_help: true, reason, first } (see the header)
    */
-  function request(thread_id, how = "forced", { fill_pct = null } = {}) {
+  function request(thread_id, how = "forced", { fill_pct = null, wall = false } = {}) {
     if (!thread_id) return { started: false };
     if (running.has(thread_id)) return { running: true };
     const prior = pending.get(thread_id);
     const same_window = prior && prior.window === (threads.get(thread_id)?.window?.name || null);
-    if (same_window && how !== "manual" && prior.next_at > clock.now()) return { waiting: true };
+    if (same_window && how !== "manual" && prior.next_at > clock.now()) {
+      if (wall) prior.wall = true;   // the retry is the wall's too: it outlives the force line's switch
+      return { waiting: true };
+    }
     if (how !== "manual") {
       const why = cannot_help(thread_id, fill_pct);
-      if (why) { pending.delete(thread_id); return hold_back(thread_id, why); }
+      if (why) { pending.delete(thread_id); return hold_back(thread_id, why, wall); }
     }
     stopped.delete(thread_id);
-    start(thread_id, how);
+    start(thread_id, how, how !== "manual" && wall);
     return { started: true };
   }
 
@@ -392,10 +410,11 @@ function create_packer({
       if (!t || !t.window || t.window.name !== p.window) { pending.delete(thread_id); continue; }
       if (p.next_at > clock.now()) continue;
       if (p.how !== "manual") {
+        if (!switched_on(p.wall)) { pending.delete(thread_id); continue; }   // switched off while it waited
         const why = cannot_help(thread_id);
-        if (why) { pending.delete(thread_id); hold_back(thread_id, why); continue; }
+        if (why) { pending.delete(thread_id); hold_back(thread_id, why, p.wall); continue; }
       }
-      start(thread_id, p.how);
+      start(thread_id, p.how, p.wall);
     }
   }
 
@@ -426,11 +445,15 @@ function create_packer({
     };
   }
 
-  /** Forced packs held back whose window is still the one they were judged in, newest first. */
+  /**
+   * Forced packs held back whose window is still the one they were judged in and whose
+   * asker is still switched on: a hold says "it would go if it could help", which is not
+   * true of a pack that is switched off. Newest first.
+   */
   function held_back() {
     const out = [];
     for (const [thread, s] of stopped) {
-      if (threads.get(thread)?.window?.name !== s.window) { stopped.delete(thread); continue; }
+      if (threads.get(thread)?.window?.name !== s.window || !switched_on(s.wall)) { stopped.delete(thread); continue; }
       out.push({ thread, ...s });
     }
     return out.sort((a, b) => b.at - a.at);

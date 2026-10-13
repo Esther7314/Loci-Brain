@@ -8,7 +8,11 @@
 // Sections and defaults (the blueprint's settings table, with the owner's final rulings):
 //   compress   on · context_tokens (null = work it out: the provider's report, the
 //              gateway's model table, else 1M; a number = the owner's own figure) ·
-//              ask_pct · keep_raw · weak_pct[] · force_pct
+//              basic: ask_on · ask_pct · keep_raw
+//              advanced: advanced_on · weak_pct[] · force_pct
+//              (the two switches sit under `on` and are independent of each other; a
+//              group that is off keeps its numbers, and the order weak < ask < force
+//              holds whatever the switches say)
 //   report     from · to · quiet_min · flip (daily | every_n | manual) · every_n
 //   wake       on (off by default: an unattended machine idles until someone turns it
 //              on) · every_min · dnd {on, from, to} · segments {mode: all | only, list} ·
@@ -16,9 +20,9 @@
 //              daily_cap · dry_run · allow_short
 //   own        tool_rounds · models (empty = the model of the client's last request)
 //   push       bark (a Bark key or a whole Bark URL) · text (full | notice)
-// The panel shows most of these; daily_cap, dry_run, allow_short, own.* and push.text
-// live only in the file, but POST /present accepts them too — they are validated the
-// same way, and nothing about them is secret.
+// The panel shows most of these; compress.context_tokens, daily_cap, dry_run,
+// allow_short, own.* and push.text live only in the file, but POST /present accepts them
+// too — they are validated the same way, and nothing about them is secret.
 //
 // What never leaves this module as it is stored:
 //   · push.bark — the view carries `bark_set` and a masked tail (`bark_hint`) instead.
@@ -41,7 +45,11 @@ const fs = require("fs");
 const path = require("path");
 
 const DEFAULTS = Object.freeze({
-  compress: { on: true, context_tokens: null, ask_pct: 75, keep_raw: 40, weak_pct: [65], force_pct: 85 },
+  compress: {
+    on: true, context_tokens: null,
+    ask_on: true, ask_pct: 75, keep_raw: 40,
+    advanced_on: true, weak_pct: [65], force_pct: 85,
+  },
   report: { from: "04:00", to: "08:00", quiet_min: 30, flip: "daily", every_n: 2 },
   wake: {
     on: false, every_min: 55,
@@ -156,8 +164,10 @@ const VALIDATE = {
     const out = {
       on: bool(c.on, "compress.on"),
       context_tokens: int_or_null(c.context_tokens, 1000, 100000000, "compress.context_tokens"),
+      ask_on: bool(c.ask_on, "compress.ask_on"),
       ask_pct: int_in(c.ask_pct, 1, 99, "compress.ask_pct"),
       keep_raw: int_in(c.keep_raw, 1, 1000, "compress.keep_raw"),
+      advanced_on: bool(c.advanced_on, "compress.advanced_on"),
       weak_pct: null,
       force_pct: int_in(c.force_pct, 1, 99, "compress.force_pct"),
     };

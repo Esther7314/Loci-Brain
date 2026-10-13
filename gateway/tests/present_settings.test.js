@@ -68,6 +68,39 @@ test("a patch: merged over what is there, written whole, readable by hand", () =
     { ok: false, status: 400, field: "compress.force_pct", error: "水位线要比强制线低" }, "the panel shows this text as it is");
 });
 
+test("compress.ask_on / advanced_on: both on for a file that has neither; each patched alone; a non-boolean is refused", () => {
+  const s = fresh();
+  fs.mkdirSync(path.dirname(s.file), { recursive: true });
+  const written_before = { compress: { on: true, context_tokens: null, ask_pct: 70, keep_raw: 30, weak_pct: [60], force_pct: 90 } };
+  fs.writeFileSync(s.file, JSON.stringify(written_before), "utf8");
+  const got = s.load();
+  assert.strictEqual(got.state, "ok");
+  assert.deepStrictEqual(got.values.compress, { ...written_before.compress, ask_on: true, advanced_on: true });
+  assert.deepStrictEqual(s.view().compress, got.values.compress, "the panel reads both switches from the view");
+
+  assert.deepStrictEqual(s.patch({ compress: { ask_on: false } }), { ok: true });
+  assert.deepStrictEqual([s.load().values.compress.ask_on, s.load().values.compress.advanced_on], [false, true]);
+  assert.deepStrictEqual(s.patch({ compress: { advanced_on: false } }), { ok: true }, "both off under compress.on is a setting like any other");
+  const disk = JSON.parse(fs.readFileSync(s.file, "utf8")).compress;
+  assert.deepStrictEqual(disk, { ...written_before.compress, ask_on: false, advanced_on: false }, "a group that is off keeps its numbers");
+
+  for (const key of ["ask_on", "advanced_on"]) {
+    for (const value of ["off", 0, null]) {
+      assert.deepStrictEqual(s.patch({ compress: { [key]: value } }),
+        { ok: false, status: 400, field: `compress.${key}`, error: "只能是 true 或 false（开 / 关）" });
+    }
+  }
+  assert.deepStrictEqual(s.patch({ compress: { weak_pct: [80] } }),
+    { ok: false, status: 400, field: "compress.weak_pct", error: "弱提醒线要比水位线低" }, "the order holds while both groups are off");
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(s.file, "utf8")).compress, disk, "a refused patch writes nothing");
+
+  // by hand: a switch that is not a boolean fails the section, which then runs on its defaults
+  fs.writeFileSync(s.file, JSON.stringify({ compress: { advanced_on: "no" } }), "utf8");
+  const bad = s.load();
+  assert.deepStrictEqual([bad.state, bad.errors], ["invalid", [{ field: "compress.advanced_on", error: "只能是 true 或 false（开 / 关）" }]]);
+  assert.deepStrictEqual(bad.values.compress, DEFAULTS.compress);
+});
+
 test("the Bark code is shown only as its origin and a two-character tail", () => {
   assert.strictEqual(bark_hint(""), null);
   assert.strictEqual(bark_hint("AbCdEfGh7Q"), "••••7Q");

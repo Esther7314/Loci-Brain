@@ -33,7 +33,9 @@
 // (raw lines from the mark on), context {tokens, source}, last {at, how, how_words}
 // (how the window was opened; null for a conversation's first window), and
 // held_back_words: why the gateway is not packing this window on its own (pack.js: a
-// forced pack would not bring it under the force line), in Chinese, or null.
+// forced pack would not bring it under the force line), in Chinese, or null — null too
+// when that pack is switched off (compress.on, or compress.advanced_on for one the force
+// line asked for): a switch that is off is read from settings, not said here.
 //
 // status.report is day_close.js status(): day, state (written · missing · failed · quiet ·
 // not_due) with state_words, at, text (the report itself: the panel shows it to her),

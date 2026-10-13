@@ -29,7 +29,15 @@
 //      unless compress.on is false: then every turn that hits it is cut again, but
 //      nothing is folded behind the owner's back. The pack is told how full the refused
 //      request was (the fill measured on this turn is only the cut one), so it can judge
-//      whether folding would bring the window back under the force line at all
+//      whether folding would bring the window back under the force line at all.
+//      compress.advanced_on does not govern this pack: that switch is about the fill
+//      crossing the force line, and this pack is asked for because upstream refused the
+//      turn. The cut is made on the request, not on the window, so without the pack every
+//      later turn is refused once and cut again, and the fill each one leaves is the cut
+//      one — it may never reach the ask line, and with the force line off nothing but the
+//      owner's button would be left to fold the window. compress.force_pct stays the cut
+//      target and the bar the pack is judged by either way: here it is headroom under
+//      the limit, not a trigger
 //
 // It never gets stuck:
 //   · the cut never depends on the fill: every request that hits the wall is cut, so a
@@ -193,8 +201,9 @@ const SCALE_MAX = 4;
  * @param windows        context_window.js instance (resolve, learn)
  * @param threads        threads.js instance (the fill is set on a wall whose resend failed)
  * @param read_compress  () → present.json compress section
- * @param request_pack   (thread_id, { fill_pct }) → asks pack.js for a pack, how "forced"; fill_pct
- *                       is the refused request's fill against the window now in use
+ * @param request_pack   (thread_id, { fill_pct }) → asks pack.js for a pack, how "forced", on the
+ *                       wall's account; fill_pct is the refused request's fill against the window
+ *                       now in use
  * @param data_root      LOCI_GATEWAY_DATA; 「撞墙」 lines go to logs/present.jsonl
  */
 function create_wall_escape({ windows, threads, read_compress, request_pack, data_root, clock, zone, log = console.error }) {
@@ -306,7 +315,7 @@ function create_wall_escape({ windows, threads, read_compress, request_pack, dat
         }
       }
 
-      // ⑤ a pack, so the next turns stop hitting it
+      // ⑤ a pack, so the next turns stop hitting it (under compress.on alone: see the header)
       const packing = values.on === true;
       if (packing) {
         try { request_pack(ctx.thread, { fill_pct: fill_pct(refused, size.tokens) }); } catch (err) { log(`[gateway] present: asking for a pack after the wall failed: ${err?.message || err}`); }

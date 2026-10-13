@@ -17,6 +17,8 @@
 //   · the earlier summary is folded into the next pack; markers are stripped from a summary
 //   · POST /present/compress → queued, then a flip with how "manual"; a second call while
 //     it runs → 409
+//   · compress.advanced_on false: a turn past the force line starts no pack, 「现在压」
+//     packs all the same (ask_on off too), and the line packs again once it is back on
 //   · upstream answers context_length_exceeded "maximum context length is 8192 tokens" →
 //     cut once, the resend succeeds, one 「撞墙」 line, 8192 learned (source learned), the
 //     fill after it uses 8192; a resend that fails too returns upstream's error and the
@@ -317,6 +319,49 @@ test("「现在压」: queued, then a flip with how manual; a second call while 
   assert.strictEqual(c.last_how, "manual");
   assert.strictEqual(c.failures_since_ok, 0);
   assert.strictEqual(typeof c.last_ok_seconds_ago, "number");
+});
+
+test("compress.advanced_on false: a turn past the force line starts no pack; 「现在压」 still packs; switched on, the line packs again", { timeout: 30000 }, async () => {
+  const said = (tag) => `${tag}${"话".repeat(60)}`;
+  const pack_lines = () => present_log().filter((l) => l.event === "pack").length;
+  // both groups off: 「现在压」 answers to neither
+  const off = await call("POST", "/present", { patch: { compress: { advanced_on: false, ask_on: false } } });
+  assert.strictEqual(off.status, 200, off.text);
+  try {
+    const before = thread(T).window;
+    const [packs_before, lines_before] = [packs().length, pack_lines()];
+    history = [...history, a("山里有座庙。"), u(said("强制线关着的第一句"))];
+    plans.push({ text: said("回第一句"), usage: usage(4000) });
+    await chat(history);
+    await settled(T, (x) => x.window.usage?.prompt_tokens === 4000, "the first turn");
+    history = [...history, a(said("回第一句")), u(said("强制线关着的第二句"))];
+    plans.push({ text: said("回第二句"), usage: usage(9500) });
+    await chat(history);
+    await settled(T, (x) => x.window.usage?.prompt_tokens === 9500, "the turn at 95%");
+    await new Promise((r) => setTimeout(r, 300));
+    assert.strictEqual(packs().length, packs_before, "95% ≥ force 85 with the advanced group off: no pack");
+    assert.strictEqual(pack_lines(), lines_before, "nothing asked for, nothing held back");
+    assert.strictEqual(thread(T).window.name, before.name);
+    assert.strictEqual((await call("GET", "/present")).json.status.compress.held_back_words, null);
+
+    pack_plans.push({ text: `两组都关着时按的摘要。${SENTINEL}` });
+    const manual = await call("POST", "/present/compress", {});
+    assert.deepStrictEqual([manual.status, manual.json], [200, { ok: true, queued: true, thread: T }]);
+    const flipped = await settled(T, (x) => x.window.no === before.no + 1, "the manual flip");
+    assert.strictEqual(flipped.window.opened_by.how, "manual");
+
+    // the advanced group back on: the same kind of turn packs
+    const on = await call("POST", "/present", { patch: { compress: { advanced_on: true } } });
+    assert.strictEqual(on.status, 200, on.text);
+    pack_plans.push({ text: `强制线打开之后的摘要。${SENTINEL}` });
+    history = [...history, a(said("回第二句")), u(said("强制线打开了"))];
+    plans.push({ text: said("回第三句"), usage: usage(9500) });
+    await chat(history);
+    const forced = await settled(T, (x) => x.window.no === before.no + 2, "the forced flip");
+    assert.strictEqual(forced.window.opened_by.how, "forced");
+  } finally {
+    await call("POST", "/present", { patch: { compress: { advanced_on: true, ask_on: true } } });
+  }
 });
 
 let W = null;
