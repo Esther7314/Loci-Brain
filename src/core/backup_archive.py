@@ -9,7 +9,6 @@ check, not a cryptographic signature of who created the archive.
 from __future__ import annotations
 
 import hashlib
-import io
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -33,7 +32,7 @@ MAX_TOTAL_UNCOMPRESSED_BYTES = 1024 * MIB
 MAX_COMPRESSION_RATIO = 1000.0
 MAX_MANIFEST_BYTES = 8 * MIB
 
-# The compatibility reader keeps the historical broad archive limits above.
+# The limits above are what `_validate_infos` applies when it is given none.
 # Production migration has a deliberately smaller attack surface: only the
 # files the importer consumes are accepted, ordinary members are tightly
 # bounded, and total extraction cannot fill a 512 MiB instance's filesystem.
@@ -63,10 +62,6 @@ MIGRATE_MAX_MEDIA_BYTES = 25 * MIB
 
 class BackupArchiveError(ValueError):
     """The backup cannot be trusted or safely processed."""
-
-
-def _sha256(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
 
 
 def _normalize_member_path(raw_name: str) -> str:
@@ -107,22 +102,6 @@ def _migration_member_limit(path: str) -> int:
     raise BackupArchiveError(f"迁移包包含不支持的成员: {path}")
 
 
-def snapshot_sqlite(db_path: str) -> bytes:
-    """Return a transactionally consistent SQLite snapshot."""
-    if not db_path or not os.path.isfile(db_path):
-        return b""
-    fd, temp_path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-    try:
-        _snapshot_sqlite_to_file(db_path, temp_path)
-        return Path(temp_path).read_bytes()
-    finally:
-        try:
-            os.unlink(temp_path)
-        except OSError:
-            pass
-
-
 def _snapshot_sqlite_to_file(db_path: str, target_path: str) -> bool:
     """Write a consistent SQLite snapshot to disk without retaining its bytes."""
 
@@ -159,76 +138,6 @@ def validate_sqlite_bytes(db_bytes: bytes) -> None:
             os.unlink(temp_path)
         except OSError:
             pass
-
-
-def _collect_markdown(buckets_dir: str) -> dict[str, bytes]:
-    base = Path(buckets_dir).resolve()
-    if not base.is_dir():
-        raise BackupArchiveError(f"buckets_dir not found: {buckets_dir}")
-
-    files: dict[str, bytes] = {}
-    for path in sorted(base.rglob("*.md")):
-        resolved = path.resolve()
-        if not resolved.is_file() or not resolved.is_relative_to(base):
-            raise BackupArchiveError(f"拒绝导出指向记忆目录外的文件: {path}")
-        relative = resolved.relative_to(base).as_posix()
-        arc_path = _normalize_member_path(f"buckets/{relative}")
-        try:
-            files[arc_path] = resolved.read_bytes()
-        except OSError as exc:
-            raise BackupArchiveError(f"无法读取记忆文件 {relative}: {exc}") from exc
-    return files
-
-
-def _build_manifest(files: dict[str, bytes], *, created_at: str, version: str) -> dict[str, Any]:
-    entries = [
-        {"path": path, "size": len(data), "sha256": _sha256(data)}
-        for path, data in sorted(files.items())
-    ]
-    return {
-        "schema_version": MANIFEST_SCHEMA_VERSION,
-        "kind": MANIFEST_KIND,
-        "created_at": created_at,
-        "version": version,
-        "file_count": len(entries),
-        "total_bytes": sum(item["size"] for item in entries),
-        "files": entries,
-    }
-
-
-def build_export_archive(
-    buckets_dir: str,
-    embedding_db_path: str,
-    export_meta: dict[str, Any],
-) -> tuple[bytes, dict[str, Any]]:
-    """Build a complete in-memory archive or fail without returning a partial one."""
-    files = _collect_markdown(buckets_dir)
-    db_bytes = snapshot_sqlite(embedding_db_path)
-    if db_bytes:
-        files["embeddings.db"] = db_bytes
-    meta_bytes = json.dumps(
-        export_meta, ensure_ascii=False, indent=2, default=str
-    ).encode("utf-8")
-    files["export_meta.json"] = meta_bytes
-
-    manifest = _build_manifest(
-        files,
-        created_at=str(export_meta.get("exported_at") or ""),
-        version=str(export_meta.get("version") or ""),
-    )
-    manifest_bytes = json.dumps(
-        manifest, ensure_ascii=False, indent=2
-    ).encode("utf-8")
-
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as archive:
-        for path, data in sorted(files.items()):
-            archive.writestr(path, data)
-        archive.writestr(MANIFEST_NAME, manifest_bytes)
-    payload = buffer.getvalue()
-    if len(payload) > MAX_ARCHIVE_BYTES:
-        raise BackupArchiveError("备份压缩后超过 512 MiB 上限")
-    return payload, manifest
 
 
 def _stream_file_member(
@@ -269,128 +178,6 @@ def _stream_file_member(
     if written != declared_size:
         raise BackupArchiveError(f"导出期间文件大小发生变化: {arc_path}")
     return {"path": arc_path, "size": written, "sha256": digest.hexdigest()}
-
-
-def build_export_archive_file(
-    buckets_dir: str,
-    embedding_db_path: str,
-    export_meta: dict[str, Any],
-) -> tuple[str, dict[str, Any]]:
-    """Build a bounded temporary ZIP on disk and return its path plus manifest.
-
-    Unlike :func:`build_export_archive`, this production path never holds all
-    Markdown, the SQLite snapshot, the ZIP buffer, and a second ``getvalue``
-    copy in RAM at the same time.  The caller owns the returned path and must
-    remove it after the response finishes.
-    """
-
-    base = Path(buckets_dir).resolve()
-    if not base.is_dir():
-        raise BackupArchiveError(f"buckets_dir not found: {buckets_dir}")
-
-    archive_fd, archive_path = tempfile.mkstemp(prefix="loci-export-", suffix=".zip")
-    os.close(archive_fd)
-    snapshot_fd, snapshot_path = tempfile.mkstemp(prefix="loci-embedding-", suffix=".db")
-    os.close(snapshot_fd)
-    entries: list[dict[str, Any]] = []
-    total_uncompressed = 0
-
-    def record(entry: dict[str, Any]) -> None:
-        nonlocal total_uncompressed
-        entries.append(entry)
-        if len(entries) + 1 > MIGRATE_MAX_MEMBERS:  # + manifest member
-            raise BackupArchiveError(
-                f"备份文件项过多（上限 {MIGRATE_MAX_MEMBERS}）"
-            )
-        total_uncompressed += int(entry["size"])
-        if total_uncompressed > MIGRATE_MAX_TOTAL_UNCOMPRESSED_BYTES:
-            raise BackupArchiveError("备份解压后超过 512 MiB 上限")
-
-    try:
-        with zipfile.ZipFile(
-            archive_path,
-            "w",
-            zipfile.ZIP_DEFLATED,
-            allowZip64=True,
-        ) as archive:
-            for path in sorted(base.rglob("*.md")):
-                if path.is_symlink():
-                    raise BackupArchiveError(f"拒绝导出符号链接文件: {path}")
-                try:
-                    resolved = path.resolve(strict=True)
-                except OSError as exc:
-                    raise BackupArchiveError(f"无法解析记忆文件 {path}: {exc}") from exc
-                if not resolved.is_file() or not resolved.is_relative_to(base):
-                    raise BackupArchiveError(f"拒绝导出指向记忆目录外的文件: {path}")
-                relative = path.relative_to(base).as_posix()
-                arc_path = _normalize_member_path(f"buckets/{relative}")
-                record(
-                    _stream_file_member(
-                        archive,
-                        source=resolved,
-                        arc_path=arc_path,
-                    )
-                )
-
-            if _snapshot_sqlite_to_file(embedding_db_path, snapshot_path):
-                record(
-                    _stream_file_member(
-                        archive,
-                        source=Path(snapshot_path),
-                        arc_path="embeddings.db",
-                    )
-                )
-
-            meta_bytes = json.dumps(
-                export_meta,
-                ensure_ascii=False,
-                indent=2,
-                default=str,
-            ).encode("utf-8")
-            if len(meta_bytes) > MIGRATE_MAX_EXPORT_META_BYTES:
-                raise BackupArchiveError("export_meta.json 过大")
-            archive.writestr("export_meta.json", meta_bytes)
-            record(
-                {
-                    "path": "export_meta.json",
-                    "size": len(meta_bytes),
-                    "sha256": _sha256(meta_bytes),
-                }
-            )
-
-            entries.sort(key=lambda item: item["path"])
-            manifest = {
-                "schema_version": MANIFEST_SCHEMA_VERSION,
-                "kind": MANIFEST_KIND,
-                "created_at": str(export_meta.get("exported_at") or ""),
-                "version": str(export_meta.get("version") or ""),
-                "file_count": len(entries),
-                "total_bytes": sum(int(item["size"]) for item in entries),
-                "files": entries,
-            }
-            manifest_bytes = json.dumps(
-                manifest,
-                ensure_ascii=False,
-                indent=2,
-            ).encode("utf-8")
-            if len(manifest_bytes) > MAX_MANIFEST_BYTES:
-                raise BackupArchiveError("backup_manifest.json 过大")
-            archive.writestr(MANIFEST_NAME, manifest_bytes)
-
-        if os.path.getsize(archive_path) > MAX_ARCHIVE_BYTES:
-            raise BackupArchiveError("备份压缩后超过 512 MiB 上限")
-        return archive_path, manifest
-    except Exception:
-        try:
-            os.unlink(archive_path)
-        except OSError:
-            pass
-        raise
-    finally:
-        try:
-            os.unlink(snapshot_path)
-        except OSError:
-            pass
 
 
 def validate_sqlite_file(db_path: str) -> None:
@@ -502,56 +289,6 @@ def _manifest_expectations(
         except ValueError as exc:
             raise BackupArchiveError(f"备份成员 SHA-256 格式错误: {path}") from exc
     return manifest, expected
-
-
-def _verify_manifest(manifest: Any, files: dict[str, bytes]) -> dict[str, Any]:
-    verified, expected = _manifest_expectations(
-        manifest,
-        {path: len(data) for path, data in files.items()},
-    )
-    for path, data in files.items():
-        entry = expected[path]
-        if entry.get("sha256") != _sha256(data):
-            raise BackupArchiveError(f"备份成员 SHA-256 校验失败: {path}")
-    return verified
-
-
-def read_backup_archive(zip_bytes: bytes) -> dict[str, Any]:
-    """Read a bounded archive and verify its manifest when present."""
-    try:
-        with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as archive:
-            infos = _validate_infos(archive.infolist(), len(zip_bytes))
-            files: dict[str, bytes] = {}
-            for path, info in infos.items():
-                try:
-                    data = archive.read(info)
-                except (OSError, RuntimeError, zipfile.BadZipFile) as exc:
-                    raise BackupArchiveError(f"无法读取备份成员 {path}: {exc}") from exc
-                if len(data) != info.file_size:
-                    raise BackupArchiveError(f"备份成员读取长度不一致: {path}")
-                files[path] = data
-    except zipfile.BadZipFile as exc:
-        raise BackupArchiveError(f"无效的 ZIP 文件: {exc}") from exc
-
-    manifest_bytes = files.pop(MANIFEST_NAME, None)
-    if manifest_bytes is None:
-        return {
-            "files": files,
-            "manifest": None,
-            "integrity_verified": False,
-            "integrity_warning": "旧版备份没有完整性清单；已执行 ZIP 安全检查，但无法确认文件是否齐全",
-        }
-    try:
-        manifest = json.loads(manifest_bytes.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise BackupArchiveError(f"backup_manifest.json 无法解析: {exc}") from exc
-    verified = _verify_manifest(manifest, files)
-    return {
-        "files": files,
-        "manifest": verified,
-        "integrity_verified": True,
-        "integrity_warning": "",
-    }
 
 
 def extract_backup_archive_file(

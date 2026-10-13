@@ -88,7 +88,7 @@ from ._package_read import _ParsedBucket
 # The vector-row cap is read here (tests/test_package_into_a_living_library.py holds it
 # against the archive's member cap).
 from ._package_vectors import _MAX_EMBEDDING_ROWS  # noqa: F401
-from ._package_write import EntryWriter, _new_entry_id, _safe_unlink, _same_file
+from ._package_write import EntryWriter, _new_entry_id, _same_file
 
 from utils import atomic_write_text, now_iso  # type: ignore
 
@@ -553,39 +553,6 @@ class MigrateEngine:
     # Step one: parse the zip (core/_package_read.py)
     # ----------------------------------------------------------
 
-    async def parse_zip(self, zip_bytes: bytes) -> dict:
-        """Compatibility byte API; HTTP uploads use disk-backed parse_zip_file."""
-        job_id = self._begin_parse()
-        if job_id is None:
-            return {
-                "ok": False,
-                "busy": True,
-                "error": f"当前状态为 {self._phase}，请等待任务完成后再上传",
-            }
-        self._reset_parse_state()
-        worker = asyncio.create_task(asyncio.to_thread(self._parse_zip_sync, zip_bytes))
-        try:
-            parsed = await asyncio.shield(worker)
-            await self._accept_parsed(parsed)
-        except asyncio.CancelledError:
-            # A to_thread worker cannot be killed.  Reap it before releasing
-            # the singleton reservation so cancellation cannot stack parsers.
-            orphan: dict[str, Any] | None = None
-            try:
-                orphan = await worker
-            except Exception:
-                pass
-            if orphan:
-                shutil.rmtree(str(orphan.get("temp_dir") or ""), ignore_errors=True)
-            self._fail_parse("zip 预检已取消")
-            raise
-        except Exception as e:
-            self._fail_parse(f"zip 预检失败: {e}")
-            logger.error(f"[migrate] parse_zip error: {e}", exc_info=True)
-            return {"ok": False, "error": self._error_message}
-
-        return self._parsed_reply()
-
     async def parse_zip_file(
         self,
         archive_path: str,
@@ -696,25 +663,6 @@ class MigrateEngine:
                 "zip 内未找到任何 bucket markdown 文件（期望路径前缀：buckets/）"
             )
         await self._identify_conflicts()
-
-    def _parse_zip_sync(self, zip_bytes: bytes) -> dict:
-        """Compatibility byte API that still streams decompressed data to disk."""
-
-        workspace = tempfile.mkdtemp(prefix="loci-migrate-")
-        fd, archive_path = tempfile.mkstemp(prefix="loci-upload-", suffix=".zip")
-        try:
-            with os.fdopen(fd, "wb") as handle:
-                handle.write(zip_bytes)
-                handle.flush()
-                os.fsync(handle.fileno())
-            parsed = self._parse_zip_path_sync(archive_path, workspace)
-            parsed["temp_dir"] = workspace
-            return parsed
-        except Exception:
-            shutil.rmtree(workspace, ignore_errors=True)
-            raise
-        finally:
-            _safe_unlink(archive_path)
 
     def _parse_zip_path_sync(self, archive_path: str, workspace: str) -> dict:
         package = extract_backup_archive_file(archive_path, workspace)
