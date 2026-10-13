@@ -7,14 +7,17 @@
                   with the ‹ › line at the page's foot. Only what can still be done or
                   withdrawn is here: a promise not closed, a live hold, a cue still waiting.
                   Each row: its title, what it is and why it hangs (答应了的 / 条子 / 线索 ·
-                  the API's why_words), and its buttons from `actions`:
-                    done      做完了   ┐ a promise
-                    drop      不做了   ┘
-                    withdraw  撤掉     a hold or a cue (a promise waiting on a cue: the
-                                       cue comes off, the promise stays)
-                  A button is POST /api/loci/trace {id, action}, the model's own trace
-                  road; the list is read again after it, on the same page. A click anywhere
-                  else on the row opens the detail window.
+                  the API's why_words), and one button at its right, from `actions`:
+                    a hold or a cue   撤掉 (withdraw)
+                    a promise         了结, which unfolds where it stands into
+                                        done      做完了
+                                        drop      不做了
+                                        withdraw  只撤线索 (a promise waiting on a cue:
+                                                  the cue comes off, the promise stays)
+                                      and folds back at Esc or a click anywhere else
+                  A choice is POST /api/loci/trace {id, action}, the model's own trace
+                  road; the list is read again after it, on the same page. A click on the
+                  row's words opens the detail window.
    ========================================================== */
 
 import * as api from "../api.js";
@@ -29,9 +32,12 @@ const HALVES = [
   { part: "deep", label: "Deep", tab: "deep" },
 ];
 
-// The three kinds as the board names them, and each button's words.
+// The three kinds as the board names them, and each button's words. On a promise the
+// choices sit folded behind one button, and withdraw there takes only its cue off.
 const KIND = { promise: "答应了的", hold: "条子", cue: "线索" };
 const BUTTON = { done: "做完了", drop: "不做了", withdraw: "撤掉" };
+const CLOSE = "了结";
+const CUE_ONLY = "只撤线索";
 
 /** 「答应了的 · 还有 3 天」; the API's words alone when they already open with the kind
  *  (「条子到 10-12」, 「答应了，没定时间」). */
@@ -45,28 +51,46 @@ function whyOf(it) {
 
 function hangingRow(it, again) {
   const err = h("span");
-  const buttons = (it.actions || []).filter((a) => BUTTON[a]).map((action) => {
-    const b = btn(BUTTON[action], {
-      badge: true,
-      onClick: async () => {
-        for (const x of buttons) x.disabled = true;
-        fill(err);
-        try {
-          await api.post("/api/loci/trace", { id: it.id, action });
-          await again();
-        } catch (e) {
-          for (const x of buttons) x.disabled = false;
-          fill(err, errorLine(e));
-        }
-      },
-    });
-    return b;
-  });
+  const acts = h("span", { class: "acts" });
+  const words = (action) => (action === "withdraw" && it.kind === "promise" ? CUE_ONLY : BUTTON[action]);
+  const choices = (it.actions || []).filter((a) => BUTTON[a]).map((action) => btn(words(action), {
+    badge: true,
+    onClick: async () => {
+      for (const x of choices) x.disabled = true;
+      fill(err);
+      try {
+        await api.post("/api/loci/trace", { id: it.id, action });
+        unwatch();
+        await again();
+      } catch (e) {
+        for (const x of choices) x.disabled = false;
+        fill(err, errorLine(e));
+      }
+    },
+  }));
+  const closer = btn(CLOSE, { badge: true, onClick: () => unfold() });
+  const away = (e) => { if (!acts.contains(e.target)) fold(); };
+  const esc = (e) => { if (e.key === "Escape") { fold(); closer.focus(); } };
+  function unwatch() {
+    document.removeEventListener("click", away, true);
+    document.removeEventListener("keydown", esc);
+  }
+  function fold() {
+    unwatch();
+    fill(acts, closer, fill(err));
+  }
+  function unfold() {
+    fill(acts, choices, err);
+    choices[0].focus();
+    document.addEventListener("click", away, true);
+    document.addEventListener("keydown", esc);
+  }
+  if (choices.length > 1) fold(); else fill(acts, choices, err);
   return row({
     text: it.text ?? `#${it.short}`,
     why: whyOf(it),
     open: () => openDetail(it.id),
-    right: h("span", { class: "acts" }, buttons, err),
+    right: acts,
     layout: "big",
   });
 }
