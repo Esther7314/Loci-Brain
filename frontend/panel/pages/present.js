@@ -1,18 +1,24 @@
 /* ==========================================================
-   pages/present.js — how the talk is carried from one window to the next
+   pages/present.js — how the talk is carried from one window to the next (her frame
+   present)
 
-   #/present   four numbered blocks, in the look of the settings pages (muse——设置,
-               Dream——设置):
-                 01 自助压缩   the gateway's `compress` settings — on, the context
-                              window, the ask line, how many raw lines stay, the force
-                              line, the weak lines (five at most, each with 删除 while
-                              there is more than one) — and 现在压 (POST …/compress),
-                              answered in its own row.
-                 02 the compress card (GET /api/loci/present/prompts, key `compress`)
-                 03 昨日日报   when it is written, yesterday's report, 补一份 while it is
-                              missing or failed, how the window flips, and 现在写日报
-                              (POST …/report {kind}), each answered in its own row.
-                 04 the report card (key `report`)
+   #/present   four numbered blocks:
+                 01 自助压缩   the switch (`compress.on`) and 手动压缩 (POST …/compress),
+                              answered in its own row. 提示词 beside the title opens the
+                              compress card in a glass window (presentform.openPrompt).
+                 02 普通压缩/高级压缩   the lines the fill is held against, all percent of
+                              the context window: under 普通压缩 the window itself, the
+                              ask line and how many raw lines stay; under 高级压缩 the
+                              weak lines (five at most, each with 删除 while there is
+                              more than one) and the force line.
+                 03 昨日日报   when it is written, and 昨天的日报: its state in the row,
+                              点击查看 opens it in a glass window — its text, or, while it
+                              is missing or failed, 补一份 (POST …/report {kind:
+                              "missing"}). 提示词 opens the report card.
+                 04 自动换窗/手动换窗   one choice of two. 多少天换一次窗 with its number:
+                              1 is `report.flip` "daily", more is "every_n" with that
+                              many days. 手动换窗 is "manual", with 现在写日报 (POST
+                              …/report {kind: "now"}).
                All of it is the gateway's (presentform.js: read, saved a control at a
                time, a refused field marked in its row); without a gateway it is drawn
                off and the page says 「还没接上」. Waking and pushing are pages/wakeup.js.
@@ -25,11 +31,10 @@
    ========================================================== */
 
 import * as api from "../api.js";
-import { h, fill, pagehead, setBlock, tip, btn, num, errorLine } from "../ui.js";
+import { h, fill, pagehead, setBlock, tip, btn, num, radio, glassWindow, errorLine } from "../ui.js";
 import {
   NOT_WIRED, PRESENT, ask, presentPage, showSettingsState, save, readLater, numBox, toggle,
-  choices, off, acts, setRow, to, small, linkButton, when, pctShow, pctRead, sameList, sayer,
-  cardBlock,
+  off, acts, setRow, unit, to, small, linkButton, when, intOr, sameList, sayer, openPrompt,
 } from "../presentform.js";
 
 const TIP = {
@@ -55,95 +60,34 @@ const REPORT_WORDS = {
 };
 const NOT_BUILT_REPORT = "写日报这一步网关还没做好，现在按了也不会写";
 
-const PROMPT_TITLES = { compress: "自助压缩的提示词", report: "写日报的提示词" };
+const PROMPT_TITLES = { compress: "压缩的提示词", report: "写日报的提示词" };
+
+/** 提示词 beside a block's title: opens that prompt card in its window. */
+function promptLink(p, key) {
+  const b = p.ctl(h("button", { class: "lnk", type: "button" }, "提示词"));
+  b.addEventListener("click", () => openPrompt(key, PROMPT_TITLES[key]));
+  return b;
+}
+
+/** A number box with its unit after it. */
+const withUnit = (box, words) => h("span", { class: "acts nu" }, box, unit(words));
+
+/** A heading inside a block (普通压缩, 高级压缩); `ruled` draws a line over it. */
+function subHead(text, { ruled = false } = {}) {
+  return h("h4", { class: `subhd${ruled ? " ruled" : ""}`, text });
+}
 
 // ---------------------------------------------------------------- 01 自助压缩
 
-/** 128000 -> "128k", 1000000 -> "1M". */
-function tokensWords(n) {
-  if (!Number.isFinite(n)) return "";
-  if (n >= 1e6 && n % 1e5 === 0) return `${n / 1e6}M`;
-  if (n >= 1000 && n % 1000 === 0) return `${n / 1000}k`;
-  return String(n);
-}
-
-/** The weak lines: one row each, then 「+ 再加一条提醒」 for another (five at most). 删除
- *  at a line's right takes it away (while there is more than one), and so does emptying
- *  its box. Returns the rows and the link, in order; later rows go in before the link. */
-function weakLines(p) {
-  const WHY = "这个水位线会提醒他，压缩与否由他决定。";
-  const add = p.ctl(linkButton("+ 再加一条提醒"));
-  const end = h("div", { class: "acts setacts" }, add);
-  let boxes = [];
-  let rows = [];
-  const used = () => boxes.filter((b) => b.value.trim() !== "");
-  const register = () => {
-    p.unreg("compress.weak_pct");
-    used().forEach((b, i) => p.reg(`compress.weak_pct[${i}]`, b));
-  };
-  const drop = (one) => {
-    const b = p.ctl(btn("删除", { badge: true }));
-    b.addEventListener("click", () => { boxes = boxes.filter((x) => x !== one); layout(); send(); });
-    return b;
-  };
-  const layout = () => {
-    for (const r of rows) r.remove();
-    const many = boxes.length > 1;
-    rows = boxes.map((b, i) => setRow({ text: "弱提醒线", why: i === 0 ? WHY : null, right: acts(b, many ? drop(b) : null) }));
-    end.before(...rows);
-    add.disabled = !p.live || boxes.length >= 5;
-    if (p.live) register();
-  };
-  async function send() {
-    const list = used().map((b) => pctRead(b.value.trim()));
-    register();
-    if (sameList(list, p.s.compress.weak_pct)) return;
-    if (await save(p, { compress: { weak_pct: list } }) && !sameList(list, p.s.compress.weak_pct)) draw(p.s.compress.weak_pct);
-  }
-  const box = (v) => {
-    const b = num({ value: pctShow(v), "aria-label": "弱提醒线" });
-    if (!p.live) return off(b);
-    b.addEventListener("change", () => {
-      const v = pctRead(b.value.trim());
-      if (typeof v === "number") b.value = pctShow(v);
-      send();
-    });
-    return b;
-  };
-  const draw = (values) => {
-    boxes = values.map(box);
-    if (!boxes.length) boxes.push(box(""));
-    layout();
-  };
-  add.addEventListener("click", () => { boxes.push(box("")); layout(); boxes[boxes.length - 1].focus(); });
-  draw(p.live ? p.s.compress.weak_pct || [] : [""]);
-  return [...rows, end];
-}
-
 function compressBlock(p) {
-  const ctxWhy = h("span");
-  const fillWhy = h("span");
-  const keptWhy = h("span");
   const lastWhy = h("span");
-  const forceWhy = h("span");
   p.watch(() => {
     const st = p.st.compress || {};
-    const c = st.context || {};
-    const auto = p.s.compress.context_tokens === null;
-    ctxWhy.textContent = c.tokens
-      ? `现在按 ${tokensWords(c.tokens)}（${SOURCE_WORDS[c.source] || c.source || "来处不明"}）${auto ? "，空着就是自动" : "，清空就是自动"}`
-      : "空着就是自动";
-    if (st.state === "no_thread" || !st.thread) fillWhy.textContent = "还没有对话";
-    else if (st.fill_pct === null || st.fill_pct === undefined) fillWhy.textContent = "还不知道装了多少";
-    else fillWhy.textContent = `现在装了 ${st.fill_pct}%${st.estimated ? "（估的）" : "（上游报的）"}`;
-    keptWhy.textContent = Number.isInteger(st.kept_raw) ? `这一窗现在有 ${st.kept_raw} 条原话` : "";
     lastWhy.textContent = !st.thread ? ""
       : st.last ? `上次换窗 ${when(st.last.at)} · ${st.last.how_words || st.last.how}` : "这一窗是这个对话的第一窗";
-    // a forced pack held back (it could not bring the window under the line) says why here
-    forceWhy.textContent = st.held_back_words || "兜底压缩线，不考虑他的意见了。";
   });
 
-  const now = p.ctl(btn("现在压", { badge: true }));
+  const now = p.ctl(btn("手动压缩", { badge: true }));
   const nowSay = sayer(now);
   now.addEventListener("click", async () => {
     nowSay.clear();
@@ -158,42 +102,123 @@ function compressBlock(p) {
     } finally { now.disabled = false; }
   });
 
+  return setBlock("01", "自助压缩", { tip: TIP.compress, extra: promptLink(p, "compress") },
+    setRow({ text: "总开关", right: acts(toggle(p, ["compress", "on"], "自助压缩总开关")) }),
+    setRow({ text: "手动压缩", why: p.live ? ["不等水位线，现在就压缩。", lastWhy] : "不等水位线，现在就压缩。", right: acts(now) }));
+}
+
+// ---------------------------------------------------------------- 02 普通压缩/高级压缩
+
+/** 128000 -> "128k", 1000000 -> "1M". */
+function tokensWords(n) {
+  if (!Number.isFinite(n)) return "";
+  if (n >= 1e6 && n % 1e5 === 0) return `${n / 1e6}M`;
+  if (n >= 1000 && n % 1000 === 0) return `${n / 1000}k`;
+  return String(n);
+}
+
+/** The weak lines: one row each, put in before `anchor` (the force line's row), and
+ *  「+再加一条提醒线」 for another (five at most). 删除 at a line's right takes it away
+ *  (while there is more than one), and so does emptying its box. Returns the first rows
+ *  and the link. */
+function weakLines(p, anchor) {
+  const WHY = "这个水位线会提醒他，压缩与否由他决定。";
+  const add = p.ctl(linkButton("+再加一条提醒线"));
+  const link = h("div", { class: "setacts left" }, add);
+  let boxes = [];
+  let rows = [];
+  const used = () => boxes.filter((b) => b.value.trim() !== "");
+  const read = (b) => intOr(b.value.trim());
+  const register = () => {
+    p.unreg("compress.weak_pct");
+    used().forEach((b, i) => p.reg(`compress.weak_pct[${i}]`, b));
+  };
+  const drop = (one) => {
+    const b = p.ctl(btn("删除", { badge: true }));
+    b.addEventListener("click", () => { boxes = boxes.filter((x) => x !== one); layout(); send(); });
+    return b;
+  };
+  const layout = () => {
+    for (const r of rows) r.remove();
+    const many = boxes.length > 1;
+    rows = boxes.map((b, i) => setRow({ text: "弱提醒线", why: i === 0 ? WHY : null,
+      right: acts(withUnit(b, "%"), many ? drop(b) : null) }));
+    anchor.before(...rows);
+    add.disabled = !p.live || boxes.length >= 5;
+    if (p.live) register();
+  };
+  async function send() {
+    const list = used().map(read);
+    register();
+    if (sameList(list, p.s.compress.weak_pct)) return;
+    if (await save(p, { compress: { weak_pct: list } }) && !sameList(list, p.s.compress.weak_pct)) draw(p.s.compress.weak_pct);
+  }
+  const box = (v) => {
+    const b = num({ value: v === "" ? "" : String(v), "aria-label": "弱提醒线" });
+    if (!p.live) return off(b);
+    b.addEventListener("change", () => {
+      const n = read(b);
+      if (typeof n === "number") b.value = String(n);
+      send();
+    });
+    return b;
+  };
+  const draw = (values) => {
+    boxes = values.map(box);
+    if (!boxes.length) boxes.push(box(""));
+    layout();
+  };
+  add.addEventListener("click", () => { boxes.push(box("")); layout(); boxes[boxes.length - 1].focus(); });
+  draw(p.live ? p.s.compress.weak_pct || [] : [65]);
+  return { rows, link };
+}
+
+function linesBlock(p) {
+  const ctxWhy = h("span");
+  const fillWhy = h("span");
+  const keptWhy = h("span");
+  const forceWhy = h("span");
+  p.watch(() => {
+    const st = p.st.compress || {};
+    const c = st.context || {};
+    const auto = p.s.compress.context_tokens === null;
+    ctxWhy.textContent = c.tokens
+      ? `现在按 ${tokensWords(c.tokens)}（${SOURCE_WORDS[c.source] || c.source || "来处不明"}）${auto ? "，空着就是自动" : "，清空就是自动"}`
+      : "空着就是自动";
+    if (st.state === "no_thread" || !st.thread) fillWhy.textContent = "还没有对话";
+    else if (st.fill_pct === null || st.fill_pct === undefined) fillWhy.textContent = "还不知道装了多少";
+    else fillWhy.textContent = `现在已到 ${st.fill_pct}%${st.estimated ? "（估的）" : "（上游报的）"}`;
+    keptWhy.textContent = Number.isInteger(st.kept_raw) ? `现在这个窗口已有 ${st.kept_raw} 条原文` : "";
+    // a forced pack held back (it could not bring the window under the line) says why here
+    forceWhy.textContent = st.held_back_words || "强制压缩，不考虑他的意见了。";
+  });
+
+  const force = setRow({ text: "强制提醒线", why: p.live ? forceWhy : "强制压缩，不考虑他的意见了。",
+    right: withUnit(numBox(p, ["compress", "force_pct"], { label: "强制提醒线", board: "85" }), "%") });
+  const weak = weakLines(p, force);
   const home = h("div");
   p.homes.compress = home;
-  return setBlock("01", "自助压缩", { tip: TIP.compress },
-    setRow({ text: "开关", right: acts(toggle(p, ["compress", "on"], "自助压缩开关")) }),
+  return setBlock("02", "普通压缩/高级压缩", {},
+    h("p", { class: "why blocknote", text: "如果你开了 auto compact（自动压缩），记得关掉，不然两边会起冲突。" }),
+    subHead("普通压缩"),
     setRow({ text: "上下文窗口", why: p.live ? ctxWhy : null,
       right: acts(numBox(p, ["compress", "context_tokens"], { label: "上下文窗口", kind: "int?", placeholder: "自动", style: { width: "104px" } })) }),
-    setRow({ text: "压缩水位线", why: p.live ? fillWhy : null, right: acts(numBox(p, ["compress", "ask_pct"], { label: "水位线", kind: "pct" })) }),
-    setRow({ text: "压缩完留多少条原话", why: p.live ? keptWhy : null, right: acts(numBox(p, ["compress", "keep_raw"], { label: "留多少条" })) }),
-    setRow({ text: "手动压缩", why: p.live ? ["不等水位线，现在就压一次", lastWhy] : "不等水位线，现在就压一次", right: acts(now) }),
-    setRow({ text: "强制压缩线", why: p.live ? forceWhy : "兜底压缩线，不考虑他的意见了。",
-      right: acts(numBox(p, ["compress", "force_pct"], { label: "强制压缩线", kind: "pct" })) }),
-    weakLines(p),
-    home,
-    small("如果你开 auto compact（自动压缩），记得关掉，不然两边会起冲突。", { margin: "var(--s-3) 0 0" }));
+    setRow({ text: "压缩水位线", why: p.live ? fillWhy : null,
+      right: withUnit(numBox(p, ["compress", "ask_pct"], { label: "压缩水位线", board: "75" }), "%") }),
+    setRow({ text: "压缩完留多少条原文", why: p.live ? keptWhy : null,
+      right: withUnit(numBox(p, ["compress", "keep_raw"], { label: "留多少条", board: "10" }), "条") }),
+    subHead("高级压缩", { ruled: true }),
+    weak.rows,
+    force,
+    weak.link,
+    home);
 }
 
 // ---------------------------------------------------------------- 03 昨日日报
 
-/** The report's text, folded to a few lines with 展开 when it is long. */
-function reportText(text) {
-  const FOLD = "11em";
-  const body = h("p", { class: "c2", style: { fontSize: "15px", lineHeight: "1.8", overflow: "hidden", maxHeight: FOLD } }, text);
-  const long = text.length > 160 || text.split("\n").length > 6;
-  if (!long) { body.style.maxHeight = ""; return body; }
-  const more = linkButton("展开");
-  more.addEventListener("click", () => {
-    const open = body.style.maxHeight !== "none";
-    body.style.maxHeight = open ? "none" : FOLD;
-    more.textContent = open ? "收起" : "展开";
-  });
-  return h("div", null, body, h("div", { style: { marginTop: "6px" } }, more));
-}
-
 /** After 补一份 or 现在写日报: queued, already writing (409), not built yet, or the error. */
 function reportAnswer(say, e, r, kind) {
-  if (r) return say.ok(r.queued ? (kind === "now" ? "排上了，写完之后你下次开口就是新窗口" : "排上了，写好就出现在上面") : "好了");
+  if (r) return say.ok(r.queued ? (kind === "now" ? "排上了，写完之后你下次开口就是新窗口" : "排上了，写好就出现在这里") : "好了");
   if (e.status === 409) return say.err("已经有一份在写了，等它写完");
   if (e.status === 501 || (e.body && e.body.state === "not_built")) return say.err(NOT_BUILT_REPORT);
   return say.err(e.message);
@@ -217,67 +242,101 @@ function reportButton(p, words, kind, after) {
   return b;
 }
 
-function reportBlock(p) {
-  const st = () => p.st.report || {};
-  const wordsOf = (r) => r.state_words || REPORT_WORDS[r.state] || r.state || "";
+const reportWords = (r) => r.state_words || REPORT_WORDS[r.state] || r.state || "";
+const reportHead = (r) => [r.day, reportWords(r), r.at ? `${when(r.at)} 写的` : ""].filter(Boolean).join(" · ");
 
-  // 什么时候写, with the i saying the gateway's own window and quiet time.
-  const whenTipHolder = h("span", { style: { display: "contents" } }, tip(TIP.when));
-  p.watch(() => fill(whenTipHolder, tip(whenTip(p.s.report))));
-
-  // 昨天的日报: its day, state and time beside the name, and in the same row its text
-  // (written), the error (failed), or nothing more than what the state says.
-  const head = h("span");
-  const body = h("div", { style: { marginTop: "var(--s-2)" } }, h("div", { class: "bars", "aria-hidden": "true" },
-    [100, 94, 100, 88, 100, 60].map((w) => h("div", { class: "bar", style: { width: `${w}%` } }))));
+/** 昨天的日报 in its window: its day, state and time, then its text (written), or the
+ *  error and 补一份 (missing, failed). Drawn again when the page reads the status. */
+function openReport(p) {
+  const win = glassWindow({ title: "昨天的日报" });
+  const redo = reportButton(p, "补一份", "missing", (b) => { b.disabled = false; });
+  const redoRow = setRow({ text: "", right: acts(redo) });
+  const head = h("p", { class: "why", style: { margin: "0 0 var(--s-2)" } });
+  const body = h("div");
+  win.body.append(head, body, redoRow);
   p.watch(() => {
-    const r = st();
-    head.textContent = [r.day, wordsOf(r), r.at ? `${when(r.at)} 写的` : ""].filter(Boolean).join(" · ");
-    if (r.state === "written" && r.text) fill(body, reportText(r.text));
+    if (!win.body.isConnected) return;
+    const r = p.st.report || {};
+    head.textContent = reportHead(r);
+    const owed = r.state === "missing" || r.state === "failed";
+    redoRow.hidden = !owed;
+    redoRow.querySelector(".c").textContent = r.state === "failed" ? "昨天的没写成" : "昨天的还没写";
+    if (r.state === "written" && r.text) fill(body, h("p", { class: "body", text: r.text }));
     else if (r.state === "failed") {
       fill(body,
         r.error ? h("p", { class: "err", style: { margin: "0", whiteSpace: "pre-wrap", lineHeight: "1.6" }, text: r.error }) : null,
         small(r.gave_up ? "试了几次都没成，不再自己重试了" : "还会再试", { margin: "6px 0 0" }));
     } else fill(body);
-    body.hidden = !body.childNodes.length;
   });
-  const yesterday = setRow({ text: "昨天的日报", why: p.live ? head : null });
-  yesterday.querySelector(".txt").append(body);
+}
 
-  // 漏了的时候: only while yesterday's is missing or failed.
-  const redo = reportButton(p, "补一份", "missing", (b) => { b.disabled = !p.live; });
-  const missWhy = h("span", { text: "昨天的还没写" });
-  const missing = setRow({ text: "漏了的时候", why: missWhy, right: acts(redo) });
-  p.watch(() => {
-    const r = st();
-    missing.hidden = !(r.state === "missing" || r.state === "failed");
-    missWhy.textContent = r.state === "failed" ? "昨天的没写成" : "昨天的还没写";
-  });
+function reportBlock(p) {
+  // 什么时候写, with the i saying the gateway's own window and quiet time.
+  const whenTipHolder = h("span", { style: { display: "contents" } }, tip(TIP.when));
+  p.watch(() => fill(whenTipHolder, tip(whenTip(p.s.report))));
 
-  // 现在写日报: only while 手动换窗 is the saved choice.
-  const manualOn = () => p.live && p.s.report.flip === "manual";
-  const nowWrite = reportButton(p, "现在写日报", "now", (b) => { b.disabled = !manualOn(); });
-  p.watch(() => { nowWrite.disabled = !manualOn(); });
-
-  const [daily, everyN, manual] = choices(p, "win", ["report", "flip"], [
-    ["daily", "一天一个窗", true],
-    ["every_n", "每", false, numBox(p, ["report", "every_n"], { label: "几天" }), " 天换一个窗"],
-    ["manual", "手动换窗", false],
-  ]);
+  const state = h("span");
+  p.watch(() => { state.textContent = reportHead(p.st.report || {}); });
+  const look = p.ctl(linkButton("点击查看"));
+  look.addEventListener("click", () => openReport(p));
 
   const home = h("div");
   p.homes.report = home;
-  return setBlock("03", "昨日日报", { tip: TIP.report },
+  return setBlock("03", "昨日日报", { tip: TIP.report, extra: promptLink(p, "report") },
     setRow({ text: "什么时候写",
       right: acts(numBox(p, ["report", "from"], { label: "从几点", kind: "time", board: "04:00" }), to(),
         numBox(p, ["report", "to"], { label: "到几点", kind: "time", board: "08:00" }), whenTipHolder) }),
-    yesterday,
-    missing,
-    setRow({ text: "换窗", why: "默认一天一个窗。想几天一个窗，或者自己决定什么时候换，在这里改。" }),
-    setRow({ lead: daily, right: h("span", { class: "r", text: "默认" }) }),
-    setRow({ lead: everyN }),
-    setRow({ lead: manual, why: "按「现在写日报」，写完之后你下次开口就是新窗口。", right: acts(nowWrite) }),
+    setRow({ text: "昨天的日报", why: p.live ? state : null, right: acts(look) }),
     home);
+}
+
+// ---------------------------------------------------------------- 04 自动换窗/手动换窗
+
+/** One choice of two. The first carries a number of days: 1 is `flip` "daily", more is
+ *  "every_n" with `every_n` that many; while 手动换窗 is chosen the number is only kept
+ *  here, and goes with the first choice when it is picked again. */
+function flipBlock(p) {
+  const days = num({ "aria-label": "多少天换一次窗", value: "1" });
+  const manualOn = () => p.live && p.s.report.flip === "manual";
+  const nowWrite = reportButton(p, "现在写日报", "now", (b) => { b.disabled = !manualOn(); });
+  let auto, manual;
+
+  if (p.live) {
+    const r = () => p.s.report;
+    let n = r().flip === "every_n" ? r().every_n : 1;
+    const patch = () => ({ report: n === 1 ? { flip: "daily" } : { flip: "every_n", every_n: n } });
+    const check = () => {
+      auto.querySelector("input").checked = r().flip !== "manual";
+      manual.querySelector("input").checked = r().flip === "manual";
+    };
+    auto = radio({ name: "flip", label: "多少天换一次窗", value: "auto", checked: r().flip !== "manual",
+      onChange: () => save(p, patch(), { undo: check }) });
+    manual = radio({ name: "flip", label: "手动换窗", value: "manual", checked: r().flip === "manual",
+      onChange: () => save(p, { report: { flip: "manual" } }, { undo: check }) });
+    days.addEventListener("change", () => {
+      const raw = days.value.trim();
+      if (raw === "") { days.value = String(n); days.removeAttribute("aria-invalid"); return; }
+      n = intOr(raw);
+      if (!manualOn()) save(p, patch());
+    });
+    p.reg("report.flip", auto);
+    p.reg("report.every_n", days);
+    p.watch(() => {
+      if (r().flip === "every_n") n = r().every_n;
+      else if (r().flip === "daily") n = 1;
+      if (document.activeElement !== days && days.getAttribute("aria-invalid") !== "true") days.value = String(n);
+      check();
+      nowWrite.disabled = !manualOn();
+    });
+  } else {
+    off(days);
+    auto = off(radio({ name: "flip", label: "多少天换一次窗", checked: true }));
+    manual = off(radio({ name: "flip", label: "手动换窗", checked: false }));
+  }
+
+  return setBlock("04", "自动换窗/手动换窗", {},
+    setRow({ lead: auto, why: "默认是一天一个窗。", right: withUnit(days, "天") }),
+    setRow({ lead: manual, why: "按「现在写日报」，写完之后下一次发信息就是新窗口。", right: acts(nowWrite) }));
 }
 
 // ---------------------------------------------------------------- the page
@@ -286,15 +345,10 @@ async function render(view) {
   const snap = await ask(PRESENT);
   const live = Boolean(snap && snap.connected === true);
   const p = presentPage(live ? snap : null);
-  const prompts = live ? ask(`${PRESENT}/prompts`) : null;
   view.append(
     pagehead({ title: "今天就在眼前", caption: live || (snap && snap.error) ? null : NOT_WIRED }),
     p.top,
-    h("main", { class: "sets present" },
-      compressBlock(p),
-      cardBlock("02", "compress", PROMPT_TITLES.compress, prompts),
-      reportBlock(p),
-      cardBlock("04", "report", PROMPT_TITLES.report, prompts)));
+    h("main", { class: "sets present" }, compressBlock(p), linesBlock(p), reportBlock(p), flipBlock(p)));
   if (live) showSettingsState(p);
   else if (snap && snap.error) { p.top.append(errorLine(snap.error)); p.topSync(); }
 }

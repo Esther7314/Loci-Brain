@@ -389,14 +389,50 @@ export function savingNum({ value, label, save, onError = () => {} }) {
   return box;
 }
 
-/** A numbered block of a settings page (her frames muse——设置, Dream——设置): 「01 提醒设置」
- *  in small ink with its i, and its rows under it. */
-export function setBlock(no, title, { tip: tipText } = {}, ...children) {
+/** A numbered block of a settings page (her frames muse——设置, Dream——设置, present):
+ *  「01 提醒设置」 in small ink with its i, `extra` after them (present's 提示词 link), and
+ *  its rows under it. */
+export function setBlock(no, title, { tip: tipText, extra } = {}, ...children) {
   return h("section", { class: "sblock" },
     h("div", { class: "phead" },
       h("h3", { class: "pt" }, h("span", { class: "sn", text: no }), title),
-      tipText ? tip(tipText) : null),
+      tipText ? tip(tipText) : null,
+      extra || null),
     children);
+}
+
+const ICON_CLOSE = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg>';
+
+/** Her glass window over the page (frame glass-card-example), for something to read or
+ *  rewrite: `title`, what sits before the × (`aside`, a badge), a rule, and `body` for
+ *  the caller to fill. Closed by the ×, Escape, or a click outside it; the focus then
+ *  goes back to where it was. Returns {body, close}. */
+export function glassWindow({ title, aside } = {}) {
+  const before = document.activeElement;
+  const body = h("div", { class: "sheet-body" });
+  const x = h("button", { class: "ib close", type: "button", "aria-label": "关闭" });
+  x.innerHTML = ICON_CLOSE;   // constant markup, never data
+  const dlg = h("div", { class: "dlg rising sheet", role: "dialog", "aria-modal": "true", "aria-label": title, tabindex: "-1" },
+    h("div", { class: "grab", "aria-hidden": "true" }),
+    h("div", { class: "head" }, h("h1", { text: title }), aside || null, x),
+    body);
+  const scrim = h("div", { class: "scrim" }, dlg);
+  const overflow = document.body.style.overflow;
+  const onKey = (e) => { if (e.key === "Escape") close(); };
+  function close() {
+    document.removeEventListener("keydown", onKey);
+    document.body.style.overflow = overflow;
+    scrim.remove();
+    if (before && typeof before.focus === "function") before.focus();
+  }
+  x.addEventListener("click", close);
+  scrim.addEventListener("mousedown", (e) => { if (e.target === scrim) close(); });
+  document.addEventListener("keydown", onKey);
+  document.body.style.overflow = "hidden";
+  document.body.appendChild(scrim);
+  requestAnimationFrame(() => requestAnimationFrame(() => dlg.classList.remove("rising")));
+  dlg.focus({ preventScroll: true });
+  return { body, close };
 }
 
 /** A sample under a prompt card (her frame Dream——设置): a small underlined link that

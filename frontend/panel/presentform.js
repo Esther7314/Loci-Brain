@@ -14,7 +14,7 @@
    ========================================================== */
 
 import * as api from "./api.js";
-import { h, fill, row, sw, radio, num, promptCard, errorLine, dayTime } from "./ui.js";
+import { h, fill, row, btn, sw, radio, num, promptCard, glassWindow, errorLine, dayTime } from "./ui.js";
 
 export const NOT_WIRED = "还没接上";
 
@@ -22,16 +22,16 @@ export const PRESENT = "/api/loci/present";
 
 // A refused field, in the board's words (the longest matching prefix wins).
 export const FIELD_WORDS = {
-  "compress.on": "自助压缩开关",
+  "compress.on": "自助压缩总开关",
   "compress.context_tokens": "上下文窗口",
   "compress.ask_pct": "压缩水位线",
-  "compress.keep_raw": "压缩完留多少条原话",
+  "compress.keep_raw": "压缩完留多少条原文",
   "compress.weak_pct": "弱提醒线",
-  "compress.force_pct": "强制压缩线",
+  "compress.force_pct": "强制提醒线",
   "report.from": "什么时候写（从）",
   "report.to": "什么时候写（到）",
   "report.flip": "换窗",
-  "report.every_n": "几天换一个窗",
+  "report.every_n": "多少天换一次窗",
   "wake.on": "自动唤醒开关",
   "wake.every_min": "多久醒一次",
   "wake.dnd": "免打扰",
@@ -93,10 +93,6 @@ export function intOr(raw) {
   const v = Number(raw);
   return raw !== "" && Number.isFinite(v) ? v : raw;
 }
-
-/** A percent box shows "85%"; what is typed is read with or without the sign. */
-export const pctShow = (v) => (v === null || v === undefined || v === "" ? "" : `${v}%`);
-export const pctRead = (raw) => intOr(raw.replace(/\s*[%％]\s*$/, ""));
 
 /** "4" · "4:30" · "4.30" · "0430" -> "04:00" · "04:30"; anything else as typed. The box
  *  has the phone's number pad, which has no colon. */
@@ -239,13 +235,13 @@ export function readLater(p, anchor, ms = 8000) {
 export function numBox(p, path, { label, kind = "int", board = "", placeholder, style }) {
   const key = path.join(".");
   if (!p.live) return off(num({ value: board, "aria-label": label, style }));
-  const show = kind === "pct" ? pctShow : (v) => (v === null || v === undefined ? "" : String(v));
+  const show = (v) => (v === null || v === undefined ? "" : String(v));
   const el = p.reg(key, num({ "aria-label": label, placeholder, style }));
   el.addEventListener("change", () => {
     const raw = el.value.trim();
     const saved = at(p.s, path);
     if (raw === "" && kind !== "int?") { el.value = show(saved); el.removeAttribute("aria-invalid"); return; }
-    const value = raw === "" ? null : kind === "time" ? timeOr(raw) : kind === "pct" ? pctRead(raw) : intOr(raw);
+    const value = raw === "" ? null : kind === "time" ? timeOr(raw) : intOr(raw);
     if (value === saved) { el.value = show(saved); return; }
     save(p, nest(path, value));
   });
@@ -311,6 +307,63 @@ export function cardBlock(no, key, title, prompts) {
     }).catch(() => { /* the login gate: the router takes over */ });
   }
   return holder;
+}
+
+/** One of the gateway's prompt cards in a glass window (her frame glass-card-example):
+ *  the text to read; 编辑 lets it be rewritten and 保存 writes it (POST {key, text});
+ *  恢复默认 puts the default back ({key, reset: true}). The card is read when the window
+ *  opens, and drawn again from each reply's `item`. The server's 不建议改 lines sit left
+ *  of the two buttons. */
+export async function openPrompt(key, title) {
+  const edit = btn("编辑", { badge: true });
+  edit.disabled = true;
+  const win = glassWindow({ title, aside: edit });
+  let out;
+  try { out = await ask(`${PRESENT}/prompts`); } catch (_) { win.close(); return; }   // the login gate
+  const first = out && Array.isArray(out.items) ? out.items.find((c) => c.key === key) : null;
+  if (!first) { fill(win.body, errorLine(out && out.error ? out.error : NOT_WIRED)); return; }
+
+  const draw = (card) => {
+    const area = h("textarea", { class: "ptext", readonly: true, spellcheck: "false", "aria-label": title });
+    area.value = card.text ?? "";
+    const fit = () => { area.style.height = "auto"; area.style.height = `${area.scrollHeight + 2}px`; };
+    area.addEventListener("input", fit);
+    const reset = btn("恢复默认", { badge: true });
+    const keep = btn("保存", { badge: true, dark: true });
+    keep.disabled = true;
+    const status = h("div");
+    const editing = (on) => {
+      area.readOnly = !on;
+      keep.disabled = !on;
+      edit.setAttribute("aria-pressed", String(on));
+      fit();
+      if (on) area.focus();
+    };
+    edit.disabled = false;
+    edit.setAttribute("aria-pressed", "false");
+    edit.onclick = () => editing(area.readOnly);
+    const run = (body) => async () => {
+      fill(status);
+      const was = keep.disabled;
+      reset.disabled = keep.disabled = true;
+      try { draw((await api.post(`${PRESENT}/prompts`, { key, ...body() })).item); } catch (e) {
+        reset.disabled = false;
+        keep.disabled = was;
+        fill(status, errorLine(e));
+      }
+    };
+    reset.addEventListener("click", run(() => ({ reset: true })));
+    keep.addEventListener("click", run(() => ({ text: area.value })));
+    fill(win.body,
+      card.edited && card.changed ? h("p", { class: "why", style: { margin: "0 0 var(--s-2)" }, text: `改过 · ${card.changed}` }) : null,
+      area,
+      h("div", { class: "pfoot" },
+        h("div", { class: "pnotes" }, (card.notes || []).map((n) => h("p", { class: "why", text: n }))),
+        h("div", { class: "acts" }, reset, keep)),
+      status);
+    fit();
+  };
+  draw(first);
 }
 
 // ---------------------------------------------------------------- reading
