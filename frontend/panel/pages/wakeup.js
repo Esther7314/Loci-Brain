@@ -4,8 +4,9 @@
    #/wakeup   five numbered blocks, in the look of the settings pages (muse——设置,
               Dream——设置):
                 01 自动唤醒   the gateway's `wake` settings — on, every N minutes, the
-                             quiet hours, all day or only some segments (twelve at most)
-                             — and what wake did and will do: last, next (and why it is
+                             quiet hours, all day or only some segments (twelve at most,
+                             each with 删除 while there is more than one) — and what
+                             wake did and will do: last, next (and why it is
                              not on time), today's counts, how many of his lines wait.
                 02 the wake card (GET /api/loci/present/prompts, key `wake`): the letter
                    he reads each time he wakes. POST {key, text} saves, {key, reset:
@@ -43,8 +44,8 @@ const unit = (text) => h("span", { class: "why", text });
 // ---------------------------------------------------------------- 01 自动唤醒
 
 /** The wake segments: the first beside 自定义时间段, more under it, 「+ 增加一个时间段」 for
- *  another (twelve at most). A segment is saved once both its times are filled; emptying
- *  both takes it away. */
+ *  another (twelve at most). A segment is saved once both its times are filled; 删除 at
+ *  its right takes it away (while there is more than one), and so does emptying both. */
 function segments(p) {
   const first = h("span", { style: { display: "contents" } });
   const more = h("div");
@@ -74,10 +75,15 @@ function segments(p) {
     b.addEventListener("change", send);
     return [a, b];
   };
+  const drop = (one) => {
+    const b = p.ctl(btn("删除", { badge: true }));
+    b.addEventListener("click", () => { pairs = pairs.filter((x) => x !== one); layout(); send(); });
+    return b;
+  };
   const layout = () => {
-    const [a, b] = pairs[0];
-    fill(first, acts(a, to(), b));
-    fill(more, pairs.slice(1).map(([x, y]) => set({ right: acts(x, to(), y) })));
+    const many = pairs.length > 1;
+    fill(first, acts(pairs[0][0], to(), pairs[0][1], many ? drop(pairs[0]) : null));
+    fill(more, pairs.slice(1).map((one) => set({ right: acts(one[0], to(), one[1], drop(one)) })));
     add.disabled = !p.live || pairs.length >= 12;
     if (p.live) register();
   };
@@ -266,7 +272,7 @@ async function render(view) {
   const live = Boolean(snap && snap.connected === true);
   const p = presentPage(live ? snap : null);
   view.append(
-    pagehead({ title: "wakeup", caption: live || (snap && snap.error) ? null : NOT_WIRED }),
+    pagehead({ title: "Loci 会把他唤醒", caption: live || (snap && snap.error) ? null : NOT_WIRED }),
     p.top,
     h("main", { class: "sets wakeup" },
       wakeBlock(p),

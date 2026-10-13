@@ -137,7 +137,7 @@ const DEFAULT_VIEW = {
   compress: { on: true, context_tokens: null, ask_pct: 75, keep_raw: 40, weak_pct: [65], force_pct: 85 },
   report: { from: "04:00", to: "08:00", quiet_min: 30, flip: "daily", every_n: 2 },
   wake: {
-    on: false, every_min: 60, dnd: { on: true, from: "23:00", to: "08:00" },
+    on: false, every_min: 55, dnd: { on: true, from: "23:00", to: "08:00" },
     segments: { mode: "all", list: [] }, held_cap: null, daily_cap: 16, dry_run: false, allow_short: false,
   },
   own: { tool_rounds: 6, models: [], fixed_key_set: true },
