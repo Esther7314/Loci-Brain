@@ -14,7 +14,7 @@
    ========================================================== */
 
 import * as api from "./api.js";
-import { h, fill, row, btn, sw, radio, num, promptCard, glassWindow, errorLine, dayTime } from "./ui.js";
+import { h, fill, row, btn, sw, radio, num, promptCard, sampleFold, glassWindow, errorLine, dayTime } from "./ui.js";
 
 export const NOT_WIRED = "还没接上";
 
@@ -23,6 +23,8 @@ export const PRESENT = "/api/loci/present";
 // A refused field, in the board's words (the longest matching prefix wins).
 export const FIELD_WORDS = {
   "compress.on": "自助压缩总开关",
+  "compress.ask_on": "普通压缩",
+  "compress.advanced_on": "高级压缩",
   "compress.context_tokens": "上下文窗口",
   "compress.ask_pct": "压缩水位线",
   "compress.keep_raw": "压缩完留多少条原文",
@@ -313,8 +315,9 @@ export function cardBlock(no, key, title, prompts) {
  *  the text to read; 编辑 lets it be rewritten and 保存 writes it (POST {key, text});
  *  恢复默认 puts the default back ({key, reset: true}). The card is read when the window
  *  opens, and drawn again from each reply's `item`. The server's 不建议改 lines sit left
- *  of the two buttons. */
-export async function openPrompt(key, title) {
+ *  of the two buttons; `sample` {label, text}, what an answer may look like, folds under
+ *  them. */
+export async function openPrompt(key, title, { sample } = {}) {
   const edit = btn("编辑", { badge: true });
   edit.disabled = true;
   const win = glassWindow({ title, aside: edit });
@@ -360,7 +363,8 @@ export async function openPrompt(key, title) {
       h("div", { class: "pfoot" },
         h("div", { class: "pnotes" }, (card.notes || []).map((n) => h("p", { class: "why", text: n }))),
         h("div", { class: "acts" }, reset, keep)),
-      status);
+      status,
+      sample ? sampleFold({ label: sample.label, text: sample.text, pre: true }) : null);
     fit();
   };
   draw(first);

@@ -5,16 +5,20 @@
    #/present   four numbered blocks:
                  01 自助压缩   the switch (`compress.on`) and 手动压缩 (POST …/compress),
                               answered in its own row. 提示词 beside the title opens the
-                              compress card in a glass window (presentform.openPrompt).
-                 02 普通压缩/高级压缩   the lines the fill is held against, all percent of
-                              the context window: under 普通压缩 the window itself, the
-                              ask line and how many raw lines stay; under 高级压缩 the
-                              weak lines (five at most, each with 删除 while there is
-                              more than one) and the force line.
+                              compress card in a glass window (presentform.openPrompt),
+                              with a made-up sample folded under it.
+                 02 普通压缩/高级压缩   the lines the fill is held against, percent of
+                              the context window, in two groups each with its own
+                              switch (its heading dark while it is on): 普通压缩
+                              (`compress.ask_on`) the ask line and how many raw lines
+                              stay; 高级压缩 (`compress.advanced_on`) the weak lines
+                              (five at most, each with 删除 while there is more than
+                              one) and the force line.
                  03 昨日日报   when it is written, and 昨天的日报: its state in the row,
                               点击查看 opens it in a glass window — its text, or, while it
                               is missing or failed, 补一份 (POST …/report {kind:
-                              "missing"}). 提示词 opens the report card.
+                              "missing"}). 提示词 opens the report card, with its
+                              sample.
                  04 自动换窗/手动换窗   one choice of two. 多少天换一次窗 with its number:
                               1 is `report.flip` "daily", more is "every_n" with that
                               many days. 手动换窗 is "manual", with 现在写日报 (POST
@@ -24,17 +28,17 @@
                off and the page says 「还没接上」. Waking and pushing are pages/wakeup.js.
 
    What a self-compression writes goes to the model only: no reply carries it, and the
-   page never shows it.
+   page never shows it; the sample under the compress card is written by hand.
 
-   The context window box is empty for "work it out" (null): its line says the size in
-   force and where it came from.
+   The context window has no box here: the gateway works it out, and present.json's
+   `compress.context_tokens` overrides it.
    ========================================================== */
 
 import * as api from "../api.js";
 import { h, fill, pagehead, setBlock, tip, btn, num, radio, glassWindow, errorLine } from "../ui.js";
 import {
   NOT_WIRED, PRESENT, ask, presentPage, showSettingsState, save, readLater, numBox, toggle,
-  off, acts, setRow, unit, to, small, linkButton, when, intOr, sameList, sayer, openPrompt,
+  off, acts, setRow, unit, to, small, linkButton, when, at, intOr, sameList, sayer, openPrompt,
 } from "../presentform.js";
 
 const TIP = {
@@ -45,9 +49,6 @@ const TIP = {
 
 /** The i of 什么时候写, with the gateway's own window and quiet time. */
 const whenTip = (r) => `在 ${r.from}–${r.to} 之间，你没有说话 ${r.quiet_min} 分钟之后就会写日报。`;
-
-// Where the context window size came from (context_window.js resolve()).
-const SOURCE_WORDS = { provider: "服务商报的", table: "常见模型表", learned: "撞墙量出来的", user: "你填的", default: "缺省" };
 
 // status.report.state, when the reply carries no state_words.
 const REPORT_WORDS = {
@@ -62,19 +63,42 @@ const NOT_BUILT_REPORT = "写日报这一步网关还没做好，现在按了也
 
 const PROMPT_TITLES = { compress: "压缩的提示词", report: "写日报的提示词" };
 
+// What each card's answer may look like, folded under it: made up, in the card's own
+// voice (him to himself, the other person as ta).
+const SAMPLES = {
+  compress: {
+    label: "压缩示例",
+    text: `ta 今晚有点累，但人是松的——下午那件悬着的事落了地，说话都慢下来了。
+我们正聊到周末去不去海边：ta 想去，又怕下雨，话说到「要不看周五的预报再定」就停在这儿。
+我答应了两件还没做：周五早上提醒 ta 看预报；把上次说的那家面馆的名字找出来。
+刚才 ta 提了一句最近睡得浅，我没接住，下次开口先问这个。`,
+  },
+  report: {
+    label: "日报示例",
+    text: `今天是从 ta 那句「我又没睡好」开始的。嘴上说没事，可一上午回得都慢，我没有追问，只陪着把要交的那份东西一段一段理完——理完 ta 说「终于」，我跟着松了一口气。
+下午 ta 出门见朋友，回来话多了，讲那家店的汤有多烫，讲朋友家的猫不认生。我喜欢 ta 这样讲小事的时候。
+晚上聊到周末，ta 想去海边又怕下雨，说「看周五的预报再定」。我答应了周五早上提醒 ta。
+还欠着的：那家面馆的名字，我说了要找，还没找。`,
+  },
+};
+
 /** 提示词 beside a block's title: opens that prompt card in its window. */
 function promptLink(p, key) {
   const b = p.ctl(h("button", { class: "lnk", type: "button" }, "提示词"));
-  b.addEventListener("click", () => openPrompt(key, PROMPT_TITLES[key]));
+  b.addEventListener("click", () => openPrompt(key, PROMPT_TITLES[key], { sample: SAMPLES[key] }));
   return b;
 }
 
 /** A number box with its unit after it. */
 const withUnit = (box, words) => h("span", { class: "acts nu" }, box, unit(words));
 
-/** A heading inside a block (普通压缩, 高级压缩); `ruled` draws a line over it. */
-function subHead(text, { ruled = false } = {}) {
-  return h("h4", { class: `subhd${ruled ? " ruled" : ""}`, text });
+/** A group inside a block with its own switch (普通压缩, 高级压缩): its heading, dark
+ *  while the setting at `path` is on and pale while it is off, and the switch at the
+ *  right. `ruled` draws a line over it. */
+function switchHead(p, text, path, { ruled = false } = {}) {
+  const head = h("div", { class: `subhd${ruled ? " ruled" : ""}` }, h("h4", { text }), toggle(p, path, text));
+  p.watch(() => head.classList.toggle("off", !at(p.s, path)));
+  return head;
 }
 
 // ---------------------------------------------------------------- 01 自助压缩
@@ -108,14 +132,6 @@ function compressBlock(p) {
 }
 
 // ---------------------------------------------------------------- 02 普通压缩/高级压缩
-
-/** 128000 -> "128k", 1000000 -> "1M". */
-function tokensWords(n) {
-  if (!Number.isFinite(n)) return "";
-  if (n >= 1e6 && n % 1e5 === 0) return `${n / 1e6}M`;
-  if (n >= 1000 && n % 1000 === 0) return `${n / 1000}k`;
-  return String(n);
-}
 
 /** The weak lines: one row each, put in before `anchor` (the force line's row), and
  *  「+再加一条提醒线」 for another (five at most). 删除 at a line's right takes it away
@@ -174,17 +190,11 @@ function weakLines(p, anchor) {
 }
 
 function linesBlock(p) {
-  const ctxWhy = h("span");
   const fillWhy = h("span");
   const keptWhy = h("span");
   const forceWhy = h("span");
   p.watch(() => {
     const st = p.st.compress || {};
-    const c = st.context || {};
-    const auto = p.s.compress.context_tokens === null;
-    ctxWhy.textContent = c.tokens
-      ? `现在按 ${tokensWords(c.tokens)}（${SOURCE_WORDS[c.source] || c.source || "来处不明"}）${auto ? "，空着就是自动" : "，清空就是自动"}`
-      : "空着就是自动";
     if (st.state === "no_thread" || !st.thread) fillWhy.textContent = "还没有对话";
     else if (st.fill_pct === null || st.fill_pct === undefined) fillWhy.textContent = "还不知道装了多少";
     else fillWhy.textContent = `现在已到 ${st.fill_pct}%${st.estimated ? "（估的）" : "（上游报的）"}`;
@@ -200,14 +210,12 @@ function linesBlock(p) {
   p.homes.compress = home;
   return setBlock("02", "普通压缩/高级压缩", {},
     h("p", { class: "why blocknote", text: "如果你开了 auto compact（自动压缩），记得关掉，不然两边会起冲突。" }),
-    subHead("普通压缩"),
-    setRow({ text: "上下文窗口", why: p.live ? ctxWhy : null,
-      right: acts(numBox(p, ["compress", "context_tokens"], { label: "上下文窗口", kind: "int?", placeholder: "自动", style: { width: "104px" } })) }),
+    switchHead(p, "普通压缩", ["compress", "ask_on"]),
     setRow({ text: "压缩水位线", why: p.live ? fillWhy : null,
       right: withUnit(numBox(p, ["compress", "ask_pct"], { label: "压缩水位线", board: "75" }), "%") }),
     setRow({ text: "压缩完留多少条原文", why: p.live ? keptWhy : null,
       right: withUnit(numBox(p, ["compress", "keep_raw"], { label: "留多少条", board: "10" }), "条") }),
-    subHead("高级压缩", { ruled: true }),
+    switchHead(p, "高级压缩", ["compress", "advanced_on"], { ruled: true }),
     weak.rows,
     force,
     weak.link,

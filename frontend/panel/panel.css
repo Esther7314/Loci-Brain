@@ -346,7 +346,9 @@ input[type=radio], input[type=checkbox] { accent-color: var(--ink); }
    under a block's rows */
 .sblock > .phead > .lnk { margin-left: var(--s-2); font: var(--caption); }
 .blocknote { margin: 0; }
-.subhd { margin: var(--s-4) 0 var(--s-1); font: var(--title); color: var(--ink); }
+.subhd { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); margin: var(--s-4) 0 var(--s-1); }
+.subhd h4 { margin: 0; font: var(--title); color: var(--ink); transition: color 0.15s; }
+.subhd.off h4 { color: var(--faint); }
 .subhd.ruled { margin-top: var(--s-5); border-top: 1px solid var(--edge); padding-top: var(--s-4); }
 .setacts.left { display: flex; justify-content: flex-start; margin-top: var(--s-3); }
 /* her glass window for something to read or rewrite (a prompt, yesterday's report): wide,
@@ -359,6 +361,8 @@ input[type=radio], input[type=checkbox] { accent-color: var(--ink); }
 .ptext { display: block; width: 100%; min-height: 120px; max-height: 60vh; box-sizing: border-box; border: 0; border-radius: 10px; padding: 0; background: transparent; font: var(--lead); color: var(--ink); resize: none; scrollbar-width: thin; scrollbar-color: var(--edge) transparent; }
 .ptext:focus { outline: none; }
 .ptext:not([readonly]) { padding: 11px var(--s-4); background: var(--well); }
+/* the sample under a prompt in its window: plain words, no card of its own */
+.dlg.sheet .psample { margin-top: var(--s-1); border: 0; border-radius: 0; padding: 0; background: none; -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: none; color: var(--mid); }
 
 @media (max-width: 640px) {
   .days > .rows { gap: 44px; }
