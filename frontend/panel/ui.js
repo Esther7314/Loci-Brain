@@ -424,8 +424,10 @@ let pickSeq = 0;
  *  called when another option is chosen. One row of the list is lit at a time: the chosen
  *  one when it opens, then the one under the pointer or the arrow keys. Enter chooses,
  *  Esc and a click elsewhere close. The node returned also has `getValue()` and
- *  `setOptions(options, value)` (a list that arrives later). */
-export function pick({ cls = "pill", label, options = [], value = "", onChange, disabled = false, placeholder = "" }) {
+ *  `setOptions(options, value)` (a list that arrives later).
+ *  `act`: a list of things to do, not of values (trace's 了结): the button always reads
+ *  `placeholder`, nothing stays chosen, and `onChange(value)` is called at every choice. */
+export function pick({ cls = "pill", label, options = [], value = "", onChange, disabled = false, placeholder = "", act = false }) {
   const id = `pick${++pickSeq}`;
   const button = h("button", { class: cls, type: "button", "aria-haspopup": "listbox",
     "aria-expanded": "false", "aria-controls": id, "aria-label": label, disabled });
@@ -435,6 +437,7 @@ export function pick({ cls = "pill", label, options = [], value = "", onChange, 
   let lit = -1;
 
   const show = () => {
+    if (act) { fill(button, placeholder); return; }
     const found = value === "" ? null : options.find(([v]) => v === value);
     fill(button, found ? found[1] : (placeholder ? h("span", { class: "ph", text: placeholder }) : null));
   };
@@ -465,6 +468,7 @@ export function pick({ cls = "pill", label, options = [], value = "", onChange, 
   function choose(i) {
     const [v] = options[i];
     close();
+    if (act) { if (onChange) onChange(v); return; }
     if (v === value) return;
     value = v;
     show();

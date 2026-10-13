@@ -527,6 +527,8 @@ button.pill:disabled { cursor: default; }
 .pop { position: absolute; z-index: 5; left: -1px; top: calc(100% + var(--s-2)); min-width: calc(100% + 2px); max-height: 326px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--edge) transparent; display: flex; flex-direction: column; gap: 2px; padding: 1px 10px 7px; box-sizing: border-box; border: 1px solid #FFFFFF; border-radius: 24px; background: var(--glass-card); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); box-shadow: var(--glass-drop); }
 .po { flex-shrink: 0; padding: 3px var(--s-3); border-radius: 10px; font: var(--lead); color: var(--small); text-align: center; white-space: nowrap; cursor: pointer; }
 .po.on { background: var(--grey); color: var(--ink); }
+/* a list opened from a row's right end (trace's 了结) hangs from the button's right edge */
+.acts .pop { left: auto; right: -1px; }
 /* a date's three pills and the card of three wheels under them: each wheel under its
    pill, five rows showing, the middle one lit and the others fading out */
 .whenw { gap: 10px; }
@@ -553,6 +555,8 @@ button.pill:disabled { cursor: default; }
 @media (max-width: 640px) {
   .grouped > .rows { gap: 36px; }
   .grouped > .pager { padding-left: 0; }
+  /* a row's buttons sit at its left on the phone, and so does the list one opens */
+  .acts .pop { left: -1px; right: auto; }
 
   /* the prompt card: the buttons under the 不建议改 line, at the right; the box in a size
      the phone does not zoom into */
