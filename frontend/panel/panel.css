@@ -178,6 +178,8 @@ a:hover { color: var(--ink-solid); }
 .rid { font: var(--caption); color: var(--faint); white-space: nowrap; user-select: all; -webkit-user-select: all; }
 .rid::before { content: '#'; user-select: none; -webkit-user-select: none; }
 .acts { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: var(--s-2); }
+/* the place an error would be said takes no room while it is empty */
+.acts > span:empty { display: none; }
 .more { margin: 0; padding: var(--s-1) 0 0; font: var(--caption); color: var(--small); }
 .dim { color: var(--small); }
 .foot { margin: var(--s-8) 0 0; }
