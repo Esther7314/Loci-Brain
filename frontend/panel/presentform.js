@@ -14,7 +14,7 @@
    ========================================================== */
 
 import * as api from "./api.js";
-import { h, fill, row, sw, radio, num, errorLine, dayTime } from "./ui.js";
+import { h, fill, row, sw, radio, num, promptCard, errorLine, dayTime } from "./ui.js";
 
 export const NOT_WIRED = "还没接上";
 
@@ -51,9 +51,15 @@ export function acts(...kids) {
   return h("span", { class: "acts", style: { flexWrap: "nowrap" } }, kids);
 }
 
-export function setRow({ text = "", lead, why, right, wide = false, stack = false }) {
-  const layout = ["set", wide ? "wide" : "", stack ? "stack" : ""].filter(Boolean).join(" ");
-  return row({ text, lead, why, right: right || h("span"), layout });
+/** One row of a numbered block (ui.setBlock): the name and its small words on the left,
+ *  the control at the right. */
+export function setRow({ text = "", lead, why, right, layout = "" }) {
+  return row({ text, lead, why, right: right || h("span"), layout: `big set${layout ? ` ${layout}` : ""}` });
+}
+
+/** A number's unit, after its box (分钟). */
+export function unit(text) {
+  return h("span", { class: "why", text });
 }
 
 export function to() {
@@ -278,6 +284,33 @@ export function choices(p, name, path, options) {
   p.reg(path.join("."), els[0]);
   p.watch(check);
   return els;
+}
+
+// ---------------------------------------------------------------- prompt cards
+
+/** One of the gateway's prompt cards as a numbered block. Drawn off at once; then from
+ *  `prompts` — what ask(`${PRESENT}/prompts`) is reading, null when not connected — and
+ *  again from each reply's `item`: POST {key, text} saves, {key, reset: true} is 恢复默认. */
+export function cardBlock(no, key, title, prompts) {
+  const holder = h("div");
+  const write = async (body) => draw((await api.post(`${PRESENT}/prompts`, { key, ...body })).item);
+  const draw = (card) => fill(holder, promptCard({
+    no,
+    title,
+    card,
+    changedWords: (day) => `改过 · ${day}`,
+    onSave: (text) => write({ text }),
+    onReset: () => write({ reset: true }),
+  }));
+  fill(holder, promptCard({ no, title, card: { key, text: "" }, off: true }));
+  if (prompts) {
+    prompts.then((out) => {
+      const card = out && Array.isArray(out.items) ? out.items.find((c) => c.key === key) : null;
+      if (card) draw(card);
+      else if (out && out.error) holder.append(errorLine(out.error));
+    }).catch(() => { /* the login gate: the router takes over */ });
+  }
+  return holder;
 }
 
 // ---------------------------------------------------------------- reading

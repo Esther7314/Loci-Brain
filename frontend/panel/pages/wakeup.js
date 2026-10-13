@@ -24,10 +24,10 @@
    ========================================================== */
 
 import * as api from "../api.js";
-import { h, fill, pagehead, setBlock, row, btn, radio, num, promptCard, errorLine } from "../ui.js";
+import { h, fill, pagehead, setBlock, btn, radio, num, errorLine } from "../ui.js";
 import {
   NOT_WIRED, PRESENT, ask, presentPage, showSettingsState, save, numBox, toggle,
-  off, acts, to, small, linkButton, when, timeOr, at,
+  off, acts, setRow as set, to, small, linkButton, when, timeOr, at, unit, cardBlock,
 } from "../presentform.js";
 import { remindRows as museRows, REMIND_TIP as MUSE_TIP } from "./muse.js";
 import { remindRow as dreamRow, REMIND_TIP as DREAM_TIP } from "./dream.js";
@@ -38,8 +38,6 @@ const TIP = {
 };
 const CARD_TITLE = "自动唤醒的提示词";
 
-const set = (o) => row({ ...o, right: o.right || h("span"), layout: `big set${o.layout ? ` ${o.layout}` : ""}` });
-const unit = (text) => h("span", { class: "why", text });
 
 // ---------------------------------------------------------------- 01 自动唤醒
 
@@ -164,30 +162,6 @@ function wakeBlock(p) {
     p.live ? lines : null);
 }
 
-// ---------------------------------------------------------------- 02 the wake card
-
-function cardBlock(live) {
-  const holder = h("div");
-  const draw = (card) => fill(holder, promptCard({
-    no: "02",
-    title: CARD_TITLE,
-    card,
-    changedWords: (day) => `改过 · ${day}`,
-    onSave: async (text) => draw((await api.post(`${PRESENT}/prompts`, { key: "wake", text })).item),
-    onReset: async () => draw((await api.post(`${PRESENT}/prompts`, { key: "wake", reset: true })).item),
-  }));
-  const offCard = () => fill(holder, promptCard({ no: "02", title: CARD_TITLE, card: { key: "wake", text: "" }, off: true }));
-  offCard();
-  if (live) {
-    ask(`${PRESENT}/prompts`).then((out) => {
-      const card = out && Array.isArray(out.items) ? out.items.find((c) => c.key === "wake") : null;
-      if (card) draw(card);
-      else if (out && out.error) holder.append(errorLine(out.error));
-    }).catch(() => { /* the login gate: the router takes over */ });
-  }
-  return holder;
-}
-
 // ---------------------------------------------------------------- 03 主动推送
 
 /** What Bark answered a test push (push.js test()). */
@@ -276,7 +250,7 @@ async function render(view) {
     p.top,
     h("main", { class: "sets wakeup" },
       wakeBlock(p),
-      cardBlock(live),
+      cardBlock("02", "wake", CARD_TITLE, live ? ask(`${PRESENT}/prompts`) : null),
       pushBlock(p),
       remindBlock("04", "muse", MUSE_TIP, "muse", museRows),
       remindBlock("05", "dream", DREAM_TIP, "dream", (dream, fail) => [dreamRow(dream, fail)])));
