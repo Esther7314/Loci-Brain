@@ -18,7 +18,8 @@
                     是否开启自动提醒 (poke_on_wake) · 攒了几团提醒 (poke_min_clusters) ·
                     最早的那团等几天才能提醒 (poke_min_age_days). Each saves itself when it
                     is changed (POST /api/config {persist: true, muse}); 恢复默认 puts the
-                    defaults the server gives back in and saves them.
+                    defaults the server gives back in and saves them. The three rows are
+                    remindRows, which pages/wakeup.js shows as well.
    ========================================================== */
 
 import * as api from "../api.js";
@@ -147,6 +148,46 @@ async function renderMuse(view) {
 
 const unit = (text) => h("span", { class: "why", text });
 
+/** Save some of the `muse` block, and read it back as the server keeps it. */
+async function write(values) {
+  await api.post("/api/config", { persist: true, muse: values });
+  return (await api.get("/api/config")).muse;
+}
+
+export const REMIND_TIP = TIPS.remind;
+
+/** The three reminder rows, from the `muse` block of /api/config. Each saves itself when
+ *  it is changed; a refusal goes to `fail(err)`, `fail(null)` clears it. */
+export function remindRows(muse, fail) {
+  const number = (key, label) => savingNum({
+    value: muse[key], label, onError: fail,
+    save: async (v) => (await write({ [key]: v }))[key],
+  });
+  const wake = sw({
+    checked: !!muse.poke_on_wake,
+    label: "是否开启自动提醒",
+    onChange: async (on) => {
+      fail(null);
+      wake.disabled = true;
+      try {
+        await write({ poke_on_wake: on });
+      } catch (e) {
+        wake.setAttribute("aria-checked", String(!on));
+        fail(e);
+      }
+      wake.disabled = false;
+    },
+  });
+  return [
+    row({ text: "是否开启自动提醒", why: "不开的时候，只有你手动戳他，他才会知道。",
+      right: h("span", { class: "acts" }, wake), layout: "big set" }),
+    row({ text: "攒了几团提醒", why: "日子加想法一起算。",
+      right: h("span", { class: "acts nu" }, number("poke_min_clusters", "攒了几团提醒"), unit("团")), layout: "big set" }),
+    row({ text: "最早的那团等几天才能提醒",
+      right: h("span", { class: "acts nu" }, number("poke_min_age_days", "最早的那团等几天才能提醒"), unit("天")), layout: "big set" }),
+  ];
+}
+
 async function renderSettings(view) {
   // The way back, in the place of the sub-tabs.
   const bar = subbar({ tabs: h("a", { class: "on back", href: href("muse") },
@@ -155,34 +196,9 @@ async function renderSettings(view) {
   const body = h("main", { class: "sets" });
   view.append(bar, body);
 
-  /** Save some of the block, and read it back as the server keeps it. */
-  const write = async (values) => {
-    await api.post("/api/config", { persist: true, muse: values });
-    return (await api.get("/api/config")).muse;
-  };
-
   const draw = (muse) => {
     const err = h("div");
     const fail = (e) => fill(err, e ? errorLine(e) : null);
-    const number = (key, label) => savingNum({
-      value: muse[key], label, onError: fail,
-      save: async (v) => (await write({ [key]: v }))[key],
-    });
-    const wake = sw({
-      checked: !!muse.poke_on_wake,
-      label: "是否开启自动提醒",
-      onChange: async (on) => {
-        fail(null);
-        wake.disabled = true;
-        try {
-          await write({ poke_on_wake: on });
-        } catch (e) {
-          wake.setAttribute("aria-checked", String(!on));
-          fail(e);
-        }
-        wake.disabled = false;
-      },
-    });
     const reset = btn("恢复默认", {
       badge: true,
       onClick: async () => {
@@ -196,14 +212,8 @@ async function renderSettings(view) {
         }
       },
     });
-
-    fill(body, setBlock("01", "提醒设置", { tip: TIPS.remind },
-      row({ text: "是否开启自动提醒", why: "不开的时候，只有你手动戳他，他才会知道。",
-        right: h("span", { class: "acts" }, wake), layout: "big set" }),
-      row({ text: "攒了几团提醒", why: "日子加想法一起算。",
-        right: h("span", { class: "acts nu" }, number("poke_min_clusters", "攒了几团提醒"), unit("团")), layout: "big set" }),
-      row({ text: "最早的那团等几天才能提醒",
-        right: h("span", { class: "acts nu" }, number("poke_min_age_days", "最早的那团等几天才能提醒"), unit("天")), layout: "big set" }),
+    fill(body, setBlock("01", "提醒设置", { tip: REMIND_TIP },
+      remindRows(muse, fail),
       h("div", { class: "acts setacts" }, reset),
       err));
   };

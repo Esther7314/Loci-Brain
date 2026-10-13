@@ -337,6 +337,8 @@ input[type=radio], input[type=checkbox] { accent-color: var(--ink); }
 .acts.nu { gap: var(--s-1); }
 .acts.duo { gap: 20px; }
 .sets .setacts { margin-top: 20px; }
+/* wakeup: what wake did and will do, under its rows */
+.wakestate { margin-top: var(--s-3); }
 .sets .prompt { height: 189px; }
 
 @media (max-width: 640px) {

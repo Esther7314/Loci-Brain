@@ -13,7 +13,8 @@
                      A dream whose sources were withdrawn shows the API's words for that
                      and no text. Read only.
    #/dream/settings  (her frame Dream——设置) four numbered blocks.
-                     01 提醒设置: 是否开启自动提醒 is /api/config `dream.deliver_on_wake`.
+                     01 提醒设置: 是否开启自动提醒 is /api/config `dream.deliver_on_wake`
+                     (remindRow, which pages/wakeup.js shows as well).
                      02 the weaving prompt's card (key `dream`): GET /api/loci/prompts,
                      POST {key, text} to save, {key, reset: true} for 恢复默认, and
                      梦境结果样例 folding under it.
@@ -100,6 +101,30 @@ async function write(values) {
   return (await api.get("/api/config")).dream;
 }
 
+export const REMIND_TIP = TIP_REMIND;
+
+/** The reminder row, from the `dream` block of /api/config. It saves itself when it is
+ *  flipped; a refusal goes to `fail(err)`, `fail(null)` clears it. */
+export function remindRow(dream, fail) {
+  const deliver = sw({
+    checked: dream[DELIVER] !== false,
+    label: "是否开启自动提醒",
+    onChange: async (on) => {
+      fail(null);
+      deliver.disabled = true;
+      try {
+        await write({ [DELIVER]: on });
+      } catch (e) {
+        deliver.setAttribute("aria-checked", String(!on));
+        fail(e);
+      }
+      deliver.disabled = false;
+    },
+  });
+  return row({ text: "是否开启自动提醒", why: "不开的时候，织好的梦没办法递给他。",
+    right: h("span", { class: "acts" }, deliver), layout: "big set" });
+}
+
 /** 02: the weaving prompt's card, drawn again from each reply. */
 function promptBlock() {
   const holder = h("div");
@@ -150,21 +175,6 @@ async function renderSettings(view) {
       value: dream[key], label, onError: fail,
       save: async (v) => (await write({ [key]: v }))[key],
     });
-    const deliver = sw({
-      checked: dream[DELIVER] !== false,
-      label: "是否开启自动提醒",
-      onChange: async (on) => {
-        fail(null);
-        deliver.disabled = true;
-        try {
-          await write({ [DELIVER]: on });
-        } catch (e) {
-          deliver.setAttribute("aria-checked", String(!on));
-          fail(e);
-        }
-        deliver.disabled = false;
-      },
-    });
     const reset = btn("恢复默认", {
       badge: true,
       onClick: async () => {
@@ -181,8 +191,7 @@ async function renderSettings(view) {
 
     fill(body,
       setBlock("01", "提醒设置", { tip: TIP_REMIND },
-        row({ text: "是否开启自动提醒", why: "不开的时候，织好的梦没办法递给他。",
-          right: h("span", { class: "acts" }, deliver), layout: "big set" })),
+        remindRow(dream, fail)),
       prompt,
       setBlock("03", "梦境设置", { tip: TIP_WEAVE },
         WEAVE.map(([key, text, u]) => row({ text, layout: "big set",

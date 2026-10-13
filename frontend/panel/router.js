@@ -9,14 +9,14 @@
        #/<page>/<tab>/<more…>    deeper, the page's own     #/name/pending
        …?k=v                     the page's own parameters  #/recall?query=看牙
 
-   A page module is loaded the first time its address is opened. The ten top-nav pages
+   A page module is loaded the first time its address is opened. The eleven top-nav pages
    are framed by the header; the login pages stand alone. A nav page with no module yet
    shows a placeholder.
    ========================================================== */
 
 import { h, header, errorLine, fill } from "./ui.js";
 
-/** The ten pages, in the canvas header's order. `id` is the address, `label` the word
+/** The eleven pages, in the header's order. `id` is the address, `label` the word
  *  shown. */
 export const NAV = [
   { id: "breath", label: "breath" },
@@ -28,6 +28,7 @@ export const NAV = [
   { id: "dream", label: "dream" },
   { id: "name", label: "name" },
   { id: "present", label: "present" },
+  { id: "wakeup", label: "wakeup" },
   { id: "setting", label: "setting" },
 ];
 

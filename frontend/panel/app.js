@@ -52,6 +52,7 @@ const FRAMED = {
   dream: () => import("./pages/dream.js"),
   name: () => import("./pages/name.js"),
   present: () => import("./pages/present.js"),
+  wakeup: () => import("./pages/wakeup.js"),
   setting: () => import("./pages/setting.js"),
 };
 

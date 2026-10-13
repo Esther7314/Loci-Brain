@@ -2,45 +2,37 @@
    pages/present.js — present and its 高级设置 (boards present, present-phone,
    present-settings)
 
-   #/present           自助压缩 · 昨日日报 · 自动唤醒 · 主动推送, as the board lays them out.
-                       GET /api/loci/present: the gateway's settings fill the controls,
-                       its status fills the lines beside them. A control is saved the moment
-                       it changes (a box on Enter or on leaving it, a switch or a choice on
-                       the click) with POST /api/loci/present {patch}; a refusal names its
-                       field, which is marked, and the server's words show in that row.
-                       现在压 POST …/compress · 补一份 / 现在写日报 POST …/report {kind} ·
-                       测试 POST …/push-test, each answered in its own row.
-   #/present/settings  the three prompt cards (自助压缩的, 写日报的, 自动唤醒的):
-                       GET /api/loci/present/prompts, POST {key, text} to save, {key,
+   #/present           自助压缩 · 昨日日报, as the board lays them out: how the talk is
+                       carried from one window to the next. The gateway's settings as
+                       bound controls (presentform.js). 现在压 POST …/compress · 补一份 /
+                       现在写日报 POST …/report {kind}, each answered in its own row.
+                       Waking and pushing are pages/wakeup.js.
+   #/present/settings  the two prompt cards (自助压缩的, 写日报的): GET
+                       /api/loci/present/prompts, POST {key, text} to save, {key,
                        reset: true} for 恢复默认, drawn by ui.promptCard like Loci's own.
                        The board's samples under the first two are left out: their text
                        speaks of the owner in the third person, which shipped code does not
                        (scripts/check_english.py).
 
-   Loci forwards these to the gateway (web/loci_present.py). No host with a present_url:
-   `{connected: false}`, and the page says 「还没接上」 with every control off. A gateway
-   that cannot be reached: `{connected: false, error}`, and the page shows the error, the
-   controls still off. What a self-compression writes goes to the model only: no reply
-   carries it, and the page never shows it.
+   What a self-compression writes goes to the model only: no reply carries it, and the
+   page never shows it.
 
    The context window box is empty for "work it out" (null): its line says the size in
-   force and where it came from. The Bark box never shows the stored code; its
-   placeholder is the masked hint, and saving takes the whole code or URL again.
+   force and where it came from.
    ========================================================== */
 
 import * as api from "../api.js";
-import { h, append, fill, subbar, group, row, tip, btn, sw, radio, num, customBox, promptCard, errorLine, dayTime } from "../ui.js";
+import { h, append, fill, subbar, group, tip, btn, num, customBox, promptCard, errorLine } from "../ui.js";
 import { href } from "../router.js";
-
-const NOT_WIRED = "还没接上";
-const PRESENT = "/api/loci/present";
+import {
+  NOT_WIRED, PRESENT, ask, presentPage, showSettingsState, save, readLater, numBox, toggle,
+  choices, off, acts, setRow, to, small, linkButton, when, pctShow, pctRead, sameList, sayer,
+} from "../presentform.js";
 
 const TIP = {
   report: "夜里把这一天写成一份日报，第二天开一个新窗口，从日报接着聊。",
   when: "在夜间 4–8 点之间，你没有说话 30 分钟之后就会写日报。",
   compress: "快满的时候他自己压一下，压完换个新窗口接着聊。",
-  wake: "隔一阵叫醒他一次，让他自己想想、做点事。1小时之内可以保住缓存，你下次开口接得更快、也更省。醒来的时候会顺手带上昨夜的梦和 muse 攒下的，这两样各自在 dream、muse 的高级设置里开关。",
-  push: "他醒来想跟你说话的时候，用 Bark 推到你手机上。",
 };
 
 /** The i of 什么时候写, with the gateway's own window and quiet time. */
@@ -60,60 +52,9 @@ const REPORT_WORDS = {
 };
 const NOT_BUILT_REPORT = "写日报这一步网关还没做好，现在按了也不会写";
 
-// A refused field, in the board's words (the longest matching prefix wins).
-const FIELD_WORDS = {
-  "compress.on": "自助压缩开关",
-  "compress.context_tokens": "上下文窗口",
-  "compress.ask_pct": "压缩水位线",
-  "compress.keep_raw": "压缩完留多少条原话",
-  "compress.weak_pct": "弱提醒线",
-  "compress.force_pct": "强制压缩线",
-  "report.from": "什么时候写（从）",
-  "report.to": "什么时候写（到）",
-  "report.flip": "换窗",
-  "report.every_n": "几天换一个窗",
-  "wake.on": "自动唤醒开关",
-  "wake.every_min": "多久醒一次",
-  "wake.dnd": "免打扰",
-  "wake.segments": "时间段",
-  "push.bark": "Bark 推送码",
-};
+const PROMPT_TITLES = { compress: "自助压缩的提示词", report: "写日报的提示词" };
 
-const PROMPT_TITLES = { compress: "自助压缩的提示词", report: "写日报的提示词", wake: "自动唤醒的提示词" };
-
-// ---------------------------------------------------------------- small pieces
-
-function off(el) {
-  if (el.matches("input, button, textarea, select")) el.disabled = true;
-  for (const c of el.querySelectorAll("input, button, textarea, select")) c.disabled = true;
-  return el;
-}
-
-function acts(...kids) {
-  return h("span", { class: "acts", style: { flexWrap: "nowrap" } }, kids);
-}
-
-function setRow({ text = "", lead, why, right, wide = false, stack = false }) {
-  const layout = ["set", wide ? "wide" : "", stack ? "stack" : ""].filter(Boolean).join(" ");
-  return row({ text, lead, why, right: right || h("span"), layout });
-}
-
-function to() {
-  return h("span", { class: "why", text: "到" });
-}
-
-function small(text, style) {
-  return h("p", { class: "why", style: { margin: "8px 0 4px", lineHeight: "1.6", ...(style || {}) }, text });
-}
-
-function linkButton(words) {
-  return h("button", { class: "lnk", type: "button", style: { fontSize: "14px" } }, words);
-}
-
-/** "10-07 15:02" from a local ISO stamp. */
-function when(iso) {
-  return dayTime(iso).slice(5);
-}
+// ---------------------------------------------------------------- 自助压缩
 
 /** 128000 -> "128k", 1000000 -> "1M". */
 function tokensWords(n) {
@@ -122,215 +63,6 @@ function tokensWords(n) {
   if (n >= 1000 && n % 1000 === 0) return `${n / 1000}k`;
   return String(n);
 }
-
-/** {a: {b: v}} from ["a", "b"] and v. */
-function nest(path, value) {
-  return path.reduceRight((inner, key) => ({ [key]: inner }), value);
-}
-
-function at(obj, path) {
-  return path.reduce((o, k) => (o === null || o === undefined ? undefined : o[k]), obj);
-}
-
-/** A whole number as a number; anything else as typed, so the gateway says what is wrong. */
-function intOr(raw) {
-  const v = Number(raw);
-  return raw !== "" && Number.isFinite(v) ? v : raw;
-}
-
-/** A percent box shows "85%"; what is typed is read with or without the sign. */
-const pctShow = (v) => (v === null || v === undefined || v === "" ? "" : `${v}%`);
-const pctRead = (raw) => intOr(raw.replace(/\s*[%％]\s*$/, ""));
-
-/** "4" · "4:30" · "4.30" · "0430" -> "04:00" · "04:30"; anything else as typed. The box
- *  has the phone's number pad, which has no colon. */
-function timeOr(raw) {
-  const m = /^(\d{1,2})(?:[:：.](\d{2}))?$/.exec(raw) || /^(\d{1,2})(\d{2})$/.exec(raw);
-  return m ? `${m[1].padStart(2, "0")}:${m[2] || "00"}` : raw;
-}
-
-function sameList(a, b) {
-  return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => v === b[i]);
-}
-
-/** A line of words that says how a button's work went, put in the button's own row (under
- *  the row's words) the first time it speaks. */
-function sayer(anchor) {
-  const el = h("p", { class: "why", role: "status", style: { margin: "6px 0 0", lineHeight: "1.6" } });
-  const place = () => {
-    if (el.isConnected) return;
-    const txt = anchor && anchor.closest(".item") ? anchor.closest(".item").querySelector(".txt") : null;
-    (txt || anchor.parentElement).append(el);
-  };
-  return {
-    ok(text) { place(); el.className = "why"; el.textContent = text || ""; },
-    err(text) { place(); el.className = "err"; el.textContent = text; },
-    clear() { el.remove(); el.textContent = ""; },
-  };
-}
-
-// ---------------------------------------------------------------- the page's state
-
-/** Everything the present page shares: the settings and status last read, the boxes by
- *  setting (for marking a refused one), and what to redraw when a reply comes back.
- *  `live` false = not connected: every control drawn off, nothing read or written. */
-function presentPage(snap) {
-  const p = {
-    live: Boolean(snap),
-    s: snap ? snap.settings : null,
-    st: snap ? snap.status : null,
-    state: snap ? snap.settings_state : null,
-    marks: new Map(),
-    errs: {},
-    homes: {},
-    watchers: [],
-    top: h("div"),
-  };
-  /** The page-wide error lines under the sub-bar (present.json unreadable, the gateway's
-   *  error): spaced only while there is one. */
-  p.topSync = () => { p.top.style.margin = p.top.childNodes.length ? "-16px 0 24px" : "0"; };
-  p.ctl = (el) => (p.live ? el : off(el));
-  p.reg = (key, el) => { p.marks.set(key, el); return el; };
-  p.unreg = (prefix) => { for (const k of [...p.marks.keys()]) if (k.startsWith(prefix)) p.marks.delete(k); };
-  /** Run `fn` now and after every reply (only when connected). */
-  p.watch = (fn) => { p.watchers.push(fn); if (p.live) fn(); };
-  p.update = (next, { settings = true } = {}) => {
-    if (!next || next.connected !== true) return;
-    p.s = next.settings; p.st = next.status; p.state = next.settings_state;
-    for (const fn of p.watchers) fn();
-    if (settings) showSettingsState(p);
-  };
-  return p;
-}
-
-/** The boxes a field names: itself, and what sits under it (`wake.dnd` -> both times,
- *  `compress.weak_pct` -> every weak line). */
-function boxesOf(p, field) {
-  if (!field) return [];
-  return [...p.marks.entries()]
-    .filter(([k]) => k === field || k.startsWith(`${field}.`) || k.startsWith(`${field}[`))
-    .map(([, el]) => el);
-}
-
-function clearMarks(p) {
-  for (const el of p.marks.values()) el.removeAttribute("aria-invalid");
-  for (const el of Object.values(p.errs)) { el.remove(); el.textContent = ""; }
-  fill(p.top);
-  p.topSync();
-}
-
-function fieldWords(field, message) {
-  const bare = String(field || "").replace(/\[\d+\]/g, "");
-  const key = Object.keys(FIELD_WORDS).filter((k) => bare === k || bare.startsWith(`${k}.`))
-    .sort((a, b) => b.length - a.length)[0];
-  return key ? `${FIELD_WORDS[key]}：${message}` : message;
-}
-
-/** Mark the field's boxes and say `message` in the row of the first one (else at the
- *  section's own place). */
-function fail(p, section, field, message) {
-  const boxes = boxesOf(p, field);
-  for (const el of boxes) el.setAttribute("aria-invalid", "true");
-  const err = p.errs[section] || (p.errs[section] = h("p", { class: "err", role: "alert", style: { margin: "6px 0 0", lineHeight: "1.6" } }));
-  err.textContent = err.isConnected && err.textContent ? `${err.textContent}；${message}` : message;
-  if (err.isConnected) return;
-  const item = boxes.length ? boxes[0].closest(".item") : null;
-  const home = item ? item.querySelector(".txt") : p.homes[section];
-  if (home) home.append(err); else { p.top.append(err); p.topSync(); }
-}
-
-/** The gateway's own trouble with present.json: a section it could not take is running on
- *  its defaults, or the file cannot be read at all. */
-function showSettingsState(p) {
-  clearMarks(p);
-  for (const e of (p.state && p.state.errors) || []) {
-    const section = String(e.field || "").split(/[.[]/)[0];
-    const words = fieldWords(e.field, e.error);
-    if (p.homes[section]) fail(p, section, e.field, `present.json 里这一格不对，先按缺省跑：${words}`);
-    else p.top.append(errorLine(`present.json：${e.error}`));
-  }
-  p.topSync();
-}
-
-/** Save one patch. A refusal undoes the control (`undo`), marks the field and says why. */
-async function save(p, patch, { undo } = {}) {
-  const section = Object.keys(patch)[0];
-  clearMarks(p);
-  try {
-    p.update(await api.post(PRESENT, { patch }));
-    return true;
-  } catch (e) {
-    if (e && e.status === 401) return false;
-    if (undo) undo();
-    const field = e && e.body ? e.body.field : null;
-    fail(p, section, field, fieldWords(field, e && e.message ? e.message : String(e)));
-    return false;
-  }
-}
-
-/** Read the status again a little later, after a button queued work in the background. */
-function readLater(p, anchor, ms = 8000) {
-  setTimeout(async () => {
-    if (!anchor.isConnected) return;
-    try { p.update(await api.get(PRESENT), { settings: false }); } catch (_) { /* the next visit shows it */ }
-  }, ms);
-}
-
-// ---------------------------------------------------------------- bound controls
-
-/** A number box for one setting, saved when it changes. `kind`: "int", "int?" (empty =
- *  null) or "time". `board` is what the box shows when not connected. */
-function numBox(p, path, { label, kind = "int", board = "", placeholder, style }) {
-  const key = path.join(".");
-  if (!p.live) return off(num({ value: board, "aria-label": label, style }));
-  const show = kind === "pct" ? pctShow : (v) => (v === null || v === undefined ? "" : String(v));
-  const el = p.reg(key, num({ "aria-label": label, placeholder, style }));
-  el.addEventListener("change", () => {
-    const raw = el.value.trim();
-    const saved = at(p.s, path);
-    if (raw === "" && kind !== "int?") { el.value = show(saved); el.removeAttribute("aria-invalid"); return; }
-    const value = raw === "" ? null : kind === "time" ? timeOr(raw) : kind === "pct" ? pctRead(raw) : intOr(raw);
-    if (value === saved) { el.value = show(saved); return; }
-    save(p, nest(path, value));
-  });
-  p.watch(() => {
-    if (document.activeElement !== el && el.getAttribute("aria-invalid") !== "true") el.value = show(at(p.s, path));
-  });
-  return el;
-}
-
-/** A switch for one setting, saved when it is flipped; flipped back when refused. */
-function toggle(p, path, label) {
-  if (!p.live) return off(sw({ checked: true, label }));
-  const el = p.reg(path.join("."), sw({
-    checked: Boolean(at(p.s, path)),
-    label,
-    onChange: async (on) => {
-      el.disabled = true;
-      await save(p, nest(path, on), { undo: () => el.setAttribute("aria-checked", String(!on)) });
-      el.disabled = false;
-    },
-  }));
-  p.watch(() => el.setAttribute("aria-checked", String(Boolean(at(p.s, path)))));
-  return el;
-}
-
-/** A set of radio choices for one setting: [[value, label, ...extra]]. Returns the
- *  labels in order. */
-function choices(p, name, path, options) {
-  if (!p.live) return options.map(([, label, board, ...extra]) => off(radio({ name, label, checked: board }, ...extra)));
-  const els = options.map(([value, label, , ...extra]) => radio({
-    name, label, value, checked: at(p.s, path) === value,
-    onChange: (v) => save(p, nest(path, v), { undo: () => check() }),
-  }, ...extra));
-  const inputs = els.map((l) => l.querySelector("input"));
-  const check = () => { for (const i of inputs) i.checked = i.value === at(p.s, path); };
-  p.reg(path.join("."), els[0]);
-  p.watch(check);
-  return els;
-}
-
-// ---------------------------------------------------------------- 自助压缩
 
 /** The weak lines: one row each, 「+ 再加一条提醒」 for another (five at most). Emptying a
  *  box takes its line away. */
@@ -544,206 +276,7 @@ function reportGroup(p) {
     custom);
 }
 
-// ---------------------------------------------------------------- 自动唤醒
-
-/** The wake segments: the first on the 自定义时间段 line, more under it, 「+ 增加一个时间段」
- *  for another (twelve at most). A segment is saved once both its times are filled;
- *  emptying both takes it away. */
-function segments(p) {
-  const first = h("span", { style: { display: "contents" } });
-  const more = h("div");
-  const add = p.ctl(linkButton("+ 增加一个时间段"));
-  let pairs = [];
-  const filled = () => pairs.filter(([a, b]) => a.value.trim() || b.value.trim());
-  const register = () => {
-    p.unreg("wake.segments.list");
-    // With none filled, the first pair stands for the list, so "needs one" marks it.
-    const shown = filled().length ? filled() : pairs.slice(0, 1);
-    shown.forEach(([a, b], i) => { p.reg(`wake.segments.list[${i}].from`, a); p.reg(`wake.segments.list[${i}].to`, b); });
-  };
-  const listNow = () => filled().map(([a, b]) => ({ from: timeOr(a.value.trim()), to: timeOr(b.value.trim()) }));
-  const sameSegs = (x, y) => x.length === y.length && x.every((s, i) => s.from === y[i].from && s.to === y[i].to);
-  async function send() {
-    register();
-    if (filled().some(([a, b]) => !a.value.trim() || !b.value.trim())) return;
-    const list = listNow();
-    if (sameSegs(list, p.s.wake.segments.list)) return;
-    await save(p, { wake: { segments: { list } } });
-  }
-  const pair = (s) => {
-    const a = num({ "aria-label": "从", placeholder: "09:00", value: s ? s.from : "" });
-    const b = num({ "aria-label": "到", placeholder: "22:00", value: s ? s.to : "" });
-    if (!p.live) { a.value = "09:00"; b.value = "22:00"; return [off(a), off(b)]; }
-    a.addEventListener("change", send);
-    b.addEventListener("change", send);
-    return [a, b];
-  };
-  const layout = () => {
-    const [a, b] = pairs[0];
-    fill(first, acts(a, to(), b));
-    fill(more, pairs.slice(1).map(([x, y]) => h("div", { style: { paddingLeft: "24px" } },
-      setRow({ wide: true, stack: true, right: acts(x, to(), y) }))));
-    add.disabled = !p.live || pairs.length >= 12;
-    if (p.live) register();
-  };
-  const draw = (list) => {
-    pairs = list.map(pair);
-    if (!pairs.length) pairs.push(pair(null));
-    layout();
-  };
-  add.addEventListener("click", () => { pairs.push(pair(null)); layout(); pairs[pairs.length - 1][0].focus(); });
-  draw(p.live ? p.s.wake.segments.list || [] : [null]);
-  // A saved list shows as the gateway keeps it ("9" -> "09:00"), box for box.
-  p.watch(() => {
-    const list = p.s.wake.segments.list || [];
-    const shown = filled();
-    if (shown.length !== list.length) return;
-    shown.forEach(([a, b], i) => {
-      for (const [el, v] of [[a, list[i].from], [b, list[i].to]]) {
-        if (document.activeElement !== el && el.getAttribute("aria-invalid") !== "true") el.value = v;
-      }
-    });
-  });
-  // 自定义时间段 sends the segments typed so far with it: the gateway wants at least one.
-  const listForOnly = () => (filled().every(([a, b]) => a.value.trim() && b.value.trim()) ? listNow() : undefined);
-  return { first, more, add, listForOnly };
-}
-
-function wakeGroup(p) {
-  const seg = segments(p);
-  let modes;
-  if (p.live) {
-    const path = ["wake", "segments", "mode"];
-    modes = [["all", "全天都醒，不分时间段"], ["only", "自定义时间段"]].map(([value, label]) => radio({
-      name: "wake", label, value, checked: at(p.s, path) === value,
-      onChange: (v) => {
-        const list = v === "only" ? seg.listForOnly() : undefined;
-        save(p, { wake: { segments: list ? { mode: v, list } : { mode: v } } }, { undo: () => check() });
-      },
-    }));
-    const inputs = modes.map((l) => l.querySelector("input"));
-    const check = () => { for (const i of inputs) i.checked = i.value === at(p.s, path); };
-    p.reg("wake.segments.mode", modes[0]);
-    p.watch(check);
-  } else {
-    modes = [off(radio({ name: "wake", label: "全天都醒，不分时间段", checked: true })),
-      off(radio({ name: "wake", label: "自定义时间段", checked: false }))];
-  }
-  const custom = customBox([
-    small("默认全天按上面的间隔醒。也可以只在某几个时间段里醒。"),
-    setRow({ lead: modes[0], right: h("span", { class: "r", style: { fontSize: "13px" }, text: "默认" }) }),
-    setRow({ lead: modes[1], wide: true, stack: true, right: seg.first }),
-    seg.more,
-    h("div", { style: { padding: "4px 0 2px 24px" } }, seg.add),
-  ], { open: true });
-
-  // What wake did and will do: last, next (and why it is not on time), today, held.
-  const lines = h("div", { style: { padding: "4px 0 0" } });
-  p.watch(() => {
-    const w = p.st.wake || {};
-    const t = w.today || {};
-    const stateWords = { dry_run: "只记账，不真叫", settings_unreadable: "唤醒的设置读不出来，先不叫" }[w.state];
-    const counts = [`今天醒了 ${t.woke ?? 0} 次`, `说了 ${t.spoke ?? 0} 次话`];
-    if (t.paid_failures) counts.push(`没叫成 ${t.paid_failures} 次`);
-    if (t.dry_run) counts.push(`只记账 ${t.dry_run} 次`);
-    const next = w.next_at ? `下次 ${when(w.next_at)}` : "下次：还排不上";
-    fill(lines,
-      stateWords ? small(stateWords, { margin: "4px 0" }) : null,
-      small(w.last ? `上次 ${when(w.last.at)} · ${w.last.result_words || w.last.result}` : "还没醒过", { margin: "4px 0" }),
-      small(w.next_why_words ? `${next} · ${w.next_why_words}` : next, { margin: "4px 0" }),
-      small(counts.join(" · "), { margin: "4px 0" }),
-      small(w.held === null || w.held === undefined ? "他攥着的话读不出来" : `他说了 ${w.held} 句你还没回`, { margin: "4px 0" }));
-  });
-
-  const home = h("div");
-  p.homes.wake = home;
-  return group("自动唤醒", { tip: TIP.wake },
-    h("div", null,
-      setRow({ text: "开着", right: acts(toggle(p, ["wake", "on"], "自动唤醒开关")) }),
-      setRow({ text: "多久醒一次", right: acts(numBox(p, ["wake", "every_min"], { label: "间隔" }), h("span", { class: "why", text: "分钟" })) }),
-      setRow({ text: "免打扰", wide: true, right: acts(numBox(p, ["wake", "dnd", "from"], { label: "从", kind: "time" }), to(),
-        numBox(p, ["wake", "dnd", "to"], { label: "到", kind: "time" })) }),
-      home,
-      p.live ? lines : null),
-    custom);
-}
-
-// ---------------------------------------------------------------- 主动推送
-
-/** What Bark answered a test push (push.js test()). */
-function pushWords(r) {
-  if (r.ok) return { ok: true, text: "推出去了，看看手机" };
-  if (r.status === "skipped_config_missing") return { ok: false, text: "还没有推送码：先粘贴进来、保存" };
-  if (r.status === "error") return { ok: false, text: `没推出去：${r.error || "出错了"}` };
-  return { ok: false, text: `没推出去（Bark 回 ${r.status}）${r.error ? `：${r.error}` : ""}` };
-}
-
-function pushGroup(p) {
-  const area = p.ctl(h("textarea", { class: "bark", rows: "4", placeholder: "粘贴在这里", "aria-label": "Bark 推送码" }));
-  const keep = p.ctl(h("button", { class: "tbtn", type: "button" }, "保存"));
-  const test = p.ctl(h("button", { class: "tbtn", type: "button" }, "测试"));
-  const home = h("div");
-  p.homes.push = home;
-  const say = h("p", { class: "why", role: "status", style: { margin: "8px 0 0", lineHeight: "1.6" }, hidden: true });
-  const tell = (text, ok = true) => { say.className = ok ? "why" : "err"; say.textContent = text; say.hidden = !text; };
-  const last = h("p", { class: "why", style: { margin: "8px 0 0", lineHeight: "1.6" }, hidden: true });
-
-  if (p.live) {
-    p.reg("push.bark", area);
-    p.watch(() => {
-      const ps = p.s.push || {};
-      area.placeholder = ps.bark_set && ps.bark_hint ? ps.bark_hint : "粘贴在这里";
-      const st = p.st.push || {};
-      let words = "";
-      if (st.state === "not_built") words = "推送这一步网关还没做好";
-      else if (st.last) {
-        const said = st.last.ok ? "推出去了" : `没推出去（${st.last.status ?? "出错了"}）`;
-        words = `上次推送 ${when(st.last.at)} · ${said}${st.retrying ? ` · 还有 ${st.retrying} 条在重试` : ""}`;
-      }
-      last.textContent = words;
-      last.hidden = !words;
-    });
-    keep.addEventListener("click", async () => {
-      tell("");
-      const code = area.value.trim();
-      if (!code) { tell("把完整的推送码或整条 URL 粘贴进来再保存", false); return; }
-      keep.disabled = true;
-      if (await save(p, { push: { bark: code } })) { area.value = ""; tell("存好了"); }
-      keep.disabled = false;
-    });
-    test.addEventListener("click", async () => {
-      tell("");
-      test.disabled = true;
-      try {
-        const w = pushWords(await api.post(`${PRESENT}/push-test`, {}));
-        tell(w.text, w.ok);
-      } catch (e) {
-        if (!(e && e.status === 401)) tell(e.status === 501 ? "推送这一步网关还没做好" : e.message, false);
-      } finally { test.disabled = false; }
-    });
-  }
-
-  return group("主动推送", { tip: TIP.push }, h("div", null,
-    h("div", { style: { display: "flex", alignItems: "baseline", justifyContent: "space-between", padding: "0 0 10px" } },
-      h("span", { class: "c", text: "Bark 推送码" }),
-      h("span", { style: { display: "flex", gap: "28px" } }, keep, test)),
-    area, home, say, last,
-    h("p", { class: "why", style: { margin: "10px 0 0", lineHeight: "1.6" },
-      text: "用 Kelivo 这类别人家的客户端时，他醒来说的话进不了那边的聊天窗口，只能靠推送送到你手机上；自己搭的前端可以直接显示在窗口里。" })));
-}
-
 // ---------------------------------------------------------------- the pages
-
-/** Read what a present route says; a refusal that is not the login gate reads as not
- *  connected, with the error. */
-async function ask(path) {
-  try {
-    return await api.get(path);
-  } catch (e) {
-    if (e && e.status === 401) throw e;
-    return { connected: false, error: e && e.message ? e.message : String(e) };
-  }
-}
 
 async function renderPresent(view) {
   const snap = await ask(PRESENT);
@@ -755,7 +288,7 @@ async function renderPresent(view) {
         live || (snap && snap.error) ? null : h("span", { class: "why", text: NOT_WIRED })),
       h("a", { href: href("present", "settings"), style: { fontSize: "15px", color: "var(--small)" }, text: "高级设置" })),
     p.top,
-    h("main", { class: "sections", style: "--gl-w: 96px" }, compressGroup(p), reportGroup(p), wakeGroup(p), pushGroup(p)));
+    h("main", { class: "sections", style: "--gl-w: 96px" }, compressGroup(p), reportGroup(p)));
   if (live) showSettingsState(p);
   else if (snap && snap.error) { p.top.append(errorLine(snap.error)); p.topSync(); }
 }
@@ -790,8 +323,8 @@ async function renderSettings(view) {
     out && out.error ? h("div", { style: { margin: "-16px 0 24px" } }, errorLine(out.error)) : null,
     h("main", { class: "sections" },
       group("提示词", {}, live
-        ? out.items.map(liveCard)
-        : [offCard("compress"), offCard("report"), offCard("wake")]))]);
+        ? out.items.filter((c) => PROMPT_TITLES[c.key]).map(liveCard)
+        : [offCard("compress"), offCard("report")]))]);
 }
 
 export default {
