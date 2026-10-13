@@ -1,16 +1,16 @@
 /* ==========================================================
    pages/wakeup.js — everything that wakes him, on one page
 
-   #/wakeup   five numbered blocks, in the look of the settings pages (muse——设置,
-              Dream——设置):
-                01 自动唤醒   the gateway's `wake` settings — on, every N minutes, the
-                             quiet hours, all day or only some segments (twelve at most,
-                             each with 删除 while there is more than one) — and what
-                             wake did and will do: last, next (and why it is
-                             not on time), today's counts, how many of his lines wait.
-                02 the wake card (GET /api/loci/present/prompts, key `wake`): the letter
-                   he reads each time he wakes. POST {key, text} saves, {key, reset:
-                   true} is 恢复默认.
+   #/wakeup   five numbered blocks, laid out the way her frame present is:
+                01 自动唤醒   the gateway's `wake` settings — the switch, every N
+                             minutes, the quiet hours — and what wake did and will do:
+                             last, next (and why it is not on time), today's counts,
+                             how many of his lines wait. 提示词 beside the title opens
+                             the wake card in a glass window (presentform.openPrompt,
+                             key `wake`): the letter he reads each time he wakes.
+                02 全天都醒/自定义时间段   one choice of two (`wake.segments.mode`): all
+                             day, or only some segments (twelve at most, each with 删除
+                             while there is more than one).
                 03 主动推送   the Bark code (never shown back: its placeholder is the
                              masked hint), 保存, 测试 (POST …/push-test) and the last
                              push.
@@ -27,7 +27,7 @@ import * as api from "../api.js";
 import { h, fill, pagehead, setBlock, btn, radio, num, errorLine } from "../ui.js";
 import {
   NOT_WIRED, PRESENT, ask, presentPage, showSettingsState, save, numBox, toggle,
-  off, acts, setRow as set, to, small, linkButton, when, timeOr, at, unit, cardBlock,
+  off, acts, setRow as set, to, small, linkButton, when, timeOr, at, unit, openPrompt,
 } from "../presentform.js";
 import { remindRows as museRows, REMIND_TIP as MUSE_TIP } from "./muse.js";
 import { remindRow as dreamRow, REMIND_TIP as DREAM_TIP } from "./dream.js";
@@ -39,7 +39,7 @@ const TIP = {
 const CARD_TITLE = "自动唤醒的提示词";
 
 
-// ---------------------------------------------------------------- 01 自动唤醒
+// ---------------------------------------------------------------- 01 自动唤醒 · 02 全天都醒/自定义时间段
 
 /** The wake segments: the first beside 自定义时间段, more in rows under it, 「+ 增加一个
  *  时间段」 for another (twelve at most). A segment is saved once both its times are
@@ -49,7 +49,7 @@ const CARD_TITLE = "自动唤醒的提示词";
 function segments(p) {
   const first = h("span", { style: { display: "contents" } });
   const add = p.ctl(linkButton("+ 增加一个时间段"));
-  const end = h("div", { class: "acts setacts" }, add);
+  const end = h("div", { class: "setacts left" }, add);
   let pairs = [];
   let rows = [];
   const filled = () => pairs.filter(([a, b]) => a.value.trim() || b.value.trim());
@@ -113,7 +113,7 @@ function segments(p) {
   return { first, rest: [...rows, end], listForOnly };
 }
 
-function wakeBlock(p) {
+function wakeBlocks(p) {
   const seg = segments(p);
   let modes;
   if (p.live) {
@@ -152,18 +152,24 @@ function wakeBlock(p) {
       small(w.held === null || w.held === undefined ? "他攥着的话读不出来" : `他说了 ${w.held} 句你还没回`, { margin: "4px 0" }));
   });
 
+  const card = p.ctl(h("button", { class: "lnk", type: "button" }, "提示词"));
+  card.addEventListener("click", () => openPrompt("wake", CARD_TITLE));
+
   const home = h("div");
   p.homes.wake = home;
-  return setBlock("01", "自动唤醒", { tip: TIP.wake },
-    set({ text: "开着", right: acts(toggle(p, ["wake", "on"], "自动唤醒开关")) }),
-    set({ text: "多久醒一次", right: h("span", { class: "acts nu" }, numBox(p, ["wake", "every_min"], { label: "间隔" }), unit("分钟")) }),
-    set({ text: "免打扰", right: acts(numBox(p, ["wake", "dnd", "from"], { label: "从", kind: "time" }), to(),
-      numBox(p, ["wake", "dnd", "to"], { label: "到", kind: "time" })) }),
-    set({ lead: modes[0], right: h("span", { class: "r", text: "默认" }) }),
-    set({ lead: modes[1], right: seg.first }),
-    seg.rest,
-    home,
-    p.live ? lines : null);
+  return [
+    setBlock("01", "自动唤醒", { tip: TIP.wake, extra: card },
+      set({ text: "总开关", right: acts(toggle(p, ["wake", "on"], "自动唤醒总开关")) }),
+      set({ text: "多久醒一次", right: h("span", { class: "acts nu" }, numBox(p, ["wake", "every_min"], { label: "间隔" }), unit("分钟")) }),
+      set({ text: "免打扰", right: acts(numBox(p, ["wake", "dnd", "from"], { label: "从", kind: "time" }), to(),
+        numBox(p, ["wake", "dnd", "to"], { label: "到", kind: "time" })) }),
+      home,
+      p.live ? lines : null),
+    setBlock("02", "全天都醒/自定义时间段", {},
+      set({ lead: modes[0], right: h("span", { class: "r", text: "默认" }) }),
+      set({ lead: modes[1], right: seg.first }),
+      seg.rest),
+  ];
 }
 
 // ---------------------------------------------------------------- 03 主动推送
@@ -253,8 +259,7 @@ async function render(view) {
     pagehead({ title: "Loci 会把他唤醒", caption: live || (snap && snap.error) ? null : NOT_WIRED }),
     p.top,
     h("main", { class: "sets wakeup" },
-      wakeBlock(p),
-      cardBlock("02", "wake", CARD_TITLE, live ? ask(`${PRESENT}/prompts`) : null),
+      wakeBlocks(p),
       pushBlock(p),
       remindBlock("04", "muse", MUSE_TIP, "muse", museRows),
       remindBlock("05", "dream", DREAM_TIP, "dream", (dream, fail) => [dreamRow(dream, fail)])));

@@ -14,7 +14,7 @@
    ========================================================== */
 
 import * as api from "./api.js";
-import { h, fill, row, btn, sw, radio, num, promptCard, sampleFold, glassWindow, errorLine, dayTime } from "./ui.js";
+import { h, fill, row, btn, sw, radio, num, sampleFold, glassWindow, errorLine, dayTime } from "./ui.js";
 
 export const NOT_WIRED = "还没接上";
 
@@ -34,7 +34,7 @@ export const FIELD_WORDS = {
   "report.to": "什么时候写（到）",
   "report.flip": "换窗",
   "report.every_n": "多少天换一次窗",
-  "wake.on": "自动唤醒开关",
+  "wake.on": "自动唤醒总开关",
   "wake.every_min": "多久醒一次",
   "wake.dnd": "免打扰",
   "wake.segments": "时间段",
@@ -285,31 +285,6 @@ export function choices(p, name, path, options) {
 }
 
 // ---------------------------------------------------------------- prompt cards
-
-/** One of the gateway's prompt cards as a numbered block. Drawn off at once; then from
- *  `prompts` — what ask(`${PRESENT}/prompts`) is reading, null when not connected — and
- *  again from each reply's `item`: POST {key, text} saves, {key, reset: true} is 恢复默认. */
-export function cardBlock(no, key, title, prompts) {
-  const holder = h("div");
-  const write = async (body) => draw((await api.post(`${PRESENT}/prompts`, { key, ...body })).item);
-  const draw = (card) => fill(holder, promptCard({
-    no,
-    title,
-    card,
-    changedWords: (day) => `改过 · ${day}`,
-    onSave: (text) => write({ text }),
-    onReset: () => write({ reset: true }),
-  }));
-  fill(holder, promptCard({ no, title, card: { key, text: "" }, off: true }));
-  if (prompts) {
-    prompts.then((out) => {
-      const card = out && Array.isArray(out.items) ? out.items.find((c) => c.key === key) : null;
-      if (card) draw(card);
-      else if (out && out.error) holder.append(errorLine(out.error));
-    }).catch(() => { /* the login gate: the router takes over */ });
-  }
-  return holder;
-}
 
 /** One of the gateway's prompt cards in a glass window (her frame glass-card-example):
  *  the text to read; 编辑 lets it be rewritten and 保存 writes it (POST {key, text});
