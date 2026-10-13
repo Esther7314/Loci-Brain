@@ -21,6 +21,8 @@ kind, each with the entry it first appeared in and what it looks like, newest fi
 appears in). Their lists page the way every panel list does (core/paging.py), counting
 only entries written before `as_of` so a page does not shift while it is read
 (`written_before`).
+The two people every memory has, the owner and the model, are never asked about
+(`_the_two`): they are people, known without a click.
 `name_action` is the one way the names page's buttons write: it goes through
 core/names (aliases.yaml only, never an entry) and says what it did in words.
 
@@ -90,6 +92,19 @@ def rooms(all_buckets: list, scope=None) -> dict:
     }
 
 
+def _the_two(table: dict) -> frozenset:
+    """The two people every memory has, the owner and the model, under the names the table
+    files them by (utils.get_owner_name / get_ai_name after its normalising). Empty parts
+    when a name is not set."""
+    from utils import get_ai_name, get_owner_name
+    out = set()
+    for n in (get_owner_name(), get_ai_name()):
+        n = str(n or "").strip()
+        if n and n != "AI":          # the placeholder of an unset AI name is not a name
+            out.add(table.get(n.lower(), n))
+    return frozenset(out)
+
+
 def subjects(all_buckets: list) -> dict:
     """"Who is in here": every subject that has appeared in the store, how many entries each
     has, and when each last appeared.
@@ -107,6 +122,7 @@ def subjects(all_buckets: list) -> dict:
     """
     table = subj.load_alias_table()           # {alias in lowercase: canonical name}
     blocked = subj.load_not_person()          # entries marked "this is not a person" (lowercase)
+    two = _the_two(table)
     counts: Counter = Counter()
     variants: dict[str, set] = {}             # canonical name -> the spellings actually found on disk
     last: dict[str, datetime] = {}
@@ -168,8 +184,10 @@ def subjects(all_buckets: list) -> dict:
             # showing up here means that gate leaked — flag it
             "pronoun": subj.is_pronoun(nm),
             # what the table says the name is (instance_of) and where it appears; empty
-            # when it says nothing (a table of aliases alone, or a name not in it)
-            "kind": rec.instance_of if rec else "",
+            # when it says nothing (a table of aliases alone, or a name not in it). The
+            # owner and the model are people whatever the table says or leaves unsaid.
+            "kind": (rec.instance_of if rec else "") or (subj.KIND_PERSON if nm in two else ""),
+            "given": nm in two,
             "present_in": list(rec.present_in) if rec else [],
             "member_of": list(rec.member_of) if rec else [],
         })
@@ -215,8 +233,9 @@ def _memory_line(b: dict) -> dict:
 def _recognised(row: dict) -> bool:
     """A name is recognised once the table knows it and says what it is. One the table
     knows without a kind (aliases alone, or a name merged into before kinds existed) is
-    still waiting to be told what it is, so it waits on the pending page."""
-    return bool(row["canonical"] and row["kind"])
+    still waiting to be told what it is, so it waits on the pending page. The owner and
+    the model (`given`) never wait."""
+    return bool(row["given"] or (row["canonical"] and row["kind"]))
 
 
 def names_page(all_buckets: list, *, kind: str = "", offset: int = 0,
@@ -315,7 +334,8 @@ def name_card(all_buckets: list, name: str, *, offset: int = 0, limit: int = PAG
         card = {"id": line["id"], "short": line["short"],
                 "text": str(card_row.get("content") or "").strip() or line["text"]}
     return {"name": key,
-            "kind": rec.instance_of if rec else "",
+            "kind": ((rec.instance_of if rec else "")
+                     or (subj.KIND_PERSON if key in _the_two(table) else "")),
             "aliases": list(rec.aliases) if rec else [],
             "present_in": list(rec.present_in) if rec else [],
             "member_of": list(rec.member_of) if rec else [],

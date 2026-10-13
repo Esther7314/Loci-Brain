@@ -343,6 +343,8 @@ MERGE_PROMPT = """你是一个信息合并专家。请将旧记忆与新内容�
 #            the time; the check is in code, not in the prompt).
 #   aliases  broadenings: they feed bm25 only, never the vectors, never a row a human reads.
 #   subjects who or what — people and things (a game, a book, a group), each with a kind.
+#            A name has to tell who is meant: a bare title (妈, 老板娘) is a word many
+#            people share, so it is asked for with whose or where it is (「小思的妈」).
 #
 # `{kinds}` is filled in per call (see backfill_kinds); everything else is literal JSON.
 # This is the shipped text: the owner may rewrite it from grow's 设置, and the call
@@ -369,7 +371,7 @@ BACKFILL_PROMPT = """你是记忆系统的回填器。下面是一条刚存下�
    数字: ["编程", "AI", "硬件", "网络"]
    事务: ["财务", "计划", "待办"]
    内心: ["情绪", "回忆", "梦境", "自省"]
-- subjects（主体）：这段话里出现的人和东西（游戏、书、群、作品……；地点不算）。每个写成 {"name": "文本里的称呼原样", "kind": "它是什么"}，kind 只能从这些里选：{kinds}；认不出是什么就写 ""。纯代词一律不要（我/你/他/她/它/我们/自己/对方等）——代词是指代不是名字。不要推测真名，不要给没出现的人。
+- subjects（主体）：这段话里出现的人和东西（游戏、书、群、作品……；地点不算）。每个写成 {"name": "能分清是谁的叫法", "kind": "它是什么"}：有名字就原样写名字；只有称呼（妈、老板娘、老大、房东……）就带上是谁的或哪儿的，如「小思的妈」「面馆的老板娘」；原文看不出是谁的就照抄称呼。kind 只能从这些里选：{kinds}；认不出是什么就写 ""。纯代词一律不要（我/你/他/她/它/我们/自己/对方等）——代词是指代不是名字。不要推测真名，不要给没出现的人。
 - bound（谁被绑着）：只在「想让它发生」是「是」的时候填：这件事是谁答应的、谁要去做（「我们俩约好」就是两个人都在）。写名字；写这条记忆的「我」就写「我」，跟「我」说话的那个人写「你」。
 - time：句子里说到的时间，**原样抄下来，不要换算**，例如 {"phrase": "下周一两点", "yearly": false, "absolute": ""}。每年都会再来的（生日、纪念日，「每年8月7号」）yearly 写 true。absolute 只在原文写明了是哪一天、你能确定时写 YYYY-MM-DD，否则留空。没说时间就都留空。
 - internally_generated：只看房间是 EVENT 的。这段话说的是梦见的、想象的、假设的（「梦见」「幻想」「假如」）写 true。

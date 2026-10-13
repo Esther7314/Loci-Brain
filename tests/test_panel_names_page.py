@@ -10,7 +10,8 @@ WHAT IS AGREED
     the table knows without a kind among them), each with the entry it first appeared in
     and what it looks like when something says (the side model's kind the table could not
     take; a person for a name hanging in a work or a group), and a name leaves it once a
-    button is pressed. The card says what the
+    button is pressed. The owner and the model are the two people every memory has: they
+    are listed as people and never wait, table or no table. The card says what the
     table says, the MIND entry filed as its card, and the entries naming it (after the
     table's normalising), paged. Every list pages by offset / limit / as_of: an entry
     written after `as_of` does not shift the pages. The buttons write aliases.yaml only —
@@ -272,3 +273,32 @@ def test_a_pending_name_carries_what_the_side_model_said_it_is(store, routes):
     # Only a hash of the spelling is kept, never the name.
     raw = (Path(store.base_dir) / "_state" / G.FILE).read_text(encoding="utf-8")
     assert "阿哲" not in raw
+
+
+def test_the_owner_and_the_model_are_people_and_never_wait(store, routes, monkeypatch):
+    import utils
+    monkeypatch.setattr(utils, "get_owner_name", lambda: "阿青")
+    monkeypatch.setattr(utils, "get_ai_name", lambda: "小慢")
+    entry(store, "阿青说周末想去海边。", ["阿青"], when="2026-10-02")
+    entry(store, "阿青叫小慢别熬夜。", ["阿青", "小慢"], when="2026-10-03")
+    entry(store, "阿青的妈周末要来。", ["阿青", "阿青的妈"], when="2026-10-04")
+
+    code, page = get(routes, "/api/loci/names", "kind=" + quote("人"))
+    assert code == 200
+    assert [(it["name"], it["n"]) for it in page["items"]] == [("阿青", 3), ("小慢", 1)]
+    assert page["pending_count"] == 1
+
+    code, waiting = get(routes, "/api/loci/names/pending")
+    assert [it["name"] for it in waiting["items"]] == ["阿青的妈"]
+
+    code, one = card(routes, "阿青")
+    assert code == 200 and one["kind"] == "人" and one["memories"]["total"] == 3
+
+
+def test_without_their_names_set_nobody_is_given(store, routes, monkeypatch):
+    import utils
+    monkeypatch.setattr(utils, "get_owner_name", lambda: "")
+    monkeypatch.setattr(utils, "get_ai_name", lambda: "AI")
+    entry(store, "AI 这个词又上热搜了。", ["AI"])
+    code, waiting = get(routes, "/api/loci/names/pending")
+    assert [it["name"] for it in waiting["items"]] == ["AI"]
