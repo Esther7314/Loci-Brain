@@ -27,13 +27,12 @@ import * as api from "./api.js";
 import { h, fill, clickable, btn, radio, errorLine, moreLine } from "./ui.js";
 import { openDetail } from "./detail.js";
 
-/** core/names.KIND_PERSON, the kind every table starts with. The canvas calls it 人名. */
+/** core/names.KIND_PERSON, the kind every table starts with. */
 export const KIND_PERSON = "人";
-const KIND_WORDS = { [KIND_PERSON]: "人名" };
 
-/** The words for a kind: the canvas's for the person kind, the table's own otherwise. */
+/** The words for a kind: the table's own. */
 export function kindLabel(kind) {
-  return KIND_WORDS[kind] || kind;
+  return kind;
 }
 
 /** The kinds the table uses, the person kind first (it is always there). */

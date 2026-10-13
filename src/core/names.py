@@ -454,7 +454,7 @@ def normalize_bound(names) -> tuple[list[str], str]:
 # changes is decided by a human click.
 # These write paths hang off the panel's "who is in here" screen. Nothing automatic
 # calls them: the backfill keeps what the side model says a name is as a guess
-# (core/name_guesses, tools/grow/_backfill._record_kinds), and the owner's 「是 X」 on
+# (core/name_guesses, tools/grow/_backfill._record_kinds), and the owner's 新增 on
 # the names page is what writes it here.
 #
 # 🔴 Why **text edits** rather than rewriting the whole file with
@@ -892,7 +892,7 @@ def mark_not_person(name) -> bool:
         if rec.instance_of != KIND_PERSON:
             return False
         raise ValueError(f"表里写着「{rec.name}」是人（instance_of: 人）——"
-                         "是写错了就改它的种类，别再记一遍「不是名字」")
+                         "是写错了就改它的种类，别再点一遍「忽略」")
     # This comment is written **only the first time** the block is created. The
     # panel screen says nothing at all about a marked-out name (hidden means
     # hidden; listing it again would mean it was never hidden), so "how to undo
@@ -900,7 +900,7 @@ def mark_not_person(name) -> bool:
     # anyway.
     why = _NL.join([
         "下面这些不是别名，是「这几个词根本不是人」——",
-        "面板 name 页「待认的」里点「不是名字」写进来的。",
+        "面板 name 页「待认的」里点「忽略」写进来的。",
         "它们不再摆出来、以后也不再抽；历史那些条一个字节都没动。",
         "想反悔：把对应那一行删掉就回来了。",
     ])

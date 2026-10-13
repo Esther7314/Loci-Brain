@@ -361,19 +361,14 @@ input[type=radio], input[type=checkbox] { accent-color: var(--ink); }
 .dlg hr.card-rule { margin: 22px 0 14px; }
 .ln { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding: 12px 0; }
 .ln + .ln { border-top: 1px solid var(--line); }
-/* 待认的: a row's box (跟谁是一个, + 新类别) spans under it; 是… opens under its button */
-.item.pending { position: relative; }
-/* its buttons take the width they need and stay on one line (board name-pending) */
+/* 待认的: a row's box (合并, the kinds, + 新类别) spans under it; its two buttons take
+   the width they need and stay on one line */
 .item.wide.pending { grid-template-columns: minmax(0, 1fr) auto; }
 .item.pending > .acts { flex-wrap: nowrap; }
 .namebox { grid-column: 1 / -1; padding: 0 0 12px; }
 .namebox:empty { display: none; }
 .namebox .cap { margin: 0 0 4px; font-size: 13px; color: var(--small); }
 .namebox-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
-.menu.kinds { top: 52px; right: 0; width: 150px; border-color: var(--edge); box-shadow: 0 8px 24px var(--shadow); }
-.menu.kinds .mi { height: 36px; padding: 0 10px; font-size: 14px; }
-.menu.kinds hr { margin: 4px 0; }
-.btn.dark[aria-expanded="true"] { background: var(--ink-solid); border-color: var(--ink-solid); }
 .mi.dim { color: var(--small); }
 
 /* ==========================================================
@@ -582,14 +577,11 @@ button.pill:disabled { cursor: default; }
 }
 
 /* dream, name, the name card on the phone: the kinds row slides sideways like the header
-   (note n11); the 是… menu is the same sheet from the bottom as 编辑 */
+   (note n11) */
 @media (max-width: 640px) {
   .tabs.slide { flex-wrap: nowrap; gap: 16px; overflow-x: auto; white-space: nowrap; margin: 0 -20px -2px; padding: 0 20px 10px; scrollbar-width: none; }
   .tabs.slide::-webkit-scrollbar { display: none; }
-  .menu.kinds { top: auto; right: 12px; width: auto; box-shadow: none; }
-  .menu.kinds .mi { height: 56px; padding: 0; font-size: 17px; }
   .item.pending > .acts { flex-wrap: wrap; }
-  .menu.kinds .card { max-height: 60vh; overflow-y: auto; }
   .namebox { padding-top: 10px; }
 }
 

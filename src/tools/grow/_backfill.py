@@ -397,7 +397,7 @@ def _record_kinds(bucket_id: str, pairs: list) -> None:
     """Keep what the side model said each name is as a guess for the names page
     (core/name_guesses), for a name the table does not have and for one it has without a
     kind. The table itself is never written here: every new name waits in 待认 with its
-    guess (「看着像 X」) until the owner confirms it (「是 X」, set_kind), so a kind the
+    guess (「看着像 X」) until the owner confirms it (新增, set_kind), so a kind the
     model got wrong does not settle in the table unseen. A kind already in the table and a
     name that is no subject at all (a pronoun, a word marked "not a person") are left
     alone. A guess for a kindless entry is kept under the entry's own name, which is the

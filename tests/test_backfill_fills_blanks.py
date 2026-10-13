@@ -356,7 +356,7 @@ def test_the_side_model_s_kinds_wait_as_guesses_and_the_table_is_untouched(
         {"name": "老周", "kind": ""},          # no kind: nothing to keep
     ]})
     S._cache = None
-    assert _table(table) == before, "the table waits for the owner's 「是 X」"
+    assert _table(table) == before, "the table waits for the owner's 新增"
     assert S.record_of("小王") is None and S.kind_of("小张") in ("", None)
     guesses = G.load(str(tmp_path))
     assert G.guess_of(guesses, "小王") == "人"
