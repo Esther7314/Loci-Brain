@@ -3,8 +3,8 @@
 _bucket_write.py — how a write happens
 ========================================
 
-create() and update(), and the two that rewrite a body through update's locked path
-(replace_text_fields, update_content_fragment).
+create() and update(), and the one that rewrites a body through update's locked path
+(update_content_fragment).
 
 The order is the same for both:
   1. normalise what was passed (core/_bucket_fields.py); a bad value is refused here,
@@ -22,7 +22,6 @@ BucketManager (core/bucket_manager.py) inherits WriteMixin.
 
 import logging
 import os
-import re
 import tempfile
 import uuid
 from typing import Any, Optional
@@ -646,7 +645,7 @@ class WriteMixin:
         **kwargs,
     ) -> bool:
         """update()'s body, run while the caller holds the bucket's lease (update,
-        replace_text_fields, update_content_fragment). False writes nothing.
+        update_content_fragment). False writes nothing.
 
         The steps, in order: apply `revise` to what is on disk; normalise the arguments
         (_update_normalize_args); read the file; settle pin / type / importance
@@ -1200,83 +1199,6 @@ class WriteMixin:
             )
             return None
         return committed_path
-
-    async def replace_text_fields(self, old: str, new: str) -> dict[str, int]:
-        """Replace a display term through managed per-bucket transactions.
-
-        This is used when the configured human name changes.  It deliberately
-        does not bump ``last_active``: a display-name migration is not a memory
-        activation.  Each bucket is re-read while holding the normal
-        cross-process bucket lock and then committed through ``_update_locked``
-        so atomic writes, derived-index updates, ledger/projection events and
-        concurrent edits retain the same guarantees as every other mutation.
-        """
-
-        if not old or not new or old == new:
-            return {"buckets_changed": 0, "replacements": 0}
-
-        pattern = re.compile(re.escape(old))
-        bucket_ids: list[str] = []
-        seen: set[str] = set()
-        directories = list(self._active_dirs) + [self.archive_dir]
-        for _root, _filename, file_path in self._iter_md_files(directories):
-            bucket = self._load_bucket(file_path)
-            bucket_id = str((bucket or {}).get("id") or "").strip()
-            if bucket_id and bucket_id not in seen:
-                seen.add(bucket_id)
-                bucket_ids.append(bucket_id)
-
-        changed = 0
-        total = 0
-        for bucket_id in bucket_ids:
-            async with self._bucket_turn(bucket_id):
-                file_path = self._find_bucket_file(bucket_id)
-                if not file_path:
-                    continue
-                try:
-                    post = frontmatter.load(file_path)
-                except Exception as exc:
-                    logger.warning(
-                        "Failed to load bucket for text replacement %s: %s",
-                        bucket_id,
-                        exc,
-                    )
-                    continue
-
-                replacements = 0
-                updates: dict[str, str] = {}
-                # A callable replacement is literal.  Passing ``new`` directly
-                # would interpret user-controlled ``\\1``/``\\g<name>`` syntax
-                # as regular-expression group references.
-                content, count = pattern.subn(lambda _match: new, post.content or "")
-                if count:
-                    updates["content"] = content
-                    replacements += count
-                for field in ("name", "why_remembered", "user_name"):
-                    value = post.get(field)
-                    if not isinstance(value, str) or not value:
-                        continue
-                    replaced, count = pattern.subn(lambda _match: new, value)
-                    if count:
-                        updates[field] = replaced
-                        replacements += count
-
-                if not updates:
-                    continue
-                try:
-                    committed = await self._update_locked(bucket_id, **updates)
-                except (OSError, ValueError) as exc:
-                    logger.warning(
-                        "Text replacement rejected for bucket %s: %s",
-                        bucket_id,
-                        exc,
-                    )
-                    continue
-                if committed:
-                    changed += 1
-                    total += replacements
-
-        return {"buckets_changed": changed, "replacements": total}
 
     async def update_content_fragment(
         self,

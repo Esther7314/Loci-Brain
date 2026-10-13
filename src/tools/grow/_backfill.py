@@ -153,8 +153,8 @@ async def _current_entry(bucket_id: str) -> tuple[dict, str] | None:
 def _body_moved(bucket_id: str, body: str) -> bool:
     """Is the entry's body now another than `body`, the one read when the side model was
     asked (`_current_entry`)? Asked in `revise`, under the bucket's lease — the lease
-    every write of a body takes (BucketManager.update, replace_text_fields,
-    update_content_fragment) — so a body revised while the side model was thinking is
+    every write of a body takes (BucketManager.update, update_content_fragment) — so
+    a body revised while the side model was thinking is
     seen before anything about the old one is written. A store that cannot read a body synchronously (`body_of`) is taken
     as unchanged; one that finds no entry leaves it to the write to fail."""
     read = getattr(rt.bucket_mgr, "body_of", None)

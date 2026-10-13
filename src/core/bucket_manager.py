@@ -29,7 +29,7 @@ What it deliberately does not do:
 Where each part lives (BucketManager inherits one mixin from each):
 - core/_bucket_write.py      create / update: how a write happens, step by step
 - core/_bucket_search.py     search: how a query is scored (BM25 + vectors)
-- core/_bucket_reads.py      get / is_live / find_exact_content / referenced_by / stats
+- core/_bucket_reads.py      get / is_live / referenced_by / stats
 - core/_bucket_cache.py      list_all's parsed cache, and edits made outside Loci
 - core/_bucket_lifecycle.py  touch / sink / archive / delete / restore
 - core/_bucket_clearing.py   clear_body and the invalidation records of a source change
@@ -381,8 +381,6 @@ class BucketManager(
         except (TypeError, ValueError):
             self.external_change_poll_seconds = 1.0
         self._last_file_state_check = 0.0
-        self._external_changes_detected = 0
-        self._last_external_change = ""
 
     def attach_embedding_outbox(self, outbox) -> None:
         """Attach the durable derived-index queue after both objects exist."""
@@ -430,7 +428,7 @@ class BucketManager(
         return datetime.now()
 
     # ---------------------------------------------------------
-    # The per-bucket lease, and the one around a whole-store rename
+    # The per-bucket lease
     # ---------------------------------------------------------
     def _bucket_turn(self, bucket_id: str):
         """Serialize archive()/update()/delete()/touch() on the same bucket_id.
@@ -440,22 +438,6 @@ class BucketManager(
         so an in-process lock would not actually serialize them.
         """
         return _filesystem_turn(str(self.base_dir), f"bucket-{bucket_id}")
-
-    def human_name_change_turn(self):
-        """Serialize config + vault human-name migrations as one transaction.
-
-        Per-bucket turns protect each Markdown write, but they cannot by
-        themselves stop two full-vault rename jobs from interleaving.  Routes
-        that change or synchronize the human display name hold this outer
-        process/cross-process lease from the config read through the last
-        bucket replacement.
-        """
-
-        return _filesystem_turn(
-            str(self.base_dir),
-            "settings-human-name",
-            timeout_seconds=300.0,
-        )
 
     # ---------------------------------------------------------
     # anchor system — coordinate-system buckets, hard cap of 24
@@ -537,10 +519,3 @@ class BucketManager(
             return {"ok": False, "error": "update failed", "count": 0, "limit": self.ANCHOR_LIMIT}
         new_count = await self.count_anchors()
         return {"ok": True, "anchor": target, "count": new_count, "limit": self.ANCHOR_LIMIT}
-
-    async def list_anchors(self) -> list[dict]:
-        """Return all buckets with anchor=True, sorted by created ascending."""
-        all_b = await self.list_all(include_archive=False)
-        anchors = [b for b in all_b if b.get("metadata", {}).get("anchor")]
-        anchors.sort(key=lambda b: b.get("metadata", {}).get("created", ""))
-        return anchors

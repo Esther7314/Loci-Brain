@@ -18,7 +18,6 @@ import asyncio
 import logging
 import os
 import time
-from typing import Any
 
 logger = logging.getLogger("loci_brain.bucket")
 
@@ -174,15 +173,6 @@ class CacheMixin:
                     )
         return state
 
-    def external_change_status(self) -> dict[str, Any]:
-        with self._active_cache_state_guard:
-            return {
-                "poll_seconds": self.external_change_poll_seconds,
-                "detected": self._external_changes_detected,
-                "last_detected": self._last_external_change,
-                "cached_files": len(self._active_file_state),
-            }
-
     def _reconcile_external_changes(
         self,
         previous: list[dict],
@@ -324,8 +314,6 @@ class CacheMixin:
                         self._active_cache = None
                         self._active_file_state = {}
                         self._bm25_dirty = True
-                        self._external_changes_detected += 1
-                        self._last_external_change = self._now_iso()
                         with self._bucket_path_index_guard:
                             self._bucket_path_index_ready = False
                             self._bucket_path_index = {}

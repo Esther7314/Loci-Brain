@@ -90,35 +90,6 @@ class ReadsMixin:
         data = self._load_bucket(file_path) if file_path else None
         return None if data is None else str(data.get("content") or "")
 
-    def find_exact_content(
-        self,
-        content: str,
-        domain_filter: Optional[list[str]] = None,
-    ) -> Optional[dict]:
-        """Read Markdown directly for an exact match, bypassing derived caches."""
-        expected = self._sanitize_text(content)
-        filter_set = {
-            str(domain).strip().lower()
-            for domain in (domain_filter or [])
-            if str(domain).strip()
-        }
-        for _root, _fname, file_path in self._iter_md_files(self._active_dirs):
-            bucket = self._load_bucket(file_path)
-            if not bucket or bucket.get("content") != expected:
-                continue
-            metadata = bucket.get("metadata", {})
-            if metadata.get("deleted_at"):
-                continue
-            domains = metadata.get("domain") or []
-            if isinstance(domains, str):
-                domains = [domains]
-            if filter_set and not {
-                str(domain).strip().lower() for domain in domains
-            } & filter_set:
-                continue
-            return bucket
-        return None
-
     # ---------------------------------------------------------
     # The reverse chain: whose sources include this memory.
     # The forward chain is `prov` (its sources read through utils.read_from_ids); the

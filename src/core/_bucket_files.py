@@ -61,7 +61,7 @@ class FilesMixin:
         """Take domain[0] as the primary-domain subdirectory name; empty or missing falls
         back to ``未分类``.
 
-        Used in three places: create, _move_bucket and archive. It has to go through
+        Used by create, archive and _bucket_target_path. It has to go through
         sanitize_name before it can be used as a path.
         """
         if isinstance(domain, str):
@@ -81,24 +81,9 @@ class FilesMixin:
         return os.path.join(self.archive_dir, "原文", f"{bucket_id}.txt")
 
     # ---------------------------------------------------------
-    # Move bucket between directories, commit a changed file, and keep the
+    # Where a bucket's file belongs, committing a changed file, and keeping the
     # id -> path index in step with both
     # ---------------------------------------------------------
-    def _move_bucket(self, file_path: str, target_type_dir: str, domain: Optional[list[str]] = None) -> str:
-        """
-        Move a bucket file to a new type directory, preserving domain subfolder.
-        Returns new file path.
-        """
-        primary_domain = self._primary_domain(domain)
-        target_dir = os.path.join(target_type_dir, primary_domain)
-        os.makedirs(target_dir, exist_ok=True)
-        filename = os.path.basename(file_path)
-        new_path = safe_path(target_dir, filename)
-        if os.path.normpath(file_path) != os.path.normpath(new_path):
-            os.rename(file_path, new_path)
-            logger.info(f"Moved bucket / 移动记忆桶: {filename} → {target_dir}/")
-        return str(new_path)
-
     def _bucket_target_path(
         self,
         file_path: str,

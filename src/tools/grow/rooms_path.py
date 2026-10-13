@@ -400,9 +400,8 @@ async def grow_event(items: list, direction_of_fit: str = "", bound=None,
     # returns the original id instead of creating a new bucket.
     # Duplicates that are worded differently are not blocked — those really are
     # two records, and once seen and thought about they can be handled with trace.
-    # ⚠️ Query the whole batch once through the parse cache (find_exact_content
-    # scans the entire library per item, roughly 3s each over a bind mount, which
-    # is what once dragged a batch of five out to 16 seconds).
+    # ⚠️ Query the whole batch once through the parse cache: reading every file per
+    # item costs roughly 3s each over a bind mount.
     # Under a read scope an entry the request may not read is not a duplicate it can be
     # told about: its id would be named, so the write goes ahead.
     # The same listing is the library the return's look-back and scene question read
