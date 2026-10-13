@@ -85,7 +85,7 @@ JS_CONST_FN = re.compile(r"^\s*(?:const|let|var)\s+([^\s=]+)\s*=\s*(?:async\s*)?
 SHE = "她"
 SHE_SAID = re.compile(r"她(说|的原话|定的|拍的|要求|提的)")
 
-# ── The seven 她 that stay, each one stamped ─────────────────────────────────
+# ── The four 她 that stay, each one stamped ─────────────────────────────────
 # Not a mute button. Every entry is an exact substring of the line it exempts, so
 # **editing that line invalidates its stamp**: the count comes back, the run says which
 # stamp went stale, and a person looks at whether the change should still be exempt.
@@ -106,12 +106,6 @@ DELIBERATE_SHE = {
     "src/core/dehydrator.py": [
         ('_PRONOUN_TAGS = frozenset({"她", "他", "我", "你"})',
          "① same gate, tag side: these are the pronouns kept out of tags"),
-        ("（原文里的「你/她/他」都指",
-         "② prompt: tells the model which pronouns refer to the human"),
-        ("示例一：『我也在她这里看到了自己没见过的碎片』",
-         "② prompt: a worked example; changing the example changes what it teaches"),
-        ("你是一个日记整理专家。她/他会发送一段包含今天各种事情的文本",
-         "② prompt: DIGEST_PROMPT opening line"),
         ("（我/你/他/她/它/我们/自己/对方等）——代词是指代不是名字",
          "② prompt: the do-not-extract-pronouns rule in BACKFILL_PROMPT"),
     ],

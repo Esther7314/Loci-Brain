@@ -52,8 +52,8 @@ from typing import Callable, Optional
 # ============================================================
 
 # Rough coefficients used by count_tokens_approx().
-# Empirical, and not meant to be precise — they only have to answer "does this need
-# compressing?".
+# Empirical, and not meant to be precise — they only have to say roughly how large a
+# text is.
 _TOKEN_RATIO_PER_CN_CHAR = 1.5   # one Chinese character ~ 1.5 tokens
 _TOKEN_RATIO_PER_EN_WORD = 1.3   # one English word ~ 1.3 tokens
 _TOKEN_RATIO_PER_CHAR = 0.05     # catch-all contribution from punctuation, spaces, etc.
@@ -854,57 +854,6 @@ def generate_bucket_id() -> str:
     return uuid.uuid4().hex[:12]
 
 
-def strip_wikilinks(text: str) -> str:
-    """
-    Remove Obsidian wikilink brackets: [[word]] -> word
-    """
-    return re.sub(r"\[\[([^\]]+)\]\]", r"\1", text) if text else text
-
-
-# ===============================================================
-# Wikilink parsing
-# ---------------------------------------------------------------
-# Obsidian writes bidirectional links as `[[target bucket name]]`, optionally with an alias
-# and a section:
-#   [[Memory]]                 -> target = "Memory"
-#   [[Memory#section]]         -> target = "Memory"     (after # is a heading anchor)
-#   [[Memory|display text]]    -> target = "Memory"     (after | is a display alias)
-# The regex captures only the first segment, the target name, and stops at # or |.
-# Notes on the regex:
-#   * re.compile precompiles it, which beats re.findall recompiling on every call
-#   * the character class `[^\]\|#]+` means "a run of characters that are not ], | or #"
-#   * (?:...) is a non-capturing group: it only groups alternatives, and does not consume a
-#     group number
-# ===============================================================
-_WIKILINK_RE = re.compile(r"\[\[([^\]\|#]+)(?:[#\|][^\]]*)?\]\]")
-
-
-def extract_wikilinks(text: str) -> list[str]:
-    """Extract Obsidian-style [[wikilinks]] target names from text.
-
-    Pull every `[[xxx]]` target name out of the text, deduplicated but order-preserving,
-    with `|alias` and `#section` stripped off.
-    Returns list[str] rather than a set, because callers want the order of appearance.
-
-    Example:
-        >>> extract_wikilinks("see [[A]] and [[B|alias]] also [[A]]")
-        ['A', 'B']
-    """
-    # Defensive: None or an empty string returns an empty list, so a caller's for-loop
-    # cannot blow up on it.
-    if not text:
-        return []
-    # A list plus a manual membership check, not a set(), so that first-appearance order
-    # survives. (dict has preserved insertion order since Python 3.7, so dict.fromkeys
-    # would work too; this is just more obvious.)
-    seen: list[str] = []
-    for m in _WIKILINK_RE.finditer(text):
-        target = m.group(1).strip()  # group(1) = what the first ([^\]\|#]+) captured
-        if target and target not in seen:
-            seen.append(target)
-    return seen
-
-
 def get_version() -> str:
     """The version that runs: src/VERSION, else the repository root's VERSION.
 
@@ -1134,7 +1083,7 @@ def count_tokens_approx(text: str) -> int:
     Rough token count estimate.
 
     Chinese ~ 1 char = 1.5 tokens, English ~ 1 word = 1.3 tokens.
-    Used to decide whether dehydration is needed; precision not required.
+    Used for an import's size estimate; precision not required.
     """
     if not text:
         return 0

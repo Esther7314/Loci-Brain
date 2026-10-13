@@ -174,7 +174,6 @@ def test_the_stub_answers_each_side_call_in_the_shape_its_caller_reads():
 
     dream = _dream.parse_dream(R.stub_answer(_side(_dream.DREAM_PROMPT, "素材")))
     assert dream["完整"] and dream["碎片"]
-    assert json.loads(R.stub_answer(_side(DH.CUT_PROMPT, "x"))) == {"cuts": []}
 
 
 def test_the_stubs_own_turn_grows_once_then_talks():

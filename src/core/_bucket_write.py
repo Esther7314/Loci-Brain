@@ -183,7 +183,7 @@ class WriteMixin:
         )
         bucket_name = self._create_name(name)
         domain, tags = self._create_labels(bucket_type, domain, tags)
-        linked_content = content  # wikilink injection disabled; LLM adds [[]] via prompt
+        linked_content = content  # the body is stored as written
 
         # --- Build the YAML frontmatter metadata, one step at a time. A value that is
         #     refused raises here, before anything reaches disk. ---
@@ -602,15 +602,6 @@ class WriteMixin:
         return bucket_id, candidate_path
 
     # ---------------------------------------------------------
-    # Wikilink injection — DISABLED
-    # Now handled by LLM prompts (the model adds [[]] around proper nouns)
-    # ---------------------------------------------------------
-    # def _apply_wikilinks(self, content, tags, domain, name): ...
-    # def _collect_wikilink_keywords(self, content, tags, domain, name): ...
-    # def _normalize_keywords(self, keywords): ...
-    # def _extract_auto_keywords(self, content): ...
-
-    # ---------------------------------------------------------
     # Update bucket
     # Supports: content, tags, importance, valence, arousal, name, resolved
     # ---------------------------------------------------------
@@ -953,7 +944,7 @@ class WriteMixin:
         name, the pin, and the media / meaning lists (replace or append)."""
         # --- Update only fields that were passed in ---
         if "content" in kwargs:
-            post.content = kwargs["content"]  # wikilink injection disabled; LLM adds [[]] via prompt
+            post.content = kwargs["content"]  # the body is stored as written
         if "tags" in kwargs:
             post["tags"] = kwargs["tags"]
         if "aliases" in kwargs:

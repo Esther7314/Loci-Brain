@@ -154,7 +154,6 @@ def stub_answer(body: dict) -> str:
         lines it was given (with a draft when the prompt asks for one)
       · the backfill (core/dehydrator.backfill_request): a name and a summary from the body
       · a dream (core/_dream.parse_dream): both layers and v/a
-      · the cut and digest prompts (core/dehydrator): no cuts, no entries
       · anything else asking for JSON: {}; the rest: a short line"""
     msgs = body.get("messages") or []
     if body.get("tools"):
@@ -180,10 +179,6 @@ def stub_answer(body: dict) -> str:
     if "完整" in system and "碎片" in system:
         return json.dumps({"完整": "梦里是一条没有尽头的走廊。", "碎片": "走廊", "v": 0.5, "a": 0.4},
                           ensure_ascii=False)
-    if '"cuts"' in system:
-        return json.dumps({"cuts": []})
-    if "JSON 数组" in system:
-        return "[]"
     if "JSON" in system:
         return "{}"
     return "好。"

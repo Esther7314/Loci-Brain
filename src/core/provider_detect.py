@@ -3,7 +3,7 @@
 core/provider_detect.py — provider detection and model-name normalization
 ========================================
 
-dehydrator.py (the LLM used for compression) and embedding_engine.py (vectorization)
+dehydrator.py (the side model's calls) and embedding_engine.py (vectorization)
 each grew their own answer to "is this a Gemini endpoint?" and "should this model name
 carry the ``models/`` prefix?". The two answers differed slightly in wording and in
 coverage, and that divergence was one of the roots of the embedding model-name bug —
