@@ -293,10 +293,6 @@ class CredentialProof:
     generation: int
 
 
-class CredentialChangedError(RuntimeError):
-    """The credential used to authorize a mutation is no longer current."""
-
-
 @contextmanager
 def _credential_state_guard() -> Iterator[None]:
     """Serialize credential changes and credential-derived grant commits.

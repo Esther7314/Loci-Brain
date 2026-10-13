@@ -69,19 +69,7 @@ _BUCKET_NAME_MAX_LEN = 80
 _BOOL_TRUE = frozenset({"1", "true", "yes", "on"})
 _BOOL_FALSE = frozenset({"0", "false", "no", "off"})
 
-# The set of configurable environment-variable names that the real OS or hosting platform
-# injected at the moment this process started (non-empty values only).
-# Snapshotted before any dashboard save can mutate os.environ — that snapshot is the only
-# reliable way to tell "platform-level env" apart from "a value the dashboard wrote into
-# os.environ at runtime".
-# It is used so the dashboard can warn: "these fields come from platform environment
-# variables and a restart will overwrite whatever you save here." That fixes the trap where
-# config.yaml holds one provider while the platform's LOCI_COMPRESS_BASE_URL points at
-# another and quietly wins on every restart.
-BOOT_ENV_CONFIG: frozenset[str] = frozenset(
-    k for k, v in os.environ.items()
-    if (k.startswith("LOCI_") or k == "AI_NAME") and str(v).strip()
-)
+
 def _project_root() -> str:
     """Return absolute path to the project root (parent of src/ where utils.py lives)."""
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

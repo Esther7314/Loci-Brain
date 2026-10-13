@@ -141,37 +141,6 @@ class EmbeddingOutbox:
         self._wake()
         return True
 
-    def ensure_pending(self, bucket_id: str, content: str) -> bool:
-        """Atomically add a task only when the ID has no pending version.
-
-        Repair callers may hold a stale copy of content.  A normal ``enqueue``
-        would overwrite a newer task that arrived between their status check
-        and repair attempt; keeping the existing item is safe because the
-        worker always re-reads Markdown and corrects stale hashes itself.
-        """
-        bucket_id = str(bucket_id or "").strip()
-        if not bucket_id:
-            return False
-        if not (content or "").strip():
-            return False
-
-        now = now_iso()
-        with self._lock:
-            if bucket_id in self._items:
-                return True
-            self._items[bucket_id] = {
-                "content_hash": content_hash(content),
-                "queued_at": now,
-                "updated_at": now,
-                "attempts": 0,
-                "next_attempt_at": 0.0,
-                "last_attempt_at": "",
-                "last_error": "",
-            }
-            self._persist_locked()
-        self._wake()
-        return True
-
     def discard(self, bucket_id: str) -> bool:
         with self._lock:
             if bucket_id not in self._items:
@@ -179,10 +148,6 @@ class EmbeddingOutbox:
             self._items.pop(bucket_id, None)
             self._persist_locked()
         return True
-
-    def is_pending(self, bucket_id: str) -> bool:
-        with self._lock:
-            return bucket_id in self._items
 
     def pending_ids(self) -> set[str]:
         """Return a snapshot of IDs awaiting derived-index work."""
@@ -433,27 +398,6 @@ class EmbeddingOutbox:
         if changed:
             self._wake()
         return queued
-
-    async def process_once(self) -> bool:
-        """Process one due item; useful for deterministic maintenance/tests."""
-        engine = self.embedding_engine
-        if not engine or not getattr(engine, "enabled", False):
-            return False
-        if self._circuit_delay() > 0:
-            return False
-        bucket_id, item, _delay = self._next_due()
-        if not bucket_id or item is None:
-            return False
-        await self._process(bucket_id, item, engine)
-        return True
-
-    async def wait_until_idle(self, timeout: float = 10.0) -> bool:
-        deadline = time.monotonic() + max(0.0, timeout)
-        while time.monotonic() < deadline:
-            if self.status()["pending"] == 0:
-                return True
-            await asyncio.sleep(0.02)
-        return self.status()["pending"] == 0
 
     async def _run(self) -> None:
         while self._running:

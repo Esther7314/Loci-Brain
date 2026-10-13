@@ -126,8 +126,6 @@ def _alias_path() -> str:
     return candidates[0]        # none found: point the error message at where it belongs
 
 
-_ALIAS_PATH = _alias_path()
-
 # The "this is not a person" blocklist lives under a special key in the same table.
 # Why not a separate file: everything about names stays in one file, so editing it
 # never requires remembering where the other one is.

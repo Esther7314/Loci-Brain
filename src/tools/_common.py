@@ -78,8 +78,6 @@ _HIGH_IMP_EXEMPT_TYPES = frozenset({"feel", "archived"})
 # --- The pinned soft threshold ---
 _PINNED_SOFT_GAP = 2                   # "soft threshold = cap - GAP"; cap=20 -> soft=18
 
-# --- Length of the content lock's hash key ---
-_CONTENT_LOCK_KEY_HEX = 16             # a 64-bit space; collision probability is negligible
 # How long a keyed turn waits for its holder: the slowest holder may be in a side-model
 # call (dehydration.timeout_seconds), plus grace; never less than the minimum.
 _CONTENT_TURN_WAIT_MIN_SECONDS = 180.0
@@ -506,80 +504,6 @@ async def count_pinned() -> int:
         if callable(warning):
             warning(f"count_pinned failed: {e}")
         return 0
-
-
-def _is_pinned_orphan(meta: dict) -> bool:
-    """Return True only for confidently repairable pinned/type desync.
-
-    `type == "permanent"` is now a first-class bucket type, not just the
-    storage side effect of `pinned=True`.  Metadata alone cannot safely
-    distinguish a legacy unpinned-pinned bucket from an intentionally permanent
-    bucket, so automatic demotion is intentionally disabled.
-    """
-    return False
-
-
-async def repair_pinned_desync(bucket_mgr, apply: bool = False) -> dict:
-    """Scan for pinned/type desync; permanent is currently never auto-demoted.
-
-    type=permanent is now a first-class bucket type. Metadata alone cannot safely
-    distinguish the residue of a historical unpin from a permanent bucket the
-    user created deliberately, so automatic demotion is disabled.
-
-    Returns a dict: {total, pinned, orphans:[{id,name,importance}], applied,
-    demoted, failed}."""
-    buckets = await bucket_mgr.list_all(include_archive=False)
-    unique_buckets: list[dict] = []
-    seen_ids: set[str] = set()
-    for bucket in buckets:
-        bucket_id = str(bucket.get("id") or "").strip()
-        if bucket_id:
-            if bucket_id in seen_ids:
-                continue
-            seen_ids.add(bucket_id)
-        unique_buckets.append(bucket)
-    pinned_now = [
-        bucket
-        for bucket in unique_buckets
-        if isinstance(bucket.get("metadata"), dict)
-        and not is_terminal_memory_metadata(bucket["metadata"])
-        and parse_bool(bucket["metadata"].get("pinned"), default=False)
-    ]
-    orphans = [
-        b for b in unique_buckets
-        if _is_pinned_orphan(b.get("metadata", {}))
-    ]
-
-    result: dict = {
-        "total": len(unique_buckets),
-        "pinned": len(pinned_now),
-        "orphans": [
-            {
-                "id": b["id"],
-                "name": b.get("metadata", {}).get("name") or "",
-                "importance": b.get("metadata", {}).get("importance"),
-            }
-            for b in orphans
-        ],
-        "applied": apply,
-        "demoted": 0,
-        "failed": 0,
-    }
-    if not apply or not orphans:
-        return result
-
-    for b in orphans:
-        try:
-            ok = await bucket_mgr.update(b["id"], pinned=False)
-            if ok:
-                result["demoted"] += 1
-            else:
-                result["failed"] += 1
-                rt.logger.warning(f"repair_pinned_desync: update returned False for {b['id']}")
-        except Exception as e:
-            result["failed"] += 1
-            rt.logger.warning(f"repair_pinned_desync: update failed for {b['id']}: {e}")
-    return result
 
 
 async def check_pinned_quota() -> str | None:

@@ -103,9 +103,6 @@ class WindowState:
     offer_at: dict = field(default_factory=dict)
     ever: dict = field(default_factory=dict)
 
-    def offered_keys(self) -> set:
-        return {c["card"] for cards in self.ever.values() for c in cards}
-
 
 def _stamp(dt: datetime) -> str:
     return dt.isoformat(timespec="seconds")

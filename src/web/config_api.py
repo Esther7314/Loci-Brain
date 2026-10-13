@@ -60,7 +60,6 @@ logger = sh.logger
 _MAX_PROVIDER_KEY_CHARS = 8192
 _MAX_PROVIDER_URL_CHARS = 2048
 _MAX_PROVIDER_FORMAT_CHARS = 64
-_MAX_ENV_VALUE_CHARS = 8192
 
 # The `surfacing` numbers POST /api/config accepts: (key, lowest, highest).
 # The three `awake_*` are breath's awake reasons (core/profile.breath_settings): written in

@@ -114,7 +114,7 @@ Exports
 MUSE_DEFAULTS · POOL_SPECS · muse_config()
 Item · Shelf · Cluster · Finger · item_of() · in_pool() · pool_of() · read_vectors()
 make_shelves() · cluster_shelf() · daydream()                            <- the mind side
-word_burst() · composition_drift() · blank_ledger() · era_count()        <- the event side
+word_burst() · composition_drift() · blank_ledger()                      <- the event side
 era_spans() · is_named() · mark_named()      <- computing "does it have a name" on the spot
 rejection_key() · load_rejected() · is_rejected() · record_rejection()
 load_records() (async) · propose_mind() · propose_gist()
@@ -883,11 +883,6 @@ def mark_named(items: list[Item], spans: list[tuple[datetime, datetime | None]])
         if not it.named:
             unnamed_count += 1
     return unnamed_count
-
-
-def era_count(recs: list[tuple[dict, str]]) -> int:
-    """How many periods in the store still count (the blank ledger's map gate reads this)."""
-    return len(era_spans(recs))
 
 
 def blank_ledger(items: list[Item], era_n: int, cfg: dict, now: datetime) -> list[Finger]:
