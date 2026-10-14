@@ -37,7 +37,7 @@
 import * as api from "../api.js";
 import { h, fill, pagehead, setBlock, tip, btn, num, radio, glassWindow, errorLine } from "../ui.js";
 import {
-  NOT_WIRED, PRESENT, ask, presentPage, showSettingsState, save, readLater, numBox, toggle,
+  NOT_WIRED, PRESENT, ask, presentPage, showSettingsState, save, readUntil, numBox, toggle,
   off, acts, setRow, unit, to, small, linkButton, when, at, intOr, sameList, sayer, openPrompt,
 } from "../presentform.js";
 
@@ -132,7 +132,7 @@ function compressBlock(p) {
       const r = await api.post(`${PRESENT}/compress`, {});
       nowSay.ok(r && r.nothing ? `还没有要压的：对话还在最近 ${r.keep_raw} 条以内，这些原样留着`
         : r && r.queued ? "排上了，压完换一个新窗口接着聊" : "好了");
-      readLater(p, now);
+      if (r && r.queued) readUntil(p, now, (st) => Boolean(st.compress && st.compress.packing));
     } catch (e) {
       if (e && e.status === 401) return;
       nowSay.err(e.status === 409 ? "这个对话已经在压了，等它压完" : e.message);
@@ -254,7 +254,7 @@ function reportButton(p, words, kind, after) {
     try {
       const r = await api.post(`${PRESENT}/report`, { kind });
       reportAnswer(say, null, r, kind);
-      readLater(p, b);
+      readUntil(p, b, (st) => Boolean(st.report && (st.report.running || st.report.queued)));
     } catch (e) {
       if (e && e.status === 401) return;
       reportAnswer(say, e, null, kind);

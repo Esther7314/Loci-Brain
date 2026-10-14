@@ -226,12 +226,19 @@ export async function save(p, patch, { undo } = {}) {
   }
 }
 
-/** Read the status again a little later, after a button queued work in the background. */
-export function readLater(p, anchor, ms = 8000) {
-  setTimeout(async () => {
+/** Keep reading the status after a button queued work in the background, until
+ *  `busy(status)` says it has ended or the page has moved on. A pack or a report takes a
+ *  minute or more; `upto` stops a run that never ends from being read forever. */
+export function readUntil(p, anchor, busy, { every = 5000, upto = 15 * 60 * 1000 } = {}) {
+  const until = Date.now() + upto;
+  const tick = async () => {
     if (!anchor.isConnected) return;
-    try { p.update(await api.get(PRESENT), { settings: false }); } catch (_) { /* the next visit shows it */ }
-  }, ms);
+    let snap = null;
+    try { snap = await api.get(PRESENT); p.update(snap, { settings: false }); } catch (_) { /* read again below */ }
+    if (snap && !busy(snap.status || {})) return;
+    if (Date.now() < until) setTimeout(tick, every);
+  };
+  setTimeout(tick, every);
 }
 
 // ---------------------------------------------------------------- bound controls

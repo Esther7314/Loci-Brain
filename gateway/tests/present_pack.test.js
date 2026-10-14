@@ -16,7 +16,7 @@
 //     takes longer than the wait → the turn goes as it is, and the pack still flips after
 //   · the earlier summary is folded into the next pack; markers are stripped from a summary
 //   · POST /present/compress → queued, then a flip with how "manual"; a second call while
-//     it runs → 409
+//     it runs → 409; status.compress.packing is true while it runs, false after
 //   · compress.advanced_on false: a turn past the force line starts no pack, 「现在压」
 //     packs all the same (ask_on off too), and the line packs again once it is back on
 //   · upstream answers context_length_exceeded "maximum context length is 8192 tokens" →
@@ -308,9 +308,11 @@ test("「现在压」: queued, then a flip with how manual; a second call while 
   const second = await call("POST", "/present/compress", { thread: T });
   assert.strictEqual(second.status, 409);
   assert.strictEqual(second.json.ok, false);
+  assert.strictEqual((await call("GET", "/present")).json.status.compress.packing, true);
   const t = await settled(T, (x) => x.window.no === before.no + 1, "the manual flip");
   assert.strictEqual(t.window.opened_by.how, "manual");
   const st = await call("GET", "/present");
+  assert.strictEqual(st.json.status.compress.packing, false);
   assert.strictEqual(st.json.status.compress.last.how, "manual");
   assert.strictEqual(st.json.status.compress.last.how_words, "你按的");
   const h = await call("GET", "/health");

@@ -546,6 +546,8 @@ function create_present({
         ? { at: opened.at ?? null, how: String(opened.how), how_words: HOW_WORDS[opened.how] || null } : null,
       // why the gateway is not packing this window on its own, in the panel's words (pack.js), or null
       held_back_words: held ? held.words : null,
+      // a pack of this conversation is running now (pack.js): the panel keeps reading until it ends
+      packing: packer.is_running(thread.id),
     };
   }
 
