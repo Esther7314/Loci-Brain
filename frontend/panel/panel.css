@@ -636,29 +636,46 @@ select.btn, .btn.sel { appearance: none; -webkit-appearance: none; padding-right
 .ruled-first .rows > .item:first-child { border-top: 1px solid var(--hair); }
 /* setting's grey boxes sit a little tighter than present's (board setting) */
 .sets.setting .panel { padding: 12px 18px 14px; margin: 2px 0 12px; }
-/* setting, in numbered blocks: a model's state under its title, the form under that; a
-   health row with the checks it opens; the log under the health rows */
-.modelstate { margin: var(--s-1) 0 0; }
-.modelstate:empty { display: none; }
-.sets.setting .form, .sets.setting .steps, .sets.setting .pair { margin-top: var(--s-3); }
+/* setting (her frame setting): a health row with the checks it opens */
 .hrow + .hrow { border-top: 1px solid var(--line); }
 .sets .hrow > .item.big.set .txt { padding: var(--s-2) 0; }
-.sets.setting .loghead { margin-top: var(--s-5); }
+/* a long health message wraps on the right instead of squeezing the row's name */
+.sets .hrow .item.set > .acts { flex-shrink: 1; min-width: 0; max-width: 62%; }
+.sets .hrow .item.set > .acts > .r.wrap { min-width: 0; text-align: right; }
+.sets.setting .steps { margin: var(--s-2) 0 var(--s-3); }
 
-/* a form: the field's name in a 110px column, the field after it */
-.form { display: grid; grid-template-columns: 110px minmax(0, 560px); column-gap: 20px; row-gap: 14px; align-items: center; }
-.form > .fn { font-size: 15px; color: var(--small); }
-.form .inp { width: 100%; }
-.form .pick { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+/* a model's form: the name in a pale 168px column, a box with a line under it after it */
+.fgrid { display: flex; flex-direction: column; margin-top: var(--s-1); }
+.frow { display: grid; grid-template-columns: 168px minmax(0, 1fr); align-items: center; min-height: 46px; }
+.frow > .fn, .kv > .fn { font-size: 16px; color: var(--small); }
+.frow > .fv { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; min-width: 0; }
+.frow .inp { width: 366px; max-width: 100%; }
+.frow .fixed { font-size: 16px; color: var(--small); }
+.frow .btn.sel { min-width: 156px; height: 32px; border: 0; border-bottom: 1px solid var(--edge); border-radius: 0; padding-left: 2px; background-color: transparent; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
+.lnk.small { font-size: 13px; }
+/* words to pick one of: the chosen one in ink, the rest pale; `sep` puts a slash between */
+.tabs { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 38px; }
+.tabs.sep { gap: 4px 20px; }
+.tab { border: 0; background: none; padding: 4px 0; font: inherit; font-size: 16px; color: var(--small); cursor: pointer; }
+.tab.on { color: var(--ink); }
+.tab:disabled { opacity: 0.5; cursor: default; }
+.tsep { color: var(--faint); }
+/* what is folded behind a small link (自定义设置, 导入之后会怎样): plain once open */
+.folded { margin-top: var(--s-3); }
+.lnk.fold { font-size: 13px; }
+.foldbody { margin-top: var(--s-1); }
+/* two halves (称呼's two names; 账号安全 beside 安全问题) and a name with its box */
+.duo { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: var(--s-5); align-items: start; }
+.kv { display: flex; align-items: center; gap: 12px; min-height: 45px; padding-left: 26px; }
+.kv .inp { width: 190px; max-width: 100%; text-align: center; }
+.kv .inp.name { width: 104px; }
+.frow .inp::placeholder, .kv .inp::placeholder { color: var(--small); }
+.inp.ro { display: inline-flex; align-items: center; justify-content: center; color: var(--ink); }
+button.inp { cursor: pointer; }
+.vecrows { margin-top: var(--s-4); border-top: 1px solid var(--hair); }
 
-/* 称呼 and 安全问题: two labelled boxes and a button on one line */
-.pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: center; column-gap: 24px; row-gap: 12px; padding: 4px 0; }
-.pair > label { display: flex; align-items: center; gap: 12px; font-size: 16px; color: var(--ink); min-width: 0; }
-.pair .num.name { width: 180px; min-width: 0; max-width: none; field-sizing: fixed; text-align: left; padding: 0 2px 2px; font: var(--body); height: 28px; }
-.pair .inp { flex: 1; min-width: 0; }
-
-/* the inline 改密码 box */
-.pwbox { display: flex; flex-direction: column; gap: 14px; max-width: 420px; margin: 4px 0 12px; }
+/* 改密码, in its glass window */
+.pwbox { display: flex; flex-direction: column; gap: 14px; max-width: 420px; }
 .pwbox .inp { width: 100%; }
 
 /* the log box */
@@ -712,18 +729,14 @@ select.btn, .btn.sel { appearance: none; -webkit-appearance: none; padding-right
   .panel, .sets.setting .panel { padding: 14px 16px 16px; }
   .acts.end { justify-content: flex-end; padding: 0; }
 
-  .form { display: flex; flex-direction: column; align-items: stretch; gap: 0; }
-  .form > .fn { padding-top: 10px; margin-bottom: 6px; }
-  .form .inp { height: 40px; }
-
-  .pair { display: flex; flex-direction: column; align-items: stretch; gap: 0; padding: 0; }
-  .pair > label { justify-content: space-between; padding: 12px 0; }
-  .pair > label + label { border-top: 1px solid var(--line); }
-  .pair .num.name { width: 170px; }
-  .pair > .btn { align-self: flex-end; margin-top: 14px; }
-  .pair.qa > label { flex-direction: column; align-items: stretch; gap: 6px; padding: 10px 0; font-size: 15px; color: var(--small); }
-  .pair.qa > label + label { border-top: 0; }
-  .pair.qa .inp { height: 40px; color: var(--ink); }
+  .frow { grid-template-columns: minmax(0, 1fr); padding: 6px 0; }
+  .frow > .fn { font-size: 14px; }
+  .frow .inp { width: 100%; height: 40px; }
+  .tabs { gap: 4px 22px; }
+  .duo { grid-template-columns: minmax(0, 1fr); }
+  main > .duo { row-gap: var(--s-5); }
+  .kv { padding-left: 0; justify-content: space-between; }
+  .kv .inp { width: 220px; }
 
   .logl { display: flex; flex-direction: column; gap: 2px; line-height: 1.6; padding: 4px 0; }
   .logl + .logl { border-top: 1px solid var(--edge); }
