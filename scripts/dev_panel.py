@@ -836,8 +836,11 @@ def main() -> int:
                 print(f"replay handle: {os.path.join(base, HANDLE)}", flush=True)
             if clock:
                 print(f"fake clock from {start.isoformat()}: {clock['iso']} and {clock['ms']}", flush=True)
-            if password:
+            # A kept folder is not seeded again, so it keeps the password it was seeded with.
+            if password and fresh:
                 print(f"panel password: {password}  (security question 第一只猫叫什么 -> 团子)", flush=True)
+            elif password:
+                print("panel password: the one this folder was first seeded with", flush=True)
             print("Ctrl+C stops it.", flush=True)
             server.wait()
         except KeyboardInterrupt:

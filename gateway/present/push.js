@@ -7,7 +7,8 @@
 // never the only copy.
 //
 // ─── Bark ───
-// push.bark (present.json) is either a device key or a whole Bark URL:
+// push.bark (present.json) is either a device key or a Bark URL (settings.js bark_code()
+// reads it out of whichever of Bark's GET / POST / JSON examples was pasted):
 //   · a key      → <bark_base>/<key>, bark_base https://api.day.app (LOCI_BARK_BASE
 //                  changes it: a self-hosted Bark server, or a test's fake one)
 //   · a URL      → used as it is (a self-hosted server, a URL with its own query)

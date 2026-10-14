@@ -289,9 +289,8 @@ export function choices(p, name, path, options) {
 /** One of the gateway's prompt cards in a glass window (her frame glass-card-example):
  *  the text to read; 编辑 lets it be rewritten and 保存 writes it (POST {key, text});
  *  恢复默认 puts the default back ({key, reset: true}). The card is read when the window
- *  opens, and drawn again from each reply's `item`. The server's 不建议改 lines sit left
- *  of the two buttons; `sample` {label, text}, what an answer may look like, folds under
- *  them. */
+ *  opens, and drawn again from each reply's `item`; the card's `notes` are not shown.
+ *  `sample` {label, text}, what an answer may look like, folds under the buttons. */
 export async function openPrompt(key, title, { sample } = {}) {
   const edit = btn("编辑", { badge: true });
   edit.disabled = true;
@@ -335,9 +334,7 @@ export async function openPrompt(key, title, { sample } = {}) {
     fill(win.body,
       card.edited && card.changed ? h("p", { class: "why", style: { margin: "0 0 var(--s-2)" }, text: `改过 · ${card.changed}` }) : null,
       area,
-      h("div", { class: "pfoot" },
-        h("div", { class: "pnotes" }, (card.notes || []).map((n) => h("p", { class: "why", text: n }))),
-        h("div", { class: "acts" }, reset, keep)),
+      h("div", { class: "pfoot end" }, h("div", { class: "acts" }, reset, keep)),
       status,
       sample ? sampleFold({ label: sample.label, text: sample.text, pre: true }) : null);
     fit();

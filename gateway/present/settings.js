@@ -19,7 +19,8 @@
 //              held_cap (null = no limit on how many unanswered things he may say) ·
 //              daily_cap · dry_run · allow_short
 //   own        tool_rounds · models (empty = the model of the client's last request)
-//   push       bark (a Bark key or a whole Bark URL) · text (full | notice)
+//   push       bark (a Bark key or a Bark URL, read from whatever Bark's app offers to
+//              copy: bark_code()) · text (full | notice)
 // The panel shows most of these; compress.context_tokens, daily_cap, dry_run,
 // allow_short, own.* and push.text live only in the file, but POST /present accepts them
 // too — they are validated the same way, and nothing about them is secret.
@@ -125,20 +126,41 @@ function overlaps(a, b) {
 }
 
 const BARK_KEY = /^[A-Za-z0-9_-]{4,128}$/;
-function bark(v, field) {
+// A path segment that is a device key: Bark's keys are 22 letters and digits.
+const KEY_SEGMENT = /^[A-Za-z0-9]{16,64}$/;
+const FIRST_URL = /https?:\/\/[^\s"'`\\]+/i;
+const DEVICE_KEY = /["']?device_key["']?\s*[:=]\s*["']?([A-Za-z0-9_-]{4,128})/;
+
+/** What Bark's app offers to copy, read down to what a push needs: a bare key, or
+ *  <server>/<key> (with the URL's own query, if it has one). The app shows three forms —
+ *  GET, a URL with the key and a sample text in its path; POST, a curl line to
+ *  <server>/<key>; JSON, a curl line to <server>/push with "device_key" in its body — and
+ *  a plain key or URL is read too. The text after the key in a GET URL is dropped: the
+ *  push posts its own. Returns the code, or throws the field's error. */
+function bark_code(v, field = "push.bark") {
   if (typeof v !== "string") throw bad(field, "要填 Bark 推送码，或者一整条 Bark 网址");
   const s = v.trim();
   if (!s) return "";
-  if (/^https?:\/\//i.test(s)) {
+  if (BARK_KEY.test(s)) return s;
+  const found = s.match(FIRST_URL);
+  const device = s.match(DEVICE_KEY);
+  if (!found && !device) throw bad(field, "认不出推送码：把 Bark 里复制的整段粘进来（GET、POST、JSON 哪种都行），或者只粘那串码");
+  let code = found ? found[0] : device[1];
+  if (found) {
     let u;
-    try { u = new URL(s); } catch { throw bad(field, "这条网址读不出来"); }
-    if (!/^https?:$/.test(u.protocol) || !u.hostname || /\s/.test(s) || s.length > 512) {
-      throw bad(field, "网址要以 http(s) 开头、有主机名、不带空格，最长 512 个字符");
+    try { u = new URL(found[0]); } catch { throw bad(field, "这条网址读不出来"); }
+    if (!/^https?:$/.test(u.protocol) || !u.hostname || found[0].length > 512) {
+      throw bad(field, "网址要以 http(s) 开头、有主机名，最长 512 个字符");
     }
-    return s;
+    if (device) {
+      code = `${u.origin}${u.pathname.replace(/\/push\/?$/, "")}/${device[1]}`;
+    } else {
+      const segs = u.pathname.split("/");
+      const at = segs.findIndex((x) => KEY_SEGMENT.test(x));
+      if (at >= 0 && segs.slice(at + 1).some(Boolean)) code = `${u.origin}${segs.slice(0, at + 1).join("/")}${u.search}`;
+    }
   }
-  if (!BARK_KEY.test(s)) throw bad(field, "推送码只能有字母、数字、- 和 _；或者填一整条 http(s) 网址");
-  return s;
+  return code;
 }
 
 /** What the view shows of the Bark code: its origin (for a URL) and the last two characters of the key. */
@@ -238,7 +260,7 @@ const VALIDATE = {
   },
 
   push(p) {
-    return { bark: bark(p.bark, "push.bark"), text: one_of(p.text, ["full", "notice"], "push.text") };
+    return { bark: bark_code(p.bark, "push.bark"), text: one_of(p.text, ["full", "notice"], "push.text") };
   },
 };
 
@@ -377,4 +399,4 @@ function create_settings({ file, env = process.env }) {
   return { file, load, view, patch, for_wake };
 }
 
-module.exports = { create_settings, DEFAULTS, bark_hint, SettingsError };
+module.exports = { create_settings, DEFAULTS, bark_code, bark_hint, SettingsError };

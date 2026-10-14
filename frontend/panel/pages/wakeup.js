@@ -3,9 +3,9 @@
 
    #/wakeup   five numbered blocks, laid out the way her frame present is:
                 01 自动唤醒   the gateway's `wake` settings — the switch, every N
-                             minutes, the quiet hours — and what wake did and will do:
-                             last, next (and why it is not on time), today's counts,
-                             how many of his lines wait. 提示词 beside the title opens
+                             minutes, the quiet hours — and, only while something is
+                             wrong, what is wrong (TROUBLE: a wake that did not go
+                             through, a reason it cannot wake). 提示词 beside the title opens
                              the wake card in a glass window (presentform.openPrompt,
                              key `wake`): the letter he reads each time he wakes.
                 02 全天都醒/自定义时间段   one choice of two (`wake.segments.mode`): all
@@ -37,6 +37,12 @@ const TIP = {
   push: "他醒来想跟你说话的时候，用 Bark 推到你手机上。",
 };
 const CARD_TITLE = "自动唤醒的提示词";
+
+// The reasons for not waking (wake.js WHY_WORDS) that mean something is wrong, not just
+// "not now": these show under 01; the ordinary ones (off, quiet hours, outside the
+// segments, today's cap) do not.
+const TROUBLE = new Set(["settings_unreadable", "state_unreadable", "held_unreadable", "held_cap", "no_key", "backoff", "walled"]);
+const FAILED = new Set(["paid_failure", "unpaid_failure"]);
 
 
 // ---------------------------------------------------------------- 01 自动唤醒 · 02 全天都醒/自定义时间段
@@ -134,22 +140,18 @@ function wakeBlocks(p) {
       off(radio({ name: "wake", label: "自定义时间段", checked: false }))];
   }
 
-  // What wake did and will do: last, next (and why it is not on time), today, held.
+  // What is wrong with wake, if anything: the last wake failed, a reason it cannot wake,
+  // a books file it cannot read. Nothing while all is well.
   const lines = h("div", { class: "wakestate" });
   p.watch(() => {
     const w = p.st.wake || {};
-    const t = w.today || {};
-    const stateWords = { dry_run: "只记账，不真叫", settings_unreadable: "唤醒的设置读不出来，先不叫" }[w.state];
-    const counts = [`今天醒了 ${t.woke ?? 0} 次`, `说了 ${t.spoke ?? 0} 次话`];
-    if (t.paid_failures) counts.push(`没叫成 ${t.paid_failures} 次`);
-    if (t.dry_run) counts.push(`只记账 ${t.dry_run} 次`);
-    const next = w.next_at ? `下次 ${when(w.next_at)}` : "下次：还排不上";
-    fill(lines,
-      stateWords ? small(stateWords, { margin: "4px 0" }) : null,
-      small(w.last ? `上次 ${when(w.last.at)} · ${w.last.result_words || w.last.result}` : "还没醒过", { margin: "4px 0" }),
-      small(w.next_why_words ? `${next} · ${w.next_why_words}` : next, { margin: "4px 0" }),
-      small(counts.join(" · "), { margin: "4px 0" }),
-      small(w.held === null || w.held === undefined ? "他攥着的话读不出来" : `他说了 ${w.held} 句你还没回`, { margin: "4px 0" }));
+    const say = [];
+    if (w.state === "settings_unreadable") say.push("唤醒的设置读不出来，先不叫");
+    if (w.last && FAILED.has(w.last.result)) say.push(`上次 ${when(w.last.at)} · ${w.last.result_words || w.last.result}`);
+    if (TROUBLE.has(w.next_why) && w.next_why_words) say.push(w.next_why_words);
+    if (w.held === null && w.next_why !== "held_unreadable") say.push("他攥着的话读不出来");
+    fill(lines, say.map((t) => small(t, { margin: "4px 0" })));
+    lines.hidden = !say.length;
   });
 
   const card = p.ctl(h("button", { class: "lnk", type: "button" }, "提示词"));

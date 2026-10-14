@@ -13,7 +13,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const { create_settings, DEFAULTS, bark_hint } = require("../present/settings.js");
+const { create_settings, DEFAULTS, bark_code, bark_hint } = require("../present/settings.js");
 const P = require("../present/prompts.js");
 const { create_fake_clock } = require("./fake_clock.js");
 
@@ -108,6 +108,28 @@ test("the Bark code is shown only as its origin and a two-character tail", () =>
   assert.strictEqual(bark_hint("https://api.day.app/AbCdEfGh7Q/"), "https://api.day.app/••••7Q");
   assert.strictEqual(bark_hint("https://bark.example.com:8443/KeyKeyKeyZZ?sound=x"), "https://bark.example.com:8443/••••ZZ");
   assert.strictEqual(bark_hint("https://bark.example.com/"), "https://bark.example.com/••••");
+});
+
+test("the Bark code is read out of whichever of Bark's three examples was pasted", () => {
+  const key = "Ab3dEf6hIj9kLm2nOp5qRs";   // 22, the shape of Bark's keys
+  assert.strictEqual(bark_code("  AbCdEfGh7Q "), "AbCdEfGh7Q", "a bare key");
+  assert.strictEqual(bark_code(""), "");
+  // GET: the sample text (and a title) after the key are dropped, a query is kept
+  assert.strictEqual(bark_code(`https://api.day.app/${key}/这里改成你自己的推送内容`), `https://api.day.app/${key}`);
+  assert.strictEqual(bark_code(`https://api.day.app/${key}/推送标题/这里改成你自己的推送内容?group=x`), `https://api.day.app/${key}?group=x`);
+  assert.strictEqual(bark_code(`https://bark.example.com/bark/${key}/body`), `https://bark.example.com/bark/${key}`, "a self-hosted path before the key stays");
+  // a plain URL stays as it is
+  assert.strictEqual(bark_code("https://api.day.app/AbCdEfGh7Q/"), "https://api.day.app/AbCdEfGh7Q/");
+  assert.strictEqual(bark_code(`https://bark.example.com:8443/${key}?sound=x`), `https://bark.example.com:8443/${key}?sound=x`);
+  // POST: a curl line to <server>/<key>
+  const post = `curl -X "POST" "https://api.day.app/${key}" \\\n     -H 'Content-Type: application/x-www-form-urlencoded; charset=utf-8' \\\n     --data-urlencode "body=Test Bark Server" \\\n     --data-urlencode "title=Test Title"`;
+  assert.strictEqual(bark_code(post), `https://api.day.app/${key}`);
+  // JSON: a curl line to <server>/push with device_key in the body
+  const json = `curl -X "POST" "https://api.day.app/push" \\\n     -H 'Content-Type: application/json; charset=utf-8' \\\n     -d $'{\n  "body": "Test Bark Server",\n  "title": "Test Title",\n  "device_key": "${key}"\n}'`;
+  assert.strictEqual(bark_code(json), `https://api.day.app/${key}`);
+  assert.strictEqual(bark_code(`{"device_key": "${key}"}`), key, "a device_key with no URL is the key");
+  // nothing to read
+  for (const bad of ["has a space", "推送码", "https:// nothing"]) assert.throws(() => bark_code(bad), /push\.bark|推送码|网址/, bad);
 });
 
 test("shells: the card goes where {卡} was, the material around it", () => {
