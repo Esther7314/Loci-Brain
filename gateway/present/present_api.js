@@ -13,7 +13,9 @@
 //                            of that conversation (default: the most recent) starts in the
 //                            background (pack.js, how "manual"); 409 while one is already
 //                            running for it, 404 when there is no such conversation. The
-//                            result shows up as status.compress.last.
+//                            result shows up as status.compress.last. When the window is
+//                            still within the last keep_raw lines there is nothing to fold:
+//                            { ok: true, queued: false, nothing: true, keep_raw, thread }.
 //   POST /present/report     { kind: "missing" | "now" } → { ok: true, queued: true, kind, day }:
 //                            「补一份」 (the latest scheduled report, now) or 「现在写日报」
 //                            (hand-off, report, and her next turn opens the new window),

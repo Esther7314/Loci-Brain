@@ -110,7 +110,7 @@ const { create_push } = require("./push.js");
 const { create_away } = require("./away.js");
 const win = require("./window.js");
 const compress = require("./compress.js");
-const { create_packer, PACK_WAIT_MS } = require("./pack.js");
+const { create_packer, plan_pack, PACK_WAIT_MS } = require("./pack.js");
 const { create_wall_escape } = require("./wall.js");
 const { local_stamp } = require("./clock.js");
 const { create_day_close } = require("./day_close.js");
@@ -391,6 +391,12 @@ function create_present({
       : threads.list().slice().sort((a, b) => (b.last_at || 0) - (a.last_at || 0))[0] || null;
     if (!thread) return { status: 404, body: { ok: false, error: thread_id ? `没有这个对话：${thread_id}` : "还没有对话" } };
     if (packer.is_running(thread.id)) return { status: 409, body: { ok: false, error: "这个对话正在压，等它压完", thread: thread.id } };
+    // Everything is still within the lines kept as they are: nothing would be folded, so
+    // nothing is queued, and the panel is told so instead of "queued".
+    const keep_raw = read_compress().keep_raw;
+    if (!plan_pack(thread, keep_raw).ids.length) {
+      return { status: 200, body: { ok: true, queued: false, nothing: true, keep_raw, thread: thread.id } };
+    }
     packer.request(thread.id, "manual");
     return { status: 200, body: { ok: true, queued: true, thread: thread.id } };
   }

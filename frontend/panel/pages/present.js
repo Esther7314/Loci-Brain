@@ -118,7 +118,8 @@ function compressBlock(p) {
     now.disabled = true;
     try {
       const r = await api.post(`${PRESENT}/compress`, {});
-      nowSay.ok(r && r.queued ? "排上了，压完换一个新窗口接着聊" : "好了");
+      nowSay.ok(r && r.nothing ? `还没有要压的：对话还在最近 ${r.keep_raw} 条以内，这些原样留着`
+        : r && r.queued ? "排上了，压完换一个新窗口接着聊" : "好了");
       readLater(p, now);
     } catch (e) {
       if (e && e.status === 401) return;

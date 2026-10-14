@@ -374,12 +374,12 @@ test("prompt cards: defaults, a rewrite, back to the default, a reset", { timeou
   } finally { fs.rmSync(prompts_file); }
 });
 
-test("push-test without a code says so; report refuses what it cannot do; compress queues a pack", { timeout: 20000 }, async () => {
-  // 「现在压」 on the planted conversation: queued (its one line is inside keep_raw, so the
-  // pack finds nothing to fold and sends nothing); an unknown conversation is a 404
-  const queued = await call("POST", "/present/compress", { body: {} });
-  assert.strictEqual(queued.status, 200, queued.text);
-  assert.deepStrictEqual(queued.json, { ok: true, queued: true, thread: THREAD });
+test("push-test without a code says so; report refuses what it cannot do; compress with nothing to fold says so", { timeout: 20000 }, async () => {
+  // 「现在压」 on the planted conversation: its one line is inside keep_raw, so nothing is
+  // queued and the answer says so; an unknown conversation is a 404
+  const nothing = await call("POST", "/present/compress", { body: {} });
+  assert.strictEqual(nothing.status, 200, nothing.text);
+  assert.deepStrictEqual(nothing.json, { ok: true, queued: false, nothing: true, keep_raw: 40, thread: THREAD });
   assert.strictEqual((await call("POST", "/present/compress", { body: { thread: "t_000000" } })).status, 404);
   assert.strictEqual((await call("POST", "/present/compress", { body: { thread: 7 } })).status, 400);
   const pushed = await call("POST", "/present/push-test", { body: {} });
