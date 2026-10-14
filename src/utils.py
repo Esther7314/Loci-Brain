@@ -823,6 +823,10 @@ def setup_logging(level: str = "INFO", log_dir: str | None = None) -> None:
         datefmt="%Y-%m-%d %H:%M:%S",
         handlers=handlers,
     )
+    # httpx logs every request line at INFO with the full URL, and a gateway on the LAN
+    # carries its passphrase in the path, so those lines would put the secret in
+    # server.log. Failed calls are still logged by their callers.
+    logging.getLogger("httpx").setLevel(max(log_level, logging.WARNING))
 
     # Attach the shared error system's in-memory log buffer, so E-class errors carry a tail
     try:

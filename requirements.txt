@@ -38,3 +38,6 @@ jieba>=0.42.1
 # 本地 Ollama 安装包 .tar.zst 安全解压
 zstandard>=0.22.0
 
+# 时区数据（LOCI_TZ 靠它）：Windows 上的 Python 不带时区库，没有它就退成固定 UTC+8
+tzdata>=2024.1
+
