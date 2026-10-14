@@ -15,9 +15,14 @@
 //     held.json is empty
 //   · a resend within two minutes and a regenerate of the prefixed turn carry the same
 //     prefix again; a line held after that waits for her next new turn
-//   · two or more held lines: one line each with its local time; lines held on another
-//     thread are prefixed in the thread she speaks in; a plain JSON answer gets the
-//     prefix in front of its text
+//   · every held line is an item with its local time, a blank line between items, then
+//     the boundary line; lines held on another thread are prefixed in the thread she
+//     speaks in; a plain JSON answer gets the prefix in front of its text
+//   · wake.away_prefix off: no prefix; the words go upstream before her line on that turn
+//     and every later one, confirmed once she goes on, through a regenerate, a fork, a
+//     flip (the window and the wake snapshot keep them) and a pack (it reads them as his
+//     line); switching it between the showing turn and the next neither loses nor
+//     doubles them
 //   · push: the full text by default (cut to fit a notification), only a notice with
 //     push.text "notice"; a key or a
 //     whole URL; nothing in DND; a failed push retried up to 3 times within 15 minutes,
@@ -41,6 +46,8 @@ const { create_relay } = require("../relay.js");
 const { create_present_api } = require("../present/present_api.js");
 const { create_push, endpoint_of, scrub, fit_body, BODY_MAX_BYTES } = require("../present/push.js");
 const { prefix_block } = require("../present/away.js");
+const win = require("../present/window.js");
+const { stretch_lines, format_line } = require("../present/pack.js");
 const { create_sse_prefix, create_json_prefix } = require("../present/stream_filter.js");
 const { create_settings } = require("../present/settings.js");
 
@@ -249,15 +256,19 @@ const last_assistant_before_her = (body) => body.messages[body.messages.length -
 const SYS = { role: "system", content: "你是 ta 的伴。" };
 const X = "刚才路过窗口，看见晚霞了，想跟 ta 说一声。";
 
+/** The prefix block as the client sees it, from [HH:MM, words] pairs. */
+const prefix_of = (...items) => items.map(([hm, text]) => `— 你不在的时候 · ${hm} —\n${text}`).join("\n\n") + "\n\n————\n\n";
+
 // ———————————————————————————————————————————————
 
-test("prefix lines: one held line bare, two or more one per line with the local time", () => {
+test("the prefix block: every item with its local time, a blank line between, then the boundary", () => {
   assert.strictEqual(prefix_block([{ at: "2026-10-07T14:05:00+08:00", text: " 想你了。\n" }], ZONE),
-    "（你不在的时候我说过：想你了。）\n\n");
+    "— 你不在的时候 · 14:05 —\n想你了。\n\n————\n\n", "one item has its time too");
   assert.strictEqual(prefix_block([
-    { at: "2026-10-07T14:05:00+08:00", text: "想你了。" },
+    { at: "2026-10-07T14:05:00+08:00", text: "想你了。\n\n第二段。" },
     { at: "2026-10-07T06:30:00Z", text: "晚霞很好看。" },
-  ], ZONE), "（你不在的时候我说过 · 14:05：想你了。）\n（你不在的时候我说过 · 14:30：晚霞很好看。）\n\n");
+  ], ZONE), "— 你不在的时候 · 14:05 —\n想你了。\n\n第二段。\n\n— 你不在的时候 · 14:30 —\n晚霞很好看。\n\n————\n\n");
+  assert.strictEqual(prefix_of(["14:05", "想你了。"]), "— 你不在的时候 · 14:05 —\n想你了。\n\n————\n\n", "the helper below says the same");
   assert.strictEqual(prefix_block([], ZONE), "");
 });
 
@@ -265,7 +276,7 @@ test("the prefix in the stream: comments pass first, the chunk copies upstream's
   const first = { id: "c1", object: "chat.completion.chunk", created: 5, model: "m", system_fingerprint: "fp", choices: [{ index: 0, delta: { role: "assistant" } }] };
   const body = Buffer.from(`: keep-alive\r\n\r\ndata: ${JSON.stringify(first)}\r\n\r\n`
     + `data: {"id":"c1","choices":[{"index":0,"delta":{"content":"嗯"}}]}\r\n\r\ndata: [DONE]\r\n\r\n`, "utf8");
-  const prefix = "（你不在的时候我说过：在的。）\n\n";
+  const prefix = prefix_of(["09:00", "在的。"]);
   const chunk = { id: "c1", object: "chat.completion.chunk", created: 5, model: "m", system_fingerprint: "fp",
                   choices: [{ index: 0, delta: { role: "assistant", content: prefix }, finish_reason: null }] };
   const want = ": keep-alive\r\n\r\n" + `data: ${JSON.stringify(chunk)}\n\n` + body.toString("utf8").slice(": keep-alive\r\n\r\n".length);
@@ -314,7 +325,7 @@ test("the wake said X: pushed in full; next turn starts with the prefix and upst
   const t2 = [...t1, { role: "assistant", content: "好，去吧。" }, { role: "user", content: "我回来了。" }];
   const text2 = await g.say(t2);
   const chunks = sse_chunks(text2);
-  const prefix = `（你不在的时候我说过：${X}）\n\n`;
+  const prefix = prefix_of(["11:00", X]);
   assert.deepStrictEqual(chunks[0].choices, [{ index: 0, delta: { role: "assistant", content: prefix }, finish_reason: null }],
     "the first chunk the client gets is the prefix");
   const first_up = chunks[1];
@@ -360,7 +371,7 @@ test("resend within 2 minutes and regenerate carry the same prefix; a line held 
   answer = "晚安。";
   await g.say(t1);
   await run_until(g, at("2026-10-07T11:00:00"));
-  const prefix = `（你不在的时候我说过：${X}）\n\n`;
+  const prefix = prefix_of(["11:00", X]);
 
   g.clock.advance(10 * MIN);
   const t2 = [...t1, { role: "assistant", content: "晚安。" }, { role: "user", content: "早。" }];
@@ -395,7 +406,7 @@ test("resend within 2 minutes and regenerate carry the same prefix; a line held 
   g.clock.advance(MIN);
   answer = "嗯，我在听。";
   const t3 = [...t2, { role: "assistant", content: `${prefix}重新生成的回话。` }, { role: "user", content: "什么事？" }];
-  assert.strictEqual(sse_text(await g.say(t3)), "（你不在的时候我说过：又想起一件事。）\n\n嗯，我在听。");
+  assert.strictEqual(sse_text(await g.say(t3)), `${prefix_of(["11:20", "又想起一件事。"])}嗯，我在听。`);
   assert.deepStrictEqual(held_doc(g.data_root).items.map((i) => i.text), ["又想起一件事。"]);
   const sent3 = up.chats().slice(-1)[0].body;
   assert.deepStrictEqual(last_assistant_before_her(sent3), { role: "assistant", content: "又想起一件事。" });
@@ -416,7 +427,7 @@ test("two held lines from another thread: each with its time, in this thread; a 
   const g = await boot({ held, push: { bark: "" }, start: at("2026-10-07T15:00:00") });
   const resp = await g.chat([SYS, { role: "user", content: "我到家了。" }], { stream: false });
   const body = JSON.parse(resp);
-  const prefix = "（你不在的时候我说过 · 14:05：下雨了，记得带伞。）\n（你不在的时候我说过 · 14:30：雨停了。）\n\n";
+  const prefix = prefix_of(["14:05", "下雨了，记得带伞。"], ["14:30", "雨停了。"]);
   assert.strictEqual(body.choices[0].message.content, `${prefix}我也想你。`);
   const sent = up.chats()[0].body;
   assert.deepStrictEqual(sent.messages.slice(-3), [
@@ -433,6 +444,184 @@ test("two held lines from another thread: each with its time, in this thread; a 
   await g.chat([SYS, { role: "user", content: "我到家了。" }, { role: "assistant", content: `${prefix}我也想你。` },
                 { role: "user", content: "晚饭吃什么？" }], { stream: false });
   assert.deepStrictEqual(held_doc(g.data_root).items, []);
+});
+
+// ———— wake.away_prefix off, and switching it ————
+
+const u = (content) => ({ role: "user", content });
+const a = (content) => ({ role: "assistant", content });
+const HER_BACK = "我回来了。";
+
+/** present.json rewritten with the switch as `on` (and any other sections given). */
+const set_switch = (g, on, more = {}) => fs.writeFileSync(path.join(g.data_root, "present.json"),
+  JSON.stringify({ wake: { ...WAKE_ON, away_prefix: on }, push: { bark: "" }, ...more }));
+/** The message right before her line `text` in a request, or null. */
+const before_her = (body, text) => {
+  const i = body.messages.findIndex((m) => m.role === "user" && m.content === text);
+  return i > 0 ? body.messages[i - 1] : null;
+};
+/** How many messages of a request are exactly `text`. */
+const count_of = (body, text) => body.messages.filter((m) => m.content === text).length;
+const last_chat = () => up.chats().slice(-1)[0].body;
+const away_overlays = (g) => g.present.threads.list().flatMap((t) => (t.window?.overlays || []).filter((o) => o.kind === "away"));
+
+/** Boot with the switch as `on`; her line, a wake that says X at 11:00, then her 我回来了。 answered 回来啦。 */
+async function shown_once(on) {
+  const state = { answer: "晚安。" };
+  up.plan((body, { wake }) => ({ text: wake ? X : state.answer }));
+  const g = await boot({ wake: { ...WAKE_ON, away_prefix: on }, push: { bark: "" } });
+  const t1 = [SYS, u("晚安。")];
+  await g.say(t1);
+  await run_until(g, at("2026-10-07T11:00:00"));
+  assert.deepStrictEqual(held_doc(g.data_root).items.map((i) => i.text), [X]);
+  g.clock.advance(10 * MIN);
+  const t2 = [...t1, a("晚安。"), u(HER_BACK)];
+  state.answer = "回来啦。";
+  const text2 = sse_text(await g.say(t2));
+  return { g, state, t2, text2 };
+}
+
+test("switch off: no prefix; his words go upstream before her line on that turn and every later one; confirmed once she goes on; regenerates keep them", { timeout: 30000 }, async () => {
+  const { g, state, t2, text2 } = await shown_once(false);
+  assert.strictEqual(text2, "回来啦。", "no prefix: the answer as upstream wrote it");
+  assert.deepStrictEqual(before_her(last_chat(), HER_BACK), a(X), "X goes upstream as his, right before her line");
+  const reply2 = day_lines(g.data_root).filter((l) => l.role === "assistant" && !l.woke).pop();
+  assert.strictEqual(reply2.text, "回来啦。", "the day store keeps what the client saw");
+  assert.deepStrictEqual(held_doc(g.data_root).items.map((i) => [i.text, i.shown.prefixed]), [[X, false]]);
+
+  // a regenerate of that turn, past the resend window: still no prefix, X once, in its place
+  g.clock.advance(3 * MIN);
+  state.answer = "回来啦，累不累？";
+  assert.strictEqual(sse_text(await g.say(t2)), "回来啦，累不累？");
+  assert.deepStrictEqual(before_her(last_chat(), HER_BACK), a(X));
+  assert.strictEqual(count_of(last_chat(), X), 1);
+  assert.strictEqual(held_doc(g.data_root).items.length, 1, "not confirmed before she goes on");
+
+  // she goes on: confirmed, out of held.json; X stays in front of 我回来了。
+  g.clock.advance(MIN);
+  state.answer = "好看，像橘子汽水一样，我还拍了一张给你看。";
+  const t3 = [...t2, a("回来啦，累不累？"), u("晚霞好看吗？")];
+  assert.strictEqual(sse_text(await g.say(t3)), "好看，像橘子汽水一样，我还拍了一张给你看。");
+  const doc = held_doc(g.data_root);
+  assert.deepStrictEqual(doc.items, [], "held.json is empty: no pile-up against held_cap");
+  assert.deepStrictEqual(doc.given.flatMap((e) => e.items.map((i) => [i.text, i.prefixed])), [[X, false]]);
+  assert.strictEqual(g.present.wake.status().held, 0);
+  assert.deepStrictEqual(before_her(last_chat(), HER_BACK), a(X));
+  assert.strictEqual(count_of(last_chat(), X), 1);
+  assert.deepStrictEqual(away_overlays(g).map((o) => [o.text, o.lasting]), [[X, true]]);
+
+  // and on the turn after that
+  g.clock.advance(MIN);
+  state.answer = "嗯嗯，今天的晚霞真的很少见，红了很久。";
+  const t4 = [...t3, a("好看，像橘子汽水一样，我还拍了一张给你看。"), u("嗯。")];
+  await g.say(t4);
+  assert.deepStrictEqual(before_her(last_chat(), HER_BACK), a(X));
+  assert.strictEqual(count_of(last_chat(), X), 1);
+
+  // she rewinds to 我回来了。 and regenerates (a fork): X still there, once, no prefix
+  g.clock.advance(MIN);
+  state.answer = "又一版。";
+  assert.strictEqual(sse_text(await g.say(t2)), "又一版。");
+  assert.deepStrictEqual(before_her(last_chat(), HER_BACK), a(X));
+  assert.strictEqual(count_of(last_chat(), X), 1);
+
+  // she goes on from her latest line on the first branch: confirmed again, nothing left held
+  g.clock.advance(MIN);
+  state.answer = "睡吧。";
+  await g.say([...t4, a("嗯嗯，今天的晚霞真的很少见，红了很久。"), u("困了。")]);
+  assert.deepStrictEqual(held_doc(g.data_root).items, []);
+  assert.deepStrictEqual(before_her(last_chat(), HER_BACK), a(X));
+  assert.strictEqual(count_of(last_chat(), X), 1);
+});
+
+test("switch off: a flip keeps his words while her line is raw (window and wake snapshot); a pack that folds her line reads them as his", { timeout: 30000 }, async () => {
+  const { g, state, t2 } = await shown_once(false);
+  g.clock.advance(MIN);
+  state.answer = "好看。";
+  const t3 = [...t2, a("回来啦。"), u("晚霞好看吗？")];
+  await g.say(t3);
+  const th = g.present.threads.list().find((t) => t.window && t.window.overlays.some((o) => o.kind === "away"));
+  const anchor = th.window.overlays.find((o) => o.kind === "away").anchor;
+  assert.strictEqual(g.present.day_store.get(anchor).text, HER_BACK);
+
+  // the stretch a pack reads: X as his line, said while she was away, right before her line
+  const read = stretch_lines(th.branch.map((e) => e.id), th.window, (id) => g.present.day_store.get(id)).map(format_line);
+  const at_her = read.findIndex((l) => l.endsWith(`ta：${HER_BACK}`));
+  assert.strictEqual(read[at_her - 1], `[10-07 11:00] 你（ta 不在的时候说的）：${X}`);
+
+  // a flip with her line still raw: the overlay comes along, and the wake snapshot has it
+  win.open_next(th, { mark: anchor, carry: "〔前情〕ta 去上课了。" }, g.clock.now());
+  g.present.threads.save(th.id);
+  assert.deepStrictEqual(th.window.overlays.map((o) => [o.kind, o.text, o.lasting]), [["away", X, true]]);
+  assert.ok(g.present.wake.rebase(th.id));
+  const snap = g.present.threads.get(th.id).last_sent;
+  assert.deepStrictEqual(before_her(snap.request, HER_BACK), a(X), "the snapshot holds X where the next turn will");
+  for (const [i, id] of snap.layout.lines) assert.notStrictEqual(snap.request.messages[i].content, X, `layout line ${id} is a client message`);
+  g.clock.advance(MIN);
+  state.answer = "嗯。";
+  const t4 = [...t3, a("好看。"), u("嗯。")];
+  await g.say(t4);
+  assert.deepStrictEqual(before_her(last_chat(), HER_BACK), a(X));
+  assert.strictEqual(count_of(last_chat(), X), 1);
+  assert.ok(last_chat().messages.some((m) => m.role === "system" && m.content === "〔前情〕ta 去上课了。"));
+  assert.ok(snap.request.messages.every((m, i) => JSON.stringify(m) === JSON.stringify(last_chat().messages[i])),
+    "the next turn starts with the rebuilt snapshot's exact messages");
+
+  // 现在压 with one raw line kept: her line is folded, the pack's letter reads X as his
+  set_switch(g, false, { compress: { keep_raw: 1 } });
+  g.clock.advance(MIN);
+  state.answer = "ta 回来了，我说过看见晚霞。";
+  const sent_before = up.chats().length;
+  assert.strictEqual(g.present.compress_now(th.id).body.queued, true);
+  await wait_for(() => g.present.threads.get(th.id).window.no === 3);
+  const pack = up.chats().slice(sent_before).map((c) => c.body).find((b) => String(b.messages.at(-1).content).includes("ta 不在的时候说的"));
+  assert.ok(pack, "the pack went upstream");
+  assert.ok(pack.messages.at(-1).content.includes(`你（ta 不在的时候说的）：${X}`));
+  assert.deepStrictEqual(g.present.threads.get(th.id).window.overlays.filter((o) => o.kind === "away"), [],
+    "its anchor folded away, the overlay is gone; the summary carries it now");
+  assert.ok(g.present.threads.get(th.id).window.carry.includes("ta 回来了，我说过看见晚霞。"));
+});
+
+test("switching between the showing turn and the next: nothing lost, nothing doubled", { timeout: 40000 }, async () => {
+  // shown with the prefix, switched off, the turn regenerated without it: the window keeps X
+  {
+    const { g, state, t2, text2 } = await shown_once(true);
+    assert.strictEqual(text2, `${prefix_of(["11:00", X])}回来啦。`);
+    set_switch(g, false);
+    g.clock.advance(3 * MIN);
+    state.answer = "重新来。";
+    assert.strictEqual(sse_text(await g.say(t2)), "重新来。", "the same turn, shown the way the switch says now");
+    g.clock.advance(MIN);
+    state.answer = "好。";
+    await g.say([...t2, a("重新来。"), u("嗯。")]);
+    assert.deepStrictEqual(held_doc(g.data_root).items, []);
+    assert.deepStrictEqual(before_her(last_chat(), HER_BACK), a(X));
+    assert.strictEqual(count_of(last_chat(), X), 1);
+    assert.ok(!last_chat().messages.some((m) => String(m.content).includes("你不在的时候")));
+  }
+  // shown without it, switched on before she goes on: no prefix after the fact, the window keeps X
+  {
+    const { g, state, t2 } = await shown_once(false);
+    set_switch(g, true);
+    g.clock.advance(MIN);
+    state.answer = "好。";
+    assert.strictEqual(sse_text(await g.say([...t2, a("回来啦。"), u("嗯。")])), "好。");
+    assert.deepStrictEqual(held_doc(g.data_root).items, []);
+    assert.deepStrictEqual(before_her(last_chat(), HER_BACK), a(X));
+    assert.strictEqual(count_of(last_chat(), X), 1);
+  }
+  // shown with the prefix, switched off, and her history carries the prefixed reply: the history has X, the overlay goes
+  {
+    const { g, state, t2, text2 } = await shown_once(true);
+    set_switch(g, false);
+    g.clock.advance(MIN);
+    state.answer = "好。";
+    assert.strictEqual(sse_text(await g.say([...t2, a(text2), u("嗯。")])), "好。");
+    assert.deepStrictEqual(held_doc(g.data_root).items, []);
+    assert.strictEqual(count_of(last_chat(), X), 0, "X is only inside his prefixed reply");
+    assert.ok(last_chat().messages.some((m) => m.role === "assistant" && m.content === text2));
+    assert.deepStrictEqual(away_overlays(g), []);
+  }
 });
 
 // ———— push alone: create_push on a fake clock, against the fake Bark server ————

@@ -24,6 +24,10 @@
 // The text is each line's current version in the day store, oldest first, one per line:
 //     [10-07 20:41] ta：……        [10-07 20:42] 你：……
 // with attachments as their kinds and tools as their names (what the day store keeps).
+// A lasting overlay of the window anchored in the stretch (what he said while she was
+// away, shown without the prefix: window.js "Lasting overlays") is read as his line, in
+// its place, marked as said while she was away: no line of the stretch carries those
+// words, and after the flip only the summary can.
 // What the current carry holds from further back must not be lost by folding again, so
 // the carry's summary part (the whole carry when its parts are unknown) goes in too, as
 // the earlier summary to fold into the new one. The report part is not sent: the next
@@ -135,6 +139,25 @@ function format_line(line) {
   if (Array.isArray(line.tools) && line.tools.length) bits.push(`（调了工具：${line.tools.join("、")}）`);
   const stamp = line_stamp(line.at);
   return `${stamp ? `[${stamp}] ` : ""}${who}：${bits.filter(Boolean).join(" ")}`;
+}
+
+/** A lasting overlay as a stored line would read (see "What the pack reads"). */
+function lasting_line(o) {
+  return { role: "assistant", woke: true, text: String(o.text ?? ""), at: o.said_at || null };
+}
+
+/** The stored lines of `ids` in order, with the window's lasting overlays in their places. */
+function stretch_lines(ids, w, get_line) {
+  const by_anchor = win.overlays_by_anchor({ overlays: (Array.isArray(w?.overlays) ? w.overlays : []).filter((o) => o.lasting) });
+  const out = [];
+  for (const id of ids) {
+    const here = by_anchor.get(id) || [];
+    for (const o of here) if (o.place === "before") out.push(lasting_line(o));
+    const line = get_line(id);
+    if (line) out.push(line);
+    for (const o of here) if (o.place !== "before") out.push(lasting_line(o));
+  }
+  return out;
 }
 
 /** An own turn's failure as the context-length wall (wall.js wall_of_run), or null. */
@@ -257,7 +280,7 @@ function create_packer({
       write_line({ thread: thread_id, how, outcome: "nothing", window: w.name });
       return { outcome: "nothing" };
     }
-    let lines = plan.ids.map((id) => day_store.get(id)).filter(Boolean);
+    let lines = stretch_lines(plan.ids, w, (id) => day_store.get(id));
     const card = prompts.current("compress");
     const earlier = earlier_summary(w);
     let res = null;
@@ -463,6 +486,6 @@ function create_packer({
 }
 
 module.exports = {
-  create_packer, plan_pack, predict_fill, format_line, clean_summary, earlier_summary, fit_newest, wall_of,
+  create_packer, plan_pack, predict_fill, format_line, clean_summary, earlier_summary, fit_newest, wall_of, stretch_lines,
   PACK_WAIT_MS, BACKOFF_BASE_MS, BACKOFF_MAX_MS, WALL_RETRIES, MIN_GAIN_PCT,
 };

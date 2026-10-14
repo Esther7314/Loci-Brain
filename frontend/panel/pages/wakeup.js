@@ -3,9 +3,12 @@
 
    #/wakeup   five numbered blocks, laid out the way her frame present is:
                 01 自动唤醒   the gateway's `wake` settings — the switch, every N
-                             minutes, the quiet hours — and, only while something is
-                             wrong, what is wrong (TROUBLE: a wake that did not go
-                             through, a reason it cannot wake). 提示词 beside the title opens
+                             minutes, the quiet hours, whether what he said while she
+                             was away starts his next answer in her client
+                             (`wake.away_prefix`, AWAY_PREFIX) — and, only while
+                             something is wrong, what is wrong (TROUBLE: a wake that
+                             did not go through, a reason it cannot wake). 提示词
+                             beside the title opens
                              the wake card in a glass window (presentform.openPrompt,
                              key `wake`): the letter he reads each time he wakes.
                 02 不限时间段/自定义时间段唤醒   one choice of two (`wake.segments.mode`): all
@@ -37,6 +40,11 @@ const TIP = {
   push: "他醒来想跟你说话的时候，用 Bark 推到你手机上。",
 };
 const CARD_TITLE = "自动唤醒的提示词";
+// The row for `wake.away_prefix` (present/away.js): its label and the line under it.
+const AWAY_PREFIX = {
+  text: "补进聊天记录",
+  why: "他醒着说的话，你下次开口时放在他回复的最前面，留进客户端的聊天记录。",
+};
 
 // The reasons for not waking (wake.js WHY_WORDS) that mean something is wrong, not just
 // "not now": these show under 01; the ordinary ones (off, quiet hours, outside the
@@ -165,6 +173,7 @@ function wakeBlocks(p) {
       set({ text: "多久醒一次", right: h("span", { class: "acts nu" }, numBox(p, ["wake", "every_min"], { label: "间隔" }), unit("分钟")) }),
       set({ text: "免打扰", right: acts(numBox(p, ["wake", "dnd", "from"], { label: "从", kind: "time" }), to(),
         numBox(p, ["wake", "dnd", "to"], { label: "到", kind: "time" })) }),
+      set({ text: AWAY_PREFIX.text, why: AWAY_PREFIX.why, right: acts(toggle(p, ["wake", "away_prefix"], AWAY_PREFIX.text)) }),
       home,
       p.live ? lines : null),
     setBlock("02", "不限时间段/自定义时间段唤醒", {},

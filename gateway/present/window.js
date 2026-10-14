@@ -18,8 +18,9 @@
 //              can keep one part and replace the other (same privacy as the carry)
 //   overlays   what the gateway put into the model's input that the client's history does
 //              not hold: Loci's cards, a dream or the muse line, the compression reminders,
-//              the away lines (his, role assistant; replayed only until she has seen
-//              them, then taken out by away.js). Each is "this text, before/after line X".
+//              the away lines (his, role assistant: what he said while she was away,
+//              present/away.js; `lasting` when no line of the client's history will ever
+//              carry them, see below). Each is "this text, before/after line X".
 //   offered    the reminder lines already offered in this window ("weak:<pct>", "ask"),
 //              each offered once per window (present/compress.js)
 //   summary_pending  a summary he wrote in a reply that ended in tool calls, waiting for
@@ -56,6 +57,15 @@
 // end of the turn it was offered in, after that turn's card.
 // An overlay whose anchor is not in a request's history (the client trimmed it, the
 // owner rewound past it, it sits before the mark) is not replayed in that request.
+//
+// ─── Lasting overlays ───
+// An overlay marked `lasting` holds words the conversation has that no line of the
+// client's history carries: the away lines shown without the prefix (present/away.js).
+// They are part of the conversation for as long as it lives, so a flip does not clear
+// them: open_next() keeps the lasting overlays whose anchor is still among the raw lines
+// (from the new mark on); one whose anchor is folded away was read by the pack as his
+// line (pack.js), or by him when he folded it himself. The away lines are the only
+// lasting overlays, and only away.js sets or clears `lasting`.
 //
 // ─── The mark ───
 // The mark is looked up in the client's history as sent. Found: everything before it is
@@ -192,6 +202,18 @@ function map_ids(messages, branch, cursor) {
 // while she was away goes in as his own words, role assistant.
 function overlay_message(o) { return { role: o.role === "assistant" ? "assistant" : OVERLAY_ROLE, content: o.text }; }
 
+/** The overlays that are replayed, by anchor line id, each list with its `tail` ones last. */
+function overlays_by_anchor(win) {
+  const by_anchor = new Map();
+  for (const o of Array.isArray(win?.overlays) ? win.overlays : []) {
+    if (!o.text) continue;
+    if (!by_anchor.has(o.anchor)) by_anchor.set(o.anchor, []);
+    by_anchor.get(o.anchor).push(o);
+  }
+  for (const list of by_anchor.values()) list.sort((x, y) => Number(Boolean(x.tail)) - Number(Boolean(y.tail)));
+  return by_anchor;
+}
+
 /**
  * Build the upstream copy.
  * @param messages  the client's messages, as sent (not modified)
@@ -211,13 +233,7 @@ function assemble(messages, ids, win) {
     if (at >= head) { from = at; mark = "kept"; } else mark = "void";
   }
 
-  const by_anchor = new Map();
-  for (const o of win.overlays) {
-    if (!o.text) continue;
-    if (!by_anchor.has(o.anchor)) by_anchor.set(o.anchor, []);
-    by_anchor.get(o.anchor).push(o);
-  }
-  for (const list of by_anchor.values()) list.sort((x, y) => Number(Boolean(x.tail)) - Number(Boolean(y.tail)));
+  const by_anchor = overlays_by_anchor(win);
 
   const out = messages.slice(0, head);
   const carried = mark === "kept" && typeof win.carry === "string" && win.carry.length > 0;
@@ -233,11 +249,22 @@ function assemble(messages, ids, win) {
            keep_head: head + (carried ? 1 : 0) };
 }
 
+/** The old window's lasting overlays whose anchor is on the branch from `mark` on (see "Lasting overlays"). */
+function lasting_from(old, branch, mark) {
+  const list = (Array.isArray(old.overlays) ? old.overlays : []).filter((o) => o.lasting);
+  if (!list.length) return [];
+  const ids = (Array.isArray(branch) ? branch : []).map((e) => e.id);
+  const from = mark ? ids.indexOf(mark) : 0;
+  if (from < 0) return [];
+  const raw = new Set(ids.slice(from));
+  return list.filter((o) => raw.has(o.anchor)).map((o) => JSON.parse(JSON.stringify(o)));
+}
+
 /**
  * Close this window and open the next one: the mark moves, the carry is replaced, the
- * overlays, the fill and the offered reminder lines are cleared (a new window must not be
- * nagged by the old one's water level). The caller tells Loci with
- * /cue/dropped {window: old_name, all: true}.
+ * overlays (all but the lasting ones still among the raw lines), the fill and the offered
+ * reminder lines are cleared (a new window must not be nagged by the old one's water
+ * level). The caller tells Loci with /cue/dropped {window: old_name, all: true}.
  * @param parts  { report, summary }: the carry is composed from them (compose_carry);
  *               `carry` instead sets the text as it is, parts unknown
  * @param how    "self" | "forced" | "manual" | "day", with `at` (the local time stamp)
@@ -249,6 +276,7 @@ function open_next(thread, { mark = null, carry = null, parts = null, how = null
   next.mark = mark;
   next.carry = parts ? compose_carry(parts) : carry;
   next.carry_parts = parts ? { report: parts.report ?? null, summary: parts.summary ?? null } : null;
+  next.overlays = lasting_from(old, thread.branch, mark);
   next.model = old.model;
   next.opened_by = how ? { at, how } : null;
   thread.window = next;
@@ -257,5 +285,5 @@ function open_next(thread, { mark = null, carry = null, parts = null, how = null
 
 module.exports = {
   ensure, inherit, overlay_for, add_overlay, map_ids, assemble, open_next, fresh_window,
-  compose_carry, mark_for_tail, OVERLAY_ROLE,
+  compose_carry, mark_for_tail, overlays_by_anchor, overlay_message, OVERLAY_ROLE,
 };

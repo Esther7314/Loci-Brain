@@ -56,10 +56,11 @@
 // would resend everything the flip just let go of, and the next chat turn would not
 // share its prefix. So every flip calls rebase(): the request's messages become what
 // window.js assemble would build now — the client's system messages, the new carry, the
-// client's messages from the new mark on — with no overlays (a new window starts with
-// none); every other field of the request (tools included), his reply and the earlier
-// wake pairs stay. To find the client's messages among the overlays, the snapshot keeps
-// a `layout` (index.js, from the assembly): { head: how many leading messages are the
+// client's messages from the new mark on, and the overlays the new window starts with
+// (only lasting ones: window.js open_next) where their anchors are; every other field of
+// the request (tools included), his reply and the earlier wake pairs stay. To find the
+// client's messages among the overlays, the snapshot keeps a `layout` (index.js, from the
+// assembly, and rebuilt here the same way): { head: how many leading messages are the
 // client's system messages, lines: [[index in request.messages, line id or null], …] },
 // one entry per client message after the head. A mark older than the snapshot's first
 // line has the lines between taken from the day store, as plain messages; a snapshot with
@@ -111,6 +112,7 @@ const { local_stamp } = require("./clock.js");
 const { dnd_state, in_span, local_minute, minute_of_day } = require("./dnd.js");
 const { wake_shell } = require("./prompts.js");
 const { wall_of_run } = require("./wall.js");
+const win = require("./window.js");
 
 const MIN_EVERY_MIN = 15;
 const MAX_BACKOFF_FACTOR = 4;
@@ -625,12 +627,20 @@ function create_wake({
     }
     const carry = carried && typeof w.carry === "string" && w.carry ? [{ role: "system", content: w.carry }] : [];
     const body = [...lead, ...client.slice(start)];
-    const messages = [...head, ...carry, ...body.map((c) => c.m)];
-    const offset = head.length + carry.length;
+    const by_anchor = win.overlays_by_anchor(w);
+    const messages = [...head, ...carry];
+    const lines = [];
+    for (const c of body) {
+      const here = c.id ? by_anchor.get(c.id) || [] : [];
+      for (const o of here) if (o.place === "before") messages.push(win.overlay_message(o));
+      lines.push([messages.length, c.id]);
+      messages.push(c.m);
+      for (const o of here) if (o.place === "after") messages.push(win.overlay_message(o));
+    }
     thread.last_sent = {
       ...snap,
       request: { ...snap.request, messages },
-      layout: { head: head.length, lines: body.map((c, k) => [offset + k, c.id]) },
+      layout: { head: head.length, lines },
     };
     delete thread.last_sent.walled;   // rebuilt smaller: worth a try again
     threads.save(thread.id);
