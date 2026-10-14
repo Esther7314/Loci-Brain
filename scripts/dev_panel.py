@@ -12,6 +12,9 @@ dev_panel.py — the panel on a throwaway library, for looking at it
                                              # the present page is connected (implies --locked)
     python scripts/dev_panel.py --gateway --gateway-port 18103
                                              # the gateway on a port a client can keep
+    python scripts/dev_panel.py --gateway --lan
+                                             # also reachable from a phone on the LAN
+                                             # (Kelivo): see --lan below
 
 Starts the real server (src/server.py, streamable-http) on 127.0.0.1 over a library made
 fresh in the system temp folder and seeded with a small believable sample through the
@@ -70,6 +73,15 @@ Two more switches, for replaying a chat through the gateway (scripts/replay_week
                      the seeded searches included.
 
 Both processes count the day in Asia/Shanghai (LOCI_TZ), where the sample's people live.
+
+    --lan            (with --gateway) Loci and the gateway listen on every address, so a
+                     phone on the same network can reach them: the gateway behind a
+                     passphrase path (gateway/door.js), Loci's MCP behind a host of its
+                     own, `client` (hosts.client, token in LOCI_HOST_TOKEN_CLIENT, sent as
+                     `loci-mcp-token` or a bearer). The passphrase and that token are kept
+                     in the folder's `lan.json`, so a kept folder keeps them and the phone's
+                     settings stay valid; the addresses are printed, the secrets are not.
+                     Windows asks once whether python and node may take connections.
 
 Public surface: run as a script. `seed(store, base_dir)` fills a store,
 `seed_regrow_muse_trace(store, base_dir)` adds the regrow/fold, muse and trace pages'
@@ -174,7 +186,42 @@ def _kept_config(path: str) -> dict | None:
     return cfg if isinstance(cfg, dict) else None
 
 
-def _write_config(paths: dict, gateway_url: str = "", upstream: str = "", kept: bool = False) -> None:
+def _lan_keys(base: str) -> dict:
+    """The passphrase and the client host's token for --lan, made once and kept in the
+    folder's lan.json."""
+    path = os.path.join(base, "lan.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            keys = json.load(f)
+    except (OSError, ValueError):
+        keys = {}
+    if not isinstance(keys, dict):
+        keys = {}
+    keys.setdefault("passphrase", secrets.token_urlsafe(18))
+    keys.setdefault("client_token", secrets.token_hex(16))
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(keys, f, indent=1)
+    return keys
+
+
+def _lan_ip() -> str:
+    """This machine's address on the network the default route goes through (nothing is
+    sent: a UDP socket only picks its source address)."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("10.255.255.255", 1))
+        return s.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+    finally:
+        s.close()
+
+
+CLIENT_HOST = {"token_env": "LOCI_HOST_TOKEN_CLIENT", "scope_mode": "open"}
+
+
+def _write_config(paths: dict, gateway_url: str = "", upstream: str = "", kept: bool = False,
+                  client: bool = False) -> None:
     """The throwaway config. A kept folder keeps what the panel wrote into it (models,
     names, thresholds): only the gateway host's addresses are written again, since the
     gateway may come up on another port."""
@@ -183,6 +230,8 @@ def _write_config(paths: dict, gateway_url: str = "", upstream: str = "", kept: 
         gw = ((old.get("hosts") or {}).get("gateway")) if isinstance(old.get("hosts"), dict) else None
         if gateway_url and isinstance(gw, dict):
             gw.update({"fetch_url": f"{gateway_url}/loci/source", "present_url": gateway_url})
+        if client and isinstance(old.get("hosts"), dict):
+            old["hosts"].setdefault("client", dict(CLIENT_HOST))
         with open(paths["config"], "w", encoding="utf-8") as f:
             json.dump(old, f, ensure_ascii=False, indent=1)
         return
@@ -211,6 +260,8 @@ def _write_config(paths: dict, gateway_url: str = "", upstream: str = "", kept: 
                 "present_url": gateway_url,
             },
         }
+        if client:
+            cfg["hosts"]["client"] = dict(CLIENT_HOST)
     with open(paths["config"], "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=1)
 
@@ -742,6 +793,9 @@ def main() -> int:
     ap.add_argument("--gateway-port", type=int, default=0,
                     help="the gateway's port on 127.0.0.1 (default 0 = any free one; taken -> any "
                          "free one), for a client that keeps the gateway's address")
+    ap.add_argument("--lan", action="store_true",
+                    help="(with --gateway) also listen on the LAN, for a phone: the gateway behind a "
+                         "passphrase, Loci's MCP behind a client host; both kept in lan.json")
     ap.add_argument("--upstream", default="",
                     help="the gateway's upstream and Loci's side model, with a placeholder key "
                          "(for scripts/replay_week.py's stand-in)")
@@ -782,9 +836,14 @@ def main() -> int:
     for d in (paths["buckets"], paths["logs"]):
         os.makedirs(d, exist_ok=True)
     port = _free_port(args.port)
+    if args.lan and not args.gateway:
+        print("refused: --lan goes with --gateway", file=sys.stderr)
+        return 2
+    lan = _lan_keys(base) if args.lan else None
     gw_port = _free_port(args.gateway_port) if args.gateway else 0
-    gw_url = f"http://127.0.0.1:{gw_port}" if args.gateway else ""
-    _write_config(paths, gw_url, args.upstream, kept=not fresh)
+    # On a LAN bind every gateway path starts with the passphrase, Loci's calls included.
+    gw_url = (f"http://127.0.0.1:{gw_port}" + (f"/{lan['passphrase']}" if lan else "")) if args.gateway else ""
+    _write_config(paths, gw_url, args.upstream, kept=not fresh, client=bool(lan))
 
     hook = secrets.token_hex(16)
     env = _child_env(paths, port, hook)
@@ -801,6 +860,8 @@ def main() -> int:
     if args.gateway:
         host_token, fetch_token = secrets.token_hex(16), secrets.token_hex(16)
         env.update({"LOCI_HOST_TOKEN_GATEWAY": host_token, "LOCI_FETCH_TOKEN_GATEWAY": fetch_token})
+        if lan:
+            env.update({"LOCI_BIND_HOST": "0.0.0.0", "LOCI_HOST_TOKEN_CLIENT": lan["client_token"]})  # nosec B104
         gw_env = {k: v for k, v in os.environ.items() if not k.upper().startswith("LOCI_")}
         gw_env.update({
             "PORT": str(gw_port),
@@ -811,6 +872,8 @@ def main() -> int:
             "LOCI_HOOK_TOKEN": host_token,
             "LOCI_TZ": ZONE,
         })
+        if lan:
+            gw_env.update({"LOCI_GATEWAY_BIND": "0.0.0.0", "LOCI_GATEWAY_PASSPHRASE": lan["passphrase"]})  # nosec B104
         if args.upstream:
             gw_env.update({"LOCI_OWNER_NAME": "阿青", "LOCI_AI_NAME": "小满"})
         if clock:
@@ -863,8 +926,14 @@ def main() -> int:
             print(f"Loci panel (throwaway library): http://127.0.0.1:{port}/loci", flush=True)
             print(f"library: {paths['buckets']}", flush=True)
             if gateway:
-                print(f"gateway: {gw_url} (upstream {gw_env['LOCI_UPSTREAM']}; "
+                shown = f"http://127.0.0.1:{gw_port}" + ("/<passphrase>" if lan else "")
+                print(f"gateway: {shown} (upstream {gw_env['LOCI_UPSTREAM']}; "
                       "it holds no key of its own)", flush=True)
+            if lan:
+                ip = _lan_ip()
+                print(f"LAN: panel http://{ip}:{port}/loci | gateway http://{ip}:{gw_port}/<passphrase>/v1 | "
+                      f"MCP http://{ip}:{port}/mcp with header loci-mcp-token: <client_token> "
+                      f"(both in {os.path.join(base, 'lan.json')})", flush=True)
                 print(f"replay handle: {os.path.join(base, HANDLE)}", flush=True)
             if clock:
                 print(f"fake clock from {start.isoformat()}: {clock['iso']} and {clock['ms']}", flush=True)
