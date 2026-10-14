@@ -5,9 +5,13 @@ dev_panel.py — the panel on a throwaway library, for looking at it
     python scripts/dev_panel.py              # http://127.0.0.1:18761/loci
     python scripts/dev_panel.py --port 0     # any free port
     python scripts/dev_panel.py --locked     # with a panel password, to see the login page
-    python scripts/dev_panel.py --keep       # leave the library folder behind afterwards
+    python scripts/dev_panel.py --keep       # leave the library folder behind afterwards;
+                                             # run again with --dir on it and it keeps what
+                                             # the panel set (models, names, thresholds)
     python scripts/dev_panel.py --gateway    # also run the gateway (gateway/server.js), so
                                              # the present page is connected (implies --locked)
+    python scripts/dev_panel.py --gateway --gateway-port 18103
+                                             # the gateway on a port a client can keep
 
 Starts the real server (src/server.py, streamable-http) on 127.0.0.1 over a library made
 fresh in the system temp folder and seeded with a small believable sample through the
@@ -156,7 +160,32 @@ def _child_env(paths: dict, port: int, hook_token: str) -> dict:
     return env
 
 
-def _write_config(paths: dict, gateway_url: str = "", upstream: str = "") -> None:
+def _kept_config(path: str) -> dict | None:
+    """A kept folder's config.yaml as the panel left it (the server may have rewritten it
+    as YAML), or None when there is none or it does not read."""
+    if not os.path.isfile(path):
+        return None
+    try:
+        import yaml
+        with open(path, encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+    except Exception:                                   # noqa: BLE001 - unreadable: write it fresh
+        return None
+    return cfg if isinstance(cfg, dict) else None
+
+
+def _write_config(paths: dict, gateway_url: str = "", upstream: str = "", kept: bool = False) -> None:
+    """The throwaway config. A kept folder keeps what the panel wrote into it (models,
+    names, thresholds): only the gateway host's addresses are written again, since the
+    gateway may come up on another port."""
+    old = _kept_config(paths["config"]) if kept else None
+    if old is not None:
+        gw = ((old.get("hosts") or {}).get("gateway")) if isinstance(old.get("hosts"), dict) else None
+        if gateway_url and isinstance(gw, dict):
+            gw.update({"fetch_url": f"{gateway_url}/loci/source", "present_url": gateway_url})
+        with open(paths["config"], "w", encoding="utf-8") as f:
+            json.dump(old, f, ensure_ascii=False, indent=1)
+        return
     # JSON is YAML: written without a YAML library, read back by the server's.
     cfg = {
         "transport": "streamable-http",
@@ -710,6 +739,9 @@ def main() -> int:
     ap.add_argument("--keep", action="store_true", help="leave the folder behind on exit")
     ap.add_argument("--gateway", action="store_true",
                     help="also run the gateway, so the present page is connected (implies --locked)")
+    ap.add_argument("--gateway-port", type=int, default=0,
+                    help="the gateway's port on 127.0.0.1 (default 0 = any free one; taken -> any "
+                         "free one), for a client that keeps the gateway's address")
     ap.add_argument("--upstream", default="",
                     help="the gateway's upstream and Loci's side model, with a placeholder key "
                          "(for scripts/replay_week.py's stand-in)")
@@ -750,9 +782,9 @@ def main() -> int:
     for d in (paths["buckets"], paths["logs"]):
         os.makedirs(d, exist_ok=True)
     port = _free_port(args.port)
-    gw_port = _free_port(0) if args.gateway else 0
+    gw_port = _free_port(args.gateway_port) if args.gateway else 0
     gw_url = f"http://127.0.0.1:{gw_port}" if args.gateway else ""
-    _write_config(paths, gw_url, args.upstream)
+    _write_config(paths, gw_url, args.upstream, kept=not fresh)
 
     hook = secrets.token_hex(16)
     env = _child_env(paths, port, hook)
