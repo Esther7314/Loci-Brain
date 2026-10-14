@@ -123,12 +123,26 @@ function snapshot(dir) {
     if (!fs.existsSync(d)) return;
     for (const name of fs.readdirSync(d)) {
       const p = path.join(d, name);
-      const st = fs.statSync(p);
+      let st;
+      try { st = fs.statSync(p); } catch (err) { if (err.code === "ENOENT") continue; throw err; }   // a temp file renamed meanwhile
       if (st.isDirectory()) walk(p); else out[path.relative(root, p)] = st.size;
     }
   };
   walk(dir);
   return out;
+}
+
+/** The files once the previous test's last writes have landed: two equal snapshots in a row. */
+async function settled(dirs) {
+  const take = () => Object.assign({}, ...dirs.map(snapshot));
+  let last = take();
+  for (let i = 0; i < 50; i++) {
+    await new Promise((r) => setTimeout(r, 50));
+    const now = take();
+    if (JSON.stringify(now) === JSON.stringify(last)) return now;
+    last = now;
+  }
+  return last;
 }
 
 const A1 = "你好呀。今天过得怎么样？我一直在这儿等你来说话。";
@@ -212,7 +226,7 @@ test("a second, unrelated conversation opening with the same words gets its own 
 });
 
 test("requests to non-chat paths write nothing", { timeout: 20000 }, async () => {
-  const before_snapshot = { ...snapshot(host_dir), ...snapshot(path.join(data_root, "threads")) };
+  const before_snapshot = await settled([host_dir, path.join(data_root, "threads")]);
   const say = [SYS, { role: "user", content: "这句不该被记下" }];
 
   const embeddings = await fetch(`${gateway.地址}/v1/embeddings`, {
