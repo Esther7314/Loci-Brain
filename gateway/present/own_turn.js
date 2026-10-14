@@ -84,8 +84,8 @@
 // never what was said.
 //
 // Silence: an answer that is empty, 【无话】 or "No response requested." — as the whole
-// reply, never as part of one — comes back `silent: true`. This file only recognises
-// them; nothing here (or in any prompt) teaches them.
+// reply, never as part of one — comes back `silent: true`. The wake card tells him
+// 【无话】 (prompts.js); this file only recognises them.
 //
 // The summary block (stream_filter.js): every answer goes through the same scanner as the
 // client's stream before its words are kept, so `text` and `said` are only ever what he

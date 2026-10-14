@@ -8,7 +8,7 @@
                              through, a reason it cannot wake). 提示词 beside the title opens
                              the wake card in a glass window (presentform.openPrompt,
                              key `wake`): the letter he reads each time he wakes.
-                02 全天都醒/自定义时间段   one choice of two (`wake.segments.mode`): all
+                02 不限时间段/自定义时间段唤醒   one choice of two (`wake.segments.mode`): all
                              day, or only some segments (twelve at most, each with 删除
                              while there is more than one).
                 03 主动推送   the Bark code (never shown back: its placeholder is the
@@ -45,7 +45,7 @@ const TROUBLE = new Set(["settings_unreadable", "state_unreadable", "held_unread
 const FAILED = new Set(["paid_failure", "unpaid_failure"]);
 
 
-// ---------------------------------------------------------------- 01 自动唤醒 · 02 全天都醒/自定义时间段
+// ---------------------------------------------------------------- 01 自动唤醒 · 02 不限时间段/自定义时间段唤醒
 
 /** The wake segments: the first beside 自定义时间段, more in rows under it, 「+ 增加一个
  *  时间段」 for another (twelve at most). A segment is saved once both its times are
@@ -124,7 +124,7 @@ function wakeBlocks(p) {
   let modes;
   if (p.live) {
     const path = ["wake", "segments", "mode"];
-    modes = [["all", "全天都醒，不分时间段"], ["only", "自定义时间段"]].map(([value, label]) => radio({
+    modes = [["all", "不限时间段（免打扰时间除外）"], ["only", "自定义时间段"]].map(([value, label]) => radio({
       name: "wake", label, value, checked: at(p.s, path) === value,
       onChange: (v) => {
         const list = v === "only" ? seg.listForOnly() : undefined;
@@ -136,7 +136,7 @@ function wakeBlocks(p) {
     p.reg("wake.segments.mode", modes[0]);
     p.watch(check);
   } else {
-    modes = [off(radio({ name: "wake", label: "全天都醒，不分时间段", checked: true })),
+    modes = [off(radio({ name: "wake", label: "不限时间段（免打扰时间除外）", checked: true })),
       off(radio({ name: "wake", label: "自定义时间段", checked: false }))];
   }
 
@@ -167,7 +167,7 @@ function wakeBlocks(p) {
         numBox(p, ["wake", "dnd", "to"], { label: "到", kind: "time" })) }),
       home,
       p.live ? lines : null),
-    setBlock("02", "全天都醒/自定义时间段", {},
+    setBlock("02", "不限时间段/自定义时间段唤醒", {},
       set({ lead: modes[0], right: h("span", { class: "r", text: "默认" }) }),
       set({ lead: modes[1], right: seg.first }),
       seg.rest),

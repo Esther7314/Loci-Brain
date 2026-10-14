@@ -173,8 +173,12 @@ export function clearMarks(p) {
   p.topSync();
 }
 
+// Fields whose refusal already says what it is about: said without the field's words.
+const SAYS_ITSELF = new Set(["wake.segments.list"]);
+
 export function fieldWords(field, message) {
   const bare = String(field || "").replace(/\[\d+\]/g, "");
+  if (SAYS_ITSELF.has(bare)) return message;
   const key = Object.keys(FIELD_WORDS).filter((k) => bare === k || bare.startsWith(`${k}.`))
     .sort((a, b) => b.length - a.length)[0];
   return key ? `${FIELD_WORDS[key]}：${message}` : message;

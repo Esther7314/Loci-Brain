@@ -234,7 +234,7 @@ const VALIDATE = {
         if (overlaps(list[i], list[j])) throw bad(`wake.segments.list[${i}]`, `跟第 ${j + 1} 段时间重叠了`);
       }
     }
-    if (mode === "only" && list.length === 0) throw bad("wake.segments.list", "只在时间段里叫醒，就至少要有一段");
+    if (mode === "only" && list.length === 0) throw bad("wake.segments.list", "最少填写一个时间段");
     const floor = allow_short ? 1 : MIN_EVERY_MIN;
     return {
       on: bool(w.on, "wake.on"),
