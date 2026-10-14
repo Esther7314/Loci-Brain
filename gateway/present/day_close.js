@@ -1007,6 +1007,8 @@ function create_day_close({
     settle: () => (running ? running.promise : Promise.resolve(null)),
     is_busy: () => Boolean(running || queued),
     occurrence: (now) => occurrence(now, settings.load().values.report),
+    /** The last written report ({at_ms, …}) or null — night_weave.js waits on it. */
+    last_report: () => read_state().last_report || null,
     reports_dir,
   };
 }

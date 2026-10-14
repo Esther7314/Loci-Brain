@@ -61,7 +61,8 @@
 // read them per request, so a change saved on the panel needs no restart.
 //
 // heartbeat_tasks is what server.js hangs on its one beat, in order: pack retries
-// (pack.js), the night (day_close.js: hand-off, day report, flip), wake (wake.js), push
+// (pack.js), the night (day_close.js: hand-off, day report, flip), the night's weave
+// (night_weave.js: the report written + 30 min → Loci dreams), wake (wake.js), push
 // retries (push.js). A wake whose answer held a closed summary block folds the window
 // through the same after_summary as a chat turn (wake.js on_fold); its words reach the
 // day store and held.json without the block (own_turn.js).
@@ -115,6 +116,7 @@ const { create_packer, plan_pack, PACK_WAIT_MS } = require("./pack.js");
 const { create_wall_escape } = require("./wall.js");
 const { local_stamp } = require("./clock.js");
 const { create_day_close } = require("./day_close.js");
+const { create_night_weave } = require("./night_weave.js");
 const { speaker_names } = require("./source_api.js");
 const { http_base } = require("./cue.js");
 
@@ -205,6 +207,12 @@ function create_present({
     clock, zone, log,
     system_of: (id) => last_system.get(id) || [],
     on_flip: ({ thread, old_name, how }) => { packer.note_flip(how); after_flip(thread, old_name); },
+  });
+
+  // ———— the night's weave: the report written + 30 min → Loci dreams (night_weave.js) ————
+  const night_weave = create_night_weave({
+    data_root, loci_base: http_base(loci), hook_token: String(env.LOCI_HOOK_TOKEN || "").trim(),
+    last_report: () => day_close.last_report(), clock, log,
   });
 
   /** Poke delivery decides whether and what; the window decides where. */
@@ -578,6 +586,7 @@ function create_present({
     heartbeat_tasks: [
       { name: "pack", run: () => packer.beat() },
       { name: "day_close", run: () => day_close.tick() },
+      { name: "night_weave", run: () => night_weave.tick() },
       { name: "wake", run: () => wake.tick() },
       { name: "push", run: () => push.beat() },
     ],

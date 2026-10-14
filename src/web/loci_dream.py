@@ -6,6 +6,8 @@ web/loci_dream.py — dreams and musing, for the bridge
     GET  /api/loci/poke               -> dream (delivery) + muse cluster count (nudge) + structured recall scores, all in one read-only call
     POST /api/loci/dream/wake         -> the demotion signal: drop a live "whole" dream
                                          layer down to the fragment layer (idempotent)
+    POST /api/loci/dream/weave        -> the night's weave, asked by the host: sweep, then
+                                         weave if above the line and none today
     GET  /api/dream/current           -> the current dream (current layer + level; 204 when there is none, and it writes a recall state)
 
 `build_poke` looks `build_muse_pending` up as this module's global, so a test that swaps
@@ -281,6 +283,35 @@ async def api_loci_dream_wake(request: Request) -> Response:
         logger.warning(f"[loci] dream/wake 失败: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
     return JSONResponse({"降级了": degraded})
+
+
+async def api_loci_dream_weave(request: Request) -> Response:
+    """The night's weave, asked by the host once its day is closed (Lento: its daily report
+    done + 30 minutes; the gateway: the same). It runs `core._dream.maintain()` — sweep
+    what has expired, then weave if the pile is above the line and today's weave has not
+    happened — and waits for it: the weaver is Loci's own dream model, not the host's
+    paid turn. One weave at a time across this and breath's background beat.
+
+    Answers {"woven": <dream id> | null, "nightmare": bool, "verdict": <the state's
+    最近一看结论>}. `woven` is null below the line, when today's weave already happened
+    (by breath or an earlier call), and when the weave was voided by a source change.
+    The text is not here: the host reads the dream as it always does (`/api/loci/poke`),
+    one road for it. The body is neither read nor validated."""
+    from starlette.responses import JSONResponse
+    withheld = _scope_withholds(request, "梦")
+    if withheld is not None:
+        return withheld
+    try:
+        from core import _dream as _D
+        out = await _D.maintain()
+        rec = out.get("织") if isinstance(out, dict) else None
+        verdict = str(_D.load_state().get("最近一看结论") or "")
+    except Exception as e:
+        logger.warning(f"[loci] dream/weave 失败: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+    return JSONResponse({"woven": rec.get("id") if isinstance(rec, dict) else None,
+                         "nightmare": bool(isinstance(rec, dict) and rec.get("nightmare")),
+                         "verdict": verdict})
 
 
 # ---------------------------------------------------------

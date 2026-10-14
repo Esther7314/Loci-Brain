@@ -198,8 +198,8 @@ withheld_ingredients() (the ingredients of a dream that may no longer be seen; a
          withholds the whole dream from being handed out)
 degrade_on_wake() (🔴 the degrade signal: drop a living `完整` layer down to the fragment
          layer; idempotent)
-maintain() (the hook at awakening: sweep the expired ones and weave if above the line —
-         both silently)
+maintain() (the hook at awakening, and a host's night weave: sweep the expired ones and
+         weave if above the line — both silently; one at a time)
 gather_ingredients() · pressure() · parse_dream() · layer_of() · load_dreams() · dreams_dir() · first_sentence()
 want_pool() · unclear_pool() · cold_pool() · quote_pool()
 is_marked() · dream_born_ids() · dream_roots() · retells_a_dream() · from_a_dream() (the mark)
@@ -218,6 +218,7 @@ import os
 import random
 import re
 import uuid
+import weakref
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -1687,7 +1688,30 @@ async def maintain(cfg: dict | None = None) -> dict:
     🔴 **Not one word is added to breath** (a hard boundary in the spec): dreams do not
        enter the awakening screen. How a dream is handed into the conversation, and how it
        is removed from the context, is the **bridge's** job and is not touched here.
+
+    Two callers: breath's background beat, and a host asking for the night's weave
+    (`POST /api/loci/dream/weave`). One runs at a time (`_maintain_lock`): the per-day
+    check reads the state before the model call and writes it after, so two at once
+    would both pass it and weave two dreams.
     """
+    async with _maintain_lock():
+        return await _maintain(cfg)
+
+
+# One maintain() at a time (see its docstring). One lock per event loop: an asyncio.Lock
+# belongs to the loop it first waited on, and the tests run each case in a loop of its own.
+_MAINTAIN_LOCKS: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+
+
+def _maintain_lock() -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    lock = _MAINTAIN_LOCKS.get(loop)
+    if lock is None:
+        lock = _MAINTAIN_LOCKS[loop] = asyncio.Lock()
+    return lock
+
+
+async def _maintain(cfg: dict | None) -> dict:
     c = cfg or _c()
     out: dict = {"扫": {}, "织": None, "压力": None}
     try:

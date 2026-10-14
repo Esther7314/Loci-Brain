@@ -348,3 +348,62 @@ def test_a_withdrawal_that_reaches_no_dream_says_none(store, tmp_path):
     out = _withdraw(store)
     assert out["cleanup"]["dream_records"] == "none"
     assert A.load()[0]["cleared"] is False and A.load()[0]["text"] == "other 的梦"
+
+
+# ───────────────────────── the night's weave, asked by the host ─────────────────────────
+
+def test_the_night_weave_answers_the_id_never_the_text_and_weaves_once_a_day(store,
+                                                                              monkeypatch):
+    _want(store)
+    call = routes(monkeypatch, locked=True)
+    first = call("POST", "/api/loci/dream/weave", body={}, key="s3cret")
+    assert first.status == 200, first.raw
+    woven = first.json["woven"]
+    assert woven and [r["id"] for r in D.load_dreams()] == [woven]
+    assert first.json["nightmare"] is False
+    assert PHRASE not in first.raw.decode("utf-8") and FRAGMENT not in first.raw.decode("utf-8")
+    again = call("POST", "/api/loci/dream/weave", body={}, key="s3cret")
+    assert again.status == 200 and again.json["woven"] is None, again.raw
+    assert "今天织过了" in again.json["verdict"]
+    assert len(D.load_dreams()) == 1
+
+
+def test_the_night_weave_is_a_hook_route_behind_the_key(store, monkeypatch):
+    from web import panel_auth as PA
+    assert PA.is_hook("/api/loci/dream/weave")
+    assert "/api/loci/dream/weave" not in PA.PUBLIC_PATHS
+    call = routes(monkeypatch, locked=True)
+    assert call("POST", "/api/loci/dream/weave", body={}).status == 401
+    assert D.load_dreams() == []
+
+
+def test_the_night_weave_says_a_nightmare(store, monkeypatch):
+    _want(store)
+
+    async def dark(ingredients, c):
+        return D.parse_dream(json.dumps({"完整": "梦里一直在下坠，没有底。", "碎片": "下坠。",
+                                         "v": 0.1, "a": 0.95}, ensure_ascii=False))
+    monkeypatch.setattr(D, "call_model", dark)
+    reply = routes(monkeypatch)("POST", "/api/loci/dream/weave", body={}, key="s3cret")
+    assert reply.status == 200 and reply.json["woven"] and reply.json["nightmare"] is True
+
+
+def test_two_weaves_at_once_weave_one_dream(store, monkeypatch):
+    # breath's background beat and the host's night weave can land together: the per-day
+    # check reads before the model call and writes after, so without one-at-a-time both
+    # would pass it.
+    _want(store)
+    calls = []
+
+    async def slow(ingredients, c):
+        calls.append(1)
+        await asyncio.sleep(0.05)
+        return D.parse_dream(json.dumps({"完整": "梦见海。", "碎片": "海。", "v": 0.4, "a": 0.6},
+                                        ensure_ascii=False))
+    monkeypatch.setattr(D, "call_model", slow)
+
+    async def both():
+        return await asyncio.gather(D.maintain(), D.maintain())
+    outs = run(both())
+    assert len(calls) == 1 and len(D.load_dreams()) == 1
+    assert sum(1 for o in outs if o["织"]) == 1

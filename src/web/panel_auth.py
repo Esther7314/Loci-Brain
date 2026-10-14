@@ -112,6 +112,7 @@ KEEPALIVE_PATH = "/auth/recovery-question"
 # them, with the key.
 HOOK_PATHS = frozenset([
     "/api/loci/dream/wake",
+    "/api/loci/dream/weave",
     "/api/dream/current",
     "/api/loci/poke",
     "/api/v2/slices",

@@ -78,6 +78,9 @@ them writes something.
                                          authorizes again (a logged-in session only)
     POST /api/loci/dream/wake         -> the demotion signal: drop a live "whole" dream
                                          layer down to the fragment layer (idempotent)
+    POST /api/loci/dream/weave        -> the night's weave, asked by the host once its day
+                                         is closed: sweep, then weave if above the line and
+                                         none today; answers the id, never the text
     POST /api/loci/import-package     -> bring an export package back: a multipart `file`
                                          is checked and parsed (nothing written; the
                                          collisions come back); then {job_id, decisions,
@@ -264,7 +267,7 @@ core/profile.py):
     web/loci_password.py  auth/state, auth/set-password, auth/security-question,
                           auth/revoke-grants
     web/loci_health.py    health, setup, logs, and build_health / build_setup
-    web/loci_dream.py     poke, dream/wake, dream/current, and
+    web/loci_dream.py     poke, dream/wake, dream/weave, dream/current, and
                           build_muse_pending / build_poke
     web/loci_detail.py    bucket, lineage, source, entry/fix (core/detail.py)
     web/loci_names.py     names, names/pending, names/{name}, names/action
@@ -348,6 +351,7 @@ def register(mcp) -> None:
     mcp.custom_route("/api/logs", methods=["GET"])(loci_health.api_logs)
     mcp.custom_route("/api/loci/poke", methods=["GET"])(loci_dream.api_loci_poke)
     mcp.custom_route("/api/loci/dream/wake", methods=["POST"])(loci_dream.api_loci_dream_wake)
+    mcp.custom_route("/api/loci/dream/weave", methods=["POST"])(loci_dream.api_loci_dream_weave)
     mcp.custom_route("/api/dream/current", methods=["GET"])(loci_dream.api_dream_current)
 
     # ---------------------------------------------------------
