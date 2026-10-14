@@ -290,5 +290,5 @@ def test_the_stamped_total_matches_what_the_ratchet_zeroed_out():
     r = CE.scan()
     assert CE.BASELINE["she"] == 0
     assert r["she_total"] == 0
-    assert r["stamped_she"] == 22, "the stamped 她 — the owner ruled on exactly these"
+    assert r["stamped_she"] == 24, "the stamped 她 — the owner ruled on exactly these"
     assert r["stale_stamps"] == []

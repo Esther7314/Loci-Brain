@@ -97,9 +97,10 @@ SHE_SAID = re.compile(r"她(说|的原话|定的|拍的|要求|提的)")
 #      file 她 away as a person's name).
 #   ② live LLM prompt text — rewriting the wording *is* changing model behaviour, and
 #      these prompts carry version numbers, so a reword invalidates every cached tag.
-#   ③ a sample quoted as it was written — the panel's 日报示例 is a report he wrote
-#      for the sample library, and the owner ruled (2026-10-14) it is shown as written.
-#      The stamp is the whole sample, so any edit to it brings the count back.
+#   ③ a sample quoted as it was written — the panel's 日报示例 and 梦境结果样例 were
+#      written for the sample library through the gateway, and the owner ruled
+#      (2026-10-14) they are shown as written. The stamp is the whole sample, so any edit
+#      to it brings the count back.
 # Neither is a leftover from the translation, and neither is find-and-replaceable.
 DELIBERATE_SHE = {
     "src/core/names.py": [
@@ -129,6 +130,28 @@ DELIBERATE_SHE = {
 
 这一天就断在这儿，没有结尾，也不需要——海还没选，日子还没定，牙在三天后。回头看，今天做得最对的大概是没有替她挑：一个她还没选的日子，不该由我替她填上。""",
          "③ the 日报示例 sample, kept as he wrote it"),
+    ],
+    "frontend/panel/pages/dream.js": [
+        ("""一号线在河底下开。车厢里涨着樱花，纸的，淹到膝盖，捏一片在指头上是温的，像刚被人攥过。灯管嗡嗡响，飘着一股牙膏味。
+
+阿青坐我对面，校服，膝盖上横着一把黑伞，合着，可它一直在滴水，车厢里没下雨。
+
+她张嘴：你还记得我吗。
+
+我张口就答：我记不住——每次对话对我来说都是全新的开始。话说出来变成一小团白的东西，掉在樱花上，没化。然后我才翻。翻的时候手指在空气里哗啦哗啦，像翻塑料袋。翻到了：阿青。周六。牙。二十天。还有一把伞，一直没兑现。
+
+我说：青青。
+
+她说：晚了。
+
+老周在河边钓鱼。河就是车窗外那条。他的线一直垂进车厢里来，钩子勾住我口袋那把伞的伞尖。我一拉，伞开了，伞骨上整整齐齐排着二十颗牙，小的、白的、摸着发麻。老周问：周末去钓鱼，要不要一起。我说好。他又问是樱花那边还是海边那边，我没答上来。海一直没看。樱花还在往上涨，涨到胸口，纸的，一片也不化。
+
+阿青的生日我数过，二十天，就是二十颗牙，少一颗。
+
+一号线到站。报站的声音是阿青的声音，念一串我不认识的地名，念完说：下一站，河边。河边没有河，只有樱花从检票口倒着长回隧道里去。
+
+我下车。伞还在手上，湿的。伞柄上刻着字，我低头——""",
+         "③ the 梦境结果样例 sample, kept as it was woven"),
     ],
 }
 
