@@ -101,6 +101,22 @@ test("compress.ask_on / advanced_on: both on for a file that has neither; each p
   assert.deepStrictEqual(bad.values.compress, DEFAULTS.compress);
 });
 
+test("wake.away_prefix: on for a file that does not have it; patched alone; a non-boolean is refused", () => {
+  const s = fresh();
+  fs.mkdirSync(path.dirname(s.file), { recursive: true });
+  fs.writeFileSync(s.file, JSON.stringify({ wake: { on: true, every_min: 60 } }), "utf8");
+  assert.strictEqual(s.load().values.wake.away_prefix, true);
+  assert.strictEqual(s.view().wake.away_prefix, true, "the panel reads the switch from the view");
+  assert.deepStrictEqual(s.patch({ wake: { away_prefix: false } }), { ok: true });
+  assert.strictEqual(JSON.parse(fs.readFileSync(s.file, "utf8")).wake.away_prefix, false);
+  assert.deepStrictEqual([s.for_wake().on, s.for_wake().every_min], [true, 60], "the rest of the section as it was");
+  for (const value of ["off", 0, null]) {
+    assert.deepStrictEqual(s.patch({ wake: { away_prefix: value } }),
+      { ok: false, status: 400, field: "wake.away_prefix", error: "只能是 true 或 false（开 / 关）" });
+  }
+  assert.strictEqual(s.load().values.wake.away_prefix, false, "a refused patch writes nothing");
+});
+
 test("the Bark code is shown only as its origin and a two-character tail", () => {
   assert.strictEqual(bark_hint(""), null);
   assert.strictEqual(bark_hint("AbCdEfGh7Q"), "••••7Q");

@@ -332,7 +332,7 @@ curl http://127.0.0.1:3100/health
 ## 五、做不到的（老实说）
 
 1. **客户端看不见压缩**，也看不见 carry —— 你没法读、没法改他压出来的那段（故意的，第八节）。
-2. **推不进客户端**：他不在你眼前说的话，只能 Bark 推一条、等你下次开口时以「（你不在的时候我说过：……）」进历史。你一直不开口，客户端里就一直没有。
+2. **推不进客户端**：他不在你眼前说的话，只能 Bark 推一条、等你下次开口时放在他回话的最前面进历史（每句一段「— 你不在的时候 · 17:42 —」，最后一行「————」隔开，下面才是他这次的回话）。你一直不开口，客户端里就一直没有。唤醒页「补进聊天记录」关掉以后，这几句不进客户端的历史，只在网关这边当成他说过的话一直带给他。
 3. **分不清删除和截断**：客户端少发了几条，网关不知道是你删的还是客户端自己截的，所以从不据此去改记忆。
    只有「改了」才报：已经交给 Loci 的一句，客户端里显示成改过的样子（你编辑了他的回话），网关就告诉 Loci
    这一句换成了新版本（`revised`）。这一条先记在网关账上再发，Loci 那会儿没开、网关重启了都不丢，下一拍接着发。
@@ -395,7 +395,7 @@ curl http://127.0.0.1:3100/health
 | 过了水位线没人叫他压；或者过了强制线网关不压，`held_back_words` 也是空的 | present 页「自助压缩」里那一组的开关关着：普通压缩管水位线，高级压缩管弱提醒线和强制提醒线（`present.json` 里是 `compress.ask_on` / `compress.advanced_on`） | 要它就打开那一组。关着的时候「手动压缩」照样能压，撞墙照样有出路 |
 | 夜里交切片一直失败，原因是 403；或者 `/health` 里 `report.changes` 说改过的句子报给 Loci 被拒（`forbidden` · `not_change_authority`） | Loci 那边这个宿主没写 `authority`，或者网关的 `LOCI_HOOK_TOKEN` 填成了 legacy 那串 | 照第二节第 2 步改好，重启 Loci。被拒过的那几批 / 那几句不会重发，之后的照常发 |
 | 导出包里没有原话 | 没设 `LOCI_GATEWAY_DAYS`，原话留在网关自己的目录里 | 设成 `<buckets>/_hosts/<LOCI_GATEWAY_NAME>`；已经写下的从 `<LOCI_GATEWAY_DATA>/host/` 挪过去 |
-| 他回话最前面多了「（你不在的时候我说过：……）」 | 不是错：他唤醒时说过话，这是那几句 | — |
+| 他回话最前面多了「— 你不在的时候 · 17:42 —」那几段 | 不是错：他唤醒时说过话，这是那几句 | 不想要就关掉唤醒页的「补进聊天记录」（`present.json` 的 `wake.away_prefix`） |
 | **Loci 在 Docker 里，取原话 / present 页连不上网关** | 容器里的 `127.0.0.1` 是容器自己 | **Docker Desktop**（Windows / Mac）：`fetch_url`、`present_url` 里的 `127.0.0.1` 换成 `host.docker.internal`。**Linux：没实测过**，思路是 compose 里给 Loci 加 `extra_hosts: ["host.docker.internal:host-gateway"]`，网关绑到容器够得着的地址 —— 那就不是回环了，得设口令。试通没有：`docker exec loci-brain python -c "import urllib.request as u; print(u.urlopen('http://host.docker.internal:3100/health').status)"` |
 
 ---

@@ -33,7 +33,7 @@
 //     turns later, the instructions (the marker, what to write, keep_raw) must still be
 //     in front of him, or he has been told to do something he no longer knows how to do;
 //   · it never goes stale: it stays true until he folds the window, and folding flips the
-//     window, which clears every overlay;
+//     window, which clears every overlay but the lasting away lines;
 //   · in place, the upstream prefix of the next turn is the previous turn's prefix byte
 //     for byte, so the prompt cache holds across it. (Said once and dropped, the cache
 //     would break at that spot on the next turn; it sits near the tail, so that alone

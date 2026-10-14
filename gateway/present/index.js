@@ -22,8 +22,9 @@
 //            lines whose group is switched on)
 //         ②c what he said while she was away (away.js): held lines her history shows
 //            are confirmed; held lines not seen yet go in before her line as his own
-//            words, and this turn's answer starts with the prefix block (on_response
-//            adds it through stream_filter.js; the day store keeps the reply with it).
+//            words, and while wake.away_prefix is on this turn's answer starts with the
+//            prefix block (on_response adds it through stream_filter.js; the day store
+//            keeps the reply with it).
 //            A wake that spoke has already pushed them through Bark (push.js).
 //         ③ assembly: client system + carry + lines from the mark on, overlays replayed
 //         ④ a streamed request asks for usage (stream_filter.js)
@@ -167,7 +168,8 @@ function create_present({
   // ── what he said while she was away: pushed (push.js), then prefixed on her next turn (away.js) ──
   const push = create_push({ data_root, settings, clock, zone, log,
                              bark_base: String(env.LOCI_BARK_BASE || "").trim() || undefined });
-  const away = create_away({ data_root, threads, zone, log });
+  const away = create_away({ data_root, threads, zone, log,
+                             prefix_on: () => settings.load().values.wake.away_prefix !== false });
   let day_close = null;   // built below; wake asks it whether today's due report is written
   const wake = create_wake({ data_root, threads, day_store, settings, prompts, own_turn, clock, zone, log,
                              loci_address: loci, poke_state, on_spoke: (item) => push.on_spoke(item),
@@ -283,8 +285,9 @@ function create_present({
       if (offered) notes.push(`压缩提醒(${offered.line})`);
     }
 
-    // ②c away (away.js): held lines she has seen are confirmed; held lines not yet seen go
-    //    in as his messages before her line, and this turn's answer starts with the prefix
+    // ②c away (away.js): held lines her history shows are confirmed; held lines not yet
+    //    shown go in as his messages before her line, and this turn's answer starts with
+    //    the prefix while wake.away_prefix is on
     let away_prefix = null;
     try {
       const shown = away.prepare({ seen, messages: body.messages, thread, w });

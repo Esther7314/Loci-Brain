@@ -17,7 +17,9 @@
 //   wake       on (off by default: an unattended machine idles until someone turns it
 //              on) · every_min · dnd {on, from, to} · segments {mode: all | only, list} ·
 //              held_cap (null = no limit on how many unanswered things he may say) ·
-//              daily_cap · dry_run · allow_short
+//              daily_cap · dry_run · allow_short · away_prefix (on by default: what he
+//              said while she was away starts his next answer in her client, away.js;
+//              off for a client that shows it some other way)
 //   own        tool_rounds · models (empty = the model of the client's last request)
 //   push       bark (a Bark key or a Bark URL, read from whatever Bark's app offers to
 //              copy: bark_code()) · text (full | notice)
@@ -70,6 +72,7 @@ const DEFAULTS = Object.freeze({
     dnd: { on: true, from: "23:00", to: "08:00" },
     segments: { mode: "all", list: [] },
     held_cap: null, daily_cap: 16, dry_run: false, allow_short: false,
+    away_prefix: true,
   },
   own: { tool_rounds: 6, models: [] },
   push: { bark: "", text: "full" },
@@ -305,6 +308,7 @@ const VALIDATE = {
       daily_cap: int_in(w.daily_cap, 1, 200, "wake.daily_cap"),
       dry_run: bool(w.dry_run, "wake.dry_run"),
       allow_short,
+      away_prefix: bool(w.away_prefix, "wake.away_prefix"),
     };
   },
 

@@ -130,6 +130,23 @@ test("a fork inherits the window when the mark is shared, a fresh one when it is
   assert.strictEqual(parent.window.model, "m");
 });
 
+test("open_next keeps the lasting overlays whose anchor is still raw, and only those", () => {
+  const t = thread_of([u("一"), a("一的回话"), u("二"), a("二的回话"), u("三")], "t_lasting");
+  const w = win.ensure(t, 0);
+  win.add_overlay(w, { kind: "away", anchor: "m_1", place: "before", role: "assistant", text: "折走的那句", turn: "m_1", lasting: true });
+  win.add_overlay(w, { kind: "away", anchor: "m_3", place: "before", role: "assistant", text: "还在的那句", turn: "m_3", lasting: true });
+  win.add_overlay(w, { kind: "away", anchor: "m_3", place: "before", role: "assistant", text: "等确认的那句", turn: "m_3", lasting: false });
+  win.add_overlay(w, { kind: "cue", anchor: "m_5", place: "after", text: "卡三", turn: "m_5" });
+  win.open_next(t, { mark: "m_3", carry: "前情" }, 1);
+  assert.deepStrictEqual(t.window.overlays.map((o) => o.text), ["还在的那句"]);
+  assert.notStrictEqual(t.window.overlays[0], w.overlays[1], "a copy, not the old window's object");
+  const h = [SYS, u("一"), a("一的回话"), u("二"), a("二的回话"), u("三")];
+  assert.deepStrictEqual(win.assemble(h, win.map_ids(h, t.branch, "m_5"), t.window).messages,
+    [SYS, { role: "system", content: "前情" }, a("还在的那句"), u("二"), a("二的回话"), u("三")]);
+  win.open_next(t, { mark: "m_5", carry: "更新的前情" }, 2);
+  assert.deepStrictEqual(t.window.overlays, [], "its anchor folded away: gone");
+});
+
 // ———— the usage chunk ————
 
 async function through_strip(chunks) {

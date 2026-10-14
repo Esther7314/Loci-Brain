@@ -142,6 +142,7 @@ const DEFAULT_VIEW = {
   wake: {
     on: false, every_min: 55, dnd: { on: true, from: "23:00", to: "08:00" },
     segments: { mode: "all", list: [] }, held_cap: null, daily_cap: 16, dry_run: false, allow_short: false,
+    away_prefix: true,
   },
   own: { tool_rounds: 6, models: [], fixed_key_set: true },
   push: { bark_set: false, bark_hint: null, text: "full" },
@@ -256,6 +257,7 @@ test("POST /present: a bad patch → 400 naming the field; present.json untouche
     [{ wake: { every_min: 5 } }, "wake.every_min"],
     [{ wake: { held_cap: 0 } }, "wake.held_cap"],
     [{ wake: { on: "yes" } }, "wake.on"],
+    [{ wake: { away_prefix: "off" } }, "wake.away_prefix"],
     [{ report: { flip: "weekly" } }, "report.flip"],
     [{ push: { bark: "has a space" } }, "push.bark"],
     [{ push: { text: "loud" } }, "push.text"],
