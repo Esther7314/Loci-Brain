@@ -640,8 +640,9 @@ select.btn, .btn.sel { appearance: none; -webkit-appearance: none; padding-right
 .hrow + .hrow { border-top: 1px solid var(--line); }
 .sets .hrow > .item.big.set .txt { padding: var(--s-2) 0; }
 /* a long health message wraps on the right instead of squeezing the row's name */
-.sets .hrow .item.set > .acts { flex-shrink: 1; min-width: 0; max-width: 62%; }
-.sets .hrow .item.set > .acts > .r.wrap { min-width: 0; text-align: right; }
+.sets .hrow > .item.big.set { grid-template-columns: minmax(38%, 1fr) fit-content(62%); }
+.sets .hrow .item.set > .acts { min-width: 0; justify-content: flex-end; }
+.sets .hrow .item.set > .acts > .r.wrap { flex: 0 1 auto; min-width: 0; text-align: right; }
 .sets.setting .steps { margin: var(--s-2) 0 var(--s-3); }
 
 /* a model's form: the name in a pale 168px column, a box with a line under it after it */
@@ -735,6 +736,8 @@ button.inp { cursor: pointer; }
   .tabs { gap: 4px 22px; }
   .duo { grid-template-columns: minmax(0, 1fr); }
   main > .duo { row-gap: var(--s-5); }
+  .sets .hrow .item.set > .acts { max-width: 100%; min-width: 0; margin-left: 0; justify-content: flex-start; }
+  .sets .hrow .item.set > .acts > .r.wrap { text-align: left; }
   .kv { padding-left: 0; justify-content: space-between; }
   .kv .inp { width: 220px; }
 
