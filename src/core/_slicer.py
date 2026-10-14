@@ -94,6 +94,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import threading
 from dataclasses import dataclass
@@ -328,12 +329,55 @@ async def slice_lines(lines: list[dict], *, model: ModelCall,
     return out
 
 
+_OWN_SLICERS: dict[str, object] = {}
+_OWN_SLICERS_LOCK = threading.Lock()
+
+
+def own_slicer_settings(config: Optional[dict]) -> Optional[dict]:
+    """`dehydration.slicer`: the slicer's own endpoint, when it should not share the
+    backfill's. The same keys as `dehydration` (api_format, base_url, model,
+    timeout_seconds, max_tokens, ...), plus `api_key_env` naming the environment variable
+    that holds its key, so the key never sits in config. None when absent or empty: the
+    slicer rides the backfill's endpoint as before."""
+    own = ((config or {}).get("dehydration") or {}).get("slicer")
+    if not isinstance(own, dict) or not own:
+        return None
+    settings = {k: v for k, v in own.items() if k != "api_key_env"}
+    env_name = str(own.get("api_key_env") or "").strip()
+    if env_name:
+        settings["api_key"] = os.environ.get(env_name, "")
+    return settings
+
+
+def _own_slicer(config: dict, settings: dict):
+    """One Dehydrator per distinct slicer setting (its key included, so a changed key
+    builds a new client), kept for the process: building one per batch would open a client
+    and a cache connection each time."""
+    from .dehydrator import Dehydrator
+    key = json.dumps(settings, sort_keys=True, ensure_ascii=False, default=str)
+    with _OWN_SLICERS_LOCK:
+        found = _OWN_SLICERS.get(key)
+        if found is None:
+            found = Dehydrator({"dehydration": settings,
+                                "buckets_dir": config["buckets_dir"],
+                                "human": config.get("human")})
+            _OWN_SLICERS[key] = found
+        return found
+
+
 def side_model(dehydrator, config: Optional[dict],
                max_tokens: int = _SLICER_MAX_TOKENS) -> ModelCall:
-    """The production slicer: the backfill side model's client and key (dehydration: in
-    config), with `dehydration.slicer_model` when it names another model on the same
-    endpoint. The returned callable carries `model_name` for the batch line."""
-    name = str(((config or {}).get("dehydration") or {}).get("slicer_model") or "").strip() or None
+    """The production slicer. With `dehydration.slicer` (own_slicer_settings) it is a
+    client of its own, on that endpoint with that model; otherwise the backfill side
+    model's client and key (dehydration: in config), with `dehydration.slicer_model` when
+    it names another model on the same endpoint. The returned callable carries
+    `model_name` for the batch line."""
+    own = own_slicer_settings(config)
+    if own is not None:
+        dehydrator = _own_slicer(config, own)
+        name = None
+    else:
+        name = str(((config or {}).get("dehydration") or {}).get("slicer_model") or "").strip() or None
 
     async def call(system: str, user: str) -> str:
         if dehydrator is None:

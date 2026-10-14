@@ -104,6 +104,15 @@ dehydration:
   # Empty = the model above.
   # 切宿主交来的一天原文用的副模型：同一个端点和密钥，想换个模型就填名字；留空 = 用上面的 model。
   slicer_model: ""
+  # The slicer on an endpoint of its own (then slicer_model is not read): the same keys as
+  # this section, and api_key_env names the environment variable holding its key.
+  # 切片单独走一个端点（这时不读 slicer_model）：键跟本节一样，api_key_env 写放密钥的环境变量名。
+  # slicer:
+  #   api_format: openai_compat
+  #   base_url: "http://127.0.0.1:3010/api/loci/side/v1"
+  #   api_key_env: LENTO_LOCI_FETCH_TOKEN
+  #   model: sonnet
+  #   timeout_seconds: 300
 
 # --- Sources after the fact / 来源事后挂 ---
 # The host hands over a day's raw lines; a side model slices them, and each slice waits for
