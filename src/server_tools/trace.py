@@ -61,7 +61,9 @@ async def trace(
     cue: Annotated[Optional[dict | str], _PydField(description=(
         'What this entry is waiting for: {"condition": "<the event, one sentence>"}. '
         "Replaces any cue it had; the condition is required. An empty string takes the "
-        'cue off. e.g. cue={"condition": "he is back from the trip"}.'
+        "cue off: do that once what it waited on has happened (the promise itself stays "
+        "open until you resolve it). "
+        'e.g. cue={"condition": "he is back from the trip"}.'
     ))] = None,
     card_of: Annotated[Optional[str], _PydField(description=(
         "Make this mind entry the card of a name (a person in MIND/TRAITS, a thing in "

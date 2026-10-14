@@ -141,8 +141,17 @@ def test_trace_sets_and_clears_a_cue(store):
     assert "已修改" in run(trace_core(bucket_id=bid,
                                       cue={"condition": "he is back from the trip"}))
     assert _meta(store, bid)["cue"]["condition"] == "he is back from the trip"
-    assert "cue 要有 condition" in run(trace_core(bucket_id=bid, cue={"condition": ""}))
+    refused = run(trace_core(bucket_id=bid, cue={"condition": ""}))
+    assert "cue 要有 condition" in refused and 'cue=""' in refused, "the refusal says how to take it off"
     assert "已修改" in run(trace_core(bucket_id=bid, cue=""))
+    assert "cue" not in _meta(store, bid)
+
+
+def test_trace_takes_a_cue_off_when_the_empty_string_comes_quoted(store):
+    # Seen from a model in a client: cue='""', the empty string with its quotes kept.
+    bid = run(rt.bucket_mgr.create("Return the borrowed book.", tags=["t"]))
+    run(trace_core(bucket_id=bid, cue={"condition": "he is back from the trip"}))
+    assert "已修改" in run(trace_core(bucket_id=bid, cue='""'))
     assert "cue" not in _meta(store, bid)
 
 

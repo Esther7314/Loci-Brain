@@ -543,9 +543,13 @@ class _Library:
                 if origin:
                     tail.append(f"来路：{origin}")
 
+                act = f'——等的事到了就 trace(bucket_id="{short_id(bid)}", cue="") 撤掉等待'
+                if is_open_promise(meta):
+                    act += '；答应的事做完了再 status="resolved"'
+
                 def said(q: str, with_age: bool) -> str:
                     bits = parts + ([age] if age and with_age else []) + tail
-                    return f"【相关记忆】{self.label(bid)}（{'；'.join(bits)}）{q} ({short_id(bid)})"
+                    return f"【相关记忆】{self.label(bid)}（{'；'.join(bits)}）{q}{act} ({short_id(bid)})"
                 text, shown = said(quote, True), said("", False)
                 kind = MEMORY
             out.append(Card(kind, self.key(bid, shown), bid, text, matched,

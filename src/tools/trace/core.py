@@ -364,13 +364,19 @@ def _read_bound(c: _Call) -> str | None:
     return None
 
 
+_EMPTY_QUOTED = ('""', "''")
+_CUE_OFF_HINT = '要撤掉已有的 cue，传 cue=""（空字符串）。'
+
+
 def _read_cue(c: _Call) -> str | None:
-    """cue: None leaves it alone, "" takes it off, anything else has to be a whole cue
-    (grow's check, so a cue means the same thing whichever tool wrote it)."""
+    """cue: None leaves it alone, "" takes it off (so does an empty string sent with its
+    quotes, '""'), anything else has to be a whole cue (grow's check, so a cue means the
+    same thing whichever tool wrote it). A refusal for a missing condition also says how
+    a cue is taken off: that is what a cue with an empty condition is usually after."""
     cue = c.cue
     if cue is None:
         return None
-    if isinstance(cue, str) and not cue.strip():
+    if isinstance(cue, str) and (not cue.strip() or cue.strip() in _EMPTY_QUOTED):
         c.cue_update = (None,)
         return None
     from ..grow.rooms_path import check_cue
@@ -381,6 +387,8 @@ def _read_cue(c: _Call) -> str | None:
             pass
     cue_value, cue_err = check_cue(cue)
     if cue_err:
+        if isinstance(cue, dict) and not str(cue.get("condition") or "").strip():
+            return cue_err + _CUE_OFF_HINT
         return cue_err
     c.cue_update = (cue_value,)
     return None
