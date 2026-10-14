@@ -273,6 +273,55 @@ test("regenerating far back (the thread has moved on) forks instead of replacing
   assert.strictEqual(day_store.current(DAY).filter((l) => l.state === "replaced").length, 0);
 });
 
+/** Four rounds, then a regenerate of the second reply: the thread has moved on, so it forks. */
+function rewound_and_regenerated(t) {
+  const s = scene(t);
+  const { threads, clock } = s;
+  const h1 = [SYS, user("你好")];
+  const r1 = send(threads, h1, LONG(1));
+  const h2 = [...h1, assistant(LONG(1)), user("第二句")];
+  const r2 = send(threads, h2, LONG(2));
+  const h3 = [...h2, assistant(LONG(2)), user("第三句")];
+  send(threads, h3, LONG(3));
+  const h4 = [...h3, assistant(LONG(3)), user("第四句")];
+  send(threads, h4, LONG(4));
+  clock.advance(RESEND_WINDOW_MS + 1000);
+  const ALT = `${LONG(2)}（另一个版本）`;
+  const regen = send(threads, h2, ALT);
+  assert.strictEqual(regen.done.forked_from, r1.seen.thread);
+  const original = r1.seen.thread;
+  const fork = regen.done.thread;
+  const snapshot = (id) => threads.get(id).branch.map((e) => e.id);
+  return { ...s, h2, h4, ALT, original, fork, a2: r2.done.wrote,
+           original_before: snapshot(original), fork_before: snapshot(fork), snapshot };
+}
+
+test("after a rewind-and-regenerate fork, going on from the original branch continues the original and leaves the fork alone", (t) => {
+  const { threads, clock, day_store, h4, original, fork, original_before, fork_before, snapshot } = rewound_and_regenerated(t);
+  clock.advance(60 * 1000);
+  const on = send(threads, [...h4, assistant(LONG(4)), user("第五句")]);
+  assert.strictEqual(on.seen.thread, original, "her history is the original branch, all of it");
+  assert.deepStrictEqual(on.seen.revised, [], "no reply of the fork is rewritten");
+  assert.strictEqual(on.seen.forked_from, null);
+  assert.strictEqual(on.seen.wrote.length, 1, "only her new line is written");
+  assert.deepStrictEqual(snapshot(original), [...original_before, on.seen.wrote[0]]);
+  assert.deepStrictEqual(snapshot(fork), fork_before, "the fork is untouched");
+  assert.ok(day_store.read_day(DAY).every((l) => l.rev === 1), "no line got a second revision");
+});
+
+test("after a rewind-and-regenerate fork, going on from the fork continues the fork and leaves the original's reply alone", (t) => {
+  const { threads, clock, day_store, h2, ALT, original, fork, a2, original_before, fork_before, snapshot } = rewound_and_regenerated(t);
+  clock.advance(60 * 1000);
+  const on = send(threads, [...h2, assistant(ALT), user("换个话题")]);
+  assert.strictEqual(on.seen.thread, fork, "her history is the fork's");
+  assert.deepStrictEqual(on.seen.revised, [], "the original's reply is not rewritten");
+  assert.strictEqual(on.seen.forked_from, null);
+  assert.deepStrictEqual(snapshot(fork), [...fork_before, on.seen.wrote[0]]);
+  assert.deepStrictEqual(snapshot(original), original_before, "the original is untouched");
+  assert.strictEqual(day_store.get(a2).text, LONG(2));
+  assert.ok(day_store.read_day(DAY).every((l) => l.rev === 1), "no line got a second revision");
+});
+
 test("tool turn: a request ending in a tool result writes no line; tools are kept by name only", (t) => {
   const { threads, day_store, days_dir } = scene(t);
   const h1 = [SYS, user("上周我们说到哪了")];

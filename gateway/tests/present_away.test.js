@@ -528,7 +528,11 @@ test("switch off: no prefix; his words go upstream before her line on that turn 
   // she goes on from her latest line on the first branch: confirmed again, nothing left held
   g.clock.advance(MIN);
   state.answer = "睡吧。";
+  const lines_before = day_lines(g.data_root).length;
   await g.say([...t4, a("嗯嗯，今天的晚霞真的很少见，红了很久。"), u("困了。")]);
+  assert.deepStrictEqual(day_lines(g.data_root).slice(lines_before).map((l) => [l.role, l.text, l.rev]),
+    [["user", "困了。", 1], ["assistant", "睡吧。", 1]],
+    "the first branch carries on: the fork's reply is not rewritten, the first branch's lines are not written again");
   assert.deepStrictEqual(held_doc(g.data_root).items, []);
   assert.deepStrictEqual(before_her(last_chat(), HER_BACK), a(X));
   assert.strictEqual(count_of(last_chat(), X), 1);

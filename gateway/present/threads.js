@@ -41,9 +41,14 @@
 //       – a resend (below) of the same opening within RESEND_WINDOW_MS
 //       – the earlier messages are exactly a thread made only of the owner's lines that
 //         never got a reply (the request failed upstream; the owner typed again)
-//   · Several threads can hold the anchor (a fork shares its parent's lines). The one
-//     chosen is the one the rest of the history keeps agreeing with, then the one whose
-//     end the history reaches, then the longest agreement, then the most recent.
+//   · Several threads can hold lines of the history (a fork shares its parent's lines).
+//     The one chosen is the one the history agrees with furthest: a thread holding a
+//     later reply of the history beats one that only shares an earlier reply, and among
+//     threads holding the same anchor, the one the rest of the history keeps agreeing
+//     with. A rewind that forked leaves both branches holding the shared lines; the
+//     client's history, not which branch was used last, says which one it is showing.
+//     Ties go to the one whose end the history reaches, then the longest agreement, then
+//     the most recent.
 //
 // ─── Resends, regenerates, forks, tool turns ───
 //   · **Resend**: the same request (same system text, same messages) within
@@ -214,12 +219,14 @@ function create_threads({ dir, day_store, clock, resend_window_ms = RESEND_WINDO
    */
   function find_thread(prior, own) {
     let best = null;
-    // Ranked in this order: how far the rest of the history keeps agreeing with the
-    // branch, how little of the branch is left past where the history ends, how long the
-    // agreement before the anchor is, how recently the thread was used.
+    // Ranked in this order: how far into the history the branch agrees (the anchor, then
+    // the messages after it that keep agreeing), how little of the branch is left past
+    // where the history ends, how long the agreement before the anchor is, how recently
+    // the thread was used. Each thread anchors on the latest reply it holds, so a thread
+    // that only shares an earlier reply ranks below one that holds a later reply.
     const better = (a, b) => {
       if (!b) return true;
-      for (const [x, y] of [[a.walk_ok, b.walk_ok], [-a.left_after, -b.left_after], [a.run, b.run], [a.thread.last_at, b.thread.last_at]]) {
+      for (const [x, y] of [[a.reach, b.reach], [-a.left_after, -b.left_after], [a.run, b.run], [a.thread.last_at, b.thread.last_at]]) {
         if (x !== y) return x > y;
       }
       return false;
@@ -229,7 +236,7 @@ function create_threads({ dir, day_store, clock, resend_window_ms = RESEND_WINDO
       const walk = prior.slice(p + 1).concat(own);
       let walk_ok = 0;
       while (walk_ok < walk.length && s + 1 + walk_ok < branch.length && branch[s + 1 + walk_ok].fp === walk[walk_ok].fp) walk_ok++;
-      const cand = { thread, p, s, run, walk_ok, left_after: branch.length - (s + 1 + walk_ok) };
+      const cand = { thread, p, s, run, reach: p + 1 + walk_ok, left_after: branch.length - (s + 1 + walk_ok) };
       if (better(cand, best)) best = cand;
     };
 
