@@ -608,7 +608,7 @@ button.pill:disabled { cursor: default; }
 /* dream, name, the name card on the phone: the kinds row slides sideways like the header
    (note n11) */
 @media (max-width: 640px) {
-  .tabs.slide { flex-wrap: nowrap; gap: 16px; overflow-x: auto; white-space: nowrap; margin: 0 -20px -2px; padding: 0 20px 10px; scrollbar-width: none; }
+  .tabs.slide { display: flex; flex-wrap: nowrap; gap: 16px; overflow-x: auto; white-space: nowrap; margin: 0 -20px -2px; padding: 0 20px 10px; scrollbar-width: none; }
   .tabs.slide::-webkit-scrollbar { display: none; }
   .item.pending > .acts { flex-wrap: wrap; }
   .item.pending > .acts > .pickw { position: relative; }
