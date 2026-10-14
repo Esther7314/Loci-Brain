@@ -488,11 +488,18 @@ if __name__ == "__main__":
         # LOCI_TRUSTED_PROXY_CIDRS.  Uvicorn's default proxy middleware rewrites
         # scope["client"] before our guards run, which discards the immediate
         # proxy address and makes that trust decision impossible.
+        # On Windows uvicorn picks the Proactor loop, whose accept loop gives up for good
+        # on one OSError (WinError 64: a client dropped the connection while it was being
+        # accepted): the process stays up, the port stops listening, and the background
+        # jobs keep writing the library while a restarted copy writes it too. The
+        # Selector loop has no such accept loop. Loci starts no asyncio subprocess, the
+        # one thing Selector lacks on Windows.
         uvicorn.run(
             _app,
             host=_BIND_HOST,
             port=LOCI_PORT,
             proxy_headers=False,
+            loop="asyncio:SelectorEventLoop" if sys.platform == "win32" else "auto",
         )
     else:
         # stdio: the tools were already folded into mcp at the entry point above, so
