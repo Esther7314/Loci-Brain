@@ -5,9 +5,13 @@
 // runs on its own: the callers (wake.js, day_close.js, pack.js, driven by the one heartbeat)
 // decide when, this file decides how.
 //
+// Where: the upstream URL in force, asked per request (`upstream`, settings.js
+// upstream_base: the panel's, else LOCI_UPSTREAM), so a change on the panel reaches the
+// next request.
+//
 // Which key (the owner's ruling, blueprint §七.1):
-//   · LOCI_UPSTREAM_KEY set → that key, as `Authorization: Bearer <key>`. Works across
-//     restarts.
+//   · a fixed key — the panel's upstream key, else LOCI_UPSTREAM_KEY (`fixed_key`,
+//     settings.js) → that key, as `Authorization: Bearer <key>`. Works across restarts.
 //   · otherwise the credential headers of the owner's latest chat request that upstream
 //     accepted (relay.js calls remember_owner after a 2xx): `authorization`, `x-api-key`,
 //     `api-key`, whichever she sent. A request that carried none still counts — her
@@ -18,6 +22,9 @@
 //     { outcome: "unpaid", reason: "no_key" } without sending anything. blocked() says
 //     the same beforehand (no_key, or no_model when no model can be named), so a caller
 //     on the beat can wait without preparing a turn that cannot go.
+//   · client_credential() hands the remembered headers to upstream.js, which sends Loci's
+//     side-model calls and the upstream test with the same key in force; nothing else
+//     reads them.
 //
 // Which model: the caller's `models`, else present.json `own.models`, else the model of
 // her latest accepted request. The list is a fallback chain: when upstream refuses the
@@ -247,21 +254,24 @@ function add_usage(sum, u) {
 }
 
 /**
- * @param env           LOCI_UPSTREAM_KEY (fixed key), LOCI_HOOK_TOKEN (Loci's door)
+ * @param env           LOCI_HOOK_TOKEN (Loci's door); LOCI_UPSTREAM_KEY when `fixed_key` is not given
  * @param data_root     LOCI_GATEWAY_DATA; the log goes to <data_root>/logs/present.jsonl
- * @param upstream      upstream base URL; requests go where relay.js sends chat requests
+ * @param upstream      upstream base URL, or () → it (read per request); requests go where
+ *                      relay.js sends chat requests
+ * @param fixed_key     () → the fixed key in force ("" = none); defaults to LOCI_UPSTREAM_KEY
  * @param loci_address  Loci's MCP endpoint (LOCI_MCP)
  * @param read_own      () → present.json `own` ({ tool_rounds, models })
  * @param mcp           an MCP client ({ list_tools, call_tool }); built from loci_address when omitted
  * @param alarm_ms      the overall alarm
  */
 function create_own_turn({
-  env = process.env, data_root, upstream, loci_address, read_own = () => ({}),
+  env = process.env, data_root, upstream, fixed_key: read_fixed_key = null, loci_address, read_own = () => ({}),
   clock = { now: () => Date.now() }, zone = undefined, log = console.error,
   mcp = null, alarm_ms = DEFAULT_ALARM_MS,
 }) {
   const log_file = path.join(data_root, "logs", "present.jsonl");
-  const target = String(upstream || "").replace(/\/+$/, "").replace(/\/v1$/, "") + "/v1/chat/completions";
+  const base_of = typeof upstream === "function" ? upstream : () => upstream;
+  const target = () => String(base_of() || "").replace(/\/+$/, "").replace(/\/v1$/, "") + "/v1/chat/completions";
   const hook_token = String(env.LOCI_HOOK_TOKEN || "").trim();
   const loci = mcp || make_client({ address: loci_address, timeout_ms: MCP_CALL_TIMEOUT_MS,
                                     headers: hook_token ? { "x-loci-hook-token": hook_token } : {} });
@@ -279,7 +289,14 @@ function create_own_turn({
     borrowed = { headers: creds, model: typeof model === "string" && model.trim() ? model.trim() : (borrowed?.model || null), at: clock.now() };
   }
 
-  function fixed_key() { return String(env.LOCI_UPSTREAM_KEY || "").trim(); }
+  function fixed_key() {
+    return String((read_fixed_key ? read_fixed_key() : env.LOCI_UPSTREAM_KEY) || "").trim();
+  }
+
+  /** The credential headers of her latest accepted request ({} = she sent none), or null. */
+  function client_credential() {
+    return borrowed ? { ...borrowed.headers } : null;
+  }
 
   function credential() {
     const fixed = fixed_key();
@@ -365,7 +382,7 @@ function create_own_turn({
     else { delete body.tools; delete body.tool_choice; }
     let resp;
     try {
-      resp = await fetch(target, {
+      resp = await fetch(target(), {
         method: "POST",
         headers: { ...cred.headers, "content-type": "application/json", accept: "text/event-stream, application/json" },
         body: JSON.stringify(body), signal,
@@ -635,7 +652,7 @@ function create_own_turn({
     };
   }
 
-  return { run, abort, remember_owner, status, blocked, busy: () => Boolean(current) };
+  return { run, abort, remember_owner, client_credential, status, blocked, busy: () => Boolean(current) };
 }
 
 module.exports = {

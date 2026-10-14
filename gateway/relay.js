@@ -6,7 +6,9 @@
 // Origin, Host). The order inside one request:
 //   ① read the body; parse it only when its Content-Type says JSON
 //   ② the /v1/* guard: anything else is answered 404 here, before anyone is asked anything;
-//      a chat request whose Content-Type is not JSON is a 415, never forwarded unrecorded
+//      no upstream in force is a 503; a chat request whose Content-Type is not JSON is a
+//      415, never forwarded unrecorded. The upstream is read per request
+//      (present/upstream.js), so a URL saved on the panel takes the next request.
 //   ③ a chat request: the present layer (present/index.js) sees the client's messages
 //      untouched, stores the owner's line, asks Loci for this turn's card and poke
 //      delivery for a dream / muse line, and hands back the copy to forward — carry,
@@ -47,10 +49,13 @@ function is_chat(req, body) {
 }
 
 /**
- * @param upstream  upstream base URL, trailing slashes already stripped
+ * @param upstream  upstream base URL, trailing slashes already stripped — or () → it, read
+ *                  per request (present/upstream.js: the panel can change it live); "" =
+ *                  none, and a /v1/* request is answered 503 without going anywhere
  * @param present   optional { prepare, on_response } (present/index.js)
  */
 function create_relay({ upstream, present = null }) {
+  const base_of = typeof upstream === "function" ? upstream : () => upstream;
   return async function handle_relay(req, res, { start }) {
     const raw = await read_body(req).catch(() => Buffer.alloc(0));
     // Only a body that says it is JSON is read as JSON: a text/plain one is what a web
@@ -87,6 +92,19 @@ function create_relay({ upstream, present = null }) {
       res.writeHead(404, { "Content-Type": "application/json; charset=utf-8", "Content-Length": payload.length });
       res.end(payload);
       console.log(`[gateway] ${req.method} ${req.url} → 404（不是 /v1/*，没往上游发）`);
+      return;
+    }
+
+    // No upstream in force (no panel URL, no LOCI_UPSTREAM): said before anything is stored.
+    const base = String(base_of() || "");
+    if (!base) {
+      req.resume();
+      const payload = Buffer.from(JSON.stringify({
+        error: "网关还没有上游：在面板的网关上游里填一个地址，或者启动时设 LOCI_UPSTREAM；这一条没往上游发。",
+      }), "utf8");
+      res.writeHead(503, { "Content-Type": "application/json; charset=utf-8", "Content-Length": payload.length });
+      res.end(payload);
+      console.log(`[gateway] ${req.method} ${route} → 503 (no upstream)`);
       return;
     }
 
@@ -128,7 +146,7 @@ function create_relay({ upstream, present = null }) {
     const headers = { ...req.headers };
     delete headers.host; delete headers["content-length"]; delete headers["accept-encoding"];
 
-    const target = upstream.replace(/\/v1$/, "") + req.url;
+    const target = base.replace(/\/v1$/, "") + req.url;
     const send = (payload) => fetch(target, {
       method: req.method,
       headers: headers,
@@ -199,4 +217,4 @@ function create_relay({ upstream, present = null }) {
   };
 }
 
-module.exports = { create_relay, is_chat };
+module.exports = { create_relay, is_chat, says_json };

@@ -21,15 +21,28 @@
 //   own        tool_rounds · models (empty = the model of the client's last request)
 //   push       bark (a Bark key or a Bark URL, read from whatever Bark's app offers to
 //              copy: bark_code()) · text (full | notice)
+//   upstream   base_url ("" = the env LOCI_UPSTREAM) · key ("" = none set here)
 // The panel shows most of these; compress.context_tokens, daily_cap, dry_run,
 // allow_short, own.* and push.text live only in the file, but POST /present accepts them
 // too — they are validated the same way, and nothing about them is secret.
 //
+// The upstream (upstream.js reads it per request, so a change takes effect on the next
+// request, no restart):
+//   · the URL in force = upstream.base_url when set, else LOCI_UPSTREAM.
+//   · the key in force, for every request the gateway sends on its own account (its own
+//     turns, Loci's side-model calls, the upstream test): the panel key, else
+//     LOCI_UPSTREAM_KEY, else the key the client sent with its latest accepted request
+//     (own_turn.js, memory only). The panel key wins over the env one because it is the
+//     one the owner can change while the gateway runs; clearing it (`key: ""`) falls
+//     back to the env key. A client's chat request is never touched: it goes upstream
+//     with the key the client sent.
+//
 // What never leaves this module as it is stored:
 //   · push.bark — the view carries `bark_set` and a masked tail (`bark_hint`) instead.
-//   · the fixed upstream key — it is not in this file at all. It is the env
-//     LOCI_UPSTREAM_KEY, read-only here; the view says only whether it is set
-//     (`own.fixed_key_set`).
+//   · upstream.key — the view carries `key_set` (a panel key is stored), and for the key
+//     in force where it comes from (`key_from`: panel · env · client, or null when there
+//     is none) and a masked tail (`key_hint`). LOCI_UPSTREAM_KEY is read from the env,
+//     never written here; `own.fixed_key_set` says whether a panel or env key is in force.
 //
 // A file that cannot be read is not an empty file:
 //   · read three times; still unreadable → state "unreadable": compress and report run
@@ -60,10 +73,14 @@ const DEFAULTS = Object.freeze({
   },
   own: { tool_rounds: 6, models: [] },
   push: { bark: "", text: "full" },
+  upstream: { base_url: "", key: "" },
 });
 
 // Keys the view adds; a patch that echoes them back has them dropped, not refused.
-const READ_ONLY = { push: ["bark_set", "bark_hint"], own: ["fixed_key_set"] };
+const READ_ONLY = {
+  push: ["bark_set", "bark_hint"], own: ["fixed_key_set"],
+  upstream: ["env_base_url", "in_force", "key_set", "key_hint", "key_from"],
+};
 const SECTIONS = Object.keys(DEFAULTS);
 const NESTED = { wake: ["dnd", "segments"] };
 const READ_TRIES = 3;
@@ -177,6 +194,49 @@ function bark_hint(code) {
   return tail(code);
 }
 
+const MAX_UPSTREAM_URL = 512;
+const MAX_UPSTREAM_KEY = 512;
+
+/** An upstream base URL, trailing slashes off; "" stays "" (use LOCI_UPSTREAM). Throws the field's error. */
+function upstream_url(v, field = "upstream.base_url") {
+  if (typeof v !== "string") throw bad(field, "要填上游的地址（一串网址），或者留空用 LOCI_UPSTREAM");
+  const s = v.trim().replace(/\/+$/, "");
+  if (!s) return "";
+  let u;
+  try { u = new URL(s); } catch { u = null; }
+  // the relay appends the request's own path and query, so the base carries neither
+  if (!u || !/^https?:$/.test(u.protocol) || !u.hostname || u.username || u.password
+      || u.search || u.hash || s.length > MAX_UPSTREAM_URL) {
+    throw bad(field, `要填 http(s) 开头的地址，比如 https://api.deepseek.com/v1（不带账号密码、? 和 #，最长 ${MAX_UPSTREAM_URL} 个字符）`);
+  }
+  return s;
+}
+
+/** An upstream key as it goes after `Bearer `; "" clears it. Throws the field's error. */
+function upstream_key(v, field = "upstream.key") {
+  if (typeof v !== "string") throw bad(field, "要填一把 key（一串字符），或者传空的清掉");
+  const s = v.trim().replace(/^bearer\s+/i, "");
+  if (!s) return "";
+  if (s.includes("•")) throw bad(field, "这是遮住的样子，不是 key：要换就把整把 key 重新粘进来");
+  if (!/^[\x21-\x7e]+$/.test(s) || s.length > MAX_UPSTREAM_KEY) {
+    throw bad(field, `key 里不能有空格、中文或别的看不见的字符，最长 ${MAX_UPSTREAM_KEY} 个字符`);
+  }
+  return s;
+}
+
+/** What a view shows of a key: the last two characters behind a mask; null for none. */
+function key_hint(key) {
+  if (key === null || key === undefined || key === "") return null;
+  const s = String(key);
+  return s.length > 4 ? `••••${s.slice(-2)}` : "••••";
+}
+
+/** LOCI_UPSTREAM as the gateway uses it (trailing slashes off), or null when unset. */
+function env_base_url(env) {
+  const s = String(env.LOCI_UPSTREAM || "").trim().replace(/\/+$/, "");
+  return s || null;
+}
+
 // ———— Section validators: (merged section, touched(path)) → normalized section ————
 // `touched` says whether the patch named a key, so an ordering error points at the
 // field the owner just changed rather than its unchanged neighbour.
@@ -262,6 +322,10 @@ const VALIDATE = {
   push(p) {
     return { bark: bark_code(p.bark, "push.bark"), text: one_of(p.text, ["full", "notice"], "push.text") };
   },
+
+  upstream(u) {
+    return { base_url: upstream_url(u.base_url), key: upstream_key(u.key) };
+  },
 };
 
 /** Refuse what a patch may not name: unknown sections or keys, wrong shapes. Returns it without the read-only echoes. */
@@ -298,10 +362,16 @@ function paths_of(obj, prefix = "") {
 }
 
 /**
- * @param file  <LOCI_GATEWAY_DATA>/present.json
- * @param env   for LOCI_UPSTREAM_KEY (whether a fixed key is set; its value is never read out)
+ * @param file        <LOCI_GATEWAY_DATA>/present.json
+ * @param env         LOCI_UPSTREAM and LOCI_UPSTREAM_KEY (the env side of the upstream; the
+ *                    key's value is never read out)
+ * @param env_base    the URL the gateway was started with, when the caller has it apart
+ *                    from env (present/index.js); defaults to LOCI_UPSTREAM
+ * @param client_key  () → the key the client sent with its latest accepted request, ""
+ *                    when it sent none, null when no request was remembered yet
+ *                    (own_turn.js); only its source and masked tail reach the view
  */
-function create_settings({ file, env = process.env }) {
+function create_settings({ file, env = process.env, env_base = env_base_url(env), client_key = () => null }) {
   function read_file() {
     let last_err = null;
     for (let i = 0; i < READ_TRIES; i++) {
@@ -342,14 +412,43 @@ function create_settings({ file, env = process.env }) {
     return { state: errors.length ? "invalid" : got.state, values, errors, bad_sections };
   }
 
+  /** The upstream URL in force: the panel's, else LOCI_UPSTREAM, else "". */
+  function upstream_base(values = load().values) {
+    return values.upstream.base_url || env_base || "";
+  }
+
+  /** The fixed key in force, { key, from: "panel" | "env" }, or null (see the header). */
+  function fixed_key(values = load().values) {
+    if (values.upstream.key) return { key: values.upstream.key, from: "panel" };
+    const from_env = String(env.LOCI_UPSTREAM_KEY || "").trim();
+    return from_env ? { key: from_env, from: "env" } : null;
+  }
+
+  function upstream_view(values) {
+    const fixed = fixed_key(values);
+    let client = null;
+    if (!fixed) {
+      try { client = client_key(); } catch { client = null; }
+    }
+    return {
+      base_url: values.upstream.base_url,
+      env_base_url: env_base,
+      in_force: upstream_base(values) || null,
+      key_set: Boolean(values.upstream.key),
+      key_hint: fixed ? key_hint(fixed.key) : key_hint(client),
+      key_from: fixed ? fixed.from : (client === null || client === undefined ? null : "client"),
+    };
+  }
+
   /** The settings as GET /present shows them: no Bark code, no key. */
   function view(values = load().values) {
     return {
       compress: values.compress,
       report: values.report,
       wake: values.wake,
-      own: { ...values.own, fixed_key_set: Boolean(String(env.LOCI_UPSTREAM_KEY || "").trim()) },
+      own: { ...values.own, fixed_key_set: Boolean(fixed_key(values)) },
       push: { bark_set: Boolean(values.push.bark), bark_hint: bark_hint(values.push.bark), text: values.push.text },
+      upstream: upstream_view(values),
     };
   }
 
@@ -396,7 +495,9 @@ function create_settings({ file, env = process.env }) {
     return got.values.wake;
   }
 
-  return { file, load, view, patch, for_wake };
+  return { file, load, view, patch, for_wake, upstream_base, fixed_key };
 }
 
-module.exports = { create_settings, DEFAULTS, bark_code, bark_hint, SettingsError };
+module.exports = {
+  create_settings, DEFAULTS, bark_code, bark_hint, upstream_url, upstream_key, key_hint, env_base_url, SettingsError,
+};

@@ -127,7 +127,7 @@ const WHY_WORDS = {
   state_unreadable: "唤醒的账（counters.json）读不出来，先不叫",
   held_unreadable: "攥着的话（held.json）读不出来，先不叫",
   held_cap: "他说的话 ta 还没回的已经到上限了，等 ta 开口再叫",
-  no_key: "还没有钥匙：网关重启后要等 ta 先说一句（或者配 LOCI_UPSTREAM_KEY）",
+  no_key: "还没有钥匙：网关重启后要等 ta 先说一句（或者在网关上游里填一把固定的 key，或者配 LOCI_UPSTREAM_KEY）",
   no_thread: "还没有能接着说下去的对话",
   cap: "今天叫的次数到上限了，明天再叫",
   dnd: "在免打扰时段里，等免打扰结束",

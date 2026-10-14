@@ -196,6 +196,32 @@ test("the borrowed key and model: her latest accepted request's credential and m
   assert.deepStrictEqual([res3.outcome, res3.reason], ["unpaid", "no_model"], "a fixed key with no model anywhere sends nothing");
 });
 
+test("the panel's upstream: URL and fixed key are read per run; the client's credential is handed out as a copy", async () => {
+  let fixed = "sk-panel-fixed-31";
+  let base = "http://127.0.0.1:9/v1";   // nothing listens: switched below before any run
+  const r = create_own_turn({
+    env: { LOCI_HOOK_TOKEN: HOOK, LOCI_UPSTREAM_KEY: FIXED }, data_root: fresh_dir(), upstream: () => base,
+    fixed_key: () => fixed, loci_address: loci.url, read_own: () => ({ tool_rounds: 6, models: ["own-a"] }),
+    log: (s) => logged.push(s),
+  });
+  assert.strictEqual(r.client_credential(), null, "nothing remembered yet");
+  r.remember_owner({ headers: { authorization: `Bearer ${KEY}` }, model: "her-model" });
+  const copy = r.client_credential();
+  copy.authorization = "tampered";
+  assert.deepStrictEqual(r.client_credential(), { authorization: `Bearer ${KEY}` });
+
+  base = up.url;
+  up.plan(() => ({ text: "在的。" }));
+  const res = await r.run({ kind: "report", messages: MSG });
+  assert.strictEqual(res.outcome, "ok");
+  assert.strictEqual(up.got[0].headers.authorization, `Bearer sk-panel-fixed-31`, "the fixed key given wins over env and client");
+  fixed = "";
+  up.plan(() => ({ text: "在的。" }));
+  const res2 = await r.run({ kind: "report", messages: MSG });
+  assert.strictEqual(res2.key, "borrowed", "no fixed key: the client's");
+  assert.strictEqual(up.got[0].headers.authorization, `Bearer ${KEY}`);
+});
+
 test("a request that carried no key still lends: her upstream takes none, and own turns go without one", async () => {
   up.plan(() => ({ text: "好。" }));
   const r = runner();

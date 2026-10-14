@@ -121,13 +121,15 @@ const FORWARDED_CREDENTIALS = ["authorization", "x-api-key", "api-key"];
 
 /**
  * @param data_root      <LOCI_GATEWAY_DATA>; the cache lives at context_windows.json in it
- * @param upstream       upstream base URL (…/v1), for the background model-list fetch
+ * @param upstream       upstream base URL (…/v1), or () → it (read per fetch: the panel can
+ *                       change it while the gateway runs), for the background model-list fetch
  * @param read_settings  () → present.json as an object (missing keys are fine)
  * @param clock          { now() }
  * @param log            where a failed fetch is reported
  */
 function create_context_windows({ data_root, upstream = "", read_settings = () => ({}), clock, log = () => {} }) {
   const file = path.join(data_root, "context_windows.json");
+  const base_of = typeof upstream === "function" ? upstream : () => upstream;
   let state = null;
   let fetching = false;
 
@@ -235,14 +237,15 @@ function create_context_windows({ data_root, upstream = "", read_settings = () =
   function ensure(model, headers = {}) {
     const s = load();
     const name = String(model || "");
-    if (!name || !upstream || fetching) return false;
+    const upstream_now = String(base_of() || "");
+    if (!name || !upstream_now || fetching) return false;
     if (s.provider[name]) return false;
     if (s.list_fetched_at && clock.now() - s.list_fetched_at < LIST_COOLDOWN_MS) return false;
     const auth = {};
     for (const key of FORWARDED_CREDENTIALS) if (headers[key]) auth[key] = headers[key];
     fetching = true;
     s.list_fetched_at = clock.now();   // a failed fetch also waits out the cooldown: no knocking every turn
-    const url = `${upstream.replace(/\/v1$/, "")}/v1/models`;
+    const url = `${upstream_now.replace(/\/v1$/, "")}/v1/models`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), LIST_TIMEOUT_MS);
     fetch(url, { method: "GET", headers: { Accept: "application/json", ...auth }, signal: controller.signal })

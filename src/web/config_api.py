@@ -17,6 +17,11 @@ the new ones.
 - /api/test/dehydration, /api/test/embedding: connectivity self-tests for compression and
   vectorization.
 - /api/models: list the models available from the target provider.
+
+The side model's `api_format: "gateway"` ("same as the gateway", core/gateway_side): its
+calls go through the gateway to the gateway's upstream with the key the gateway holds.
+`base_url` and `api_key` are then neither required nor used (they stay saved for switching
+back); `model` is required. The test and the model list go through the gateway too.
 - /api/loci/ollama (GET): whether a local Ollama answers and which models it holds
   (core/ollama_local.detect: a short timeout, nothing pulled).
 
@@ -511,6 +516,17 @@ def register(mcp) -> None:
                     return JSONResponse(
                         {"error": "dehydration.runs_on must be 'cloud' or 'local'"},
                         status_code=400)
+                # "Same as the gateway": stored in its one spelling, and only with a model
+                # (the one setting of Loci's own on that road).
+                if _dehy.is_gateway(dehy_payload.get("api_format")):
+                    dehy_payload["api_format"] = _dehy.GATEWAY_FORMAT
+                saved = sh.config.get("dehydration")
+                after = {**(saved if isinstance(saved, dict) else {}), **dehy_payload}
+                if (_dehy.is_gateway(after.get("api_format")) and not _dehy.runs_local(after)
+                        and not str(after.get("model") or "").strip()):
+                    return JSONResponse(
+                        {"error": "副模型选了「跟网关一样」，要填模型名（dehydration.model）"},
+                        status_code=400)
             for section in ("dehydration", "embedding"):
                 payload = body.get(section)
                 if isinstance(payload, dict) and "api_key" in payload and (
@@ -661,7 +677,8 @@ def register(mcp) -> None:
                 live_fmt, live_base, live_key)
             sh.dehydrator.runs_on = "local" if _dehy.runs_local(dehy) else "cloud"
             sh.dehydrator.thinking = _dehy.thinking_on(dehy)
-            sh.dehydrator.api_available = bool(sh.dehydrator.api_key)
+            sh.dehydrator.api_available = _dehy.available(live_fmt, live_key)
+            sh.dehydrator._config = sh.config
             # Rebuild OpenAI-compat client whenever key or url changes
             if sh.dehydrator.api_available and sh.dehydrator.api_format == "openai_compat":
                 sh.dehydrator.client = _dehy.openai_client(
@@ -1007,6 +1024,19 @@ def register(mcp) -> None:
         dehyd = sh.config.get("dehydration", {})
         model = dehyd.get("model", "")
         _fmt, base_url, api_key = _dehy.endpoint(dehyd, sh.config)
+        if _fmt == _dehy.GATEWAY_FORMAT:
+            # Through the gateway, with the key it holds: one tiny call proves the road.
+            from core import gateway_side as _gw
+            if not str(model or "").strip():
+                return JSONResponse({"ok": False, "error": "副模型选了「跟网关一样」，要先填模型名"},
+                                    status_code=400)
+            try:
+                await _gw.chat(sh.config, {"model": model, "max_tokens": 5,
+                                           "messages": [{"role": "user", "content": "hi"}]},
+                               timeout=15)
+            except _gw.GatewaySideError as e:
+                return JSONResponse({"ok": False, "error": str(e)[:300]})
+            return JSONResponse({"ok": True, "message": "经网关调通 ✓"})
         if not _dehy.runs_local(dehyd):
             base_url = dehyd.get("base_url", "")
         if not api_key:
@@ -1070,7 +1100,8 @@ def register(mcp) -> None:
     # =============================================================
     # /api/models — list the models a provider offers, for the panel's model picker
     # POST Body: {api_key, base_url, api_format}
-    # Supports three formats: openai_compat / gemini / anthropic
+    # Supports four formats: openai_compat / gemini / anthropic / gateway (listed through
+    # the gateway, with the key it holds; api_key and base_url are not read)
     # =============================================================
     @mcp.custom_route("/api/models", methods=["POST"])
     async def api_list_models(request: Request) -> Response:
@@ -1107,6 +1138,14 @@ def register(mcp) -> None:
             api_key = sh.config.get("embedding", {}).get("api_key", "")
             if not base_url:
                 base_url = sh.config.get("embedding", {}).get("base_url", "")
+
+        from core import dehydrator as _dehy
+        if _dehy.is_gateway(api_format):
+            from core import gateway_side as _gw
+            try:
+                return JSONResponse({"ok": True, "models": await _gw.list_models(sh.config)})
+            except _gw.GatewaySideError as e:
+                return JSONResponse({"ok": False, "error": str(e)[:300]})
 
         if not api_key:
             return JSONResponse({"ok": False, "error": "需要 api_key（请先保存 API Key 或在输入框填入）"}, status_code=400)

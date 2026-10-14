@@ -51,6 +51,13 @@
 //       become what the gateway's own turns borrow (own_turn.js; memory only).
 //   owner_arrived()
 //       Called first thing for every chat request: a wake in flight is aborted (wake.js).
+//   upstream
+//       The upstream in force (upstream.js): base() for the relay, per request; test() for
+//       /present/upstream-test; handle_side for /loci/upstream/* (Loci's side model).
+//
+// The URL and key in force are present.json's `upstream` section over the env
+// (settings.js); the relay, the own turns, the window-size fetch and the side door all
+// read them per request, so a change saved on the panel needs no restart.
 //
 // heartbeat_tasks is what server.js hangs on its one beat, in order: pack retries
 // (pack.js), the night (day_close.js: hand-off, day report, flip), wake (wake.js), push
@@ -97,6 +104,7 @@ const { with_usage, create_sse_filter, create_json_filter, split_summary,
         create_sse_prefix, create_json_prefix } = require("./stream_filter.js");
 const { estimate_prompt, measure } = require("./fill.js");
 const { create_own_turn } = require("./own_turn.js");
+const { create_upstream, key_in } = require("./upstream.js");
 const { create_wake } = require("./wake.js");
 const { create_push } = require("./push.js");
 const { create_away } = require("./away.js");
@@ -116,7 +124,8 @@ const POKE_TIMEOUT_MS = 8000;
 /**
  * @param env                     process.env (LOCI_TZ, LOCI_GATEWAY_DAYS, LOCI_HOOK_TOKEN, LOCI_CUE_TIMEOUT_MS …)
  * @param data_root               LOCI_GATEWAY_DATA
- * @param upstream                upstream base URL (for the provider's model list)
+ * @param upstream                LOCI_UPSTREAM: the upstream base URL when the panel names none
+ *                                (settings.js `upstream`; read per request through upstream.js)
  * @param loci                    Loci's MCP address; its REST routes hang off the same root
  * @param idle_threshold_minutes  poke delivery's idle gate
  * @param log_path                memory-actions.jsonl (shared with health.js)
@@ -133,20 +142,28 @@ function create_present({
     : path.join(data_root, "host");
   const day_store = create_day_store({ dir: path.join(host_dir, "days"), clock, zone });
   const threads = create_threads({ dir: path.join(data_root, "threads"), day_store, clock });
-  const settings = create_settings({ file: path.join(data_root, "present.json"), env });
+  // own_turn is built below; the settings view asks it lazily for the client's key (source and masked tail only)
+  let own_turn = null;
+  const settings = create_settings({ file: path.join(data_root, "present.json"), env,
+    env_base: String(upstream || "").trim().replace(/\/+$/, "") || null,
+    client_key: () => key_in(own_turn ? own_turn.client_credential() : null) });
   const prompts = create_prompts({ file: path.join(data_root, "prompts.json"), clock, zone });
   const name = String(env.LOCI_GATEWAY_NAME || "").trim() || "gateway";
   const asked_timeout = Number(env.LOCI_CUE_TIMEOUT_MS);
   const cue_timeout_ms = Number.isFinite(asked_timeout) && asked_timeout > 0 ? asked_timeout : CUE_TIMEOUT_MS;
   const cue = create_cue({ address: loci, hook_token: String(env.LOCI_HOOK_TOKEN || "").trim(),
                            timeout_ms: cue_timeout_ms, log_path });
-  const windows = create_context_windows({ data_root, upstream, clock, log,
+  const upstream_base = () => settings.upstream_base();
+  const windows = create_context_windows({ data_root, upstream: upstream_base, clock, log,
     read_settings: read_settings || (() => settings.load().values) });
   const poke_state = path.join(data_root, "state", "poke-window.json");
   const delivering = new Set();
   // the gateway's own paid turns; the relay hands it each accepted request's credential (memory only)
-  const own_turn = create_own_turn({ env, data_root, upstream, loci_address: loci, clock, zone, log,
-                                     read_own: () => settings.load().values.own });
+  own_turn = create_own_turn({ env, data_root, upstream: upstream_base, loci_address: loci, clock, zone, log,
+                               fixed_key: () => settings.fixed_key()?.key || "",
+                               read_own: () => settings.load().values.own });
+  // the upstream in force, its test, and the side door for Loci's side model (upstream.js)
+  const upstream_in_force = create_upstream({ env, settings, own_turn, context_windows: windows });
   // ── what he said while she was away: pushed (push.js), then prefixed on her next turn (away.js) ──
   const push = create_push({ data_root, settings, clock, zone, log,
                              bark_base: String(env.LOCI_BARK_BASE || "").trim() || undefined });
@@ -539,6 +556,7 @@ function create_present({
     prepare,
     on_response,
     remember_owner: own_turn.remember_owner,
+    upstream: upstream_in_force,
     owner_arrived() { wake.owner_arrived(); day_close.owner_arrived(); },
     own_turn,
     wake,

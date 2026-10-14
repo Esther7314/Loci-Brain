@@ -24,9 +24,18 @@
 //                            outcome: { ok: true, status: 200 } · { ok: false, status:
 //                            "error", error: "超时：Bark 没回" } · { ok: false, status:
 //                            "skipped_config_missing", … }, plus endpoint_redacted (masked)
+//   POST /present/upstream-test  GET <upstream in force>/v1/models with the key in force
+//                            (upstream.js test), answered 200 with the outcome:
+//                            { ok: true, status: 200, models: [ids…] } · { ok: false,
+//                            status: <HTTP status> | "no_upstream" | "no_key" | "error", error }
 //   GET  /present/prompts    { items: [card…], error? }  (prompts.js)
 //   POST /present/prompts    { key, text } | { key, reset: true } → { ok: true, item }
 // Any other path or method under /present is a 404.
+//
+// settings.upstream is the upstream in force (settings.js): base_url (the panel's, "" = use
+// LOCI_UPSTREAM) · env_base_url · in_force · key_set (a panel key is stored) · key_from
+// (panel · env · client, null = no key yet) · key_hint (the key in force, masked). A patch
+// takes `upstream: { base_url, key }`; `key: ""` clears the panel key; the key never comes back.
 //
 // status.compress is the most recently active conversation's window, from
 // present/index.js window_status(): thread, fill_pct, used_tokens, estimated, kept_raw
@@ -65,10 +74,11 @@ const NOT_BUILT = { ok: false, state: "not_built" };
  * @param push             push.js instance (status.push is its status(): state, last {at, ok, status}, retrying)
  * @param report_now       present/index.js report_now (kind → { status, body })
  * @param report_status    present/index.js report_status (status.report)
+ * @param upstream         upstream.js instance (the upstream test)
  */
 function create_present_api({
   name, settings, prompts, threads, window_status, context_windows, wake, compress_now, report_now, report_status,
-  push = null,
+  push = null, upstream = null,
 }) {
   function latest_thread() {
     let best = null;
@@ -151,6 +161,12 @@ function create_present_api({
       req.resume();
       if (!push) return send_json(res, 501, { ...NOT_BUILT, error: "推送还没接上" });
       return send_json(res, 200, await push.test());
+    },
+    // ── the upstream in force (upstream.js): one /models request, its outcome as it is ──
+    "POST /present/upstream-test": async (req, res) => {
+      req.resume();
+      if (!upstream) return send_json(res, 501, { ...NOT_BUILT, error: "上游测试还没接上" });
+      return send_json(res, 200, await upstream.test());
     },
     "GET /present/prompts": async (req, res) => { req.resume(); send_json(res, 200, prompts.cards()); },
     "POST /present/prompts": async (req, res) => {

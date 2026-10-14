@@ -29,7 +29,8 @@ Loci 的核心**不主动说话** —— MCP 是被动协议，工具没被调�
 不是 `/v1/*` 的路径一律本地 404，不往上游发。
 
 📌 API key 还是客户端的：原样转给上游，**不存、不写日志**。网关自己那一轮（唤醒、日报、强制打包）
-缺省借你最近一次请求带来的那把，只放在内存里（见三·1 的 `LOCI_UPSTREAM_KEY`）。
+和 Loci 副模型「跟网关一样」的那几下，用的是**网关手里那把**：面板「网关上游」里填的固定 key →
+没填就是 `LOCI_UPSTREAM_KEY` → 都没有就借你最近一次请求带来的那把（只放在内存里）。见二·4 末尾。
 
 ### 平常一轮长什么样
 
@@ -70,7 +71,7 @@ node gateway/server.js
 
 | 环境变量 | 缺省 | 干什么 |
 |---|---|---|
-| `LOCI_UPSTREAM` | 无，**必填** | 真正的模型在哪，OpenAI 兼容地址（`…/v1`）。不设起不来 |
+| `LOCI_UPSTREAM` | 无 | 真正的模型在哪，OpenAI 兼容地址（`…/v1`）。面板「网关上游」里填了地址就以面板的为准（随时改、下一个请求就生效）；清空就回到这个。两边都没有：设了 `LOCI_GATEWAY_TOKEN` 的照样起来，`/v1/*` 回 503 等你在面板里填；连 `LOCI_GATEWAY_TOKEN` 也没设就起不来 |
 | `PORT` | `3100` | 网关听哪个端口。`0` = 随便挑一个，启动第一行告诉你挑了哪个 |
 | `LOCI_GATEWAY_BIND` | `127.0.0.1` | 网关听哪个地址。不是回环地址（比如 `0.0.0.0`，让手机从局域网连）时**必须**同时设 `LOCI_GATEWAY_PASSPHRASE`，不然起不来 |
 | `LOCI_GATEWAY_PASSPHRASE` | 无 | 非回环绑定时，**每条路径**前面都要带 `/<口令>/`（`/<口令>/v1/…`、`/<口令>/present`、`/<口令>/loci/source`、`/<口令>/health`），没带一律 404。16–128 个字母、数字或 `. _ ~ -`。进门就摘掉，不往上游发、不进日志。回环绑定时不用带；设了也认带口令的路径 |
@@ -78,9 +79,9 @@ node gateway/server.js
 | `LOCI_GATEWAY_HOSTS` | 无 | 回环绑定时，除了 `localhost` / `127.x.x.x` / `[::1]` / `*.localhost`，还认哪些名字寄来的请求（hosts 文件里自己起的名、本机的反向代理），逗号隔开。别的名字一律 403（防 DNS 重绑定）。非回环绑定时不看这个，靠口令 |
 | `LOCI_MCP` | `http://127.0.0.1:18002/mcp` | Loci 在哪（`/mcp` 结尾；REST 口挂在同一个根上） |
 | `LOCI_HOOK_TOKEN` | 无 | **网关 → Loci** 的钥匙：问卡片、取梦、夜里交原话、自己那一轮调 Loci 工具时，放在 `x-loci-hook-token` 请求头里（不进 URL）。值 = Loci 那边 `hosts.gateway.token_env` 指的那个环境变量的值 |
-| `LOCI_GATEWAY_TOKEN` | 无 | **Loci → 网关** 的钥匙：`/present/*`（面板 present 页经 Loci 代问）和 `/loci/source`（Loci 来取原话）只认 `Authorization: Bearer <它>`，错了 401。**不设 = 这两族口关着**：`/present/*` 回 404，`/loci/source` 回 503（Loci 当「暂时取不到」，退回记忆自己的正文）。值 = Loci 那边 `hosts.gateway.fetch_token_env` 指的那个环境变量的值 |
+| `LOCI_GATEWAY_TOKEN` | 无 | **Loci → 网关** 的钥匙：`/present/*`（面板 present 页经 Loci 代问）、`/loci/source`（Loci 来取原话）和 `/loci/upstream/*`（Loci 的副模型走网关，二·4 末尾）只认 `Authorization: Bearer <它>`，错了 401。**不设 = 这几族口关着**：`/present/*`、`/loci/upstream/*` 回 404，`/loci/source` 回 503（Loci 当「暂时取不到」，退回记忆自己的正文）。值 = Loci 那边 `hosts.gateway.fetch_token_env` 指的那个环境变量的值 |
 | `LOCI_GATEWAY_NAME` | `gateway` | 这个网关在 Loci 那边叫什么：`/present` 回执里的 `host`，原话来源的 `instance`。跟 Loci `hosts:` 里那个宿主的名字写成一样 |
-| `LOCI_UPSTREAM_KEY` | 无 | 网关自己那一轮（唤醒、日报、强制打包）用的上游钥匙，可以是一把限额的。**不设**就借你最近一次请求带来的那把（只在内存里），网关重启后要等你先说一句才能唤醒 / 写日报。只从环境变量读，面板只看得到「设了没有」 |
+| `LOCI_UPSTREAM_KEY` | 无 | 网关自己那一轮（唤醒、日报、强制打包）和 Loci 副模型走网关时用的上游钥匙，可以是一把限额的。面板「网关上游」里填了固定 key 就**以面板的为准**（面板那把随时能换；清空就回到这把）。两边都没有就借你最近一次请求带来的那把（只在内存里），网关重启后要等你先说一句才能唤醒 / 写日报 / 走副模型。只从环境变量读，面板只看得到打码的尾巴 |
 | `LOCI_GATEWAY_DATA` | `gateway/data` | 网关的**私账**目录：设置、窗口状态（含压缩文）、日志。见第八节 |
 | `LOCI_GATEWAY_DAYS` | `<LOCI_GATEWAY_DATA>/host` | 原话（`days/<日期>.jsonl`）和日报（`reports/<日期>.md`）落哪。设成 `<buckets>/_hosts/<LOCI_GATEWAY_NAME>` 才会跟着 Loci 的导出走；不设就留在网关自己的目录里，不碰任何库 |
 | `LOCI_TZ` | 本机时区 | 「一天」按哪个时区切（IANA 名，如 `Asia/Shanghai`）。日报时段、免打扰、唤醒时间段都按它。认不出的名字退回本机时区，启动时打一行 ⚠️ |
@@ -226,7 +227,27 @@ wakeup 页（他自己的时间）：
 
 三张提示词卡：压缩和日报的在 present 页，点那一块标题旁边的「提示词」打开；唤醒的在 wakeup 页那一块下面。改了存网关，随时能恢复缺省。
 
-设置存在网关的 `<LOCI_GATEWAY_DATA>/present.json`，下一拍（一分钟内）生效，不用重启。
+**网关上游**（上游在哪、用哪把 key）：
+
+- **地址**（`upstream.base_url`）：OpenAI 兼容地址，写到 `…/v1`。空着 = 用启动时的 `LOCI_UPSTREAM`。
+  存了**下一个请求就走新的**（你的聊天、网关自己那一轮、副模型都是），不用重启。
+- **固定 key**（`upstream.key`）：只写不读，存了以后只看得到打码的尾巴（`••••ab`）；传空的就清掉。
+  现在用的是哪把（`key_from`）：`panel` 面板这把 → `env` 没填就是 `LOCI_UPSTREAM_KEY` →
+  `client` 都没有就是你最近一次聊天带来的那把（网关重启后没有，要等你先说一句）。
+  这把 key 只给网关替你发的请求用；你客户端自己的聊天照旧带客户端那把。
+- **测试**（`POST /present/upstream-test`）：拿现在这把 key 问一次上游的 `/v1/models`，回
+  `{ok, status, models?, error?}`。`status` 是上游回的 HTTP 状态码，或者 `no_upstream`（没地址）·
+  `no_key`（还没 key，没问）· `error`（连不上 / 4 秒没回）。
+
+**Loci 的副模型「跟网关一样」**：Loci 设置页「副模型」（打标、切段、摘要、织梦用的那个）的格式选 `gateway`，
+它就不用自己的地址和 key 了：每一下都经网关的 `/loci/upstream/v1/…` 送到上面那个上游、用上面那把 key，
+只有模型名是它自己的（必填）。Loci 凭 `hosts.gateway` 那个宿主找到网关（`present_url` + `fetch_token_env`，
+跟 present 页同一条路）。这扇门是**纯转发**：不进对话、不记原话、不贴卡片、不算水位、不打断唤醒，请求体一个字不改，
+发上游的只有 content-type、accept 和那把 key。网关还没有 key（刚重启、谁都没说话、面板也没填）时，
+副模型那一下失败，Loci 那边看到的是「网关还没有 key：等 ta 先说一句，或者在网关上游里填一把固定的 key」，
+跟别的副模型失败一样，什么都不半截写进去。
+
+设置存在网关的 `<LOCI_GATEWAY_DATA>/present.json`，下一拍（一分钟内）生效，不用重启（网关上游是下一个请求就生效）。
 面板上没有的几项（`compress.context_tokens` 上下文窗口多大，不填就是网关自己认，见第三节 ·
 `wake.daily_cap` 每天最多叫几次 · `wake.dry_run` 只记账不真叫 ·
 `wake.allow_short` 允许间隔小于 15 分钟 · `own.tool_rounds` · `own.models` 模型降级链 ·
@@ -259,7 +280,7 @@ curl http://127.0.0.1:3100/health
 - 自动唤醒缺省关。打开之前想清楚：每醒一次就是一整轮的钱；每天最多 16 次。
 - 他压出来的那段字你永远看不到，这是故意的。
 - 夜里电脑要开着，日报在 4–8 点、你静够 30 分钟之后写。
-- 网关重启后，唤醒和日报要等你先说一句（借你那把钥匙）；不想等就配 `LOCI_UPSTREAM_KEY`。
+- 网关重启后，唤醒、日报和走网关的副模型要等你先说一句（借你那把钥匙）；不想等就在面板「网关上游」里填一把固定 key，或者配 `LOCI_UPSTREAM_KEY`。
 - 想让他在你不在的时候说的话推到手机上：装 Bark，把推送码贴进 present 页，点「试推一条」。
 - 手机上的客户端要连电脑上的网关：先看 `LOCI_GATEWAY_BIND` 那一行，别把网关裸开在局域网上 —— 卡片里是你的记忆。
 - 在浏览器里用的网页版客户端，先把它的地址加进 `LOCI_GATEWAY_ORIGINS`；Kelivo 这类原生客户端不用管。
@@ -301,7 +322,8 @@ curl http://127.0.0.1:3100/health
   照样计入上限，下次间隔 ×2、×4 退避。没发出去的（没钥匙、连不上上游）不算。
 - 几乎不花钱的：**自助压缩**（提醒几十个字，摘要是他在你那一轮里多写的一段输出）、卡片、梦 ——
   这些都在你自己那一轮里，跟你的消息一起付。
-- 夜里切段花的是 **Loci 打标模型**的钱（`LOCI_COMPRESS_*`），不是上游的。
+- 夜里切段花的是 **Loci 打标模型**的钱（`LOCI_COMPRESS_*`），不是上游的 —— 除非副模型选了「跟网关一样」，
+  那时打标、切段、摘要、织梦都走上游、花网关手里那把 key 的钱。
 - 缓存保不保得住看上游：多久过期、要不要显式开，每家不一样。唤醒间隔缺省 55 分钟，是照「一小时之内
   缓存还在」定的（卡着 60 分钟醒，缓存正好过期），你那家不是这样就自己调。
 
@@ -337,7 +359,13 @@ curl http://127.0.0.1:3100/health
 
 | 你看到的 | 多半是因为 | 怎么办 |
 |---|---|---|
-| 网关起不来：`LOCI_UPSTREAM is not set` | 没设上游 | 设 `LOCI_UPSTREAM=<那家的 /v1>` |
+| 网关起不来：`LOCI_UPSTREAM is not set and present.json names no upstream` | 哪儿都没有上游，面板的门（`LOCI_GATEWAY_TOKEN`）也关着 | 设 `LOCI_UPSTREAM=<那家的 /v1>`；或者设 `LOCI_GATEWAY_TOKEN`，起来以后在面板「网关上游」里填 |
+| 聊天回 **503**「网关还没有上游」 | 没设 `LOCI_UPSTREAM`，面板里也没填地址 | 面板「网关上游」里填地址，下一个请求就走 |
+| 「网关上游」测试：`no_key` | 网关还没 key：面板没填、没设 `LOCI_UPSTREAM_KEY`、重启后你还没说过话 | 填一把固定 key，或者先说一句 |
+| 「网关上游」测试：HTTP 401 / 403 | 上游不认这把 key | 换一把；看 `key_from` 用的是哪一把 |
+| 「网关上游」测试：HTTP 404 | 地址没写到 `/v1` 那一层（或者那家没有 `/models`） | 地址写成 `https://…/v1` |
+| Loci 副模型（选了「跟网关一样」）报「网关还没有 key」 | 同上，网关手里没 key | 同上 |
+| Loci 副模型报「还没接上网关」/「好几个宿主配了 present_url」 | Loci 的 `hosts:` 里没有、或者不止一个宿主写了 `present_url` | 照第二节第 2 步留一个 |
 | 网关起不来：`LOCI_GATEWAY_BIND=… is not a loopback address` | 绑了非回环地址（`0.0.0.0`、局域网 IP）却没设口令 | 设 `LOCI_GATEWAY_PASSPHRASE`（16 位以上）；或者改回 `127.0.0.1` |
 | 网关起不来：`Another gateway (pid …) is already running on LOCI_GATEWAY_DATA=…` | 这个数据目录上已经有一个网关在跑（第五节第 13 条） | 留一个就够：停掉那个，或者给这个另设一个 `LOCI_GATEWAY_DATA`。那个 pid 根本不是网关（锁是很久以前留下的、pid 又被别的程序用上了），就手动删掉报错里写的那个 `gateway.lock` |
 | 网关起不来：`LOCI_GATEWAY_PASSPHRASE must be 16–128 characters` | 口令太短，或者有 URL 路径里会被改写的字符 | 只用字母、数字和 `. _ ~ -`，16–128 位 |
@@ -385,11 +413,12 @@ curl http://127.0.0.1:3100/health
   当成你的聊天记录一样看管：
   - `threads/` —— 每个对话的窗口：carry、塞进去的卡片和梦、**上一轮发上游的那一整份**（唤醒要照着它拼前缀）
   - `held.json` —— 他唤醒时说了、你还没看到的话
-  - `present.json` —— 设置，**Bark 推送码是明文**（任何口都只回打码的尾巴）
+  - `present.json` —— 设置，**Bark 推送码和面板填的上游 key 是明文**（任何口都只回打码的尾巴）
   - `prompts.json` · `counters.json` · `context_windows.json` · `logs/`（日志只有数字、名字和原因，没有字）
   - `gateway.lock` —— 只有正在跑的那个网关的 pid（第五节第 13 条）
 - **钥匙**：客户端的 API key 只路过；借来给网关自己那一轮用的那把只在内存里，不落盘、不进日志，重启就没了。
-  `LOCI_UPSTREAM_KEY` 只从环境变量读。
+  `LOCI_UPSTREAM_KEY` 只从环境变量读。面板填的上游 key 存在 `present.json`，任何回复、日志、报错里都没有它
+  （上游的报错里带出来也会被换成 `••••`）。
 - **Bark 推送的字经过 Bark 的服务器**。缺省推全文；不想让字经过别人的服务器，`present.json` 里
   `push.text` 改成 `notice`（只推「ta 说了句话」），或者自己搭一个 Bark 服务器。
 

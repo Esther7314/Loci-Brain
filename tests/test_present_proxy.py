@@ -157,7 +157,8 @@ def panel(tmp_path, monkeypatch):
 
 
 ALLOWED = [("GET", ""), ("POST", ""), ("POST", "/compress"), ("POST", "/report"),
-           ("POST", "/push-test"), ("GET", "/prompts"), ("POST", "/prompts")]
+           ("POST", "/push-test"), ("POST", "/upstream-test"), ("GET", "/prompts"),
+           ("POST", "/prompts")]
 
 
 # ───────────────────────── present_url in the hosts table ─────────────────────────
@@ -181,6 +182,8 @@ def test_present_url_is_parsed_with_the_host_and_checked():
     ("GET", "/api/loci/present/compress"),
     ("GET", "/api/loci/present/report"),
     ("GET", "/api/loci/present/push-test"),
+    ("GET", "/api/loci/present/upstream-test"),
+    ("POST", "/api/loci/present/upstream"),
     ("POST", "/api/loci/present/settings"),
     ("POST", "/api/loci/present/"),
     ("GET", "/api/loci/present/prompts/"),

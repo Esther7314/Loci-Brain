@@ -16,7 +16,8 @@ Key behaviours:
   tools/grow/rooms_path._backfill_one's
 - Dehydrator._chat(system, user): one chat call in the configured format — an
   OpenAI-compatible client (DeepSeek / Ollama / LM Studio / vLLM / Gemini all work),
-  native Gemini, or native Anthropic — retried on transient errors
+  native Gemini, native Anthropic, or "gateway": through the gateway to its upstream,
+  with the key the gateway holds (core/gateway_side) — retried on transient errors
 - The summary table (dehydration_cache.db): the key of a row and the writer of one.
   Nothing in the server writes a row or reads one back; see the note in
   Dehydrator.__init__
@@ -25,13 +26,16 @@ What it deliberately does not do:
 - It neither reads nor writes memory bucket files (it has no idea what a bucket looks like)
 - It does not decide when to be called, and it makes no dedup judgements
 - With no API key it does not raise on construction: `_chat` answers "" and the layer
-  above decides what to do (`_require_api` is there for a caller that would rather raise)
+  above decides what to do (`_require_api` is there for a caller that would rather raise).
+  The "gateway" format needs no key here: the gateway holds it, and a call that cannot go
+  raises with the reason (core/gateway_side)
 
 Exports: the Dehydrator class (`_chat`, `_require_api`, the connection settings),
          BACKFILL_PROMPT · BACKFILL_KINDS · BACKFILL_MAX_TOKENS,
          BackfillAnswer · backfill_request · parse_backfill · backfill_kinds,
-         RUNS_ON · runs_local · endpoint · thinking_on (where the side model runs and
-         what it is called with: the local Ollama or the configured provider),
+         RUNS_ON · GATEWAY_FORMAT · runs_local · endpoint · available · thinking_on
+         (where the side model runs and what it is called with: the local Ollama, the
+         configured provider, or the gateway),
          openai_client (the OpenAI-compatible client, with no retries of its own)
 ========================================
 """
@@ -53,6 +57,7 @@ from openai import AsyncOpenAI
 
 from utils import clean_llm_json, positive_float
 
+from . import gateway_side as _gateway_side
 from . import names as _names
 from . import prompts as _prompts
 from .provider_detect import (
@@ -470,6 +475,10 @@ def parse_backfill(raw: str, content: str, kinds=None) -> Optional["BackfillAnsw
 # or the local Ollama.
 RUNS_ON = ("cloud", "local")
 
+# "Same as the gateway": the side model calls the gateway's upstream through the gateway,
+# with the key the gateway holds (core/gateway_side); base_url and api_key are not used.
+GATEWAY_FORMAT = "gateway"
+
 # What a local Ollama is sent as the key: it checks none, the OpenAI client insists on a
 # non-empty one, and a cloud key kept for switching back must never reach a local or
 # user-supplied address (the same rule as the embedding's local mode).
@@ -490,6 +499,7 @@ def endpoint(dehy_cfg: dict, config: dict | None = None) -> tuple[str, str, str]
 
     Local: Ollama's OpenAI-compatible endpoint (core/ollama_local) and a placeholder key;
     the saved cloud format, address and key stay in config for switching back.
+    Gateway: ("gateway", "", "") — the gateway knows where and with which key.
     Cloud: the configured three. A Google AI Studio key of the newer form (`AQ.*`) is not
     accepted by Gemini's OpenAI-compatible endpoint, so on Google's host it goes to the
     native generateContent API without anyone setting api_format by hand."""
@@ -497,6 +507,8 @@ def endpoint(dehy_cfg: dict, config: dict | None = None) -> tuple[str, str, str]
     if runs_local(dehy_cfg):
         from . import ollama_local
         return "openai_compat", ollama_local.openai_base(config), _LOCAL_KEY
+    if is_gateway(dehy_cfg.get("api_format")):
+        return GATEWAY_FORMAT, "", ""
     api_format = dehy_cfg.get("api_format", "openai_compat")
     base_url = dehy_cfg.get("base_url", _DEFAULT_BASE_URL)
     api_key = str(dehy_cfg.get("api_key", "") or "")
@@ -508,6 +520,15 @@ def endpoint(dehy_cfg: dict, config: dict | None = None) -> tuple[str, str, str]
         api_format = "gemini"
         logger.info("AQ.* key + generativelanguage.googleapis.com detected — auto-switching to native Gemini API")
     return api_format, base_url, api_key
+
+
+def is_gateway(api_format) -> bool:
+    return str(api_format or "").strip().lower() == GATEWAY_FORMAT
+
+
+def available(api_format: str, api_key: str) -> bool:
+    """Can the side model be called at all: a key is configured, or the gateway holds one."""
+    return api_format == GATEWAY_FORMAT or bool(api_key)
 
 
 def openai_client(api_key: str, base_url: str, timeout: float) -> AsyncOpenAI:
@@ -543,7 +564,7 @@ class Dehydrator:
         self.max_tokens = dehy_cfg.get("max_tokens", _DEFAULT_MAX_TOKENS)
         self.temperature = dehy_cfg.get("temperature", _DEFAULT_TEMPERATURE)
         self.timeout_seconds = positive_float(dehy_cfg.get("timeout_seconds"), _API_TIMEOUT_SECONDS)
-        # api_format: "openai_compat" (default) | "gemini" | "anthropic"; where it runs and
+        # api_format: "openai_compat" (default) | "gemini" | "anthropic" | "gateway"; where it runs and
         # what it is called with come from one function, which the panel's hot update uses
         # too (web/config_api).
         self.runs_on = "local" if runs_local(dehy_cfg) else "cloud"
@@ -562,13 +583,17 @@ class Dehydrator:
         # that do not understand thinkingConfig.
         self.thinking_budget = dehy_cfg.get("thinking_budget", 0)
 
+        # The running config, read per call by the "gateway" format (which gateway host:
+        # core/gateway_side.find_gateway).
+        self._config = config
+
         # --- How the human side is addressed ---
         # Part of a summary row's key (_content_key). Same source as config.human, which
         # the front end can edit.
         self.human = config.get("human", "用户") or "用户"
 
         # --- API availability ---
-        self.api_available = bool(self.api_key)
+        self.api_available = available(self.api_format, self.api_key)
 
         # --- Initialize OpenAI-compatible client (only for openai_compat format) ---
         self.client: Optional[AsyncOpenAI] = None
@@ -656,6 +681,9 @@ class Dehydrator:
             status = getattr(resp, "status_code", None)
         if isinstance(status, int) and status in _RETRY_STATUS:
             return True
+        # An error that knows whether it is worth another try says so (core/gateway_side).
+        if getattr(exc, "transient", None) is True:
+            return True
         name = type(exc).__name__.lower()
         return any(k in name for k in ("timeout", "connect", "ratelimit", "unavailable"))
 
@@ -728,6 +756,9 @@ class Dehydrator:
         if self.api_format == "anthropic":
             return await self._chat_anthropic(system, user, max_tokens=max_tokens,
                                               temperature=temperature, model=model)
+        if self.api_format == GATEWAY_FORMAT:
+            return await self._chat_gateway(system, user, max_tokens=max_tokens,
+                                            temperature=temperature, model=model)
         if self.api_format != "openai_compat":
             logger.warning(f"Unknown api_format '{self.api_format}', falling back to openai_compat")
         # openai_compat (default)
@@ -787,6 +818,29 @@ class Dehydrator:
             return ""
         parts = candidates[0].get("content", {}).get("parts", [])
         return parts[0].get("text", "") if parts else ""
+
+    async def _chat_gateway(
+        self,
+        system: str,
+        user: str,
+        *,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        model: str | None = None,
+    ) -> str:
+        """Through the gateway to its upstream, with the key the gateway holds: an
+        OpenAI-style request whose only setting of Loci's own is the model. Thinking has no
+        knob every provider reads, so nothing is sent for it, as with openai_compat."""
+        payload = {
+            "model": model or self.model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "max_tokens": max_tokens if max_tokens is not None else self.max_tokens,
+            "temperature": temperature if temperature is not None else self.temperature,
+        }
+        return await _gateway_side.chat(self._config, payload, timeout=self.timeout_seconds)
 
     async def _chat_anthropic(
         self,

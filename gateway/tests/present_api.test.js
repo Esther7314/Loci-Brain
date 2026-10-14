@@ -153,8 +153,10 @@ test("no Bearer or the wrong one → 401 on every route, and nothing is written"
   const routes = [
     ["GET", "/present"], ["POST", "/present", { patch: { wake: { on: true } } }],
     ["POST", "/present/compress", {}], ["POST", "/present/report", { kind: "now" }],
-    ["POST", "/present/push-test", {}], ["GET", "/present/prompts"],
+    ["POST", "/present/push-test", {}], ["POST", "/present/upstream-test", {}], ["GET", "/present/prompts"],
     ["POST", "/present/prompts", { key: "wake", text: "x" }],
+    ["POST", "/loci/upstream/v1/chat/completions", { model: "m", messages: [{ role: "user", content: "hi" }] }],
+    ["GET", "/loci/upstream/v1/models"],
     ["POST", "/loci/source", { v: 1, source: { system: "gateway", instance: "desk", container: `thread:${THREAD}`, id: "m_20261007_0001" }, revision: null, span: null, scope: null, max_chars: 8000 }],
   ];
   for (const [method, route, body] of routes) {
@@ -175,7 +177,10 @@ test("GET /present: host, connected, every default, honest placeholders", { time
   assert.strictEqual(r.headers.get("cache-control"), "no-store");
   assert.strictEqual(r.json.host, "desk");
   assert.strictEqual(r.json.connected, true);
-  assert.deepStrictEqual(r.json.settings, DEFAULT_VIEW);
+  // the upstream in force is LOCI_UPSTREAM, and the key in force LOCI_UPSTREAM_KEY: masked
+  assert.deepStrictEqual(r.json.settings, { ...DEFAULT_VIEW, upstream: {
+    base_url: "", env_base_url: fake_upstream.地址, in_force: fake_upstream.地址,
+    key_set: false, key_hint: "••••ey", key_from: "env" } });
   assert.deepStrictEqual(r.json.settings_state, { state: "defaults", errors: [] });
   assert.ok(!r.text.includes("sk-fixed-upstream-key"), "the fixed key is never echoed");
   const s = r.json.status;
@@ -443,6 +448,7 @@ test("LOCI_GATEWAY_TOKEN unset: /present/* closed with 404, /loci/source with 50
   for (let i = 0; i < 250 && !closed.全部输出().includes("closed — LOCI_GATEWAY_TOKEN unset"); i++) await new Promise((r) => setTimeout(r, 20));
   assert.ok(closed.全部输出().includes("closed — LOCI_GATEWAY_TOKEN unset"), "the banner says the doors are closed");
   for (const [method, route, status] of [["GET", "/present", 404], ["POST", "/present", 404], ["GET", "/present/prompts", 404],
+    ["POST", "/present/upstream-test", 404], ["POST", "/loci/upstream/v1/chat/completions", 404], ["GET", "/loci/upstream/v1/models", 404],
     ["POST", "/loci/source", 503]]) {
     for (const auth of [null, TOKEN, ""]) {
       const r = await call(method, route, { body: method === "POST" ? {} : undefined, auth, to: closed });

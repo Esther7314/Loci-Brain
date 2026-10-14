@@ -53,6 +53,10 @@
 // Run:
 //     LOCI_UPSTREAM=https://api.deepseek.com/v1 node gateway/server.js
 // then point the client's base_url at http://127.0.0.1:3100/v1.
+// LOCI_UPSTREAM is where requests go until the panel names another URL (present.json
+// `upstream`, present/settings.js); the URL in force is read per request, so a change on
+// the panel needs no restart. With neither, the gateway starts only when the panel can
+// reach it (LOCI_GATEWAY_TOKEN set) and answers /v1/* with 503 until a URL is saved.
 // The API key still comes from the client — this layer forwards it verbatim and
 // **neither stores nor reads it**.
 //
@@ -62,7 +66,9 @@
 //    pages may knock: Origin and Host) is door.js,
 //    one gateway per data directory (gateway.lock) is lock.js,
 //    /present/* and /loci/source are present/present_api.js and present/source_api.js
-//    behind LOCI_GATEWAY_TOKEN, everything else is relay.js, and the present layer (day
+//    behind LOCI_GATEWAY_TOKEN, and so is /loci/upstream/* (present/upstream.js: the plain
+//    door Loci's side model calls the upstream through), everything else is relay.js, and
+//    the present layer (day
 //    store, threads, the window and its overlays, cue, compression and packing, the
 //    nightly report, wake, away and push, settings, prompt cards) is gateway/present/.
 //    If this file grows, the lines that grew must be mounts.
@@ -82,10 +88,12 @@ const { behind_token, send_json } = require("./present/http_io.js");
 const { create_present_api } = require("./present/present_api.js");
 const { create_source_api } = require("./present/source_api.js");
 const { build_present_health } = require("./present/health_section.js");
+const { SIDE_PREFIX } = require("./present/upstream.js");
 
 // ———— Config: read once at startup; changing any of it means a restart ————
 const port = Number(process.env.PORT || 3100);
-const upstream = (process.env.LOCI_UPSTREAM || "").replace(/\/+$/, "");
+// LOCI_UPSTREAM: the upstream until the panel names another (present/upstream.js).
+const upstream = (process.env.LOCI_UPSTREAM || "").trim().replace(/\/+$/, "");
 const LOCI = process.env.LOCI_MCP || poke.DEFAULT_ADDRESS;
 const idle_threshold_minutes = Number(process.env.POKE_IDLE_MINUTES || poke.DEFAULT_IDLE_MINUTES);
 const data_root = process.env.LOCI_GATEWAY_DATA || path.join(__dirname, "data");
@@ -98,11 +106,6 @@ const log_path = path.join(data_root, "logs", "memory-actions.jsonl");
 const gateway_token = String(process.env.LOCI_GATEWAY_TOKEN || "").trim();
 const door_config = check_door(process.env);
 
-if (!upstream) {
-  console.error("LOCI_UPSTREAM is not set — there is nothing to forward requests to.");
-  console.error("例：LOCI_UPSTREAM=https://api.deepseek.com/v1 node gateway/server.js");
-  process.exit(1);
-}
 if (door_config.error) {
   console.error(door_config.error);
   process.exit(1);
@@ -117,12 +120,19 @@ release_on_exit(lock.file);
 
 // ———— Modules ————
 const present = create_present({ env: process.env, data_root, upstream, loci: LOCI, idle_threshold_minutes, log_path });
-const relay = create_relay({ upstream, present });
+// No upstream anywhere: start only when the panel can name one (its door is open).
+if (!present.upstream.base() && !gateway_token) {
+  console.error("LOCI_UPSTREAM is not set and present.json names no upstream — there is nothing to forward requests to.");
+  console.error("例：LOCI_UPSTREAM=https://api.deepseek.com/v1 node gateway/server.js（或者设 LOCI_GATEWAY_TOKEN，在面板的网关上游里填）");
+  process.exit(1);
+}
+const relay = create_relay({ upstream: () => present.upstream.base(), present });
 const heartbeat = create_heartbeat({ tasks: present.heartbeat_tasks });
 const admit = create_door(door_config);
 const caller_refused = create_caller_check({ env: process.env, loopback: door_config.loopback });
 const present_api = behind_token(gateway_token, create_present_api(present));
 const source_api = behind_token(gateway_token, create_source_api(present), { closed_status: 503 });
+const side_api = behind_token(gateway_token, present.upstream.handle_side);
 const present_health = () => build_present_health({ present, doors: {
   token_set: Boolean(gateway_token), bind: door_config.bind, passphrase_required: door_config.required } });
 
@@ -134,6 +144,7 @@ const routes = [
     handle: (req, res) => handle_health(req, res, { log_path, cue_timeout_ms: present.cue_timeout_ms, present_health }) },
   { match: (req, route) => route === "/present" || route.startsWith("/present/"), handle: present_api },
   { match: (req, route) => route === "/loci/source", handle: source_api },
+  { match: (req, route) => route === SIDE_PREFIX || route.startsWith(`${SIDE_PREFIX}/`), handle: side_api },
   { match: () => true, handle: relay },
 ];
 
@@ -169,12 +180,14 @@ server.listen(port, door_config.bind, () => {
   const bound = server.address().port;
   const here = `http://${url_host(door_config.bind)}:${bound}${door_config.required ? "/<LOCI_GATEWAY_PASSPHRASE>" : ""}`;
   console.log(`[gateway] up on http://${url_host(door_config.bind)}:${bound}`);
-  console.log(`[gateway] upstream       ${upstream}`);
+  const in_force = present.upstream.base();
+  console.log(`[gateway] upstream       ${in_force ? `${in_force}${in_force === upstream ? "" : "   (set on the panel)"}`
+    : "none yet — /v1/* answers 503 until the panel saves one"}`);
   console.log(`[gateway] Loci           ${poke._internal.httpBase(LOCI)}`);
   console.log(`[gateway] idle threshold ${idle_threshold_minutes} min`);
   console.log(`[gateway] data lock      ${lock.file}${lock.took_over ? ` (taken over from pid ${lock.took_over}, no longer running)` : ""}`);
   for (const line of present.banner_lines()) console.log(`[gateway] ${line}`);
-  console.log(`[gateway] present api    ${gateway_token ? "/present/* and /loci/source open to Bearer LOCI_GATEWAY_TOKEN"
+  console.log(`[gateway] present api    ${gateway_token ? "/present/*, /loci/source and /loci/upstream/* open to Bearer LOCI_GATEWAY_TOKEN"
     : "closed — LOCI_GATEWAY_TOKEN unset, so /present/* answers 404 and /loci/source 503"}`);
   if (door_config.required) console.log("[gateway] passphrase     not a loopback bind: every path needs /<LOCI_GATEWAY_PASSPHRASE>/ in front");
   console.log(`[gateway] is it working  GET ${here}/health`);

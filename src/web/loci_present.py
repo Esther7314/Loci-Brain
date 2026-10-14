@@ -13,6 +13,7 @@ login, one origin), so Loci forwards the present page's requests to the host who
     POST /api/loci/present/compress   -> POST <present_url>/present/compress
     POST /api/loci/present/report     -> POST <present_url>/present/report
     POST /api/loci/present/push-test  -> POST <present_url>/present/push-test
+    POST /api/loci/present/upstream-test -> POST <present_url>/present/upstream-test
     GET  /api/loci/present/prompts    -> GET  <present_url>/present/prompts
     POST /api/loci/present/prompts    -> POST <present_url>/present/prompts
 
@@ -69,12 +70,14 @@ PRESENT_PATHS = frozenset([
     ("POST", "/compress"),
     ("POST", "/report"),
     ("POST", "/push-test"),
+    ("POST", "/upstream-test"),
     ("GET", "/prompts"),
     ("POST", "/prompts"),
 ])
 
-# Every gateway route here answers at once (a write only queues its work), so a slow
-# answer is a gateway in trouble, and the panel should say so rather than hang.
+# Every gateway route here answers at once (a write only queues its work; the upstream
+# test gives its upstream four seconds, gateway/present/upstream.js), so a slow answer is
+# a gateway in trouble, and the panel should say so rather than hang.
 TIMEOUT_SECONDS = 5.0
 # The largest status reply carries one day report in full; this is far above that.
 MAX_REPLY_BYTES = 2 * 1024 * 1024

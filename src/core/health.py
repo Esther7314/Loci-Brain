@@ -150,10 +150,13 @@ def check_summariser(c: _Checks, g: _Ground) -> None:
     dehy = g.cfg.get("dehydration") or {}
     if not isinstance(dehy, dict):
         raise TypeError("config.yaml 里的 dehydration 不是一个配置块")
-    from .dehydrator import runs_local
+    from .dehydrator import is_gateway, runs_local
     if runs_local(dehy):
         # The local Ollama needs no key (core/dehydrator.endpoint).
         c.add("dehydration", "摘要/标签", "ok", f"配着 {dehy.get('model') or '?'}（本地）")
+    elif is_gateway(dehy.get("api_format")):
+        # The gateway holds the key (core/gateway_side); whether it has one shows on a call.
+        c.add("dehydration", "摘要/标签", "ok", f"配着 {dehy.get('model') or '?'}（走网关）")
     elif str(dehy.get("api_key") or "").strip() or os.environ.get("LOCI_API_KEY", ""):
         c.add("dehydration", "摘要/标签", "ok", f"配着 {dehy.get('model') or '?'}")
     else:
@@ -622,12 +625,15 @@ class _Rows:
 
 
 def setup_summariser(r: _Rows, cfg: dict) -> None:
-    from .dehydrator import endpoint, runs_local
+    from .dehydrator import endpoint, is_gateway, runs_local
     dehy = cfg.get("dehydration", {}) or {}
     d_model = str(dehy.get("model") or "")
     if runs_local(dehy):
         # The local Ollama: its address, and the placeholder key it is sent.
         _fmt, d_base, d_key = endpoint(dehy, cfg)
+    elif is_gateway(dehy.get("api_format")):
+        # Through the gateway: the gateway holds the address and the key.
+        d_key, d_base = "gateway", "走网关"
     else:
         d_key = str(dehy.get("api_key") or "")
         d_base = str(dehy.get("base_url") or "")

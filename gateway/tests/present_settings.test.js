@@ -165,3 +165,35 @@ test("prompts: the text in force is the rewrite, else the default", () => {
   assert.strictEqual(prompts.current("report"), P.CARDS.report.text);
   assert.throws(() => prompts.current("nope"));
 });
+
+test("the upstream: the panel URL over LOCI_UPSTREAM; the panel key over LOCI_UPSTREAM_KEY over the client's", () => {
+  let client = null;
+  const s = create_settings({ file: path.join(root, `p${++n}`, "present.json"),
+    env: { LOCI_UPSTREAM: "https://env.example.com/v1/", LOCI_UPSTREAM_KEY: "sk-env-key-99" },
+    client_key: () => client });
+  assert.strictEqual(s.upstream_base(), "https://env.example.com/v1");
+  assert.deepStrictEqual(s.fixed_key(), { key: "sk-env-key-99", from: "env" });
+  assert.deepStrictEqual(s.view().upstream, { base_url: "", env_base_url: "https://env.example.com/v1",
+    in_force: "https://env.example.com/v1", key_set: false, key_hint: "••••99", key_from: "env" });
+
+  assert.deepStrictEqual(s.patch({ upstream: { base_url: "http://127.0.0.1:8000/v1", key: "sk-panel-key-12" } }), { ok: true });
+  assert.strictEqual(s.upstream_base(), "http://127.0.0.1:8000/v1");
+  assert.deepStrictEqual(s.fixed_key(), { key: "sk-panel-key-12", from: "panel" }, "the panel key wins over the env one");
+  assert.strictEqual(s.view().upstream.key_from, "panel");
+  assert.ok(!JSON.stringify(s.view()).includes("sk-panel-key-12"), "the key never leaves as it is stored");
+  assert.deepStrictEqual(s.patch({ upstream: { base_url: "https://other.example.com/v1" } }), { ok: true });
+  assert.strictEqual(s.fixed_key().key, "sk-panel-key-12", "a patch without the key keeps it");
+
+  assert.deepStrictEqual(s.patch({ upstream: { key: "" } }), { ok: true });
+  assert.deepStrictEqual(s.fixed_key(), { key: "sk-env-key-99", from: "env" }, "cleared: the env key again");
+
+  const bare = create_settings({ file: path.join(root, `p${++n}`, "present.json"), env: {}, client_key: () => client });
+  assert.deepStrictEqual([bare.view().upstream.key_from, bare.view().upstream.key_hint, bare.view().upstream.in_force],
+    [null, null, null], "nobody spoke yet, nothing set: no key, no upstream");
+  client = "";
+  assert.deepStrictEqual([bare.view().upstream.key_from, bare.view().upstream.key_hint], ["client", null],
+    "the client spoke without a key: its (empty) credential is the one in force");
+  client = "sk-client-abc";
+  assert.deepStrictEqual([bare.view().upstream.key_from, bare.view().upstream.key_hint], ["client", "••••bc"]);
+  assert.strictEqual(bare.view().own.fixed_key_set, false);
+});
