@@ -57,6 +57,7 @@ SLICE_STATE_WORDS = {
     (_sl.CLOSED, "grow"): "写成记忆了",
     (_sl.CLOSED, "trace"): "补进已有的了",
     (_sl.CLOSED, "drop"): "他跳过了",
+    (_sl.CLOSED, _sl.EXPIRED): "过夜没认领",
     (_sl.REPLACED, ""): "重切过",
 }
 

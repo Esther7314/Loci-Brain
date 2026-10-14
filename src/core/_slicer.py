@@ -38,7 +38,10 @@ each line's id and hash, the host that handed it over and, when the host sent on
 `report_at`: when it last wrote its daily report, which is where grow's page starts
 "today", core/grow_view.day_cut) and its slices; `close` and `recut` lines change one
 slice. A closed slice stays in the file as what handled it, so a second use of its id
-is refused by name. The index is rebuilt from the file on first use and whenever it
+is refused by name. A slice gets one night: when the host's batch for a later day of
+the same source comes in, whatever is still open from earlier days is closed as
+`expired` (expire_before) — what the model did not claim that night was not worth a
+memory, and the list it reads holds one day, not a pile. Imports do not expire. The index is rebuilt from the file on first use and whenever it
 has grown. An append-only log rather than a file per batch: every change is one whole
 line flushed to disk (a torn last line is skipped on read), and the file is the history
 of who handled what.
@@ -85,7 +88,8 @@ Exports: SLICER_PROMPT_VERSION · SLICER_PROMPT · GIST_MAX · DRAFT_MAX · Slic
          parse_slices · side_model ·
          read_batch · batch_id_of · fingerprint_of · slice_fingerprint · FINGERPRINT_BY ·
          guess_covering · take_batch · PendingSlices (record_batch · get · record_for ·
-         run_length · close · recut · withdraw_lines · purge · open_batches · batches ·
+         run_length · close · expire_before · recut · withdraw_lines · purge ·
+         open_batches · batches · EXPIRED ·
          last_report · pending_count · rebuild_index)
 ========================================
 """
@@ -617,7 +621,10 @@ async def take_batch(store, body, *, model: ModelCall,
     `slices` store, its embedding engine). Returns
 
         {batch_id, day, source, slices: [{slice_id, span: {first, last, count}, gist,
-         guesses: [{id, short, score}]}], unsliced, replaced}
+         guesses: [{id, short, score}]}], unsliced, replaced, expired}
+
+    `expired`: how many slices of this source's earlier days, still unclaimed, were
+    closed as this one came in (PendingSlices.expire_before).
 
     Raises BatchError (malformed, a line the registry reads as withdrawn, deleted or
     held: its text may not go to the side model, or a line delivered at another version
@@ -690,10 +697,12 @@ async def take_batch(store, body, *, model: ModelCall,
     if registry is not None:
         registry.record_order(batch["source"], ids, batch_id=batch["batch_id"],
                               revision=batch["revision"], revisions=revisions)
+    expired = await store.slices.expire_before(row["batch_id"])
     covered = sum(s.count for s in slices)
     return {"batch_id": row["batch_id"], "day": row["day"], "source": dict(row["source"]),
             "slices": [store.slices.get(s["slice_id"], public=True) for s in row["slices"]],
-            "unsliced": len(batch["lines"]) - covered, "replaced": replaced}
+            "unsliced": len(batch["lines"]) - covered, "replaced": replaced,
+            "expired": len(expired)}
 
 
 # ============================================================
@@ -703,7 +712,9 @@ async def take_batch(store, body, *, model: ModelCall,
 SLICES_FILE = "pending_slices.jsonl"
 OPEN, CLOSED, REPLACED = "open", "closed", "replaced"
 HOW = ("grow", "trace", "drop")
-_HOW_WORD = {"grow": "写成了", "trace": "挂到了", "drop": "丢掉了"}
+# Closed by the store, never by the model: left open when the host's next day came in.
+EXPIRED = "expired"
+_HOW_WORD = {"grow": "写成了", "trace": "挂到了", "drop": "丢掉了", EXPIRED: "过了一夜没认领，自动丢了"}
 _LOCK_KEY = "pending-slices"
 
 
@@ -1055,6 +1066,31 @@ class PendingSlices:
                     raise why
                 return self._append({"kind": "close", "slice_id": str(slice_id).strip(),
                                      "how": how, "by": list(dict.fromkeys(by))})
+
+    async def expire_before(self, batch_id: str) -> list[str]:
+        """Close as expired every slice still open in an earlier day's batch of the same
+        source as `batch_id`: a slip the model left unclaimed for a night is not handed to
+        it again. The raw lines stay with the host, and pending slices are never searched,
+        so nothing a recall could reach is lost. Imported conversations' batches neither
+        expire nor make others expire, and a batch with no day compares with none. Returns
+        the slices it closed."""
+        async with self._turn():
+            self._fresh()
+            with self._guard:
+                b = self._batches.get(batch_id)
+                if b is None or b["import"] or not b["day"]:
+                    return []
+                gone = []
+                for old in self._batches.values():
+                    if (old["import"] or old["source"] != b["source"] or not old["day"]
+                            or str(old["day"]) >= str(b["day"])):
+                        continue
+                    for sid in old["slice_ids"]:
+                        if self._slices.get(sid, {}).get("state") == OPEN:
+                            self._append({"kind": "close", "slice_id": sid, "how": EXPIRED,
+                                          "by": []})
+                            gone.append(sid)
+                return gone
 
     async def withdraw_lines(self, where: dict, line_ids: list[str]) -> tuple[list[str], int]:
         """Lines of `where` ({system, instance, container}) may no longer be used: every

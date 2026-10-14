@@ -215,6 +215,58 @@ def test_the_same_batch_resent_replaces_its_pending_slices(store):
     assert "换掉了" in out and store.slices.pending_count() == 2
 
 
+# ───────────────────────── one night ─────────────────────────
+
+def _day(offset: int) -> str:
+    return W.today().date().fromordinal(W.today().date().toordinal() + offset).isoformat()
+
+
+def _next_ids(prefix: str) -> list[str]:
+    return [f"{prefix}_{i:04d}" for i in range(1, len(TEXTS) + 1)]
+
+
+def test_the_next_days_batch_expires_what_was_left_open(store, tmp_path):
+    first = take(store, stub(THREE), b=body(day=_day(-1)))
+    a, b, c = (s["slice_id"] for s in first["slices"])
+    run(_event("Slept well for once.", slice_id=a))
+    assert store.slices.pending_count() == 2
+
+    second = take(store, stub(THREE), b=body(day=_day(0), ids=_next_ids("n")))
+    assert second["expired"] == 2
+    assert store.slices.pending_count() == 3, "only the new day is waiting"
+    assert store.slices.get(a)["closed"]["how"] == "grow", "a claimed slice stays claimed"
+    for sid in (b, c):
+        assert store.slices.get(sid)["closed"] == {
+            "how": SL.EXPIRED, "by": [], "at": store.slices.get(sid)["closed"]["at"]}
+    out = run(trace(slice_id=b, drop_slice=True))
+    assert "过了一夜没认领" in out, out
+    shown = run(R.recall_core(when="", room="", tag="", query="", view="slices"))
+    assert b not in shown and second["slices"][0]["slice_id"] in shown
+
+
+def test_a_resend_of_the_same_day_or_another_source_expires_nothing(store):
+    take(store, stub(THREE))
+    again = take(store, stub(THREE))
+    assert again["expired"] == 0 and store.slices.pending_count() == 3
+    other = {**SOURCE, "container": "private:V"}
+    got = take(store, stub(THREE), b={**body(day=_day(1), ids=_next_ids("o")),
+                                      "source": other})
+    assert got["expired"] == 0 and store.slices.pending_count() == 6
+
+
+def test_an_imported_conversation_neither_expires_nor_is_expired(store):
+    lines = [(i, _fp(t)) for i, t in zip(IDS, TEXTS)]
+    slices = [{"first": IDS[0], "last": IDS[3], "gist": "imported", "guesses": [],
+               "draft": "a candidate entry"}]
+    run(store.slices.record_batch(batch_id="b_import", source=dict(SOURCE), day=_day(-3),
+                                  revision=None, lines=lines, slices=slices,
+                                  origin={"batch": "imp_1", "same_self": True,
+                                          "title": "old chat"}))
+    got = take(store, stub(THREE), b=body(day=_day(0), ids=_next_ids("n")))
+    assert got["expired"] == 0 and store.slices.pending_count() == 4
+    assert run(store.slices.expire_before("b_import")) == []
+
+
 def test_a_handled_slice_stays_handled_across_a_resend(store, tmp_path):
     first = take(store, stub(THREE))
     sid = first["slices"][0]["slice_id"]
