@@ -25,7 +25,7 @@
 //              copy: bark_code()) · text (full | notice)
 //   upstream   base_url ("" = the env LOCI_UPSTREAM) · key ("" = none set here)
 // The panel shows most of these; compress.context_tokens, daily_cap, dry_run,
-// allow_short, own.* and push.text live only in the file, but POST /present accepts them
+// allow_short, own.models and push.text live only in the file, but POST /present accepts them
 // too — they are validated the same way, and nothing about them is secret.
 //
 // The upstream (upstream.js reads it per request, so a change takes effect on the next
@@ -74,7 +74,7 @@ const DEFAULTS = Object.freeze({
     held_cap: null, daily_cap: 16, dry_run: false, allow_short: false,
     away_prefix: true,
   },
-  own: { tool_rounds: 6, models: [] },
+  own: { tool_rounds: 10, models: [] },
   push: { bark: "", text: "full" },
   upstream: { base_url: "", key: "" },
 });

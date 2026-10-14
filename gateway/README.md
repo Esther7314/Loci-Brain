@@ -250,7 +250,7 @@ wakeup 页（他自己的时间）：
 设置存在网关的 `<LOCI_GATEWAY_DATA>/present.json`，下一拍（一分钟内）生效，不用重启（网关上游是下一个请求就生效）。
 面板上没有的几项（`compress.context_tokens` 上下文窗口多大，不填就是网关自己认，见第三节 ·
 `wake.daily_cap` 每天最多叫几次 · `wake.dry_run` 只记账不真叫 ·
-`wake.allow_short` 允许间隔小于 15 分钟 · `own.tool_rounds` · `own.models` 模型降级链 ·
+`wake.allow_short` 允许间隔小于 15 分钟 · `own.models` 模型降级链 ·
 `push.text` 推全文还是只推「ta 说了句话」）直接改这个文件。
 
 ### 5. 看它在不在干活
@@ -296,7 +296,7 @@ curl http://127.0.0.1:3100/health
 | | |
 |---|---|
 | `P_in` · `P_cache` · `P_out` | 上游每 token 的输入价 · 缓存命中价 · 输出价 |
-| `r` | 这一轮里他调了几圈工具（0 到 `own.tool_rounds`，缺省最多 6）。每多一圈 = 再发一整轮 |
+| `r` | 这一轮里他调了几圈工具（0 到 `own.tool_rounds`，缺省最多 10）。每多一圈 = 再发一整轮 |
 | `O` | 他这一轮写出来的 token |
 
 ```

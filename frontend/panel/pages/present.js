@@ -2,7 +2,7 @@
    pages/present.js — how the talk is carried from one window to the next (her frame
    present)
 
-   #/present   four numbered blocks:
+   #/present   five numbered blocks:
                  01 自助压缩   the switch (`compress.on`) and 手动压缩 (POST …/compress),
                               answered in its own row. 提示词 beside the title opens the
                               compress card in a glass window (presentform.openPrompt),
@@ -23,6 +23,8 @@
                               1 is `report.flip` "daily", more is "every_n" with that
                               many days. 手动换窗 is "manual", with 现在写日报 (POST
                               …/report {kind: "now"}).
+                 05 工具轮数   `own.tool_rounds`: how many rounds of Loci's tools one of
+                              his own turns (a pack, a report, a wake) may use.
                All of it is the gateway's (presentform.js: read, saved a control at a
                time, a refused field marked in its row); without a gateway it is drawn
                off and the page says 「还没接上」. Waking and pushing are pages/wakeup.js.
@@ -360,6 +362,18 @@ function flipBlock(p) {
     setRow({ lead: manual, why: "按「现在写日报」，写完之后下一次发信息就是新窗口。", right: acts(nowWrite) }));
 }
 
+// ---------------------------------------------------------------- 05 工具轮数
+
+function roundsBlock(p) {
+  const home = h("div");
+  p.homes.own = home;
+  return setBlock("05", "工具轮数", {},
+    setRow({ text: "他自己开口时最多用几轮工具",
+      why: "写日报、压缩、自己醒来说话时，他翻记忆、记东西最多用几轮（1–20）。每多一轮，多花一整轮的 token；用满了，再调的就不执行了。",
+      right: withUnit(numBox(p, ["own", "tool_rounds"], { label: "最多几轮", board: "10" }), "轮") }),
+    home);
+}
+
 // ---------------------------------------------------------------- the page
 
 async function render(view) {
@@ -369,7 +383,7 @@ async function render(view) {
   view.append(
     pagehead({ title: "今天就在眼前", caption: live || (snap && snap.error) ? null : NOT_WIRED }),
     p.top,
-    h("main", { class: "sets present" }, compressBlock(p), linesBlock(p), reportBlock(p), flipBlock(p)));
+    h("main", { class: "sets present" }, compressBlock(p), linesBlock(p), reportBlock(p), flipBlock(p), roundsBlock(p)));
   if (live) showSettingsState(p);
   else if (snap && snap.error) { p.top.append(errorLine(snap.error)); p.topSync(); }
 }

@@ -94,7 +94,7 @@ LATE_NIGHT_UNTIL = 6                  # a line before 06:00 may still belong to 
 CJK = re.compile(r"[⺀-鿿豈-﫿＀-￯]")
 
 # What the gateway's own turns may cost (gateway/present/settings.js own.tool_rounds).
-DEFAULT_TOOL_ROUNDS = 6
+DEFAULT_TOOL_ROUNDS = 10
 
 def request_kind(body: dict) -> str:
     """What asked, read off the request: an own turn offers tools; the side model's calls

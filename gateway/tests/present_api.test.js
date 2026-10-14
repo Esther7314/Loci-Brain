@@ -144,7 +144,7 @@ const DEFAULT_VIEW = {
     segments: { mode: "all", list: [] }, held_cap: null, daily_cap: 16, dry_run: false, allow_short: false,
     away_prefix: true,
   },
-  own: { tool_rounds: 6, models: [], fixed_key_set: true },
+  own: { tool_rounds: 10, models: [], fixed_key_set: true },
   push: { bark_set: false, bark_hint: null, text: "full" },
 };
 

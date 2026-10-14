@@ -16,7 +16,7 @@ const path = require("node:path");
 const http = require("node:http");
 const fence = require("./network_fence.js");
 
-const { create_own_turn, is_silence, model_refused, loci_name, NOT_HERE, ONE_LEFT, LAST_ROUND, OUT_OF_ROUNDS } = require("../present/own_turn.js");
+const { create_own_turn, is_silence, model_refused, loci_name, NOT_HERE, rounds_left, ONE_LEFT, LAST_ROUND, OUT_OF_ROUNDS } = require("../present/own_turn.js");
 const { create_relay } = require("../relay.js");
 
 const KEY = "sk-own-turn-SENTINEL-7f3a9c";
@@ -255,7 +255,9 @@ test("tool calls on every answer: 6 rounds run on Loci, the 7th is told the roun
   // the 7th request carries the six rounds: assistant tool_calls and their results, in order
   const last = up.got[6].body.messages;
   const results = last.filter((m) => m.role === "tool").map((m) => m.content);
-  assert.deepStrictEqual(results.slice(0, 4), Array(4).fill("〔recall 回来了〕"), "earlier results go back as Loci gave them");
+  assert.deepStrictEqual(results.slice(0, 4), [5, 4, 3, 2].map((n) => `〔recall 回来了〕\n\n${rounds_left(n)}`),
+    "each earlier round's result says how many rounds are left");
+  assert.strictEqual(rounds_left(5), "〔工具还能再用 5 轮。〕");
   assert.strictEqual(results[4], `〔recall 回来了〕\n\n${ONE_LEFT}`, "the round before the last says one is left");
   assert.strictEqual(results[5], `〔recall 回来了〕\n\n${LAST_ROUND}`, "the last round's result says it is the last");
   assert.strictEqual(last.at(-1).tool_call_id, last.at(-2).tool_calls[0].id);
@@ -311,7 +313,9 @@ test("a tool that is not Loci's gets 「ta 不在」; Loci's in the same answer 
   assert.deepStrictEqual(res.tools_refused, ["web_search"]);
   assert.deepStrictEqual(up.got[0].body.tools, offered, "the caller's tools, byte for byte");
   const results = up.got[1].body.messages.filter((m) => m.role === "tool").map((m) => m.content);
-  assert.deepStrictEqual(results, [NOT_HERE, "〔recall 回来了〕"]);
+  assert.deepStrictEqual(results, [NOT_HERE, `〔recall 回来了〕
+
+${rounds_left(5)}`], "the round's final result says how many are left");
   assert.strictEqual(NOT_HERE, "ta 不在，这个现在用不了。");
   assert.deepStrictEqual(loci.calls.map((c) => c.name), ["recall"], "web_search never reached Loci");
 });
@@ -335,7 +339,9 @@ test("a client's prefixed Loci name runs on Loci under the bare name; exact wins
   assert.deepStrictEqual(res.tools_used, ["recall"]);
   assert.deepStrictEqual(res.tools_refused, ["other__search"]);
   const results = up.got[1].body.messages.filter((m) => m.role === "tool").map((m) => m.content);
-  assert.deepStrictEqual(results, ["〔recall 回来了〕", NOT_HERE]);
+  assert.deepStrictEqual(results, ["〔recall 回来了〕", `${NOT_HERE}
+
+${rounds_left(5)}`]);
 });
 
 test("abort when she arrives, mid-stream: at once, not a failure, and no result line claims success", async () => {
