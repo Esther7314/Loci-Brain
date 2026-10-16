@@ -17,19 +17,31 @@
                     detail window (openSliceSource: GET /api/loci/grow/slices/{id}/source,
                     看原话 asks `?fetch=1`). A slice whose source is withdrawn, deleted or
                     held shows the API's `source_words` in place of what it says. Read
-                    only: the panel never handles a slice for the model.
+                    only: the panel never handles a slice for the model. With slicing
+                    off (the reply's `slicing_on` false) a line above the batches says
+                    so; the batches already there stay listed.
    #/grow/settings  (her frame grow——设置) the side model's two prompts, numbered: 01
                     tagging (key `backfill`), 02 slicing (key `slicer`, with 切片结果样例
                     under it: what a slicing gives back, folded). GET /api/loci/prompts,
                     POST /api/loci/prompts {key, text} to save, {key, reset: true} for
                     恢复默认; a card drawn again from the reply's `item`, a refusal in the
                     server's words under the buttons.
+                    Above 02, the slicing switch: /api/config `slices.enabled`, saved
+                    when flipped (POST /api/config {persist: true, slices}; a refusal
+                    says the server's words and the switch flips back). Off, the 02 card
+                    is shown greyed and cannot be saved. Its words are placeholders until
+                    she names them.
    ========================================================== */
 
 import * as api from "../api.js";
-import { h, fill, subbar, row, note, pagedList, footPager, clock, clickable, promptCard, sampleFold, errorLine } from "../ui.js";
+import { h, fill, subbar, row, note, pagedList, footPager, clock, clickable, promptCard, sampleFold, errorLine, sw } from "../ui.js";
 import { href } from "../router.js";
 import { openDetail, openSliceSource } from "../detail.js";
+
+// The slicing switch's words: placeholders, she names them.
+const SLICING = "Slicing";
+const SLICING_WHY = "Each night the day's chat is cut into pieces for him to claim. Off: nothing is cut, and what he writes during the day cannot point back to the original lines.";
+const SLICING_OFF = "Slicing is off. Nothing new is cut at night.";
 
 const TIP_SLICES = "每天夜里写日报的时候，副模型把这一天的聊天切成一小段一小段，每段配一句「在说什么」。导入时打的草稿也在这儿。这些还不是记忆，等他有空一段段看，自己决定写不写、怎么写。";
 
@@ -109,6 +121,7 @@ async function renderSlices(view) {
     load: (q) => api.get("/api/loci/grow/slices", q),
     items: (batches) => batches.map(batchGroup),
   });
+  if (list.reply.slicing_on === false) view.append(note(SLICING_OFF, "empty"));
   if (!list.total) return;
   list.el.classList.add("grouped", "batches");
   view.append(h("main", { class: "sections" }, list.el));
@@ -123,28 +136,65 @@ async function renderSettings(view) {
   const body = h("main", { class: "pcards" });
   view.append(bar, body);
 
-  let items;
+  let items, slicing;
   try {
-    items = (await api.get("/api/loci/prompts")).items || [];
+    const [prompts, config] = await Promise.all([api.get("/api/loci/prompts"), api.get("/api/config")]);
+    items = prompts.items || [];
+    slicing = !(config.slices && config.slices.enabled === false);
   } catch (e) {
     body.append(errorLine(e));
     return;
   }
   let n = 0;
+  let redrawSlicer = null;
   for (const { key, title, extra } of CARDS) {
     const card = items.find((c) => c.key === key);
     if (!card) continue;
     const no = String(++n).padStart(2, "0");
     const holder = h("div");
     const under = extra ? extra() : null;
-    const draw = (c) => fill(holder, promptCard({
-      no, title, card: c, extra: under,
-      onSave: async (text) => draw((await api.post("/api/loci/prompts", { key, text })).item),
-      onReset: async () => draw((await api.post("/api/loci/prompts", { key, reset: true })).item),
-    }));
+    let last = card;
+    const draw = (c) => {
+      last = c;
+      fill(holder, promptCard({
+        no, title, card: c, extra: under, off: key === "slicer" && !slicing,
+        onSave: async (text) => draw((await api.post("/api/loci/prompts", { key, text })).item),
+        onReset: async () => draw((await api.post("/api/loci/prompts", { key, reset: true })).item),
+      }));
+      holder.classList.toggle("off", key === "slicer" && !slicing);
+    };
     draw(card);
+    if (key === "slicer") {
+      redrawSlicer = () => draw(last);
+      body.append(slicingRow((on) => { slicing = on; redrawSlicer(); }, slicing));
+    }
     body.append(holder);
   }
+}
+
+/** The slicing switch (/api/config `slices.enabled`): saved when flipped; a refusal
+ *  flips it back and says why under it. `changed(on)` after a save went through. */
+function slicingRow(changed, on) {
+  const err = h("div");
+  const toggle = sw({
+    checked: on,
+    label: SLICING,
+    onChange: async (want) => {
+      fill(err);
+      toggle.disabled = true;
+      try {
+        await api.post("/api/config", { persist: true, slices: { enabled: want } });
+        changed(want);
+      } catch (e) {
+        toggle.setAttribute("aria-checked", String(!want));
+        fill(err, errorLine(e));
+      }
+      toggle.disabled = false;
+    },
+  });
+  return h("div", null,
+    row({ text: SLICING, why: SLICING_WHY, right: h("span", { class: "acts" }, toggle), layout: "big set" }),
+    err);
 }
 
 export default {

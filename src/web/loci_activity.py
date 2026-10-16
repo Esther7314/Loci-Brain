@@ -165,6 +165,7 @@ async def api_loci_grow_today(request: Request) -> Response:
 
 
 async def api_loci_grow_slices(request: Request) -> Response:
+    from core import _slicer as _sl
     from core import grow_view as _gv
     from . import panel_auth as _pa
     from .host_api import _slices_config
@@ -179,7 +180,8 @@ async def api_loci_grow_slices(request: Request) -> Response:
                                 registry=getattr(sh.bucket_mgr, "sources", None))
     except Exception as e:                       # noqa: BLE001
         return _failed("grow/slices", e)
-    return JSONResponse({**out, "scope": _scope_line(request)})
+    return JSONResponse({**out, "slicing_on": _sl.slicing_on(sh.config),
+                         "scope": _scope_line(request)})
 
 
 async def api_loci_grow_slice_source(request: Request) -> Response:

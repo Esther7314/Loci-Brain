@@ -61,10 +61,19 @@ async def api_v2_slices_take(request: Request) -> Response:
     — state "withdrawn", "deleted", "held" or "revised" — and no slice, gist or line
     order is stored; the same batch sent again is refused as above. The host sends the
     batch again without the withdrawn, deleted or held lines, and slices a revised line
-    from its new version."""
+    from its new version.
+
+    With slicing turned off (`slices.enabled`, grow's 设置; core/_slicer.slicing_on) the
+    batch is not read: 200 with {"sliced": false, "note": "slicing_off", "message": …},
+    nothing cut, nothing stored, no earlier slice expired. The host goes on as if the
+    day had no slices; it should not send the batch again."""
     from starlette.responses import JSONResponse
     from core import _slicer as _sl
     from core import _sources as _src
+    if not _sl.slicing_on(sh.config):
+        return JSONResponse({"sliced": False, "note": "slicing_off",
+                             "message": "slicing is turned off in Loci's settings (grow); "
+                                        "nothing was cut or stored"})
     try:
         body = await sh._read_json_object(request)
     except (ValueError, json.JSONDecodeError) as e:

@@ -514,6 +514,25 @@ def test_the_intake_route_answers_400_and_502(store, monkeypatch):
     assert store.slices.pending_count() == 0
 
 
+def test_with_slicing_off_the_intake_cuts_and_stores_nothing(store, monkeypatch):
+    from web import _shared as sh
+    calls = []
+    call = _routes(monkeypatch, store, stub(THREE, calls=calls))
+    monkeypatch.setattr(sh, "config", {"slices": {"max_lines_per_batch": 100, "enabled": False}})
+    status, out = call("POST", body())
+    assert status == 200 and out["sliced"] is False and out["note"] == "slicing_off", out
+    assert calls == [] and store.slices.pending_count() == 0
+    status, listed = call("GET")
+    assert status == 200 and listed["pending"] == 0
+
+
+def test_slicing_is_on_unless_the_switch_says_off():
+    assert SL.slicing_on(None) and SL.slicing_on({}) and SL.slicing_on({"slices": {}})
+    assert SL.slicing_on({"slices": {"enabled": "maybe"}})
+    assert not SL.slicing_on({"slices": {"enabled": False}})
+    assert not SL.slicing_on({"slices": {"enabled": "false"}})
+
+
 def test_a_line_withdrawn_while_slicing_answers_400_naming_it(store, monkeypatch):
     from core import _source_change as SC
     from core.scope import Host

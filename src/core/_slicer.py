@@ -84,7 +84,7 @@ whole (`purge`): drafts are not kept as history.
 
 Exports: SLICER_PROMPT_VERSION · SLICER_PROMPT · GIST_MAX · DRAFT_MAX · Slice ·
          SlicerError · BatchError · BatchForbidden · BatchStale · REVISED · SliceError ·
-         slice_lines ·
+         SWITCH · slicing_on · slice_lines ·
          parse_slices · side_model ·
          read_batch · batch_id_of · fingerprint_of · slice_fingerprint · FINGERPRINT_BY ·
          guess_covering · take_batch · PendingSlices (record_batch · get · record_for ·
@@ -107,7 +107,7 @@ from typing import Awaitable, Callable, Optional
 
 from . import _sources as _src
 from . import _when as _w
-from utils import clean_llm_json
+from utils import clean_llm_json, parse_bool
 
 # ============================================================
 # The side model's contract
@@ -140,6 +140,11 @@ DEFAULT_GUESS_THRESHOLD = 0.65
 # A batch over this many lines is refused (send it in parts). Config:
 # slices.max_lines_per_batch. A Lento day is a few hundred lines.
 DEFAULT_MAX_LINES_PER_BATCH = 2000
+# Slicing is optional: with `slices.enabled` false (grow's 设置) a host's batch is
+# answered without cutting or storing anything, and memories written during the day get
+# no source after the fact. Imports draft through slice_lines on their own and are not
+# under it.
+SWITCH = "enabled"
 # One side-model call takes at most this many lines / characters of prompt; a bigger
 # batch is sliced in consecutive chunks, and a topic running across a chunk edge comes
 # back as two slices.
@@ -335,6 +340,15 @@ async def slice_lines(lines: list[dict], *, model: ModelCall,
 
 _OWN_SLICERS: dict[str, object] = {}
 _OWN_SLICERS_LOCK = threading.Lock()
+
+
+def slicing_on(config: Optional[dict]) -> bool:
+    """`slices.enabled` (SWITCH): whether a host's batch is sliced. On when absent or
+    not readable as a switch."""
+    cfg = (config or {}).get("slices")
+    if not isinstance(cfg, dict) or SWITCH not in cfg:
+        return True
+    return parse_bool(cfg.get(SWITCH), default=True)
 
 
 def own_slicer_settings(config: Optional[dict]) -> Optional[dict]:

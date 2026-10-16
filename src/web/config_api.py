@@ -10,7 +10,8 @@ the new ones.
 - /api/config (GET/POST): read runtime config and hot-update it (including hot-swapping
   the embedding backend, the similarity lines in `thresholds:`, core/thresholds.py,
   muse's reminder in `muse:`, core/_muse.muse_config, and the dream's rules in `dream:`,
-  core/_dream.dream_config). The two keys (`dehydration.api_key`, `embedding.api_key`)
+  core/_dream.dream_config, and whether a host's batch is sliced in `slices:`,
+  core/_slicer.slicing_on). The two keys (`dehydration.api_key`, `embedding.api_key`)
   are written to config.yaml when persisted and only ever come back masked; an
   environment variable still overrides either at startup (utils.load_config).
   `config.yaml` is the single source of truth.
@@ -116,6 +117,21 @@ def _muse_changes(payload) -> dict:
     if _MUSE_SWITCH in payload:
         out[_MUSE_SWITCH] = _parse_bool(payload[_MUSE_SWITCH])
     return out
+
+
+# grow's 设置: whether a host's batch is sliced (core/_slicer.slicing_on). Off, POST
+# /api/v2/slices cuts and stores nothing (web/host_api.api_v2_slices_take).
+def _slices_view(config: Mapping) -> dict:
+    from core import _slicer as SL
+    return {SL.SWITCH: SL.slicing_on(dict(config)), "defaults": {SL.SWITCH: True}}
+
+
+def _slices_changes(payload) -> dict:
+    """The `slices` values a request sets: the switch only, read as a bool."""
+    from core import _slicer as SL
+    if not isinstance(payload, dict) or SL.SWITCH not in payload:
+        return {}
+    return {SL.SWITCH: _parse_bool(payload[SL.SWITCH])}
 
 
 # The dream's rules (dream-settings 「规矩」): the `dream:` numbers POST /api/config
@@ -400,6 +416,7 @@ def register(mcp) -> None:
             },
             "muse": _muse_view(sh.config),
             "dream": _dream_view(sh.config),
+            "slices": _slices_view(sh.config),
             # The similarity lines as they run now, each with its default and range, and
             # whether the embedding model changed since they were last looked at (a note
             # for the person; nothing is reset).
@@ -504,6 +521,12 @@ def register(mcp) -> None:
             if "dream" in body and not isinstance(body.get("dream"), dict):
                 return JSONResponse({"error": "dream must be an object"}, status_code=400)
             dream_changes, dream_problem = _dream_changes(body.get("dream"), sh.config)
+            if "slices" in body and not isinstance(body.get("slices"), dict):
+                return JSONResponse({"error": "slices must be an object"}, status_code=400)
+            try:
+                slices_changes = _slices_changes(body.get("slices"))
+            except ValueError as e:
+                return JSONResponse({"error": f"slices: {e}"}, status_code=400)
             if dream_problem:
                 return JSONResponse({"error": dream_problem}, status_code=400)
             # The side model's 在哪儿跑 and Thinking, and the two keys: checked before
@@ -811,6 +834,17 @@ def register(mcp) -> None:
                 section[key] = val
                 updated.append(f"dream.{key}")
 
+        # --- Slicing on or off: applied to the running config, which the next batch a
+        # host sends reads (core/_slicer.slicing_on) ---
+        if slices_changes:
+            section = sh.config.get("slices")
+            if not isinstance(section, dict):
+                section = {}
+                sh.config["slices"] = section
+            for key, val in slices_changes.items():
+                section[key] = val
+                updated.append(f"slices.{key}")
+
         # --- The similarity lines (core/thresholds): applied to the running config, so
         # the next search, write or fold reads them; None takes a line back to its
         # default. Saving a line or dismissing the note settles the retune note on the
@@ -913,6 +947,13 @@ def register(mcp) -> None:
                         sc_dream = {}
                         save_config["dream"] = sc_dream
                     sc_dream.update(dream_changes)
+
+                if slices_changes:
+                    sc_sl = save_config.get("slices")
+                    if not isinstance(sc_sl, dict):
+                        sc_sl = {}
+                        save_config["slices"] = sc_sl
+                    sc_sl.update(slices_changes)
 
                 if threshold_changes:
                     sc_th = save_config.get("thresholds")

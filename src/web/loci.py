@@ -96,7 +96,8 @@ them writes something.
     POST /api/v2/slices               -> the host hands over a day's raw lines; a side model
                                          slices them and the slices are stored as pending,
                                          with the batch's `report_at` when it carries one
-                                         (hook key; the raw text is not kept)
+                                         (hook key; the raw text is not kept); with
+                                         slicing off (`slices.enabled`) nothing is cut
     POST /api/v2/source/change        -> a host's change to one piece of its material: the
                                          source registry, the block on what stood on it, and
                                          for withdrawn / deleted the clearing of every place
@@ -193,7 +194,7 @@ reads too (panel_auth.HOST_READ_PATHS); the rest are the panel's alone. Two of t
                                          else local midnight)
     GET  /api/loci/grow/slices        -> every batch of slices, handled and replaced ones
                                          included, each slice with its state and the guesses
-                                         at or above the guess line
+                                         at or above the guess line; `slicing_on`
     GET  /api/loci/grow/slices/{id}/source -> one slice's 原话: its source with the
                                          registry's state and whether its lines can be
                                          asked for; `?fetch=1` asks (a host's lines of the

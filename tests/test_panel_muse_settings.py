@@ -155,3 +155,18 @@ def test_days_and_thoughts_are_counted_together_against_the_threshold(world, mon
     # The age condition still holds alongside the sum.
     _waiting(monkeypatch, 1, 1, days_old=1)
     assert asyncio.run(L.build_muse_pending())["worth_poking"] is False
+
+
+# grow's 设置 shares the doorway: the slicing switch (`slices.enabled`).
+
+def test_the_slicing_switch_reads_on_and_is_saved_off(world):
+    from core import _slicer as SL
+    status, out = world["call"]("GET", "/api/config")
+    assert status == 200 and out["slices"] == {"enabled": True, "defaults": {"enabled": True}}
+    status, out = world["call"]("POST", "/api/config", {"persist": True, "slices": {"enabled": False}})
+    assert status == 200 and "slices.enabled" in out["updated"], out
+    assert not SL.slicing_on(world["config"])
+    saved = yaml.safe_load(world["config_path"].read_text(encoding="utf-8"))
+    assert saved["slices"] == {"enabled": False}
+    assert world["call"]("GET", "/api/config")[1]["slices"]["enabled"] is False
+    assert world["call"]("POST", "/api/config", {"slices": [1]})[0] == 400
