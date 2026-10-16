@@ -55,7 +55,8 @@ class Reply:
 
 def routes(monkeypatch, *, locked=False):
     """call(method, path, query=b"", body=None, origin=True, ctype="application/json",
-    key=None) -> Reply."""
+    key=None, params=None) -> Reply. A route with a parameter is called by its template
+    (`/api/loci/periods/{bucket_id}`) with `params` filling it."""
     from starlette.requests import Request
     import web
     from web import loci as Wb
@@ -75,7 +76,7 @@ def routes(monkeypatch, *, locked=False):
     monkeypatch.setattr(PA, "hook_token", lambda: "s3cret")
 
     def call(method, path, query=b"", body=None, origin=True, ctype="application/json",
-             key=None):
+             key=None, params=None):
         headers = [(b"host", b"testserver")]
         if origin:
             headers.append((b"origin", b"http://testserver"))
@@ -90,6 +91,6 @@ def routes(monkeypatch, *, locked=False):
         async def receive():
             return {"type": "http.request", "body": data, "more_body": False}
         req = Request({"type": "http", "method": method, "path": path, "headers": headers,
-                       "query_string": query}, receive)
+                       "query_string": query, "path_params": params or {}}, receive)
         return Reply(asyncio.run(table[(method, path)](req)))
     return call

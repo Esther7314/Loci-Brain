@@ -494,6 +494,12 @@ span.lnk { font-size: 13px; }
    the full width, the 不建议改 line under it with 恢复默认 · 保存 at its right */
 .pcards { display: flex; flex-direction: column; gap: var(--s-3); }
 .pcards > .off .pcard { opacity: 0.45; }
+.pform { display: flex; flex-direction: column; gap: 14px; }
+.pform .inp { width: 100%; }
+.pform > .st { margin: 8px 0 0; }
+.pask { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.padd .pask .inp { flex: 1; min-width: 0; }
+.padd .rows { margin-top: 6px; }
 .subbar.tight { padding-top: var(--s-4); padding-bottom: var(--s-5); }
 /* the way back in the tabs' place: < and the page's name */
 .tabs a.back { display: inline-flex; gap: var(--s-3); }

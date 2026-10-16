@@ -22,7 +22,10 @@ same thing.
                          the model's own judgement — it only hangs a `disputed` mark
                          with her note, and the model decides (`content_fix`,
                          core/_invalidation.py). It is not offered again while one hangs
-                         (`disputed_view`).
+                         (`disputed_view`). A period (`__大event__`) is offered 字写错了
+                         and 删除 only: its name and its span are edited on the regrow/fold
+                         page's 日子 column (core/periods.py), and a corrected copy written
+                         as a plain event would lose both.
   lineage(...)           关联: what came after it (derived entries, the gists covering it,
                          the periods it falls in, its new version) and its signposts (the
                          cue it waits on, the holds live on it). Every linked entry goes
@@ -208,6 +211,8 @@ def edit_actions(meta: dict) -> list[str]:
     m = meta or {}
     if _V.state_of(m) != _V.LIVE or str(m.get("superseded_by") or "").strip():
         return []
+    if _B.is_big(m):
+        return [TYPO, DELETE]
     if is_event_room(m.get("room")):
         return [TYPO, CONTENT, DELETE]
     if is_mind_room(m.get("room")) and not _I.disputed_open(m):

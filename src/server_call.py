@@ -8,7 +8,8 @@ Every tool face (server_tools/<tool>.py) hands its coroutine to `_with_notice`, 
 resolves who is calling (the request's host, read scope and write key, core/scope.py) and
 refuses a call that may not run; logs the three phases (entry / ok / err); collects the
 call's W/I notices; turns an exception into the readable OB-E004 string; and appends a
-poke from the panel's muse page waiting to be said (core/_nudge.py).
+poke from the panel's muse page waiting to be said (core/_nudge.py) and what the owner
+changed on the regrow/fold page's 日子 / 想法 column (core/_panel_changes.py).
 
 server.py binds the MCP instance (its request context says who is calling) and the store
 (the poke line reads it) with bind(), before any tool is mounted, and re-exports
@@ -157,7 +158,8 @@ async def _with_notice(coro: Awaitable[str], op: str = "", args: dict | None = N
        is resolved (who is calling, what it may read, its write key) and set for the call.
     2. On exit: the concatenation order is [scope line, on a read] + [deletion notice] +
        [tool output] + [the W/I notices this call produced] + [a poke from the panel's
-       muse page waiting to be said, said once (core/_nudge.py)].
+       muse page waiting to be said, said once (core/_nudge.py)] + [what the owner changed
+       on the panel's 日子 / 想法 column, said once (core/_panel_changes.py)].
     3. On exception: catch it, record OB-E004, and return the standard format (including
        the last 15 log lines), so the MCP protocol layer never sees a bare exception string.
     4. When op is non-empty, emit the structured log at all three points.
@@ -221,7 +223,7 @@ async def _run_with_notice(coro: Awaitable[str], op: str = "", args: dict | None
     except Exception:
         extras = ""
     body = result + extras if extras else result
-    return body + await _nudge_lines()
+    return body + await _nudge_lines() + await _panel_change_text()
 
 
 async def _nudge_lines() -> str:
@@ -236,3 +238,23 @@ async def _nudge_lines() -> str:
         logger.warning(f"[nudge] could not hand out the poke line: {type(e).__name__}: {e}")
         return ""
     return "".join(f"\n\n{line}" for line in lines)
+
+
+async def _panel_change_text() -> str:
+    """What the owner changed on the 日子 / 想法 column since he last heard, said once, at
+    the end of the next tool reply that reads the whole library (core/_panel_changes.py).
+    Never fails the call."""
+    from core import _panel_changes, _when
+    from tools._common import read_scope
+    from utils import panel_actor
+    try:
+        if not _panel_changes.waiting(bucket_mgr.base_dir):
+            return ""
+        view = await read_scope()
+        text = _panel_changes.take_text(bucket_mgr.base_dir, _when.now(),
+                                        whole_library=bool(view.whole_library),
+                                        actor=panel_actor())
+    except Exception as e:                      # noqa: BLE001
+        logger.warning(f"[panel changes] could not hand them out: {type(e).__name__}: {e}")
+        return ""
+    return f"\n\n{text}" if text else ""

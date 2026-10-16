@@ -59,9 +59,9 @@ of what the panel can reach.
                                          (`?cursor=…&limit=`) and never sees those numbers
                                          (hook key; core/_ledger.py)
 
-🔴 THE WRITE SURFACE — sixteen POST routes here and six in the page blocks below
-(entry/fix, names/action, trace, muse/nudge, embedding/backfill, prompts), and every one of
-them writes something.
+🔴 THE WRITE SURFACE — sixteen POST routes here and eleven in the page blocks below
+(entry/fix, names/action, trace, muse/nudge, embedding/backfill, prompts, and the five of
+periods/*), and every one of them writes something.
 
     POST /api/loci/similar/action     -> a human verdict on a suspected duplicate: keep
                                          both (writes _state/similar_kept.json: ids and
@@ -173,6 +173,17 @@ offset / limit / as_of. 🔴 POST /api/loci/trace writes.
                                          done about a moved basis in the last two weeks,
                                          newest first, from the ledger with seq as each
                                          row's id (core/changes_feed.py)
+    GET  /api/loci/periods            -> the 日子 / 想法 column: every period fold drew and
+                                         every merged thought (core/periods.py)
+    GET  /api/loci/periods/{id}       -> one of them with its members
+    POST /api/loci/periods/edit       -> a period's name and span
+    POST /api/loci/periods/delete     -> a period put away, its members untouched
+    POST /api/loci/periods/merge      -> two periods made one
+    POST /api/loci/periods/day        -> a memory's day, or a merged thought's
+    POST /api/loci/periods/cover      -> a merged thought's roster
+                                         (the five: web/loci_periods.py, through trace
+                                         where trace does it, each told to the model on
+                                         his next call, core/_panel_changes.py)
 
 What Loci handed out and took in — turns, recall's timeline, usage, grow, muse, dreams,
 vectors (web/loci_activity.py; core/activity.py, core/grow_view.py, core/muse_view.py,
@@ -275,6 +286,8 @@ core/profile.py):
                           (core/census.py)
     web/loci_mind.py      breath/last, awake, hanging, trace, changes/recent
                           (core/breath_snapshot.py, core/profile.py, core/changes_feed.py)
+    web/loci_periods.py   periods, periods/{id}, periods/edit · delete · merge · day ·
+                          cover (core/periods.py, core/_panel_changes.py)
     web/loci_activity.py  turns, recall/timeline, usage, grow/today, grow/slices, muse,
                           muse/nudge, dreams, embedding/missing, embedding/backfill
                           (core/activity.py, core/grow_view.py, core/muse_view.py,
@@ -395,6 +408,15 @@ def register(mcp) -> None:
     mcp.custom_route("/api/loci/hanging", methods=["GET"])(_mind.api_loci_hanging)
     mcp.custom_route("/api/loci/trace", methods=["POST"])(_mind.api_loci_trace)
     mcp.custom_route("/api/loci/changes/recent", methods=["GET"])(_mind.api_loci_changes_recent)
+    from . import loci_periods as _periods
+    mcp.custom_route("/api/loci/periods", methods=["GET"])(_periods.api_loci_periods)
+    mcp.custom_route("/api/loci/periods/edit", methods=["POST"])(_periods.api_loci_period_edit)
+    mcp.custom_route("/api/loci/periods/delete", methods=["POST"])(
+        _periods.api_loci_period_delete)
+    mcp.custom_route("/api/loci/periods/merge", methods=["POST"])(_periods.api_loci_period_merge)
+    mcp.custom_route("/api/loci/periods/day", methods=["POST"])(_periods.api_loci_period_day)
+    mcp.custom_route("/api/loci/periods/cover", methods=["POST"])(_periods.api_loci_period_cover)
+    mcp.custom_route("/api/loci/periods/{bucket_id}", methods=["GET"])(_periods.api_loci_period)
 
     # ---------------------------------------------------------
     # What Loci handed out and took in: turns, recall's timeline, usage, grow, muse and

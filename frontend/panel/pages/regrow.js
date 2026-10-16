@@ -15,22 +15,31 @@
                      the server remembers the pair and leaves it out of the list until either
                      entry's text changes; the list is read again after it. Sinking one of
                      the pair is not offered: whether two merge is the model's call.
+   #/regrow/periods  「日子 / 想法」 (no board; she asked 10-16 for it to follow the
+                     panel's own look): every period fold drew and every merged thought,
+                     each opening a glass window where she renames, moves, merges or
+                     deletes a period, moves a memory in or out of one (its own day), and
+                     changes a thought's day and what it merged (periodform.js). 他 is told
+                     of every change on his next tool call.
    ========================================================== */
 
 import * as api from "../api.js";
 import { h, subbar, group, row, btn, errorLine, fill, clickable, pagedList, footPager } from "../ui.js";
 import { href } from "../router.js";
 import { openDetail } from "../detail.js";
+import { renderColumn, TIP_COLUMN } from "../periodform.js";
 
 const LINE = "看看最近发生了什么变化？";
 const TIP = "regrow = 他把一条记忆重写一版。fold = 收拢：几条合成一条概括，或者把几天圈成一段日子。都是他自己做的，这页只给你看，只放最近两周。";
 const SIMILAR = "疑似重复";
 const KEEP = "留着";
+const PERIODS = "日子 / 想法";
 
 function tabs(on) {
   return [
     { label: LINE, href: href("regrow"), on: on === "changes" },
     { label: SIMILAR, href: href("regrow", "similar"), on: on === "similar" },
+    { label: PERIODS, href: href("regrow", "periods"), on: on === "periods" },
   ];
 }
 
@@ -123,8 +132,17 @@ async function renderSimilar(view) {
   footPager(view, list);
 }
 
+async function renderPeriods(view) {
+  view.append(subbar({ tabs: tabs("periods"), tip: TIP_COLUMN }));
+  const main = h("main", { class: "sections" });
+  view.append(main);
+  await renderColumn(main);
+}
+
 export default {
   render(view, route) {
-    return route.tab === "similar" ? renderSimilar(view) : renderChanges(view);
+    if (route.tab === "similar") return renderSimilar(view);
+    if (route.tab === "periods") return renderPeriods(view);
+    return renderChanges(view);
   },
 };

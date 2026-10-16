@@ -103,11 +103,11 @@ def _check_when(when: str, meta: dict) -> str | None:
        let a "3w" land quietly on an event.
     """
     if _is_big(meta):
-        m = SPAN_RE.match(when)
-        if not m:
+        if not SPAN_RE.match(when):
             return ('时期的 when 要写成起止："2026-07-31..2026-08-05"，'
                     '进行中就把止留空："2026-07-31.."。')
-        return _check_real_dates(m.group(1), m.group(2) or "")
+        # fold's own gate: a real day on both ends, and the end not before the start.
+        return _F.check_span(when)[2] or None
     if _H.is_hold(meta):
         # A hold's when is the day it ends or the days it covers (core/_holds.py).
         return _H.check_hold_when(when) or None

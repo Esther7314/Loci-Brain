@@ -1120,7 +1120,11 @@ class WriteMixin:
                 elif k == "summary":
                     post[k] = self._sanitize_text(str(kwargs[k])).strip()[:_SUMMARY_MAX]
                 elif k == "when":
-                    post[k] = str(kwargs[k]).strip()[:_WHEN_MAX]
+                    w = "" if kwargs[k] is None else str(kwargs[k]).strip()[:_WHEN_MAX]
+                    if w:
+                        post[k] = w
+                    else:
+                        post.metadata.pop(k, None)
                 elif k == "dont_surface":
                     post[k] = kwargs[k]
                 elif k == "first_of_kind":
