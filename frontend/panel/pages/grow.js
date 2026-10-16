@@ -20,28 +20,28 @@
                     only: the panel never handles a slice for the model. With slicing
                     off (the reply's `slicing_on` false) a line above the batches says
                     so; the batches already there stay listed.
-   #/grow/settings  (her frame grow——设置) the side model's two prompts, numbered: 01
-                    tagging (key `backfill`), 02 slicing (key `slicer`, with 切片结果样例
-                    under it: what a slicing gives back, folded). GET /api/loci/prompts,
+   #/grow/settings  (her frame grow——设置) three numbered blocks: 01 the tagging
+                    prompt (key `backfill`), 02 切片开关, 03 the slicing prompt (key
+                    `slicer`, with 切片结果样例 under it: what a slicing gives back,
+                    folded). GET /api/loci/prompts,
                     POST /api/loci/prompts {key, text} to save, {key, reset: true} for
                     恢复默认; a card drawn again from the reply's `item`, a refusal in the
                     server's words under the buttons.
-                    Above 02, the slicing switch: /api/config `slices.enabled`, saved
-                    when flipped (POST /api/config {persist: true, slices}; a refusal
-                    says the server's words and the switch flips back). Off, the 02 card
-                    is shown greyed and cannot be saved. Its words are placeholders until
-                    she names them.
+                    02 切片开关 is /api/config `slices.enabled`, saved when flipped
+                    (POST /api/config {persist: true, slices}; a refusal says the
+                    server's words and the switch flips back). Off, the 03 card is shown
+                    greyed and cannot be saved.
    ========================================================== */
 
 import * as api from "../api.js";
-import { h, fill, subbar, row, note, pagedList, footPager, clock, clickable, promptCard, sampleFold, errorLine, sw } from "../ui.js";
+import { h, fill, subbar, row, note, pagedList, footPager, clock, clickable, promptCard, sampleFold, errorLine, sw, setBlock } from "../ui.js";
 import { href } from "../router.js";
 import { openDetail, openSliceSource } from "../detail.js";
 
-// The slicing switch's words: placeholders, she names them.
-const SLICING = "Slicing";
-const SLICING_WHY = "Each night the day's chat is cut into pieces for him to claim. Off: nothing is cut, and what he writes during the day cannot point back to the original lines.";
-const SLICING_OFF = "Slicing is off. Nothing new is cut at night.";
+// The slicing switch's words (hers, 10-16).
+const SLICING = "切片开关";
+const SLICING_WHY = "写日报之前会把今天的原文发给副模型、分段写单子，然后拿给他认领。关了没有切片，他的记忆回不到原话。";
+const SLICING_OFF = "副模型切片关掉了，晚上没有新的切片。";
 
 const TIP_SLICES = "每天夜里写日报的时候，副模型把这一天的聊天切成一小段一小段，每段配一句「在说什么」。导入时打的草稿也在这儿。这些还不是记忆，等他有空一段段看，自己决定写不写、怎么写。";
 
@@ -150,6 +150,8 @@ async function renderSettings(view) {
   for (const { key, title, extra } of CARDS) {
     const card = items.find((c) => c.key === key);
     if (!card) continue;
+    // The switch takes the number before the slicing card.
+    if (key === "slicer") ++n;
     const no = String(++n).padStart(2, "0");
     const holder = h("div");
     const under = extra ? extra() : null;
@@ -166,15 +168,15 @@ async function renderSettings(view) {
     draw(card);
     if (key === "slicer") {
       redrawSlicer = () => draw(last);
-      body.append(slicingRow((on) => { slicing = on; redrawSlicer(); }, slicing));
+      body.append(slicingBlock(String(n - 1).padStart(2, "0"), (on) => { slicing = on; redrawSlicer(); }, slicing));
     }
     body.append(holder);
   }
 }
 
-/** The slicing switch (/api/config `slices.enabled`): saved when flipped; a refusal
+/** 切片开关 (/api/config `slices.enabled`), numbered `no`: saved when flipped; a refusal
  *  flips it back and says why under it. `changed(on)` after a save went through. */
-function slicingRow(changed, on) {
+function slicingBlock(no, changed, on) {
   const err = h("div");
   const toggle = sw({
     checked: on,
@@ -192,8 +194,8 @@ function slicingRow(changed, on) {
       toggle.disabled = false;
     },
   });
-  return h("div", null,
-    row({ text: SLICING, why: SLICING_WHY, right: h("span", { class: "acts" }, toggle), layout: "big set" }),
+  return setBlock(no, SLICING, {},
+    row({ text: SLICING_WHY, right: h("span", { class: "acts" }, toggle), layout: "big set" }),
     err);
 }
 
