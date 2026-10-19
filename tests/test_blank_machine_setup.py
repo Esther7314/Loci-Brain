@@ -52,7 +52,7 @@ def test_something_pulls_the_embedding_model():
         "everything up green and fail on the first write.")
 
 
-def test_the_pull_names_the_model_the_env_example_configures():
+def test_the_pull_names_the_model_the_default_configures():
     # Criterion: pulling *a* model is not enough — it has to be the one the configuration
     # points at. Two files each correct on their own and disagreeing with each other is
     # how this class of failure survives review in the first place.
@@ -67,13 +67,22 @@ def test_the_pull_names_the_model_the_env_example_configures():
     pulled = re.findall(r"ollama\s+pull\s+(\S+)", commands)
     assert pulled, "no `ollama pull` invocation found in any service command"
 
-    configured = [line.split("=", 1)[1].strip()
-                  for line in ENV_EXAMPLE.splitlines()
-                  if line.startswith("LOCI_EMBED_MODEL=")]
-    assert configured, ".env.example no longer sets LOCI_EMBED_MODEL"
-    assert configured[0] in pulled, (
-        f".env.example configures {configured[0]!r}, but what actually gets pulled is "
+    configured = DEFAULT_CONFIG["embedding"]["model"]
+    assert configured in pulled, (
+        f"config.default.yaml configures {configured!r}, but what actually gets pulled is "
         f"{pulled} — the stack would come up and fail on the first write")
+
+
+def test_the_pull_comes_with_ollama_and_only_with_it():
+    # Criterion: Ollama is opt-in (a profile). The pull has to share that profile: without
+    # it a plain `up` would wait on a container that never starts, and with a different
+    # one `--profile ollama` would bring up an Ollama with no model in it.
+    puller = next(svc for svc in SERVICES.values()
+                  if "pull" in " ".join(str(v) for v in (svc.get("command") or [])))
+    assert SERVICES["ollama"].get("profiles") and puller.get("profiles") == SERVICES["ollama"]["profiles"]
+    dep = SERVICES["loci-brain"].get("depends_on") or {}
+    assert not isinstance(dep, list) and dep.get("ollama", {}).get("required") is False, (
+        "loci-brain must not require ollama: a plain `docker compose up` leaves it out")
 
 
 def test_the_pull_runs_once_rather_than_restarting_forever():
@@ -85,20 +94,22 @@ def test_the_pull_runs_once_rather_than_restarting_forever():
     assert str(puller.get("restart", "")).strip('"') == "no"
 
 
-def test_the_hook_token_is_in_the_env_example():
-    # Criterion: the key exists in the code and worked; it was simply in no file anybody
-    # copies. Following the recommended setup without it silently stops dreams arriving.
-    assert "LOCI_HOOK_TOKEN" in ENV_EXAMPLE
-
-
-def test_the_env_example_says_when_the_hook_token_becomes_necessary():
-    # Criterion: a bare variable name is not enough. The trap is that it is unnecessary
-    # right up until the moment someone follows the advice to lock the panel — so the
-    # example has to name that moment, not just the variable.
-    block = ENV_EXAMPLE.split("LOCI_HOOK_TOKEN")[0][-500:]
-    assert "密码" in block or "锁" in block, (
-        "LOCI_HOOK_TOKEN is listed but nothing says it becomes required once the panel "
-        "is locked — which is the only situation in which its absence bites")
+def test_the_keys_are_generated_where_compose_keeps_them():
+    # Criterion: the bridge's key used to be in no file anybody copies, and following the
+    # advice to lock the panel silently stopped dreams arriving. Now the image runs the
+    # package launcher, which generates every key on the first start into the data
+    # directory — so that directory has to be a volume, or the keys (and the pairing with
+    # the gateway written into config.yaml) would be regenerated on every new container.
+    entry = (ROOT / "entrypoint.sh").read_text(encoding="utf-8")
+    assert "package/launcher.py" in entry
+    launcher = (ROOT / "package" / "launcher.py").read_text(encoding="utf-8")
+    for key in ("LOCI_HOOK_TOKEN", "LOCI_HOST_TOKEN_GATEWAY", "LOCI_FETCH_TOKEN_GATEWAY",
+                "LOCI_GATEWAY_PASSPHRASE"):
+        assert f'"{key}"' in launcher.split("KEYS = (", 1)[1].split(")", 1)[0], key
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    assert "LOCI_DATA_DIR=/app/data" in dockerfile
+    targets = [str(v).split(":")[-1] for v in SERVICES["loci-brain"].get("volumes") or []]
+    assert "/app/data" in targets and "/app/buckets" in targets
 
 
 @pytest.mark.parametrize("key", ["LOCI_COMPRESS_API_KEY", "LOCI_EMBED_BASE_URL",
@@ -138,10 +149,10 @@ def test_the_default_embedding_does_not_point_at_a_cloud_host():
 def test_the_default_embedding_model_is_the_one_the_env_example_configures():
     # Criterion: pointing at the local endpoint with a model name that endpoint has never
     # heard of fails on the first write — the same invisible failure as the missing pull.
-    configured = [line.split("=", 1)[1].strip()
+    configured = [line.split("=", 1)[1].split("#", 1)[0].strip()
                   for line in ENV_EXAMPLE.splitlines()
-                  if line.startswith("LOCI_EMBED_MODEL=")]
-    assert configured, ".env.example no longer sets LOCI_EMBED_MODEL"
+                  if line.lstrip("# ").startswith("LOCI_EMBED_MODEL=")]
+    assert configured, ".env.example no longer names LOCI_EMBED_MODEL"
     assert DEFAULT_CONFIG["embedding"]["model"] == configured[0], (
         f"config.default.yaml defaults to {DEFAULT_CONFIG['embedding']['model']!r} while "
         f".env.example configures {configured[0]!r} — the two files handed to a new user "

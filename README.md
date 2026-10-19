@@ -21,11 +21,13 @@
 ```bash
 git clone https://github.com/Esther7314/Loci-Brain.git
 cd Loci-Brain
-cp .env.example .env
 docker compose up -d
 ```
 
-起了之后，面板在 `http://127.0.0.1:18002/loci`，接下来跟第二部分一样。
+一个容器里同时跑着 Loci 和网关，哪个挂了会自己拉起来。起了之后，面板在 `http://127.0.0.1:18002/loci`，接下来跟第二部分一样，只有一处不同：
+网关地址和 MCP 的钥匙去面板 setting 页「连接地址」那一块抄（Docker 里网关地址带一段口令）。
+
+要用本地向量模型（ollama）：`docker compose --profile ollama up -d`。时区不在东八区的，先 `cp .env.example .env` 改一下 `LOCI_TZ`。
 
 ⚠️ 放在云端的话：先在面板上设密码，端口别直接开到公网。不然够得着这个端口的人都能读走全部记忆。
 

@@ -1,7 +1,11 @@
-# Loci Brain —— 起法：cp .env.example .env，填好，然后 docker compose up -d
+# Loci Brain —— 起法：docker compose up -d（要改时区之类的，先 cp .env.example .env 再改）
 #
-# 记忆全在 ./buckets 里（宿主机上，你自己的盘）。容器只是个跑代码的壳，
-# 删了重建不会丢东西。
+# 一个容器里跑 Loci 和它的网关（package/launcher.py 一起起、一起守，哪个挂了拉哪个）。
+# 记忆在 ./buckets，钥匙和网关自己的账在 ./data（都在宿主机上，你自己的盘）。
+# 容器只是个跑代码的壳，删了重建不会丢东西。
+#
+# 要本地向量模型（ollama + bge-m3）：docker compose --profile ollama up -d
+# 不加 --profile 就不起 ollama，向量模型在面板 setting 页里配云端的。
 
 services:
   loci-brain:
@@ -15,24 +19,29 @@ services:
     container_name: loci-brain
     restart: unless-stopped
     ports:
-      # 🔴 默认只开在本机。要让局域网/公网够得到，自己改成 "18002:8000" ——
-      #    但先想清楚：这个服务**没有鉴权**，开出去等于把记忆摊在路边。
-      - "127.0.0.1:18002:8000"
+      # 🔴 默认只开在本机。要让外面够得到，去掉前面的 127.0.0.1: ——
+      #    先在面板上设好密码。网关的每条路径都要带口令，MCP 要带钥匙（面板 setting 页
+      #    「连接地址」那一块抄），但面板本身只靠那个密码挡着。
+      - "127.0.0.1:18002:18002"   # Loci：面板 /loci、MCP /mcp
+      - "127.0.0.1:3100:3100"     # 网关：/<口令>/v1
     env_file:
-      - .env
+      - path: .env        # 选填：时区、名字这些，见 .env.example
+        required: false
     environment:
-      - LOCI_CONFIG_PATH=/app/buckets/config.yaml
-      - LOCI_TRANSPORT=streamable-http
       - LOCI_MCP_REQUIRE_AUTH=false
     volumes:
       - ./buckets:/app/buckets
+      - ./data:/app/data
     depends_on:
-      - ollama
+      ollama:
+        condition: service_started
+        required: false
 
-  # 本地向量模型。已经有自己的 embedding 服务就把这块删掉，
-  # 把 .env 里的 LOCI_EMBED_BASE_URL 指过去就行。
+  # 本地向量模型，只在 --profile ollama 时起。面板「向量模型」选本地、地址填
+  # http://ollama:11434/v1，模型 bge-m3。
   ollama:
     image: ollama/ollama:latest
+    profiles: ["ollama"]
     container_name: ollama
     restart: unless-stopped
     volumes:
@@ -48,6 +57,7 @@ services:
   #    模型已经在卷里的话，pull 会很快返回，所以每次 up 都跑一遍不花什么。
   ollama-pull-model:
     image: ollama/ollama:latest
+    profiles: ["ollama"]
     container_name: ollama-pull-model
     depends_on:
       - ollama

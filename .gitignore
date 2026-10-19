@@ -1,5 +1,7 @@
 # 🔴 记忆本体绝不进仓库
 buckets/
+# Docker 起法的钥匙和网关自己的账（docker-compose.yml 挂的 ./data）
+/data/
 !buckets/.gitkeep
 
 .env

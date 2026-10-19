@@ -23,7 +23,8 @@
      允许手机连  only under the package launcher: GET /api/loci/phone (absent elsewhere,
                and the block numbers close up) · POST {on}. The launcher restarts Loci and
                the gateway on the network; once both listen there, the gateway URL, the MCP
-               URL and its header, each with 复制
+               URL and its header, each with 复制. In the Docker image (`fixed`) the block is
+               连接地址: no switch, the same three with the server's address left to fill in
      副模型    GET/POST /api/config `dehydration` (its key masked, sent only when typed) ·
                测试 POST /api/test/dehydration · 拉取列表 POST /api/models. API format
                =Gateway is `api_format: "gateway"`: the gateway's upstream and key, only the
@@ -1331,6 +1332,17 @@ function phoneBlock(first) {
     box, s.el);
 }
 
+/** The Docker image: always open, no switch; the server's own address is not known from
+ *  inside the container, so the addresses carry a placeholder for it. */
+function fixedAddressBlock(p) {
+  const [a] = p.addresses;
+  return h("div", null,
+    copyRow("网关地址", a.gateway, "客户端里服务商的 API base URL 填这个"),
+    copyRow("MCP 地址", a.mcp, "客户端里 MCP 选 Streamable HTTP，地址填这个"),
+    copyRow("MCP 请求头", `Bearer ${p.key}`, "MCP 加一个自定义请求头：名字 Authorization，值填这个"),
+    h("p", { class: "why", text: `把 ${a.ip} 换成你服务器的 IP 或域名；从这台服务器本机连，换成 127.0.0.1。端口是 docker-compose.yml 里 ports 那两行开出来的。` }));
+}
+
 // ---------------------------------------------------------------- the page
 
 export default {
@@ -1352,7 +1364,9 @@ export default {
         block("账号安全", null, later(() => accountBlock(authP))),
         block("安全问题", TIP.question, later(() => questionBlock(authP)))),
       block("网关上游", TIP.upstream, later(() => upstreamBlock(snapP))),
-      phone && phone.available ? block("允许手机连", null, phoneBlock(phone)) : null,
+      phone && phone.available
+        ? (phone.fixed ? block("连接地址", null, fixedAddressBlock(phone)) : block("允许手机连", null, phoneBlock(phone)))
+        : null,
       block("副模型", TIP.aux, later(async () => auxModel(await cfgP, findOllama, snapP))),
       block("向量模型", TIP.emb, [later(async () => embModel(await cfgP, findOllama)), later(vectorRows)]),
       block("导入", null, importRows()),

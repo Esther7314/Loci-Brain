@@ -10,6 +10,11 @@ hands it the gateway's port and passphrase (LOCI_GATEWAY_PORT, LOCI_GATEWAY_PASS
 Anywhere else `available` is false and the switch is not offered — nothing here can
 rebind a process someone else started.
 
+In the Docker image the launcher runs with LOCI_LAUNCHER_BIND=0.0.0.0: both always
+listen beyond the container, there is no switch (`fixed`), and the addresses carry
+SERVER_PLACEHOLDER where the server's own address goes — from inside a container that
+address cannot be known.
+
 Loci never rebinds itself. The launcher reads `phone_access` and restarts both processes
 on 0.0.0.0 (on) or 127.0.0.1 (off); `live` says which of the two this Loci was started
 with, so the page can tell a switch that is on from a network that is open.
@@ -37,12 +42,18 @@ from ._guards import _write_body
 logger = sh.logger
 
 KEY = "phone_access"
+SERVER_PLACEHOLDER = "<服务器地址>"
 DEFAULT_LOCI_PORT = 18002
 DEFAULT_GATEWAY_PORT = 3100
 
 
 def available() -> bool:
     return os.environ.get("LOCI_LAUNCHER", "").strip() == "1"
+
+
+def fixed() -> bool:
+    """Under the launcher with its bind fixed (the Docker image): always open, no switch."""
+    return bool(os.environ.get("LOCI_LAUNCHER_BIND", "").strip())
 
 
 def switch_on(config) -> bool:
@@ -99,14 +110,16 @@ def view(config) -> dict:
     loci_port = _port("LOCI_PORT", DEFAULT_LOCI_PORT)
     gateway_port = _port("LOCI_GATEWAY_PORT", DEFAULT_GATEWAY_PORT)
     passphrase = os.environ.get("LOCI_GATEWAY_PASSPHRASE", "").strip()
+    hosts = [SERVER_PLACEHOLDER] if fixed() else _private_ipv4s()
     addresses = [{
         "ip": ip,
         "gateway": f"http://{ip}:{gateway_port}/{passphrase}/v1",
         "mcp": f"http://{ip}:{loci_port}/mcp",
-    } for ip in _private_ipv4s()]
+    } for ip in hosts]
     return {
         "available": True,
-        "on": switch_on(config),
+        "fixed": fixed(),
+        "on": True if fixed() else switch_on(config),
         "live": live(),
         "addresses": addresses,
         "key": os.environ.get("LOCI_HOOK_TOKEN", "").strip(),
@@ -121,6 +134,8 @@ async def api_loci_phone_set(request: Request) -> Response:
     from utils import atomic_update_config_yaml
     if not available():
         return JSONResponse({"error": "只有用 Windows 包起的 Loci 能在这里开关"}, status_code=409)
+    if fixed():
+        return JSONResponse({"error": "Docker 里一直开着，没有开关"}, status_code=409)
     try:
         body = await _write_body(request)
     except PermissionError as e:

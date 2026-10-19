@@ -1,13 +1,14 @@
 #!/bin/sh
 # entrypoint.sh —— Loci Brain 启动入口
 #
-# 只做三件事，做完就把台交给 python：
+# 只做三件事，做完就把台交给启动器（package/launcher.py，跟 Windows 包是同一个）：
 #   ① 老变量兼容：把还在用 OMBRE_* 的环境变量映射成 LOCI_*（从 Ombre-Brain 迁过来的人，
 #      .env 一个字不用改就能起来）。同名 LOCI_* 已存在时以 LOCI_* 为准。
-#   ② 配置就位：确保 $LOCI_CONFIG_PATH 是一个可用的**普通文件**，缺了就从内置模板初始化。
-#      它若是目录（宿主文件不存在时 Docker 会替你建一个目录挂进来），当场 FATAL 退出 ——
-#      绝不对这个路径 rm -rf，它可能就是整个记忆卷。
-#   ③ 起服务。
+#   ② 配置路径检查：$LOCI_CONFIG_PATH 若是目录（宿主文件不存在时 Docker 会替你建一个目录
+#      挂进来），当场 FATAL 退出 —— 绝不对这个路径 rm -rf，它可能就是整个记忆卷。
+#      配置缺了不在这里补：启动器第一次起的时候从内置模板生成，顺手写上跟网关配对的
+#      hosts 表和钥匙（钥匙在 /app/data/settings.env）。已有的配置一个字不动。
+#   ③ 起 Loci 和网关，一起守着。
 #
 # ⚠️ 这里没有「代码播种」那一套：代码烤在镜像里，/app/buckets 只放记忆。
 #    升级 = docker pull + 重启，不会碰你的数据。
@@ -28,7 +29,6 @@ for _old_name in $(env | grep '^OMBRE_' | cut -d= -f1 || true); do
 done
 
 CONFIG="${LOCI_CONFIG_PATH:-$APP_ROOT/buckets/config.yaml}"
-DEFAULT="$APP_ROOT/config.default.yaml"
 
 mkdir -p "$(dirname "$CONFIG")" 2>/dev/null || true
 
@@ -41,19 +41,6 @@ if [ -d "$CONFIG" ]; then
     exit 1
 fi
 
-if [ ! -e "$CONFIG" ]; then
-    echo "[entrypoint] 首次启动，从内置模板生成配置: $CONFIG"
-    cp "$DEFAULT" "$CONFIG"
-fi
-
-if [ ! -f "$CONFIG" ]; then
-    echo "[entrypoint] FATAL: 无法在 '$CONFIG' 准备出一个可用的配置文件。"
-    echo "[entrypoint] 常见原因：该路径所在的文件系统只读（很多 PaaS 只有挂载卷可写）。"
-    exit 1
-fi
-
-echo "[entrypoint] 配置就位: $CONFIG"
-
-# --- ③ 起服务 ---
+# --- ③ 起 Loci 和网关 ---
 cd "$APP_ROOT"
-exec python src/server.py
+exec python package/launcher.py

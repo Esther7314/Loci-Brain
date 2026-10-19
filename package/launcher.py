@@ -53,14 +53,21 @@ import webbrowser
 
 APP = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ROOT = os.environ.get("LOCI_PACKAGE_ROOT") or os.path.dirname(APP)
-DATA = os.path.join(ROOT, "data")
+# The Docker image keeps the library on its own volume (/app/buckets, as before the
+# gateway joined it) and the rest on another (/app/data): the environment says where.
+DATA = os.environ.get("LOCI_DATA_DIR") or os.path.join(ROOT, "data")
 SETTINGS = os.path.join(DATA, "settings.env")
-BUCKETS = os.path.join(DATA, "buckets")
-CONFIG = os.path.join(BUCKETS, "config.yaml")
+BUCKETS = os.environ.get("LOCI_VAULT_DIR") or os.path.join(DATA, "buckets")
+CONFIG = os.environ.get("LOCI_CONFIG_PATH") or os.path.join(BUCKETS, "config.yaml")
 GATEWAY_DATA = os.path.join(DATA, "gateway")
 LOCK = os.path.join(DATA, "launcher.lock")
+# Set (the Docker image: 0.0.0.0), both always listen there and 允许手机连 is not offered:
+# a container is reached from outside it or not at all. The gateway then always wants
+# its passphrase in the path (gateway/door.js).
+FIXED_BIND = os.environ.get("LOCI_LAUNCHER_BIND", "").strip()
 
 GATEWAY_NAME = "gateway"
+LOCI_DEFAULT_TZ = "Asia/Shanghai"   # core/_when._DEFAULT_TZ
 DEFAULT_LOCI_PORT = 18002
 DEFAULT_GATEWAY_PORT = 3100
 
@@ -119,8 +126,9 @@ def ensure_keys(path: str = SETTINGS) -> dict[str, str]:
 
 
 def ports(settings: dict[str, str]) -> tuple[int, int]:
-    return (int(settings.get("LOCI_PORT") or DEFAULT_LOCI_PORT),
-            int(settings.get("LOCI_GATEWAY_PORT") or DEFAULT_GATEWAY_PORT))
+    def pick(name: str, default: int) -> int:
+        return int(settings.get(name) or os.environ.get(name) or default)
+    return pick("LOCI_PORT", DEFAULT_LOCI_PORT), pick("LOCI_GATEWAY_PORT", DEFAULT_GATEWAY_PORT)
 
 
 # ── config.yaml ────────────────────────────────────────────────────────────────
@@ -192,11 +200,13 @@ def machine_zone(node: str) -> str:
 
 def child_envs(settings: dict[str, str], zone: str, phone: bool) -> tuple[dict, dict]:
     loci_port, gateway_port = ports(settings)
-    bind = "0.0.0.0" if phone else "127.0.0.1"
+    bind = FIXED_BIND or ("0.0.0.0" if phone else "127.0.0.1")
     common = dict(os.environ)
     common.update(settings)
-    if zone and not settings.get("LOCI_TZ"):
-        common["LOCI_TZ"] = zone
+    # Both read the same zone, or "today" is cut in two places: the machine's, else Loci's
+    # own default (core/_when._DEFAULT_TZ), which the gateway would not otherwise know.
+    if not common.get("LOCI_TZ"):
+        common["LOCI_TZ"] = zone or LOCI_DEFAULT_TZ
     common["PYTHONUTF8"] = "1"
     common["PYTHONIOENCODING"] = "utf-8"
     # The package ships without .pyc files; the first start compiles jieba, whose old
@@ -407,7 +417,9 @@ def run() -> int:
     loci_port, gateway_port = ports(settings)
     first_run = ensure_config(gateway_port, settings["LOCI_GATEWAY_PASSPHRASE"])
     node = node_exe()
-    zone = machine_zone(node)
+    # In a container the machine's zone is the image's (UTC), not the person's: leave
+    # LOCI_TZ to .env and Loci's own default.
+    zone = "" if FIXED_BIND else machine_zone(node)
     phone = phone_on()
     loci_env, gateway_env = child_envs(settings, zone, phone)
 
@@ -419,14 +431,30 @@ def run() -> int:
     for c in children:
         c.start()
 
-    say(f"面板：{panel}")
-    say(f"网关：http://127.0.0.1:{gateway_port}/v1")
-    say(f"MCP：http://127.0.0.1:{loci_port}/mcp")
-    say("这个窗口开着它们就开着；关掉窗口，两个一起停。")
-    if phone:
-        say("允许手机连：开着（地址在面板 setting 页）")
-    if first_run and wait_until_up(panel):
+    if FIXED_BIND:
+        # The image: the addresses as seen from outside the container are not known here.
+        say(f"面板：端口 {loci_port}，路径 /loci")
+        say(f"网关：端口 {gateway_port}，路径 /<口令>/v1（口令和 MCP 的钥匙在面板 setting 页）")
+        say(f"MCP：端口 {loci_port}，路径 /mcp")
+    else:
+        say(f"面板：{panel}")
+        say(f"网关：http://127.0.0.1:{gateway_port}/v1")
+        say(f"MCP：http://127.0.0.1:{loci_port}/mcp")
+        say("这个窗口开着它们就开着；关掉窗口，两个一起停。")
+        if phone:
+            say("允许手机连：开着（地址在面板 setting 页）")
+    if first_run and not FIXED_BIND and wait_until_up(panel):
         webbrowser.open(panel)
+
+    if os.name != "nt":
+        # `docker stop` sends SIGTERM to this process (PID 1 in the image): stop both the
+        # way Ctrl+C does, so Loci shuts down cleanly instead of being killed with the
+        # container.
+        import signal
+
+        def on_term(_sig, _frame):
+            raise KeyboardInterrupt
+        signal.signal(signal.SIGTERM, on_term)
 
     seen_change = None
     try:
@@ -434,7 +462,7 @@ def run() -> int:
             now = time.monotonic()
             for c in children:
                 c.check(now)
-            want = phone_on()
+            want = phone if FIXED_BIND else phone_on()
             if want == phone:
                 seen_change = None
             elif seen_change is None:

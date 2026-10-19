@@ -66,6 +66,18 @@ def test_the_switch_is_saved_and_the_addresses_carry_the_passphrase_and_key(tmp_
     assert call("POST", "/api/loci/phone", body={"on": "yes"}).status == 400
 
 
+def test_in_the_docker_image_it_is_always_open_with_no_switch(tmp_path, monkeypatch):
+    call, _cfg = _world(tmp_path, monkeypatch)
+    monkeypatch.setenv("LOCI_LAUNCHER_BIND", "0.0.0.0")
+    monkeypatch.setenv("LOCI_BIND_HOST", "0.0.0.0")
+    out = call("GET", "/api/loci/phone").json
+    assert out["fixed"] and out["on"] and out["live"]
+    # The container's own address means nothing outside it: the server's is left to fill in.
+    [a] = out["addresses"]
+    assert a["gateway"] == f"http://<服务器地址>:3100/{'p' * 20}/v1" and a["mcp"] == "http://<服务器地址>:18002/mcp"
+    assert call("POST", "/api/loci/phone", body={"on": False}).status == 409
+
+
 def test_the_launcher_reads_the_switch_the_panel_wrote(tmp_path, monkeypatch):
     L = _launcher()
     cfg = tmp_path / "config.yaml"
@@ -89,6 +101,9 @@ def test_the_launcher_binds_both_by_the_switch_and_loci_reaches_the_gateway_thro
     assert gateway["LOCI_GATEWAY_PASSPHRASE"] == loci["LOCI_GATEWAY_PASSPHRASE"] == "q" * 32
     loci, gateway = L.child_envs(settings, "Asia/Shanghai", phone=True)
     assert (loci["LOCI_BIND_HOST"], gateway["LOCI_GATEWAY_BIND"]) == ("0.0.0.0", "0.0.0.0")
+    # Unset LOCI_TZ: both get the same zone, never the gateway's own guess.
+    assert loci["LOCI_TZ"] == gateway["LOCI_TZ"] == "Asia/Shanghai"
+    assert L.child_envs(settings, "", phone=False)[1]["LOCI_TZ"] == L.LOCI_DEFAULT_TZ
     hosts = yaml.safe_load(L.hosts_block(3100, "q" * 32))["hosts"]
     assert hosts["gateway"]["present_url"] == f"http://127.0.0.1:3100/{'q' * 32}"
     assert hosts["gateway"]["fetch_url"] == f"http://127.0.0.1:3100/{'q' * 32}/loci/source"
