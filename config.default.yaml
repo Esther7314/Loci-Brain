@@ -76,11 +76,11 @@ storage:
   external_change_poll_seconds: 1.0  # 0 = check every list; env: LOCI_EXTERNAL_CHANGE_POLL_SECONDS
 
 # --- Dehydration API / 脱水压缩 API 配置 ---
-# Uses a cheap LLM for intelligent compression. API is required; if the
-# configured key/endpoint is unavailable, hold/grow will raise an explicit
-# error instead of silently degrading (see BEHAVIOR_SPEC.md 三、降级行为表).
-# 用廉价 LLM 做智能压缩。API 为必需；如 key/endpoint 不可用，
-# hold/grow 会直接报错而非静默降级（详见 BEHAVIOR_SPEC.md 三、降级行为表）。
+# The side model: tags, summary and names for each memory, and (unless they have their
+# own) slicing, import drafts and dreams. A cheap model is enough. Without a working
+# key memories still save, but untagged — silently; the panel's health page says so.
+# 副模型：给记忆打标签、写摘要、认人；切片、导入草稿、做梦没单独配时也用它。便宜的就够。
+# key 不可用时记忆照样存，只是没有标签和摘要（不报错，面板体检页会标红）。
 dehydration:
   # Supports any OpenAI-compatible API: DeepSeek / Ollama / LM Studio / vLLM / Gemini etc.
   # 支持所有 OpenAI 兼容 API：DeepSeek / Ollama / LM Studio / vLLM / Gemini 等

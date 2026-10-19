@@ -438,8 +438,26 @@ curl http://127.0.0.1:3100/health
 
 ## 九、你已经有自己的网关 → 只拿两个模块
 
-不想用这个外壳、只想把梦和相关提醒接进你自己的转发层：拿 `poke_delivery.js` 和 `auto_attach.js`，
-都**零依赖**（只用 `fs` / `path` / 全局 `fetch`）、**零 import 这个项目**。这条路只有记忆，没有 present。
+不想用这个外壳、只想把记忆接进你自己的转发层：拿 `present/cue.js` 和 `poke_delivery.js`，
+都**零依赖**（只用 `fs` / `path` / 全局 `fetch`）、**零 import 这个项目别的代码**。
+这条路只有记忆，没有 present（换窗口、日报、唤醒、推送）。模型那边照样要在客户端接 Loci 的 MCP。
+
+**提醒卡**（`present/cue.js`）—— 她每说一句新的问一次，把对得上的卡贴在她那句后面：
+
+```js
+const { create_cue } = require("./present/cue.js");
+const 卡 = create_cue({ address: "http://127.0.0.1:18002/mcp", hook_token: process.env.LOCI_HOOK_TOKEN || "" });
+
+// window：哪个窗口（换窗时换一个）；turn：她这一句的 id。同一句问几次，Loci 给的是同一组卡。
+const got = await 卡.ask({ text: 她这句, window, turn });
+if (got.ok && got.text) 把 got.text 接在她那句后面;      // 一张卡一行，【提醒】【相关记忆】……开头
+// 上游收下了这次请求（2xx）之后：
+await 卡.delivered({ window, turn });
+// 换窗口、卡离开了上下文：
+await 卡.dropped({ window, all: true });
+```
+
+**梦和发呆**（`poke_delivery.js`）—— 很久没说话之后回来的第一句，递上昨夜的梦或者「该发呆了」：
 
 ```js
 const 桥 = require("./poke_delivery.js");
@@ -453,18 +471,27 @@ await 桥.attach_once({
 });
 ```
 
+**出错了照常转发** —— `ask` 不抛，失败回 `{ok: false}`；`attach_once` 会抛，你要接住。
+宁可这次没贴上，也不能让人的对话卡住。Loci 上了锁（设了面板密码）时，两个都要带 `LOCI_HOOK_TOKEN`。
+
+**两个位置不一样，是故意的：**
+
+- **卡贴在她那句后面** —— 每轮内容都不同，放进系统提示等于每轮都把 prompt 缓存打穿
+- **发呆/做梦贴稳定前缀区** —— 闲够 3.5 小时才出现一次，那时候缓存本来就过期了；
+  插进去之后它就是新前缀的一部分，后面每轮都能复用
+
+### 老办法：`auto_attach.js`（只报条数）
+
+v2 之前的强弱提醒，不报内容只报数量（「〔记忆提醒〕和这句有关：事件 3 条」），靠模型自己去搜。
+有了提醒卡就用不着它了；还在用的，下面几节照旧。
+
 ```js
 const 自动贴 = require("./auto_attach.js");
-
-// 强弱提醒：**最后一步**。它自己不碰 messages，只把 patch 算出来还给你——
-// 位置要离模型开口最近，得等请求体都组完了再推进去。
 const 提醒 = await 自动贴.build_relevance_notice({ messages: body.messages, requestId, 地址, 最低分: 50 });
 if (提醒 && 提醒.patch) 自动贴.attach_at_true_tail(body.messages, 提醒.patch);
 ```
 
-**两处都会抛异常 —— 你要接住，然后照常转发。** 宁可这次没插上，也不能让人的对话卡住。
-它们读的环境变量：`LOCI_MCP`、`LOCI_HOOK_TOKEN`（Loci 上了锁时要带）、`LOCI_GATEWAY_DATA`（状态和日志落哪），
-`auto_attach.js` 另外读下面那四个 `RELEVANCE_*`。
+它读的环境变量：`LOCI_MCP`、`LOCI_HOOK_TOKEN`、`LOCI_GATEWAY_DATA`，另外读下面那四个 `RELEVANCE_*`。
 
 老的英文别名还在，指的是同一个函数（向后兼容，新写的直接用正式名）：
 
@@ -472,12 +499,6 @@ if (提醒 && 提醒.patch) 自动贴.attach_at_true_tail(body.messages, 提醒.
 自动贴.computeReminder({ ... })          // = build_relevance_notice
 自动贴.appendToTail(messages, patch)     // = attach_at_true_tail
 ```
-
-**两个位置不一样，是故意的：**
-
-- **强弱提醒贴真尾巴** —— 每轮内容都不同，放前缀等于每轮都把 prompt 缓存打穿
-- **发呆/做梦贴稳定前缀区** —— 闲够 3.5 小时才出现一次，那时候缓存本来就过期了；
-  插进去之后它就是新前缀的一部分，后面每轮都能复用
 
 ### 闲时闸
 
