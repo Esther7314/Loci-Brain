@@ -176,6 +176,9 @@ def child_envs(settings: dict[str, str], zone: str) -> tuple[dict, dict]:
         common["LOCI_TZ"] = zone
     common["PYTHONUTF8"] = "1"
     common["PYTHONIOENCODING"] = "utf-8"
+    # The package ships without .pyc files; the first start compiles jieba, whose old
+    # regex strings print SyntaxWarnings into the window. They mean nothing to the person.
+    common.setdefault("PYTHONWARNINGS", "ignore::SyntaxWarning")
 
     loci = dict(common)
     loci.update({

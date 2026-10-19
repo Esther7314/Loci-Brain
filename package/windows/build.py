@@ -125,9 +125,28 @@ def setup_python(dest: str, cache: str) -> None:
     site = os.path.join(dest, "Lib", "site-packages")
     os.makedirs(site, exist_ok=True)
     say("installing the locked dependencies")
+    # --no-compile: the .pyc files are written on first use anyway, and the zip is
+    # 90 MB lighter without them.
     subprocess.run([sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "--no-warn-script-location",
-                    "--require-hashes", "--target", site, "-r", os.path.join(REPO, "requirements.lock.txt")],
+                    "--no-compile", "--require-hashes", "--target", site,
+                    "-r", os.path.join(REPO, "requirements.lock.txt")],
                    check=True)
+    prune_tests(site)
+
+
+# The numeric libraries ship their own test suites inside the package; nothing imports them.
+PRUNE_TESTS_IN = ("numpy", "scipy", "sklearn")
+
+
+def prune_tests(site: str) -> None:
+    removed = 0
+    for top in PRUNE_TESTS_IN:
+        for dirpath, dirnames, _ in os.walk(os.path.join(site, top)):
+            for d in [d for d in dirnames if d == "tests"]:
+                shutil.rmtree(os.path.join(dirpath, d))
+                dirnames.remove(d)
+                removed += 1
+    say(f"removed {removed} bundled test suites")
 
 
 def setup_node(dest: str, cache: str) -> None:
