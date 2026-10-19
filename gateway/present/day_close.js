@@ -28,8 +28,9 @@
 // `speaker` is a name, not a role word: Loci shows it as is to the side model that slices
 // and as `who` in an original, so it says who spoke. The owner's lines carry
 // LOCI_OWNER_NAME, his carry LOCI_AI_NAME (else AI_NAME, Loci's own variable); unset, the
-// owner is 「用户」 and he is 「AI」, as Loci's own import names them (source_api.js
-// speaker_names: /loci/source names them the same way).
+// names the panel's 称呼 holds in Loci; neither, the owner is 「用户」 and he is 「AI」, as
+// Loci's own import names them (source_api.js create_speakers: /loci/source names them
+// the same way, from the same object).
 // What happens to a batch:
 //   · 2xx → handed over; its lines are never sent again
 //   · Loci unreachable, a timeout, 401, a 5xx other than 502 → tried again on a later beat
@@ -209,6 +210,7 @@ function short_stamp(iso) {
  * @param host_dir      the gateway's host folder; reports go to <host_dir>/reports/
  * @param name          LOCI_GATEWAY_NAME: the `instance` of this gateway's sources
  * @param env           LOCI_HOOK_TOKEN, LOCI_OWNER_NAME, LOCI_AI_NAME / AI_NAME
+ * @param speakers      who said a line (source_api.js create_speakers); default: env only
  * @param loci_base     Loci's REST root (cue.js http_base of LOCI_MCP)
  * @param threads · day_store · settings · prompts · own_turn   the present modules
  * @param system_of     (thread_id) → the client's system messages from its latest request, or []
@@ -216,7 +218,7 @@ function short_stamp(iso) {
  */
 function create_day_close({
   data_root, host_dir, name, env = process.env, loci_base, threads, day_store, settings, prompts, own_turn,
-  clock, zone, log = console.error, system_of = () => [], on_flip = () => {},
+  clock, zone, log = console.error, system_of = () => [], on_flip = () => {}, speakers = speaker_names(env),
   post_timeout_ms = SLICES_POST_TIMEOUT_MS, get_timeout_ms = SLICES_GET_TIMEOUT_MS,
   change_timeout_ms = CHANGE_TIMEOUT_MS,
 }) {
@@ -224,7 +226,6 @@ function create_day_close({
   const log_file = path.join(data_root, "logs", "present.jsonl");
   const reports_dir = path.join(host_dir, "reports");
   const hook_token = String(env.LOCI_HOOK_TOKEN || "").trim();
-  const speakers = speaker_names(env);
   const speaker_of = speakers.of;
 
   let owner_seen_at = 0;
@@ -991,7 +992,7 @@ function create_day_close({
 
   function banner_line() {
     return `speakers       ${speakers.owner} / ${speakers.ai}`
-      + (speakers.owner_set && speakers.ai_set ? "" : "   (LOCI_OWNER_NAME / LOCI_AI_NAME unset — the names Loci sees on handed-over lines and originals)");
+      + (speakers.owner_set && speakers.ai_set ? "" : "   (LOCI_OWNER_NAME / LOCI_AI_NAME unset — asking Loci for the panel's 称呼; these until it answers)");
   }
 
   return {

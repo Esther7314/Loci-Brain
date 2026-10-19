@@ -60,7 +60,8 @@
 // (settings.js); the relay, the own turns, the window-size fetch and the side door all
 // read them per request, so a change saved on the panel needs no restart.
 //
-// heartbeat_tasks is what server.js hangs on its one beat, in order: pack retries
+// heartbeat_tasks is what server.js hangs on its one beat, in order: the two names
+// (source_api.js create_speakers, asked of Loci at most every ten minutes), pack retries
 // (pack.js), the night (day_close.js: hand-off, day report, flip), the night's weave
 // (night_weave.js: the report written + 30 min → Loci dreams), wake (wake.js), push
 // retries (push.js). A wake whose answer held a closed summary block folds the window
@@ -117,7 +118,7 @@ const { create_wall_escape } = require("./wall.js");
 const { local_stamp } = require("./clock.js");
 const { create_day_close } = require("./day_close.js");
 const { create_night_weave } = require("./night_weave.js");
-const { speaker_names } = require("./source_api.js");
+const { create_speakers } = require("./source_api.js");
 const { http_base } = require("./cue.js");
 
 const HOW_WORDS = { self: "他自己压的", forced: "到了强制线", manual: "你按的", day: "日报换窗" };
@@ -202,9 +203,13 @@ function create_present({
   }
 
   // ———— the night: hand-off, day report, flip (day_close.js) ————
+  // ———— who said a line: env, else the panel's 称呼 asked of Loci (source_api.js) ————
+  const speakers = create_speakers({ env, loci_base: http_base(loci), hook_token: String(env.LOCI_HOOK_TOKEN || "").trim() });
+  speakers.refresh();
+
   day_close = create_day_close({
     data_root, host_dir, name, env, loci_base: http_base(loci), threads, day_store, settings, prompts, own_turn,
-    clock, zone, log,
+    clock, zone, log, speakers,
     system_of: (id) => last_system.get(id) || [],
     on_flip: ({ thread, old_name, how }) => { packer.note_flip(how); after_flip(thread, old_name); },
   });
@@ -584,6 +589,7 @@ function create_present({
     banner_lines,
     window_status,
     heartbeat_tasks: [
+      { name: "names", run: () => speakers.refresh() },
       { name: "pack", run: () => packer.beat() },
       { name: "day_close", run: () => day_close.tick() },
       { name: "night_weave", run: () => night_weave.tick() },
@@ -603,7 +609,7 @@ function create_present({
     clock,
     zone,
     name,
-    speaker_of: speaker_names(env).of,   // /loci/source (source_api.js)
+    speaker_of: speakers.of,   // /loci/source (source_api.js)
     context_windows: windows,
     cue,
     // forced / manual packing and the wall (pack.js · wall.js)

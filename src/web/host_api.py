@@ -132,6 +132,20 @@ async def api_v2_slices_pending(request: Request) -> Response:
 
 
 # ---------------------------------------------------------
+# the two names (setting page 称呼)
+# ---------------------------------------------------------
+async def api_v2_names(request: Request) -> Response:
+    """{owner, ai}: the names the setting page's 称呼 holds (utils.get_owner_name /
+    get_ai_name, so config before environment). A host labels the lines it hands over
+    and serves with them; an owner never named reads as "", and the host keeps its own
+    fallback. Names only — nothing from the library."""
+    from starlette.responses import JSONResponse
+    from utils import get_ai_name, get_owner_name
+    return JSONResponse({"owner": get_owner_name(), "ai": get_ai_name()},
+                        headers={"Cache-Control": "no-store"})
+
+
+# ---------------------------------------------------------
 # breath for a host's hook (tools/breath/awaken.py)
 # ---------------------------------------------------------
 async def api_v2_breath(request: Request) -> Response:

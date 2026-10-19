@@ -37,8 +37,9 @@
 //     replaced writes a new revision without changing the text, so its revision stays
 //     the one at which that text was set.
 //   · `at` is when the line was first said (its first revision), with the owner's offset.
-//     `speaker` is a name, never a role word (speaker_names below): her lines carry
-//     LOCI_OWNER_NAME, his LOCI_AI_NAME (else AI_NAME); unset, 「用户」 and 「AI」. The
+//     `speaker` is a name, never a role word (create_speakers below): her lines carry
+//     LOCI_OWNER_NAME, his LOCI_AI_NAME (else AI_NAME); unset, the names the panel's
+//     称呼 holds in Loci (GET /api/v2/names); neither, 「用户」 and 「AI」. The
 //     night's slices name them the same way (day_close.js), so one line is one speaker
 //     wherever Loci meets it. A line given as missing carries none.
 //   · Attachments are kept as kinds only; their placeholders ("[image]") follow the text.
@@ -102,16 +103,61 @@ function covered(source, scope) {
 const DEFAULT_OWNER = "用户";
 const DEFAULT_AI = "AI";
 
+const NAMES_REFRESH_MS = 10 * 60 * 1000;
+const NAMES_TIMEOUT_MS = 3000;
+
 /**
- * Who said a line, as Loci shows it: a display name for each role, from env.
- * @returns { owner, ai, owner_set, ai_set, of(role) }
+ * Who said a line, as Loci shows it: a display name for each role. The environment wins
+ * (LOCI_OWNER_NAME, LOCI_AI_NAME else AI_NAME); a role it leaves unset takes the name the
+ * panel's 称呼 holds in Loci, asked by refresh() at most every NAMES_REFRESH_MS; neither,
+ * 「用户」 / 「AI」. A failed ask keeps the last names Loci gave — names change once in
+ * months, and a line labelled with yesterday's name is better than one labelled 「用户」.
+ * With no loci_base (tests, a module used alone) it is the environment and the defaults.
+ * @returns { owner, ai, owner_set, ai_set, of(role), refresh() }
  */
-function speaker_names(env = process.env) {
+function create_speakers({ env = process.env, loci_base = "", hook_token = "", fetch_impl = fetch,
+  now = Date.now, refresh_ms = NAMES_REFRESH_MS, timeout_ms = NAMES_TIMEOUT_MS } = {}) {
   const owner_set = String(env.LOCI_OWNER_NAME || "").trim();
   const ai_set = String(env.LOCI_AI_NAME || env.AI_NAME || "").trim();
-  const owner = owner_set || DEFAULT_OWNER;
-  const ai = ai_set || DEFAULT_AI;
-  return { owner, ai, owner_set, ai_set, of: (role) => (role === "user" ? owner : ai) };
+  let from_loci = { owner: "", ai: "" };
+  let asked_at = -Infinity;
+  let asking = null;
+  const owner = () => owner_set || from_loci.owner || DEFAULT_OWNER;
+  const ai = () => ai_set || from_loci.ai || DEFAULT_AI;
+
+  function refresh() {
+    if ((owner_set && ai_set) || !loci_base) return Promise.resolve();
+    if (asking) return asking;
+    if (now() - asked_at < refresh_ms) return Promise.resolve();
+    asked_at = now();
+    const headers = hook_token ? { "x-loci-hook-token": hook_token } : {};
+    asking = (async () => {
+      try {
+        const r = await fetch_impl(`${loci_base}/api/v2/names`, { headers, signal: AbortSignal.timeout(timeout_ms) });
+        if (!r.ok) return;
+        const body = await r.json();
+        from_loci = { owner: String(body?.owner || "").trim(), ai: String(body?.ai || "").trim() };
+      } catch {
+        // Loci not up yet, or an older Loci without the route: keep what we had.
+      } finally {
+        asking = null;
+      }
+    })();
+    return asking;
+  }
+
+  return {
+    get owner() { return owner(); },
+    get ai() { return ai(); },
+    owner_set, ai_set,
+    of: (role) => (role === "user" ? owner() : ai()),
+    refresh,
+  };
+}
+
+/** The environment and the defaults only (create_speakers with no Loci to ask). */
+function speaker_names(env = process.env) {
+  return create_speakers({ env });
 }
 
 /**
@@ -169,7 +215,7 @@ function bad_request(res, error) {
 /**
  * @param day_store  day_store.js instance (read_day by day)
  * @param name       LOCI_GATEWAY_NAME: the `instance` this gateway's sources carry
- * @param speaker_of (role) → the line's speaker (speaker_names(env).of)
+ * @param speaker_of (role) → the line's speaker (create_speakers(...).of)
  */
 function create_source_api({ day_store, name, speaker_of = speaker_names().of }) {
   const view = (revisions) => {
@@ -266,4 +312,4 @@ function create_source_api({ day_store, name, speaker_of = speaker_names().of })
   };
 }
 
-module.exports = { create_source_api, line_view, speaker_names, within_budget, MAX_LINES, DEFAULT_OWNER, DEFAULT_AI };
+module.exports = { create_source_api, line_view, create_speakers, speaker_names, within_budget, MAX_LINES, DEFAULT_OWNER, DEFAULT_AI };

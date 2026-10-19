@@ -85,8 +85,8 @@ node gateway/server.js
 | `LOCI_GATEWAY_DATA` | `gateway/data` | 网关的**私账**目录：设置、窗口状态（含压缩文）、日志。见第八节 |
 | `LOCI_GATEWAY_DAYS` | `<LOCI_GATEWAY_DATA>/host` | 原话（`days/<日期>.jsonl`）和日报（`reports/<日期>.md`）落哪。设成 `<buckets>/_hosts/<LOCI_GATEWAY_NAME>` 才会跟着 Loci 的导出走；不设就留在网关自己的目录里，不碰任何库 |
 | `LOCI_TZ` | 本机时区 | 「一天」按哪个时区切（IANA 名，如 `Asia/Shanghai`）。日报时段、免打扰、唤醒时间段都按它。认不出的名字退回本机时区，启动时打一行 ⚠️ |
-| `LOCI_OWNER_NAME` | `用户` | 你说的那几行署谁的名：夜里交给 Loci 切段时、Loci 来取原话时都署这个。跟 Loci 用的是同一个变量名，写成一样 |
-| `LOCI_AI_NAME` | `AI_NAME`，再没有就 `AI` | 同上，他说的那几行署的名 |
+| `LOCI_OWNER_NAME` | 面板「称呼」里你的名字，没填就是 `用户` | 你说的那几行署谁的名：夜里交给 Loci 切段时、Loci 来取原话时都署这个。不设就去问 Loci 面板上「称呼」填的（十分钟问一次），一般不用设 |
+| `LOCI_AI_NAME` | `AI_NAME`，再没有就面板「称呼」里他的名字，再没有就 `AI` | 同上，他说的那几行署的名 |
 | `POKE_IDLE_MINUTES` | `210` | 闲时闸：你多久没说话之后的第一句才递梦 / 发呆（第九节） |
 | `LOCI_CUE_TIMEOUT_MS` | `3000` | 等 Loci 的卡片多久。等不到这一轮就不贴，照发 |
 | `LOCI_PACK_WAIT_MS` | `90000` | 强制打包还在跑时，你的下一轮最多等多久（等到了就带着新窗口走，等不到就照原样发，打包接着跑） |

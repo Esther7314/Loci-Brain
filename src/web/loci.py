@@ -27,6 +27,8 @@ of what the panel can reach.
     GET  /api/loci/auth/state         -> where the password currently lives, and whether one needs setting
     GET  /api/logs                    -> the tail of server.log
     GET  /api/v2/slices               -> the host's own read of the pending slices (hook key)
+    GET  /api/v2/names                -> the owner's and the AI's names from 称呼, for a host
+                                         labelling the lines it hands over (hook key)
     GET  /api/v2/breath               -> breath's waking screen for a host's window-opening hook:
                                          the same text the tool returns, or `?format=json` for
                                          its structured form (hook key). Like the tool, it
@@ -361,6 +363,7 @@ def register(mcp) -> None:
     mcp.custom_route("/api/v2/cue/delivered", methods=["POST"])(host_api.api_v2_cue_delivered)
     mcp.custom_route("/api/v2/cue/dropped", methods=["POST"])(host_api.api_v2_cue_dropped)
     mcp.custom_route("/api/v2/changes", methods=["GET"])(host_api.api_v2_changes)
+    mcp.custom_route("/api/v2/names", methods=["GET"])(host_api.api_v2_names)
     mcp.custom_route("/api/loci/setup", methods=["GET"])(loci_health.api_loci_setup)
     mcp.custom_route("/api/logs", methods=["GET"])(loci_health.api_logs)
     mcp.custom_route("/api/loci/poke", methods=["GET"])(loci_dream.api_loci_poke)

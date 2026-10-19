@@ -363,8 +363,10 @@ test("reconciliation: across the run, no outbound connection left the fake envir
   // path calls no MCP tool at all — above all it never writes a memory.
   assert.deepStrictEqual(fake_loci.全程收到.filter((rec) => rec.路径.startsWith("/api/loci/")), [], "戳戳送达那条路不该在这一单里出声");
   assert.deepStrictEqual(fake_loci.全程收到.filter((rec) => rec.路径 === "/mcp"), [], "the chat path called an MCP tool");
+  // Besides the cue, the one other ask is the two names (source_api.js create_speakers).
   const routes = new Set(fake_loci.全程收到.map((rec) => rec.路径));
-  assert.ok([...routes].every((r) => r.startsWith("/api/v2/cue")), `Loci was asked something other than the cue: ${[...routes].join(", ")}`);
+  assert.ok([...routes].every((r) => r.startsWith("/api/v2/cue") || r === "/api/v2/names"),
+    `Loci was asked something other than the cue and the names: ${[...routes].join(", ")}`);
 });
 
 // ============================================================

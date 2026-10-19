@@ -28,7 +28,7 @@ const fence = require("./network_fence.js");
 const { start_fake_upstream } = require("./fake_upstream.js");
 const { start_fake_loci } = require("./fake_loci.js");
 const { start_gateway } = require("./start_gateway.js");
-const { speaker_names } = require("../present/source_api.js");
+const { speaker_names, create_speakers } = require("../present/source_api.js");
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "loci-present-source-"));
 const data_root = path.join(root, "data");
@@ -284,6 +284,32 @@ test("speaker names: the env names, trimmed; unset, 「用户」 and 「AI」; A
   assert.strictEqual(speaker_names({ AI_NAME: "Nova" }).of("assistant"), "Nova");
   assert.strictEqual(speaker_names({ AI_NAME: "Nova", LOCI_AI_NAME: "Echo" }).of("assistant"), "Echo");
   assert.strictEqual(speaker_names({ LOCI_OWNER_NAME: "  " }).of("user"), "用户", "blank is unset");
+});
+
+test("speaker names: unset in env, the panel's 称呼 from Loci; env still wins; a failed ask keeps the last names", async () => {
+  let t = 0;
+  let answer = { owner: "Ada", ai: "Lin" };
+  const asked = [];
+  const fetch_impl = async (url, init) => {
+    asked.push({ url, key: init.headers["x-loci-hook-token"] });
+    if (answer instanceof Error) throw answer;
+    return { ok: true, json: async () => answer };
+  };
+  const s = create_speakers({ env: { AI_NAME: "Nova" }, loci_base: "http://loci", hook_token: "k", fetch_impl, now: () => t });
+  assert.deepStrictEqual([s.of("user"), s.of("assistant")], ["用户", "Nova"], "before Loci answers");
+  await s.refresh();
+  assert.deepStrictEqual([s.of("user"), s.of("assistant")], ["Ada", "Nova"], "env AI_NAME wins over Loci");
+  assert.deepStrictEqual(asked, [{ url: "http://loci/api/v2/names", key: "k" }]);
+  await s.refresh();
+  assert.strictEqual(asked.length, 1, "asked at most every ten minutes");
+  t += 10 * 60 * 1000;
+  answer = new Error("down");
+  await s.refresh();
+  assert.strictEqual(asked.length, 2);
+  assert.strictEqual(s.of("user"), "Ada", "a failed ask keeps the last names");
+  const both = create_speakers({ env: { LOCI_OWNER_NAME: "A", LOCI_AI_NAME: "B" }, loci_base: "http://loci", fetch_impl });
+  await both.refresh();
+  assert.strictEqual(asked.length, 2, "both names in env: Loci is never asked");
 });
 
 test("reconciliation: every outbound connection stayed inside this run", () => {
