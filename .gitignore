@@ -25,3 +25,6 @@ gateway/tests/.跑测试留下的东西*/
 # Exam runs: reports are per machine and per run; the libraries themselves live in the
 # temp dir and are deleted unless --keep.
 exam/out/
+
+# The Windows package build output (package/windows/build.py).
+/dist/
