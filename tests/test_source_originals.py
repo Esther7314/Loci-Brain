@@ -32,6 +32,7 @@ import pytest
 from core import _originals as O
 from core import _source_change as SCH
 from core import _sources as S
+from core import _when as W
 from core import scope as SC
 from core.bucket_manager import BucketManager
 from core import runtime as rt
@@ -180,6 +181,19 @@ def test_given_shows_the_fenced_original_and_keeps_no_copy(library, host, caplog
                         "sources": [M_STR]}]
     assert _files_holding(root, PHRASE) == []
     assert not any(PHRASE in r.getMessage() for r in caplog.records)
+
+
+def test_a_line_says_who_said_it_and_when_as_the_host_gave_them(library, host):
+    # 偏生's review of a84dac9: the speaker and the time were parsed and shown on the
+    # panel, but the model's view of the original dropped them.
+    store, e, _root = library
+    host.answer = given({"id": "m_0003", "revision": "r1", "text": "周六见",
+                         "speaker": "小周", "at": "2026-10-06T21:04:11+08:00"})
+    shown = [ln for ln in original(e).splitlines() if ln.startswith("│ ")]
+    at = W.to_local(W.parse_stamp("2026-10-06T21:04:11+08:00")).strftime("%Y-%m-%d %H:%M")
+    assert shown == [f"│ [小周 · {at}] 周六见"]
+    host.answer = given({"id": "m_0003", "revision": "r1", "text": "周六见"})
+    assert [ln for ln in original(e).splitlines() if ln.startswith("│ ")] == ["│ 周六见"]
 
 
 def test_nothing_in_the_original_can_close_the_fence(library, host):
@@ -530,3 +544,10 @@ def test_a_fetch_url_that_is_not_plain_http_leaves_the_host_out():
     hs = SC.load_hosts({"hosts": {"h": {"token_env": "T", "fetch_url": "https://h/x",
                                         "max_grant": [{"system": "lento"}]}}}, {"T": "k"})
     assert hs.get("h").fetch_url == "https://h/x"
+
+
+def test_said_of_leaves_out_what_the_host_left_out():
+    assert O.said_of(O.Line(id="m_1", text="x")) == ""
+    assert O.said_of(O.Line(id="m_1", text="x", speaker="小\n周")) == "小 周"
+    only_at = O.said_of(O.Line(id="m_1", text="x", at="2026-10-06T21:04:11+08:00"))
+    assert only_at == W.to_local(W.parse_stamp("2026-10-06T21:04:11+08:00")).strftime("%Y-%m-%d %H:%M")

@@ -129,7 +129,7 @@ else.
 
 Exports: GIVEN · UNAVAILABLE · NOT_ALLOWED · NO_HOST · GONE_WORDS · MISSING_NOW ·
          HOLD_WORDS · GONE_HTTP · TLS_FAILED · TEMPORARY_STATUSES · Settings · settings_from · Line · Answer · host_for · scope_wire ·
-         build_request · parse_answer · speaker_of · at_of · SPEAKER_MAX · fetch ·
+         build_request · parse_answer · speaker_of · at_of · said_of · SPEAKER_MAX · fetch ·
          deployment_hosts() · source_records_of(meta) · hold_what_hosts_said(answers, store)
 ========================================
 """
@@ -327,6 +327,20 @@ def at_of(value) -> Optional[str]:
     when absent or not a moment with an offset."""
     moment = _w.parse_instant(value)
     return moment.isoformat(timespec="seconds") if moment is not None else None
+
+
+def said_of(line: Line) -> str:
+    """Who said a line and when, as the host gave them: "小周 · 2026-10-06 21:04" (local).
+    What the host left out is left out, never guessed; "" when it gave neither. What the
+    model reads of an original (tools/recall/original.py) and what a dream is woven from
+    (core/_dream.py) both carry it."""
+    parts = []
+    if line.speaker:
+        parts.append(" ".join(str(line.speaker).split()))
+    moment = _w.parse_stamp(line.at) if line.at else None
+    if moment is not None:
+        parts.append(_w.to_local(moment).strftime("%Y-%m-%d %H:%M"))
+    return " · ".join(p for p in parts if p)
 
 
 def parse_answer(raw: bytes, identity, settings: Settings) -> Answer:

@@ -787,8 +787,9 @@ async def _quoted(pool: list[Ingredient], c: dict) -> tuple[list[Ingredient], li
             continue
         if await _registry_blocked([(fresh_meta, "")]):
             continue
-        given = [ln.text for a in answers if a.outcome == _O.GIVEN
-                 for ln in a.lines if ln.text]
+        # Who said it and when go with the words, as the host gave them (never guessed).
+        given = [(f"[{_O.said_of(ln)}] " if _O.said_of(ln) else "") + ln.text
+                 for a in answers if a.outcome == _O.GIVEN for ln in a.lines if ln.text]
         if given:
             x.text = "\n".join(given)
         return [x], [a.source for a in answers]

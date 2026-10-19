@@ -29,7 +29,9 @@ host's word that a source is gone, which holds it — core/_source_change.hold) 
 while the hosts were answering wins. The first look and the second refuse the same way.
 
 Each original is fenced, every line of it behind "│ ", so nothing inside can close the
-fence or pass for Loci's own words: it is material, not instructions. Loci's own marks
+fence or pass for Loci's own words: it is material, not instructions. A line opens with
+who said it and when, as the host gave them ([小周 · 2026-10-06 21:04]; a run's lines with
+their id first), and with nothing the host left out (core/_originals.said_of). Loci's own marks
 inside a fence (a line missing, where the text stops) stand behind "┆ ", which no line of
 the host's can start with.
 
@@ -125,8 +127,11 @@ def _block(answer: _O.Answer, record: dict, max_chars: int) -> list[str]:
             out.append(f"┆ [{ln.id}] ⚠️{_MISSING.get(ln.missing, '这一行没给')}")
             continue
         body = _fenced([ln.text or ""])
-        if run:
-            tag = f"[{ln.id}" + (f" @{ln.revision}" if ln.revision else "") + "] "
+        said = _O.said_of(ln)
+        head = ([f"{ln.id}" + (f" @{ln.revision}" if ln.revision else "")] if run else []) + (
+            [said] if said else [])
+        if head:
+            tag = f"[{' · '.join(head)}] "
             body = [f"│ {tag}{body[0][2:]}"] + [f"│ {' ' * len(tag)}{b[2:]}" for b in body[1:]]
         out.extend(body)
         if ln.cut and not (answer.cut_here and ln.id == answer.truncated_after):
