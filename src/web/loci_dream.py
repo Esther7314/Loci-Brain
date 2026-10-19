@@ -296,7 +296,11 @@ async def api_loci_dream_weave(request: Request) -> Response:
     最近一看结论>}. `woven` is null below the line, when today's weave already happened
     (by breath or an earlier call), and when the weave was voided by a source change.
     The text is not here: the host reads the dream as it always does (`/api/loci/poke`),
-    one road for it. The body is neither read nor validated."""
+    one road for it. The body is neither read nor validated.
+
+    A weave that failed (the dream model timing out or erroring: maintain's `失败`) is 503
+    {"error", "retryable": true, "verdict"}: nothing was woven and nothing counted toward
+    today, so the host should ask again rather than mark this report handled."""
     from starlette.responses import JSONResponse
     withheld = _scope_withholds(request, "梦")
     if withheld is not None:
@@ -305,10 +309,14 @@ async def api_loci_dream_weave(request: Request) -> Response:
         from core import _dream as _D
         out = await _D.maintain()
         rec = out.get("织") if isinstance(out, dict) else None
+        failed = str(out.get("失败") or "") if isinstance(out, dict) else ""
         verdict = str(_D.load_state().get("最近一看结论") or "")
     except Exception as e:
         logger.warning(f"[loci] dream/weave 失败: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
+    if failed:
+        return JSONResponse({"error": f"织梦失败，没织成：{failed}", "retryable": True,
+                             "verdict": verdict}, status_code=503)
     return JSONResponse({"woven": rec.get("id") if isinstance(rec, dict) else None,
                          "nightmare": bool(isinstance(rec, dict) and rec.get("nightmare")),
                          "verdict": verdict})

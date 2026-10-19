@@ -1693,6 +1693,13 @@ async def maintain(cfg: dict | None = None) -> dict:
     (`POST /api/loci/dream/weave`). One runs at a time (`_maintain_lock`): the per-day
     check reads the state before the model call and writes it after, so two at once
     would both pass it and weave two dreams.
+
+    Returns {扫, 织, 压力, 失败}. `织` is the dream woven, or None — below the line, today's
+    weave done, voided by a source change. `失败` is "" unless gathering or weaving raised
+    (the dream model timing out, say): then it names the error, the state's 最近一看结论
+    says the weave failed, and nothing counts toward today. breath ignores it (a failed
+    weave must not break breath); the night-weave route answers it as a failure the host
+    may retry, never as a quiet null.
     """
     async with _maintain_lock():
         return await _maintain(cfg)
@@ -1713,7 +1720,7 @@ def _maintain_lock() -> asyncio.Lock:
 
 async def _maintain(cfg: dict | None) -> dict:
     c = cfg or _c()
-    out: dict = {"扫": {}, "织": None, "压力": None}
+    out: dict = {"扫": {}, "织": None, "压力": None, "失败": ""}
     try:
         out["扫"] = await sweep_expired(c)
     except Exception as e:                          # noqa: BLE001
@@ -1737,6 +1744,10 @@ async def _maintain(cfg: dict | None) -> dict:
         out["织"] = await weave(cfg=c, ingredients=ingredients)
     except Exception as e:                          # noqa: BLE001 - failing to weave must not break breath
         rt.logger.warning("[dream] 织梦失败: %s", e)
+        out["失败"] = f"{type(e).__name__}: {e}"[:300]
+        st = load_state()
+        st["最近一看结论"] = f"织梦失败（{type(e).__name__}），可以再试"
+        save_state(st)
     return out
 
 

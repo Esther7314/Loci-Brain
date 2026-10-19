@@ -114,7 +114,26 @@ test("a failure is tried again on later beats, then given up", async () => {
   const st = nw.status();
   assert.strictEqual(st.tries, TRIES);
   assert.ok(st.gave_up_at && /500/.test(st.error), JSON.stringify(st));
+  assert.ok(/boom/.test(st.error), "Loci's own words are kept with the failure");
   assert.ok(s.logs.some((l) => /given up/.test(l)));
+});
+
+test("a failed weave (503, retryable) is not recorded as asked for", async () => {
+  asked.length = 0;
+  answer = { status: 503, body: { error: "织梦失败，没织成：TimeoutError", retryable: true } };
+  const t0 = Date.parse("2026-10-16T04:40:00+08:00");
+  const s = setup(path.join(root, "retry"), t0);
+  const nw = s.make();
+  s.clock.set(t0 + DELAY_MS);
+  await beat(nw);
+  const st = nw.status();
+  assert.notStrictEqual(st.asked_for, t0, JSON.stringify(st));
+  assert.ok(/503/.test(st.error) && /TimeoutError/.test(st.error), JSON.stringify(st));
+  answer = { status: 200, body: { woven: "abc123def456", nightmare: false, verdict: "过线，织" } };
+  s.clock.advance(60 * 1000);
+  await beat(nw);
+  assert.strictEqual(nw.status().asked_for, t0);
+  assert.strictEqual(nw.status().woven, "abc123def456");
 });
 
 test("Loci unreachable: no throw, kept for the next beat", async () => {

@@ -74,7 +74,12 @@ function create_night_weave({ data_root, loci_base, hook_token = "", last_report
         method: "POST", headers, body: "{}", signal: controller.signal,
       });
       const text = await resp.text();
-      if (!resp.ok) return { ok: false, error: `Loci answered HTTP ${resp.status}` };
+      if (!resp.ok) {
+        // A failed weave is 503 with Loci's words: nothing woven, worth asking again.
+        let said = "";
+        try { said = String(JSON.parse(text)?.error || ""); } catch { /* not JSON */ }
+        return { ok: false, error: `Loci answered HTTP ${resp.status}${said ? `: ${said.slice(0, 200)}` : ""}` };
+      }
       let json = null;
       try { json = JSON.parse(text); } catch { return { ok: false, error: "Loci's answer is not JSON" }; }
       return { ok: true, json: json || {} };

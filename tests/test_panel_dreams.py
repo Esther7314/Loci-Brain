@@ -388,6 +388,25 @@ def test_the_night_weave_says_a_nightmare(store, monkeypatch):
     assert reply.status == 200 and reply.json["woven"] and reply.json["nightmare"] is True
 
 
+def test_a_weave_that_fails_is_a_retryable_503_and_the_next_ask_weaves(store, monkeypatch):
+    # The dream model timing out must not read as "nothing to weave tonight": a host that
+    # took the quiet null as done never asked again for that report.
+    _want(store)
+    real = D.call_model
+
+    async def times_out(ingredients, c):
+        raise TimeoutError("the dream model did not answer")
+    monkeypatch.setattr(D, "call_model", times_out)
+    call = routes(monkeypatch)
+    failed = call("POST", "/api/loci/dream/weave", body={}, key="s3cret")
+    assert failed.status == 503 and failed.json["retryable"] is True, failed.raw
+    assert "TimeoutError" in failed.json["error"] and "失败" in failed.json["verdict"]
+    assert D.load_dreams() == []
+    monkeypatch.setattr(D, "call_model", real)
+    again = call("POST", "/api/loci/dream/weave", body={}, key="s3cret")
+    assert again.status == 200 and again.json["woven"], again.raw
+
+
 def test_two_weaves_at_once_weave_one_dream(store, monkeypatch):
     # breath's background beat and the host's night weave can land together: the per-day
     # check reads before the model call and writes after, so without one-at-a-time both
