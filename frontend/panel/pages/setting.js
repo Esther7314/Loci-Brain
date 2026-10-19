@@ -20,6 +20,10 @@
                /api/loci/present `settings.upstream`, POST {patch: {upstream}}): base_url
                ("" = the one the gateway was started with), key (write-only; "" clears it)
                · 测试 POST /api/loci/present/upstream-test
+     允许手机连  only under the package launcher: GET /api/loci/phone (absent elsewhere,
+               and the block numbers close up) · POST {on}. The launcher restarts Loci and
+               the gateway on the network; once both listen there, the gateway URL, the MCP
+               URL and its header, each with 复制
      副模型    GET/POST /api/config `dehydration` (its key masked, sent only when typed) ·
                测试 POST /api/test/dehydration · 拉取列表 POST /api/models. API format
                =Gateway is `api_format: "gateway"`: the gateway's upstream and key, only the
@@ -1251,29 +1255,110 @@ async function versionBlock() {
     second, s.el);
 }
 
+// ---------------------------------------------------------------- 允许手机连
+
+const PHONE_POLL_MS = 3000;
+
+/** A value to copy into the phone: the value itself, and 复制. */
+function copyRow(label, value, why) {
+  const done = sayer();
+  const copy = btn("复制");
+  copy.addEventListener("click", () => busy(copy, async () => {
+    try { await navigator.clipboard.writeText(value); done.ok("复制好了"); } catch (e) { done.err(e); }
+  }));
+  return h("div", null,
+    setRow({ text: label, why: [h("code", { text: value, style: { wordBreak: "break-all" } }), why], right: acts(copy), stack: true }),
+    done.el);
+}
+
+/** The switch, then — once both processes listen on the network — what the phone needs. While
+ *  the launcher restarts them (the switch and `live` disagree) the page asks again every
+ *  few seconds; the restart drops this page's own requests for a moment too. */
+function phoneBlock(first) {
+  const box = h("div");
+  const s = sayer();
+  let timer = null;
+  const toggle = sw({
+    checked: first.on,
+    label: "允许手机连",
+    onChange: async (want) => {
+      s.clear();
+      toggle.disabled = true;
+      try {
+        show(await api.post("/api/loci/phone", { on: want }));
+      } catch (e) {
+        // No answer at all (status 0): the launcher restarted Loci before this request's
+        // reply got out. The switch was written; wait for the restart like any other.
+        if (e && e.status === 0) {
+          show({ on: want, live: !want, addresses: [], key: "" });
+        } else {
+          toggle.setAttribute("aria-checked", String(!want));
+          s.err(e);
+        }
+      }
+      toggle.disabled = false;
+    },
+  });
+
+  function show(p) {
+    clearTimeout(timer);
+    toggle.setAttribute("aria-checked", String(p.on));
+    if (p.on !== p.live) {
+      fill(box, h("p", { class: "why", text: p.on ? "正在打开：Loci 和网关重启一下，十几秒。" : "正在关上：Loci 和网关重启一下，十几秒。" }));
+      timer = setTimeout(async () => {
+        try { show(await api.get("/api/loci/phone")); } catch { show(p); }
+      }, PHONE_POLL_MS);
+      return;
+    }
+    if (!p.on) { fill(box); return; }
+    if (!p.addresses.length) {
+      fill(box, h("p", { class: "err", text: "这台电脑现在没连在局域网上（没找到家里网络的地址）。连上 Wi-Fi 或网线再来看。" }));
+      return;
+    }
+    // The first address is the one the default route uses; the others are mostly virtual
+    // adapters (WSL, Hyper-V) a phone cannot reach, so they are not offered.
+    const [main_ip] = p.addresses;
+    fill(box,
+      copyRow("网关地址", main_ip.gateway, "手机上的客户端，服务商的 API base URL 填这个"),
+      copyRow("MCP 地址", main_ip.mcp, "手机上的客户端，MCP 选 Streamable HTTP，地址填这个"),
+      copyRow("MCP 请求头", `Bearer ${p.key}`, "MCP 加一个自定义请求头：名字 Authorization，值填这个"),
+      h("p", { class: "why", text: "只在同一个 Wi-Fi 里能连。第一次打开时 Windows 可能弹窗问要不要让 python 和 node 连网络：勾「专用网络」，点允许。" }));
+  }
+
+  show(first);
+  return h("div", null,
+    setRow({ text: "允许手机连", why: "打开后，同一个 Wi-Fi 里的手机能连这台电脑上的 Loci 和网关。", right: acts(toggle) }),
+    box, s.el);
+}
+
 // ---------------------------------------------------------------- the page
 
 export default {
-  render(view) {
+  async render(view) {
     const cfgP = api.get("/api/config");
     const authP = api.get("/api/loci/auth/state");
     const snapP = ask(PRESENT);
     for (const p of [cfgP, authP, snapP]) p.catch(() => {});
+    // 允许手机连 exists only under the package launcher (web/loci_phone.py); elsewhere the
+    // block is left out and the numbers close up.
+    const phone = await api.get("/api/loci/phone").catch(() => null);
     const findOllama = ollamaFinder();
-    const block = (no, title, tipText, body) => setBlock(String(no).padStart(2, "0"), title, { tip: tipText }, body);
+    let no = 0;
+    const block = (title, tipText, body) => setBlock(String(++no).padStart(2, "0"), title, { tip: tipText }, body);
     view.append(pagehead({ title: "setting" }), h("main", { class: "sets setting" },
-      block(1, "宿主", TIP.hosts, hostsRows()),
-      block(2, "称呼", TIP.names, later(() => namesBlock(cfgP))),
+      block("宿主", TIP.hosts, hostsRows()),
+      block("称呼", TIP.names, later(() => namesBlock(cfgP))),
       h("div", { class: "duo" },
-        block(3, "账号安全", null, later(() => accountBlock(authP))),
-        block(4, "安全问题", TIP.question, later(() => questionBlock(authP)))),
-      block(5, "网关上游", TIP.upstream, later(() => upstreamBlock(snapP))),
-      block(6, "副模型", TIP.aux, later(async () => auxModel(await cfgP, findOllama, snapP))),
-      block(7, "向量模型", TIP.emb, [later(async () => embModel(await cfgP, findOllama)), later(vectorRows)]),
-      block(8, "导入", null, importRows()),
-      block(9, "导出", null, exportRows()),
-      block(10, "阈值", TIP.thresholds, later(() => thresholdsBlock(cfgP))),
-      block(11, "体检", TIP.health, later(healthBlock)),
-      block(12, "版本", null, later(versionBlock))));
+        block("账号安全", null, later(() => accountBlock(authP))),
+        block("安全问题", TIP.question, later(() => questionBlock(authP)))),
+      block("网关上游", TIP.upstream, later(() => upstreamBlock(snapP))),
+      phone && phone.available ? block("允许手机连", null, phoneBlock(phone)) : null,
+      block("副模型", TIP.aux, later(async () => auxModel(await cfgP, findOllama, snapP))),
+      block("向量模型", TIP.emb, [later(async () => embModel(await cfgP, findOllama)), later(vectorRows)]),
+      block("导入", null, importRows()),
+      block("导出", null, exportRows()),
+      block("阈值", TIP.thresholds, later(() => thresholdsBlock(cfgP))),
+      block("体检", TIP.health, later(healthBlock)),
+      block("版本", null, later(versionBlock))));
   },
 };

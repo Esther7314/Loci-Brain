@@ -8,7 +8,9 @@ both processes:
   · Loci     python app/src/server.py, bound to 127.0.0.1
   · gateway  node app/gateway/server.js
 Whichever one stops is started again after a few seconds; one that keeps dying right
-after it starts waits a minute between tries, so a broken setup does not spin. Closing
+after it starts waits a minute between tries, so a broken setup does not spin. The
+panel's 允许手机连 (web/loci_phone.py) writes `phone_access` in config.yaml; when it
+changes, both are restarted listening on 0.0.0.0 (on) or 127.0.0.1 (off). Closing
 the window stops both: they share its console, and they also sit in a Windows job object
 that is killed with this process, so a crashed launcher leaves nothing behind.
 
@@ -24,10 +26,13 @@ Package layout (package/windows/build.ps1 makes it):
         buckets/          the library; config.yaml lives here, as under Docker
         gateway/          the gateway's private state
 
-First run: generates three keys into data/settings.env and writes config.yaml from
-config.default.yaml plus a `hosts:` table pairing Loci with the gateway (the same table
-gateway/README.md section 二·2 has people write by hand). With a table, the panel works
-only after a password is set — the panel's first page asks for one.
+First run: generates three keys and the gateway's passphrase into data/settings.env and
+writes config.yaml from config.default.yaml plus a `hosts:` table pairing Loci with the
+gateway (the same table gateway/README.md section 二·2 has people write by hand). Loci
+reaches the gateway with the passphrase in the path from the start, which the gateway
+accepts on loopback too (gateway/door.js), so turning 允许手机连 on or off never touches
+the table. With a table, the panel works only after a password is set — the panel's
+first page asks for one.
 
 Everything here is the standard library: it runs before any dependency is known to work.
 
@@ -38,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import secrets
 import subprocess
 import sys
@@ -58,14 +64,19 @@ GATEWAY_NAME = "gateway"
 DEFAULT_LOCI_PORT = 18002
 DEFAULT_GATEWAY_PORT = 3100
 
-# The three keys, one per direction (gateway/README.md 二·2). The legacy one is what a
-# directly connected MCP client presents; the other two must differ from each other.
-KEYS = ("LOCI_HOOK_TOKEN", "LOCI_HOST_TOKEN_GATEWAY", "LOCI_FETCH_TOKEN_GATEWAY")
+# The three keys, one per direction (gateway/README.md 二·2), and the gateway's passphrase.
+# The legacy key is what a directly connected MCP client presents (a phone included); the
+# two gateway keys must differ from each other.
+KEYS = ("LOCI_HOOK_TOKEN", "LOCI_HOST_TOKEN_GATEWAY", "LOCI_FETCH_TOKEN_GATEWAY",
+        "LOCI_GATEWAY_PASSPHRASE")
+PHONE_LINE = re.compile(  # web/loci_phone.KEY
+    r"^phone_access:\s*(\S+)", re.MULTILINE)
 
 QUICK_DEATH_S = 30      # died this soon after starting: counts toward the slow retry
 RETRY_S = 5
 SLOW_RETRY_S = 60
 QUICK_DEATHS_BEFORE_SLOW = 3
+SWITCH_GRACE_S = 2      # 允许手机连 changed: wait this long before restarting both
 
 STARTUP_SHORTCUT = "Loci.lnk"
 
@@ -114,8 +125,8 @@ def ports(settings: dict[str, str]) -> tuple[int, int]:
 
 # ── config.yaml ────────────────────────────────────────────────────────────────
 
-def hosts_block(gateway_port: int) -> str:
-    base = f"http://127.0.0.1:{gateway_port}"
+def hosts_block(gateway_port: int, passphrase: str) -> str:
+    base = f"http://127.0.0.1:{gateway_port}/{passphrase}"
     return (
         "\n"
         "# Written by the package launcher on the first run: Loci and the gateway beside it.\n"
@@ -137,7 +148,7 @@ def hosts_block(gateway_port: int) -> str:
     )
 
 
-def ensure_config(gateway_port: int) -> bool:
+def ensure_config(gateway_port: int, passphrase: str) -> bool:
     """Write config.yaml when there is none. True when it was written now (first run)."""
     if os.path.exists(CONFIG):
         return False
@@ -145,12 +156,23 @@ def ensure_config(gateway_port: int) -> bool:
         default = f.read()
     tmp = CONFIG + ".tmp"
     with open(tmp, "w", encoding="utf-8", newline="\n") as f:
-        f.write(default.rstrip("\n") + "\n" + hosts_block(gateway_port))
+        f.write(default.rstrip("\n") + "\n" + hosts_block(gateway_port, passphrase))
     os.replace(tmp, CONFIG)
     return True
 
 
 # ── the two processes ──────────────────────────────────────────────────────────
+
+def phone_on() -> bool:
+    """`phone_access` as the panel last wrote it (a top-level scalar; yaml.safe_dump keeps
+    it on one line). Unreadable or absent: off."""
+    try:
+        with open(CONFIG, encoding="utf-8") as f:
+            m = PHONE_LINE.search(f.read())
+    except OSError:
+        return False
+    return bool(m) and m.group(1).strip("'\"").lower() in ("true", "yes", "on", "1")
+
 
 def node_exe() -> str:
     bundled = os.path.join(ROOT, "node", "node.exe")
@@ -168,10 +190,11 @@ def machine_zone(node: str) -> str:
         return ""
 
 
-def child_envs(settings: dict[str, str], zone: str) -> tuple[dict, dict]:
+def child_envs(settings: dict[str, str], zone: str, phone: bool) -> tuple[dict, dict]:
     loci_port, gateway_port = ports(settings)
+    bind = "0.0.0.0" if phone else "127.0.0.1"
     common = dict(os.environ)
-    common.update({k: v for k, v in settings.items() if k not in ("LOCI_GATEWAY_PORT",)})
+    common.update(settings)
     if zone and not settings.get("LOCI_TZ"):
         common["LOCI_TZ"] = zone
     common["PYTHONUTF8"] = "1"
@@ -186,7 +209,9 @@ def child_envs(settings: dict[str, str], zone: str) -> tuple[dict, dict]:
         "LOCI_VAULT_DIR": BUCKETS,
         "LOCI_TRANSPORT": "streamable-http",
         "LOCI_PORT": str(loci_port),
-        "LOCI_BIND_HOST": settings.get("LOCI_BIND_HOST") or "127.0.0.1",
+        "LOCI_GATEWAY_PORT": str(gateway_port),
+        "LOCI_BIND_HOST": bind,
+        "LOCI_LAUNCHER": "1",       # web/loci_phone.py offers 允许手机连 only under this
     })
 
     gateway = dict(common)
@@ -199,6 +224,7 @@ def child_envs(settings: dict[str, str], zone: str) -> tuple[dict, dict]:
         "LOCI_GATEWAY_NAME": GATEWAY_NAME,
         "LOCI_GATEWAY_DATA": GATEWAY_DATA,
         "LOCI_GATEWAY_DAYS": os.path.join(BUCKETS, "_hosts", GATEWAY_NAME),
+        "LOCI_GATEWAY_BIND": bind,
     })
     return loci, gateway
 
@@ -238,6 +264,13 @@ class Child:
                 self.proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 self.proc.kill()
+        self.proc = None
+
+    def restart_with(self, env: dict) -> None:
+        self.stop()
+        self.env = env
+        self.quick_deaths = 0
+        self.start()
 
 
 class KillOnCloseJob:
@@ -372,9 +405,11 @@ def run() -> int:
 
     settings = ensure_keys()
     loci_port, gateway_port = ports(settings)
-    first_run = ensure_config(gateway_port)
+    first_run = ensure_config(gateway_port, settings["LOCI_GATEWAY_PASSPHRASE"])
     node = node_exe()
-    loci_env, gateway_env = child_envs(settings, machine_zone(node))
+    zone = machine_zone(node)
+    phone = phone_on()
+    loci_env, gateway_env = child_envs(settings, zone, phone)
 
     job = make_job()
     children = [
@@ -388,14 +423,28 @@ def run() -> int:
     say(f"网关：http://127.0.0.1:{gateway_port}/v1")
     say(f"MCP：http://127.0.0.1:{loci_port}/mcp")
     say("这个窗口开着它们就开着；关掉窗口，两个一起停。")
+    if phone:
+        say("允许手机连：开着（地址在面板 setting 页）")
     if first_run and wait_until_up(panel):
         webbrowser.open(panel)
 
+    seen_change = None
     try:
         while True:
             now = time.monotonic()
             for c in children:
                 c.check(now)
+            want = phone_on()
+            if want == phone:
+                seen_change = None
+            elif seen_change is None:
+                seen_change = now    # let the panel's request that wrote it get its answer
+            elif now - seen_change >= SWITCH_GRACE_S:
+                seen_change = None
+                phone = want
+                say("允许手机连：" + ("打开了，两个重启一下" if phone else "关上了，两个重启一下"))
+                for c, env in zip(children, child_envs(settings, zone, phone)):
+                    c.restart_with(env)
             time.sleep(1)
     except KeyboardInterrupt:
         pass

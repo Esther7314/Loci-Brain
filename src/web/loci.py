@@ -186,6 +186,11 @@ offset / limit / as_of. 🔴 POST /api/loci/trace writes.
                                          (the five: web/loci_periods.py, through trace
                                          where trace does it, each told to the model on
                                          his next call, core/_panel_changes.py)
+    GET  /api/loci/phone              -> 允许手机连 under the package: the switch, whether
+                                         this process is open to the network, the phone's
+                                         addresses and key (web/loci_phone.py)
+    POST /api/loci/phone              -> {on}: config.yaml `phone_access`, which the
+                                         package launcher acts on by restarting both
 
 What Loci handed out and took in — turns, recall's timeline, usage, grow, muse, dreams,
 vectors (web/loci_activity.py; core/activity.py, core/grow_view.py, core/muse_view.py,
@@ -290,6 +295,7 @@ core/profile.py):
                           (core/breath_snapshot.py, core/profile.py, core/changes_feed.py)
     web/loci_periods.py   periods, periods/{id}, periods/edit · delete · merge · day ·
                           cover (core/periods.py, core/_panel_changes.py)
+    web/loci_phone.py     phone (package/launcher.py restarts on its switch)
     web/loci_activity.py  turns, recall/timeline, usage, grow/today, grow/slices, muse,
                           muse/nudge, dreams, embedding/missing, embedding/backfill
                           (core/activity.py, core/grow_view.py, core/muse_view.py,
@@ -420,6 +426,9 @@ def register(mcp) -> None:
     mcp.custom_route("/api/loci/periods/day", methods=["POST"])(_periods.api_loci_period_day)
     mcp.custom_route("/api/loci/periods/cover", methods=["POST"])(_periods.api_loci_period_cover)
     mcp.custom_route("/api/loci/periods/{bucket_id}", methods=["GET"])(_periods.api_loci_period)
+    from . import loci_phone as _phone
+    mcp.custom_route("/api/loci/phone", methods=["GET"])(_phone.api_loci_phone)
+    mcp.custom_route("/api/loci/phone", methods=["POST"])(_phone.api_loci_phone_set)
 
     # ---------------------------------------------------------
     # What Loci handed out and took in: turns, recall's timeline, usage, grow, muse and
