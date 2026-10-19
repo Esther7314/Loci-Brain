@@ -3,6 +3,9 @@
 
    #/login    POST /auth/login {password}. The 账号 field is drawn (it reads "user"), and
               the server has no account names yet: only the password is sent.
+              While no password exists (GET /api/loci/auth/state setup_needed), the
+              first password is set here instead: POST /api/loci/auth/set-password, then
+              the login above with it.
    #/forgot   GET /auth/recovery-question, then POST /auth/recover {answer, password}.
               With no question set, only the line saying where a reset can be done.
    Both come back to the address the gate interrupted (api.takeBack). The server's own
@@ -103,8 +106,53 @@ async function renderForgot(view) {
   if (q) answer.focus();
 }
 
+/** No password yet, and the panel still wants one (a `hosts:` table is written, so the
+ *  gate stays shut until it is locked: web/panel_auth.panel_refusal). The first password
+ *  is set here, then this browser logs in with it. */
+function renderSetup(view) {
+  const pw1 = password({ "aria-label": "密码", placeholder: "至少 6 位", autocomplete: "new-password" });
+  const pw2 = password({ "aria-label": "再输一次密码", autocomplete: "new-password" });
+  const err = h("p", { class: "err", role: "alert", hidden: true });
+  const go = h("button", { class: "go", type: "submit" }, "设好了，进去");
+  const note = h("p", { class: "why note", text: "以后打开面板都要输这个密码。进去之后可以在 setting 里设一个安全问题，忘了密码用它找回。" });
+  const form = h("form", { novalidate: true },
+    h("main", null,
+      h("h1", { text: "先设一个密码" }),
+      field("密码", pw1.el), field("再输一次", pw2.el), err, go, note));
+  const say = (words) => { fill(err, words); err.hidden = false; };
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    err.hidden = true;
+    if (pw1.input.value !== pw2.input.value) { say("两次不一样"); return; }
+    go.disabled = true;
+    try {
+      await api.post("/api/loci/auth/set-password", { password: pw1.input.value }, { gate: false });
+      await api.post("/auth/login", { password: pw1.input.value }, { gate: false });
+      pw1.input.value = pw2.input.value = "";
+      location.hash = api.takeBack();
+    } catch (x) {
+      say(x.message);
+      go.disabled = false;
+    }
+  });
+  view.append(h("div", { class: "gate forgot" }, form));
+  setTimeout(() => pw1.input.focus(), 0);
+}
+
+/** 登录, or the first-password page while no password exists. A state that cannot be
+ *  read shows 登录: the server's refusal there says what is wrong. */
+async function renderGate(view) {
+  let st = null;
+  try {
+    st = await api.get("/api/loci/auth/state");
+  } catch {
+    st = null;
+  }
+  return st && st.setup_needed ? renderSetup(view) : renderLogin(view);
+}
+
 export default {
   render(view, route) {
-    return route.page === "forgot" ? renderForgot(view) : renderLogin(view);
+    return route.page === "forgot" ? renderForgot(view) : renderGate(view);
   },
 };
