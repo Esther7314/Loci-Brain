@@ -49,6 +49,9 @@ __all__ = [
     "_label_of", "_room_cn", "_short_id",
 ]
 
+# Before this local hour an empty when="today" points at yesterday: "today" has barely begun.
+_EARLY_HOURS = 6
+
 
 async def recall_text_and_data(when: str, room: str, tag: str, query: str,
                                floor=None, view: str = "", max_cells: int = 0,
@@ -233,6 +236,11 @@ async def recall_core(when: str, room: str, tag: str, query: str,
     if not entries:
         gates = "，".join(x for x in [when and f"when={when}", room and f"room={room}",
                                      tag and f"tag={tag}", query and f"query={query}"] if x)
+        local = _w.now()
+        if when.strip().lower() in ("today", "今天") and local.hour < _EARLY_HOURS:
+            # A nightly run after midnight asks for "today" meaning the day it just lived.
+            return (f"这儿没有东西（{gates}，今天是 {local:%m-%d}，现在 {local:%H:%M}）。"
+                    "刚过完的那天用 when=yesterday。")
         return f"这儿没有东西（{gates}）。门再开大一点试试。"
 
     gates = " ".join(x for x in [when and f"when={when}", room and f"room={room}",

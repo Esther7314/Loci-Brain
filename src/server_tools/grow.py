@@ -22,7 +22,9 @@ async def grow(
     items: Annotated[list, _PydField(description=(
         "A batch of events, each one a dict: {room, text, v, a}, plus optional when. "
         "Events always go here, even a single one — looking back at a stretch of "
-        "conversation, more than one thing usually happened. Do not pass it for a mind."
+        "conversation, more than one thing usually happened. Do not pass it for a mind. "
+        'Quote what someone said with 「」 or “”: a bare " inside the text breaks the '
+        "whole call."
     ))] = [],
     kind: Annotated[str, _PydField(description=(
         'Which kind to store: "event" (something that happened, including something '
@@ -32,12 +34,15 @@ async def grow(
         'room="EVENT/SELF".'
     ))] = "",
     room: Annotated[str, _PydField(description=(
-        "One of the four rooms above. You fill it in yourself; wrong or missing is "
-        "rejected on the spot."
+        "Mind only. For events, each item carries its own room; a room given here fills "
+        "any item that has none. One of the four rooms above, filled in by you; wrong or "
+        "missing is rejected on the spot."
     ))] = "",
     text: Annotated[str, _PydField(description=(
         'The body of a single entry. Only kind="mind" uses it — you realize one '
-        "thing at a time, so this one is singular."
+        "thing at a time, so this one is singular. "
+        'Quote what someone said with 「」 or “”: a bare " inside the text breaks the '
+        "whole call."
     ))] = "",
     # The public parameter name is "from", as the spec requires. `from` is a Python keyword,
     # so the signature spells it from_ and pydantic's public validation_alias catches it.
@@ -126,8 +131,9 @@ async def grow(
     ))] = "",
     card_of: Annotated[str, _PydField(description=(
         'Mind only: makes this entry the card of a name — the one place for how you see '
-        "that person, or that game, book or group. A person's card goes in MIND/TRAITS, "
-        "a thing's in MIND/VIEWS; one card per name, so a second is refused and the "
+        "that person, or that game, book or group. A person's card goes in MIND/TRAITS; "
+        "anything else — an animal, a game, a book, a group — in MIND/VIEWS; one card "
+        "per name, so a second is refused and the "
         'first is reworded with regrow. e.g. card_of="Detroit", room="MIND/VIEWS".'
     ))] = "",
     sources: Annotated[Optional[list | dict | str], _PydField(description=(
