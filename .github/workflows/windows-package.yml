@@ -4,8 +4,9 @@
 #   · A pushed tag v<version>: builds, checks, and attaches the zip to a DRAFT release
 #     for that tag. Draft on purpose — a person reads it and presses Publish; nothing
 #     reaches strangers because a tag was pushed.
-#   · By hand (Actions tab → Run workflow): builds and checks, keeps the zip as a run
-#     artifact, touches no release. For trying the build before tagging.
+#   · A push to any branch that touches what goes into the package, or by hand (Actions
+#     tab → Run workflow, once this file is on the default branch): builds and checks,
+#     keeps the zip as a run artifact, touches no release.
 #
 # WHAT THE CHECK MEANS
 #   The embedded Python imports every dependency from inside the unpacked folder, with
@@ -17,6 +18,12 @@ name: windows-package
 on:
   push:
     tags: ["v*"]
+    branches: ["**"]
+    paths:
+      - "package/**"
+      - "requirements.lock.txt"
+      - "VERSION"
+      - ".github/workflows/windows-package.yml"
   workflow_dispatch:
 
 permissions:
