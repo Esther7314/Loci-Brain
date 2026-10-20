@@ -14,7 +14,12 @@ changes, both are restarted listening on 0.0.0.0 (on) or 127.0.0.1 (off). Closin
 the window stops both: they share its console, and they also sit in a Windows job object
 that is killed with this process, so a crashed launcher leaves nothing behind.
 
-Package layout (package/windows/build.ps1 makes it):
+The machine may already have its own Node, or another program on one of the two ports.
+The gateway's node gets the environment without the Node variables a person sets for
+their own projects; a taken port stops the launcher before anything starts, saying which
+port and which settings.env line moves it.
+
+Package layout (package/windows/build.py makes it):
 
     <root>/
       start.bat           what the person double-clicks
@@ -45,6 +50,7 @@ import argparse
 import os
 import re
 import secrets
+import socket
 import subprocess
 import sys
 import time
@@ -70,6 +76,9 @@ GATEWAY_NAME = "gateway"
 LOCI_DEFAULT_TZ = "Asia/Shanghai"   # core/_when._DEFAULT_TZ
 DEFAULT_LOCI_PORT = 18002
 DEFAULT_GATEWAY_PORT = 3100
+# Set on a machine for the person's own Node projects (a --require, a module folder);
+# passed on, they would load into the gateway's node too.
+NODE_ENV_DROP = ("NODE_OPTIONS", "NODE_PATH")
 
 # The three keys, one per direction (gateway/README.md 二·2), and the gateway's passphrase.
 # The legacy key is what a directly connected MCP client presents (a phone included); the
@@ -131,6 +140,27 @@ def ports(settings: dict[str, str]) -> tuple[int, int]:
     return pick("LOCI_PORT", DEFAULT_LOCI_PORT), pick("LOCI_GATEWAY_PORT", DEFAULT_GATEWAY_PORT)
 
 
+def port_taken(host: str, port: int) -> bool:
+    """Something already answers on the port, or the machine will not let it be bound
+    (another program, or a range Windows reserves for itself)."""
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+            return True
+    except OSError:
+        pass
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            if os.name != "nt":
+                # As uvicorn and node set it, so a port left in TIME_WAIT by the last run
+                # is not mistaken for taken. On Windows the same option would let this
+                # bind succeed over a live listener, so it stays off there.
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind((host, port))
+    except OSError:
+        return True
+    return False
+
+
 # ── config.yaml ────────────────────────────────────────────────────────────────
 
 def hosts_block(gateway_port: int, passphrase: str) -> str:
@@ -169,6 +199,24 @@ def ensure_config(gateway_port: int, passphrase: str) -> bool:
     return True
 
 
+def follow_gateway_port(gateway_port: int, passphrase: str) -> None:
+    """Point the hosts table's gateway addresses (hosts_block) at the port in use now, so
+    moving LOCI_GATEWAY_PORT after the first run does not leave Loci calling the old one."""
+    try:
+        with open(CONFIG, encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return
+    base = f"http://127.0.0.1:{gateway_port}/{passphrase}"
+    new = re.sub(r"http://127\.0\.0\.1:\d+/" + re.escape(passphrase), lambda _m: base, text)
+    if new == text:
+        return
+    tmp = CONFIG + ".tmp"
+    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+        f.write(new)
+    os.replace(tmp, CONFIG)
+
+
 # ── the two processes ──────────────────────────────────────────────────────────
 
 def phone_on() -> bool:
@@ -187,20 +235,28 @@ def node_exe() -> str:
     return bundled if os.path.exists(bundled) else "node"
 
 
+def node_env(env: dict) -> dict:
+    return {k: v for k, v in env.items() if k.upper() not in NODE_ENV_DROP}
+
+
 def machine_zone(node: str) -> str:
     """The machine's IANA zone, asked of Node (Windows has no IANA name of its own
     that Python's standard library can read). Empty when Node cannot say."""
     try:
         out = subprocess.run([node, "-e", "console.log(Intl.DateTimeFormat().resolvedOptions().timeZone)"],
-                             capture_output=True, text=True, timeout=20)
+                             capture_output=True, text=True, timeout=20, env=node_env(dict(os.environ)))
         return out.stdout.strip() if out.returncode == 0 else ""
     except (OSError, subprocess.SubprocessError):
         return ""
 
 
+def bind_host(phone: bool) -> str:
+    return FIXED_BIND or ("0.0.0.0" if phone else "127.0.0.1")
+
+
 def child_envs(settings: dict[str, str], zone: str, phone: bool) -> tuple[dict, dict]:
     loci_port, gateway_port = ports(settings)
-    bind = FIXED_BIND or ("0.0.0.0" if phone else "127.0.0.1")
+    bind = bind_host(phone)
     common = dict(os.environ)
     common.update(settings)
     # Both read the same zone, or "today" is cut in two places: the machine's, else Loci's
@@ -224,7 +280,7 @@ def child_envs(settings: dict[str, str], zone: str, phone: bool) -> tuple[dict, 
         "LOCI_LAUNCHER": "1",       # web/loci_phone.py offers 允许手机连 only under this
     })
 
-    gateway = dict(common)
+    gateway = node_env(common)
     gateway.update({
         "PORT": str(gateway_port),
         "LOCI_MCP": f"http://127.0.0.1:{loci_port}/mcp",
@@ -415,12 +471,22 @@ def run() -> int:
 
     settings = ensure_keys()
     loci_port, gateway_port = ports(settings)
+    phone = phone_on()
+    taken = [(name, key, port) for name, key, port in (("Loci", "LOCI_PORT", loci_port),
+                                                       ("网关", "LOCI_GATEWAY_PORT", gateway_port))
+             if port_taken(bind_host(phone), port)]
+    if taken:
+        for name, key, port in taken:
+            say(f"端口 {port} 已经被这台电脑上别的程序占着，{name}用不了它。")
+            say(f"  换一个：打开 {SETTINGS}，加一行 {key}={port + 1}（或别的没人用的数），保存后重新启动。")
+        lock.close()
+        return 1
     first_run = ensure_config(gateway_port, settings["LOCI_GATEWAY_PASSPHRASE"])
+    follow_gateway_port(gateway_port, settings["LOCI_GATEWAY_PASSPHRASE"])
     node = node_exe()
     # In a container the machine's zone is the image's (UTC), not the person's: leave
     # LOCI_TZ to .env and Loci's own default.
     zone = "" if FIXED_BIND else machine_zone(node)
-    phone = phone_on()
     loci_env, gateway_env = child_envs(settings, zone, phone)
 
     job = make_job()
