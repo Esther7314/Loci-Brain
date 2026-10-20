@@ -436,6 +436,8 @@ def set_autostart(on: bool) -> str:
     """A shortcut in the Startup folder that runs this launcher minimized. Made through
     PowerShell's -EncodedCommand (UTF-16), so a folder path in any script survives —
     a .cmd file would be read in the console's code page."""
+    if os.name != "nt":
+        return "开机自动启动只有 Windows 有；这台机器上用系统自己的（macOS 的 launchd、Linux 的 systemd）"
     target = os.path.join(startup_dir(), STARTUP_SHORTCUT)
     if not on:
         if os.path.exists(target):
