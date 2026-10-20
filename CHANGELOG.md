@@ -7,38 +7,52 @@
 
 ### 🔴 从 1.x（Docker）升级，按这个顺序
 
-**① 先停，再迁移记忆库。** 新代码认的库是第 5 版，1.x 的库是第 1 版。迁移会改写每一个
-记忆文件，所以要停着做；动第一个文件之前，整个库先打一个 zip 放进 `buckets/_backups/`。
+这一段在一台装着 1.4.0 的机器上照着走过一遍：库迁过来、读得出，网关配上，旧的
+`LOCI_HOOK_TOKEN` 照样能用。
+
+**① 停下，拿新代码，迁移记忆库。** 新代码认的库是第 5 版，1.x 的库是第 1 版。迁移会改写每一个
+记忆文件，所以要停着做；动第一个文件之前，整个库先打一个 zip 放进 `buckets/_backups/`
+（`config.yaml` 不在里面，它装着钥匙，自己另存一份）。
 
 ```bash
 docker compose down
-git pull                       # 拿到新代码（下载 zip 的，换成新解压的目录，buckets 搬过去）
+git pull                       # 下载 zip 的：换成新解压的目录，把 buckets 和 .env 搬过去
 docker compose build
 docker compose run --rm --entrypoint python loci-brain scripts/migrate.py --buckets /app/buckets           # 先看要改什么
 docker compose run --rm --entrypoint python loci-brain scripts/migrate.py --buckets /app/buckets --apply   # 再改
 ```
 
-不迁移的话服务照样能起，体检页会说库落后了 —— 那时候别写东西，先回来迁。
+- **`git pull` 报 `Your local changes … docker-compose.yml`**：你照 1.x 的注释改过端口、
+  或者删过 ollama 那块。先 `git checkout -- docker-compose.yml` 还原，pull 完再按下一步改回来。
+- **迁移最后一行说有几条「想要」没写 `bound`**（谁欠着这件事）：这个没法替你猜。不补的话
+  breath 的「惦记的事」里看不到它们，体检也一直红着。起来之后让 AI 自己补：
+  `trace(bucket_id=…, bound=["我"])`，两个人约好的写 `["我", "<对方的名字>"]`。
+- 不迁移的话服务照样能起，体检会说库落后了 —— 那时候别写东西，先回来迁。
 
-**② 换上新的 `docker-compose.yml`。** 三处不一样：
+**② 新的 `docker-compose.yml` 跟 1.x 不一样的地方**（`git pull` 已经换上了）：
 
 - 容器里 Loci 的端口从 `8000` 换成了 **`18002`**。默认映射 `127.0.0.1:18002:18002` 不用管；
   自己改过成 `"xxxx:8000"` 的，右边改成 `18002`。
 - 多了网关的 **`3100`**，和一个新数据卷 **`./data`**（钥匙、网关自己的账）。
-- **ollama 不再默认起。** 向量模型的出厂默认还是本地 ollama + bge-m3，所以 1.x 里靠
-  compose 带起 ollama 的，以后要 `docker compose --profile ollama up -d`，
-  不然检索找不到向量模型。
+- **ollama 不再默认起。** 向量模型的出厂默认还是本地 ollama + bge-m3，所以以后起、停都要带
+  `--profile ollama`。不带的话**检索悄悄退成只按字面找**，新写的记忆也没有向量，
+  只有面板 setting 页体检里「向量模型」那一行会红。
 
 **③ 看一眼旧的 `.env`。**
 
-- 有 `LOCI_PORT=8000` 这一行的，**删掉**。它会盖过镜像里的 18002，Loci 起在 8000 上，
-  外面的映射就对不上了。
+- 有 `LOCI_PORT=8000` 这一行的，**删掉**。它会盖过镜像里的 18002：Loci 在容器里起在 8000 上，
+  外面连进来是空回应，容器一直不健康。
 - `LOCI_COMPRESS_*`、`LOCI_EMBED_*` 照旧生效，而且盖过面板上填的。想以后在面板上改，
   就把这几行删了再去面板填。
 - 设过 `LOCI_HOOK_TOKEN` 给自己的桥用的，不用动：第一次起的时候它被原样抄进
   `./data/settings.env`，不会另生成一把新的把桥挡在外面。
 
-**④ 把网关配上。** 全新安装第一次起的时候，会把「Loci 跟旁边这个网关配对」的 `hosts:`
+**④ 先起一次。** `docker compose --profile ollama up -d`（不用本地向量的去掉 `--profile ollama`）。
+第一次起的时候生成钥匙和网关的口令，写在 `./data/settings.env`。
+
+不用网关、只把 Loci 当 MCP 用的，到这儿就完了。
+
+**⑤ 把网关配上。** 全新安装第一次起的时候，会把「Loci 跟旁边这个网关配对」的 `hosts:`
 表写进 `buckets/config.yaml`。**你已经有 `config.yaml` 了，它一个字都不会改**，所以这张表
 要自己贴：打开 `./data/settings.env` 抄 `LOCI_GATEWAY_PASSPHRASE` 的值，把下面这段贴到
 `buckets/config.yaml` 末尾，`<口令>` 换成它：
@@ -60,11 +74,16 @@ hosts:
     present_url: "http://127.0.0.1:3100/<口令>"
 ```
 
-不用网关、只把 Loci 当 MCP 用的，这一步可以跳过。**有了这张表，面板要先设密码才能用**，
-打开面板第一页就是设密码。
+然后 **`docker compose restart loci-brain`**（`up -d` 不会重读，它看容器已经在跑就不动了）。
+有了这张表，三件事跟着变：
 
-**⑤ 起来。** `docker compose up -d`（用本地向量的加 `--profile ollama`）。网关地址和 MCP 的
-钥匙去面板 setting 页「连接地址」那一块抄。
+- **面板要先设密码。** 打开面板第一页就是设密码，设好之前面板什么都不给看。
+- **每个 MCP 客户端都要带钥匙**：请求头 `x-loci-hook-token`。不带的一律 401。
+  原来设过 `LOCI_HOOK_TOKEN` 的就用它；没设过的，钥匙在面板 setting 页「连接地址」。
+- 面板 present 页显示「接上了」，就是配好了。
+
+「连接地址」里写的是**容器里**的端口（18002、3100）。你在 compose 里把外面的端口改成了别的，
+就用你自己的那个。
 
 ### 新的
 
