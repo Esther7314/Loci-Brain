@@ -1,0 +1,86 @@
+# Builds the Windows x64 portable download and hangs it on the release.
+#
+# WHEN IT RUNS
+#   · A pushed tag v<version>: builds, checks, and attaches the zip to a DRAFT release
+#     for that tag. Draft on purpose — a person reads it and presses Publish; nothing
+#     reaches strangers because a tag was pushed.
+#   · By hand (Actions tab → Run workflow): builds and checks, keeps the zip as a run
+#     artifact, touches no release. For trying the build before tagging.
+#
+# WHAT THE CHECK MEANS
+#   The embedded Python imports every dependency from inside the unpacked folder, with
+#   the runner's own Python and Node taken off PATH, and the bundled node.exe runs.
+#   It does not start Loci or open the panel; the phone/browser test stays by hand.
+
+name: windows-package
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # build.py refuses any other minor version: the dependencies are installed by this
+      # interpreter's pip and must match the embedded 3.12.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Tag matches VERSION
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          if ("${{ github.ref_name }}" -ne "v$version") {
+            Write-Error "tag ${{ github.ref_name }} but VERSION says $version"
+            exit 1
+          }
+
+      - name: Build
+        run: python package/windows/build.py
+
+      - name: Check the unpacked folder on its own
+        shell: pwsh
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          $zip = "dist/Loci-$version-windows-x64.zip"
+          Expand-Archive $zip -DestinationPath check
+          $root = "check/Loci-$version-windows-x64"
+          # Nothing from the runner may stand in for what the package ships.
+          $env:PATH = "C:\Windows\System32;C:\Windows"
+          $env:PYTHONPATH = "C:\nowhere"
+          & "$root/python/python.exe" -c @"
+          import mcp.server.fastmcp, rapidfuzz, openai, yaml, frontmatter, httpx
+          import numpy, sklearn, rank_bm25, jieba, zstandard
+          from zoneinfo import ZoneInfo; ZoneInfo('Asia/Shanghai')
+          import sys; assert sys.flags.isolated, 'embedded python is not isolated'
+          print('python ok', sys.version.split()[0], sys.prefix)
+          "@
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & "$root/node/node.exe" --version
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          "zip: {0} MB" -f [math]::Floor((Get-Item $zip).Length / 1MB)
+
+      - name: Keep the zip on the run
+        uses: actions/upload-artifact@v4
+        with:
+          name: Loci-windows-x64
+          path: dist/Loci-*-windows-x64.zip
+          retention-days: 14
+
+      - name: Attach to the draft release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: dist/Loci-*-windows-x64.zip
