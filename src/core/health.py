@@ -55,6 +55,8 @@ class _Ground:
     visible: list = field(default_factory=list)
     n_with_archive: int = -1
     buckets_ok: bool = True
+    embedding_last: dict | None = None   # the engine's last_call(): None = no call yet
+    in_docker: bool = False
 
 
 class _Checks:
@@ -170,7 +172,20 @@ def check_embedding(c: _Checks, g: _Ground) -> None:
     if not isinstance(emb, dict):
         raise TypeError("config.yaml 里的 embedding 不是一个配置块")
     if _parse_ok(emb.get("enabled")):
-        c.add("embedding", "向量", "ok", f"开着，模型 {emb.get('model') or '?'}")
+        model = emb.get("model") or "?"
+        last = g.embedding_last
+        if last and not last.get("ok"):
+            # Configured is not working: a backend that does not answer leaves every
+            # search on the literal leg and every write without a vector, and nothing
+            # else says so.
+            c.add("embedding", "向量", "error",
+                  f"开着，模型 {model}，但最近一次要向量没要到（{last.get('at')}）"
+                  + (f"：{last['why']}" if last.get("why") else "")
+                  + " —— 现在搜索只剩字面匹配，新存的记忆没有向量",
+                  f"看向量模型的地址 {emb.get('base_url') or '(默认)'} 连不连得上、模型拉了没有；"
+                  "日志里 OB-E001 那几行写着原因。连上之后下一次调用成功，这一行自己变绿")
+        else:
+            c.add("embedding", "向量", "ok", f"开着，模型 {model}")
     else:
         c.add("embedding", "向量", "warn",
               "关着 —— query 门只能靠关键词，搜不到「意思相近」的",
@@ -249,10 +264,14 @@ def check_schema(c: _Checks, g: _Ground) -> None:
         c.add("schema", "库的版本", "error", f"读不出库的版本：{st['error']}",
               "看 buckets/_state/schema.json")
     elif st["behind"]:
+        if g.in_docker:
+            how = ("docker compose down，然后 docker compose run --rm --entrypoint python "
+                   "loci-brain scripts/migrate.py --buckets /app/buckets 先看要改什么，")
+        else:
+            how = f"停掉服务，先跑 python scripts/migrate.py --buckets {g.bd or '<库目录>'} 看要改什么，"
         c.add("schema", "库的版本", "error",
               f"库是第 {st['version']} 版，代码要第 {st['current']} 版",
-              "停掉服务，先跑 python scripts/migrate.py 看要改什么，"
-              "再加 --apply（会先备份整个库）")
+              how + "再加 --apply（会先备份整个库）")
     else:
         c.add("schema", "库的版本", "ok", f"第 {st['version']} 版")
 
@@ -438,6 +457,27 @@ def check_source_registry(c: _Checks, g: _Ground) -> None:
           + (f"；{waiting} 段切片等着写" if waiting else ""))
 
 
+# ---- The gateway beside it ----
+def check_gateway(c: _Checks, g: _Ground, gateway: dict) -> None:
+    """Whether Loci reaches the gateway it is paired with (the host with a present_url,
+    asked as the present page asks it). `gateway`: {host, why, beside} from the web side —
+    host None when no host has a present_url; `beside` when the launcher runs a gateway
+    next to this Loci, so a missing pairing is a fault and not a choice."""
+    host, why = gateway.get("host"), gateway.get("why") or ""
+    if host is None:
+        if gateway.get("beside"):
+            c.add("gateway", "网关", "error",
+                  "网关跟 Loci 一起跑着，但没配对：config.yaml 里没有写 present_url 的宿主 —— "
+                  "present、日报、唤醒都用不了，原话也取不回",
+                  "从 1.x 升上来的：照 CHANGELOG 2.0.0 那一节把 hosts 表贴进 config.yaml，然后重启")
+        return
+    if why:
+        c.add("gateway", "网关", "error", f"连不上宿主 {host} 的网关：{why}",
+              "看网关起了没有；它的日志在同一个窗口 / 容器里")
+    else:
+        c.add("gateway", "网关", "ok", f"接上了（宿主 {host}）")
+
+
 # ---- The copy that runs ----
 def check_running_version(c: _Checks, g: _Ground, running: str) -> None:
     """The version this process started with against the code on disk now: code updated
@@ -487,7 +527,8 @@ def _sort_visible(c: _Checks, g: _Ground) -> None:
 
 
 async def health(bucket_mgr, config, persistence: Callable[[str], dict],
-                 running: str = "") -> dict:
+                 running: str = "", embedding_last: dict | None = None,
+                 in_docker: bool = False, gateway: dict | None = None) -> dict:
     """**Our own health check**: {ok, summary: {status: count}, checks: [rows], groups:
     [the setting page's five rows, `groups`]}, each check row {key, label, status,
     message, action}.
@@ -495,13 +536,17 @@ async def health(bucket_mgr, config, persistence: Callable[[str], dict],
     `config` is the configuration as handed in (possibly not a dict: a check reads around
     it); `persistence(buckets_dir)` says whether the data directory is on persistent
     storage ({persistent, note}); `running` is the version this process started with
-    (checked against the code on disk; no row without it).
+    (checked against the code on disk; no row without it); `embedding_last` the
+    embedding engine's last_call(); `in_docker` picks the migration command's form;
+    `gateway` what the web side found asking the paired gateway (check_gateway; no row
+    without it).
     """
     c = _Checks()
     cfg = config if isinstance(config, dict) else {}
     g = _Ground(bucket_mgr=bucket_mgr, config=config, cfg=cfg,
                 bd=str(cfg.get("buckets_dir") or ""), now=_w.now(),
-                persistence=persistence)
+                persistence=persistence, embedding_last=embedding_last,
+                in_docker=bool(in_docker))
     await _read_buckets(c, g)
     _sort_visible(c, g)
 
@@ -525,6 +570,8 @@ async def health(bucket_mgr, config, persistence: Callable[[str], dict],
     await c.guard("dreams", "盘上的梦", check_dreams, g, "确认 buckets/night_fall/dreams 目录在")
     await c.guard("source_registry", "来源登记", check_source_registry, g,
                   "看 buckets/_sources 目录在不在、读不读得动")
+    if gateway is not None:
+        await c.guard("gateway", "网关", lambda cc, gg: check_gateway(cc, gg, gateway), g)
     if running:
         await c.guard("running_version", "跑着的这份",
                       lambda cc, gg: check_running_version(cc, gg, running), g)

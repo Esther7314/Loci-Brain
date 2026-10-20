@@ -1340,7 +1340,7 @@ function fixedAddressBlock(p) {
     copyRow("网关地址", a.gateway, "客户端里服务商的 API base URL 填这个"),
     copyRow("MCP 地址", a.mcp, "客户端里 MCP 选 Streamable HTTP，地址填这个"),
     copyRow("MCP 请求头", `Bearer ${p.key}`, "MCP 加一个自定义请求头：名字 Authorization，值填这个"),
-    h("p", { class: "why", text: `把 ${a.ip} 换成你服务器的 IP 或域名；从这台服务器本机连，换成 127.0.0.1。端口是 docker-compose.yml 里 ports 那两行开出来的。` }));
+    h("p", { class: "why", text: `把 ${a.ip} 换成你服务器的 IP 或域名；从这台服务器本机连，换成 127.0.0.1。地址里的端口是容器里面的：docker-compose.yml 的 ports 里改过冒号左边那个数的，换成你改的那个。` }));
 }
 
 // ---------------------------------------------------------------- the page

@@ -52,6 +52,7 @@ from openai import AsyncOpenAI
 
 from utils import parse_bool, positive_float
 
+from . import _when as _w
 from .provider_detect import (
     is_known_cloud_embedding_endpoint,
     normalize_model_for_endpoint,
@@ -375,6 +376,8 @@ class EmbeddingEngine:
         # A small in-process LRU of text -> embedding, to collapse repeated vector requests
         # that arrive close together.
         self._query_cache: "OrderedDict[str, list[float]]" = OrderedDict()
+        # How the latest real call to the backend went (`last_call`): None until one is made.
+        self._last_call: dict | None = None
         embed_cfg = config.get("embedding", {}) or {}
         timeout_seconds = positive_float(embed_cfg.get("timeout_seconds"), _API_TIMEOUT_SECONDS)
 
@@ -687,14 +690,28 @@ class EmbeddingEngine:
         in_flight = self.__dict__.get("_in_flight") or {}
         if in_flight.get(text, (None, None))[1] is task:
             in_flight.pop(text, None)
-        if task.cancelled() or task.exception() is not None:
+        if task.cancelled():
+            return
+        if task.exception() is not None:
+            self._note_call(False)
             return
         embedding = task.result()
+        self._note_call(bool(embedding))
         if embedding:
             self._query_cache[text] = list(embedding)
             self._query_cache.move_to_end(text)
             if len(self._query_cache) > _QUERY_CACHE_MAXSIZE:
                 self._query_cache.popitem(last=False)
+
+    def _note_call(self, ok: bool, why: str = "") -> None:
+        self._last_call = {"ok": ok, "at": _w.now().strftime("%m-%d %H:%M"), "why": why}
+
+    def last_call(self) -> dict | None:
+        """How the latest real call to the backend went: {ok, at, why}, None before the
+        first. A backend that failed returns no vector rather than raising (its OB-E001 in
+        the log says why), so `why` is empty unless the probe set it. Health reads this:
+        the configuration can be complete while every search runs without vectors."""
+        return dict(self._last_call) if self._last_call else None
 
     async def probe(self, timeout_seconds: float = 4.0) -> tuple[bool, str]:
         """Actually ask the backend for one vector. Returns `(works, why not)`.
@@ -726,16 +743,17 @@ class EmbeddingEngine:
             vector = await asyncio.wait_for(
                 self._backend.generate_async("probe"), timeout=timeout_seconds)
         except asyncio.TimeoutError:
-            return False, (f"no answer within {timeout_seconds:g}s — is the backend up, "
-                           f"and is {self.model} already pulled?")
+            why = (f"no answer within {timeout_seconds:g}s — is the backend up, "
+                   f"and is {self.model} already pulled?")
         except Exception as exc:                      # noqa: BLE001 - report, never raise
             hint = _humanize_api_error(
                 exc, api_format=getattr(self._backend, "api_format", ""),
                 base_url=getattr(self._backend, "base_url", ""))
-            return False, f"{exc}{(' ' + hint) if hint else ''}"
-        if not vector:
-            return False, "the backend answered, but with an empty vector"
-        return True, ""
+            why = f"{exc}{(' ' + hint) if hint else ''}"
+        else:
+            why = "" if vector else "the backend answered, but with an empty vector"
+        self._note_call(not why, why)
+        return not why, why
 
     async def generate_and_store(self, bucket_id: str, content: str) -> bool:
         """Generate an embedding for the content and store it in SQLite. True on success."""

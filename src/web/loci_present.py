@@ -46,12 +46,16 @@ never carries the URL: a gateway on a non-loopback bind keeps a passphrase in it
 Proxy settings from the environment are not used, so the request goes where
 `present_url` says and nowhere else.
 
-Exports: PRESENT_PATHS · TIMEOUT_SECONDS · MAX_REPLY_BYTES · api_loci_present
+The health check asks the same way (`gateway_reach`): a GET of /present, judged by the
+same rules, so 体检 and the present page cannot disagree about whether it is connected.
+
+Exports: PRESENT_PATHS · TIMEOUT_SECONDS · MAX_REPLY_BYTES · api_loci_present · gateway_reach
 ========================================
 """
 
 import asyncio
 import json
+import os
 
 import httpx
 from starlette.requests import Request
@@ -161,39 +165,58 @@ async def api_loci_present(request: Request) -> Response:
         return JSONResponse({"error": "好几个宿主配了 present_url，要带 host 说是哪一个",
                              "hosts": names}, status_code=400)
 
+    status, raw, why = await _ask(host, method, sub, query, body)
+    if not why:
+        return Response(content=raw, status_code=status, media_type="application/json",
+                        headers={"Cache-Control": "no-store"})
+    logger.warning(f"[present] {method} /present{sub} on host {host.name}: {why}")
+    return _not_connected(method, host.name, why)
+
+
+async def _ask(host, method: str, sub: str, query: list, body) -> tuple[int, bytes, str]:
+    """One request to <present_url>/present<sub> with Loci's key for that host:
+    (status, body, why it does not count as the gateway's answer — "" when it does)."""
     if not host.fetch_token:
-        return _not_connected(method, host.name, (
+        return 0, b"", (
             f"Loci 对宿主 {host.name} 没有钥匙：hosts.{host.name}.fetch_token_env 要写上一个"
             "环境变量的名字，值跟网关的 LOCI_GATEWAY_TOKEN 一样（跟这个宿主自己的 token_env "
-            "不能是同一个值）"))
-
+            "不能是同一个值）")
     url = host.present_url + "/present" + sub
     try:
         status, raw = await asyncio.wait_for(
             _forward(method, url, host.fetch_token, query, body),
             timeout=TIMEOUT_SECONDS)
     except (asyncio.TimeoutError, httpx.TimeoutException):
-        why = f"网关 {TIMEOUT_SECONDS:g} 秒内没回话"
+        return 0, b"", f"网关 {TIMEOUT_SECONDS:g} 秒内没回话"
     except _TooBig:
-        why = f"网关的回执超过 {MAX_REPLY_BYTES // (1024 * 1024)} MiB，没收"
+        return 0, b"", f"网关的回执超过 {MAX_REPLY_BYTES // (1024 * 1024)} MiB，没收"
     except httpx.HTTPError as e:
         # The class name only: an httpx message can carry the URL, and the URL can
         # carry the gateway's passphrase.
-        why = f"连不上网关（{type(e).__name__}），看看它起了没有、present_url 对不对"
-    else:
-        why = ""
-        if 300 <= status < 400:
-            why = f"网关要跳转（HTTP {status}），Loci 不跟"
-        elif status in (401, 403):
-            why = (f"网关不认 Loci 的钥匙（HTTP {status}）：hosts.{host.name}.fetch_token_env "
-                   "那个环境变量的值要跟网关的 LOCI_GATEWAY_TOKEN 一样")
-        else:
-            try:
-                json.loads(raw.decode("utf-8"))
-            except (UnicodeDecodeError, ValueError):
-                why = f"网关回的不是 JSON（HTTP {status}）"
-        if not why:
-            return Response(content=raw, status_code=status, media_type="application/json",
-                            headers={"Cache-Control": "no-store"})
-    logger.warning(f"[present] {method} /present{sub} on host {host.name}: {why}")
-    return _not_connected(method, host.name, why)
+        return 0, b"", f"连不上网关（{type(e).__name__}），看看它起了没有、present_url 对不对"
+    if 300 <= status < 400:
+        return status, raw, f"网关要跳转（HTTP {status}），Loci 不跟"
+    if status in (401, 403):
+        return status, raw, (f"网关不认 Loci 的钥匙（HTTP {status}）：hosts.{host.name}.fetch_token_env "
+                             "那个环境变量的值要跟网关的 LOCI_GATEWAY_TOKEN 一样")
+    try:
+        json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return status, raw, f"网关回的不是 JSON（HTTP {status}）"
+    return status, raw, ""
+
+
+async def gateway_reach() -> dict:
+    """For the health check (core/health.check_gateway): {host, why, beside}. host is the
+    first host with a present_url that does not answer as the present page would need
+    (else the first one), None when no host has one; `beside` when the package launcher
+    runs a gateway next to this Loci (LOCI_LAUNCHER), where no pairing is a fault."""
+    beside = os.environ.get("LOCI_LAUNCHER", "").strip() == "1"
+    candidates = sorted(_hosts_with_present(), key=lambda h: h.name)
+    if not candidates:
+        return {"host": None, "why": "", "beside": beside}
+    for host in candidates:
+        _status, _raw, why = await _ask(host, "GET", "", [], None)
+        if why:
+            return {"host": host.name, "why": why, "beside": beside}
+    return {"host": candidates[0].name, "why": "", "beside": beside}

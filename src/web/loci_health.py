@@ -67,9 +67,20 @@ async def build_setup() -> dict:
 async def build_health() -> dict:
     """Our own health check (core/health.health), over the library and config this process
     serves; `sh.data_dir_persistence` says whether the data directory survives a rebuild,
-    `sh.version` is the version this process started with."""
+    `sh.version` is the version this process started with, the embedding engine's last
+    call and the paired gateway's answer are what only this side can see."""
+    from .loci_present import gateway_reach
+    engine = getattr(sh, "embedding_engine", None)
+    last_call = getattr(engine, "last_call", None)
+    try:
+        gateway = await gateway_reach()
+    except Exception as e:                       # noqa: BLE001 - a health row, never a 500
+        gateway = {"host": "?", "why": f"问网关的时候自己出错了：{type(e).__name__}", "beside": False}
     return await _health.health(sh.bucket_mgr, sh.config, sh.data_dir_persistence,
-                                running=str(getattr(sh, "version", "") or ""))
+                                running=str(getattr(sh, "version", "") or ""),
+                                embedding_last=last_call() if callable(last_call) else None,
+                                in_docker=bool(sh.in_docker()) if hasattr(sh, "in_docker") else False,
+                                gateway=gateway)
 
 
 async def api_loci_health(request: Request) -> Response:
