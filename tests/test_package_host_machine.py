@@ -65,6 +65,18 @@ def test_a_taken_port_stops_the_launcher_before_anything_is_written_or_started(t
     lock.close()
 
 
+def test_a_key_a_1x_install_set_in_the_environment_is_kept_not_replaced(tmp_path, monkeypatch):
+    L = _launcher()
+    for k in L.KEYS:
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("LOCI_HOOK_TOKEN", "the-bridge-already-uses-this")
+    path = tmp_path / "settings.env"
+    got = L.ensure_keys(str(path))
+    assert got["LOCI_HOOK_TOKEN"] == "the-bridge-already-uses-this"
+    assert L.read_settings(str(path))["LOCI_HOOK_TOKEN"] == "the-bridge-already-uses-this"
+    assert len(got["LOCI_GATEWAY_PASSPHRASE"]) >= 32          # the rest still generated
+
+
 def test_the_gateway_node_does_not_get_the_persons_node_variables(monkeypatch):
     L = _launcher()
     monkeypatch.setenv("NODE_OPTIONS", "--require C:/someones/hook.js")

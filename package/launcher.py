@@ -116,8 +116,10 @@ def read_settings(path: str = SETTINGS) -> dict[str, str]:
 
 
 def ensure_keys(path: str = SETTINGS) -> dict[str, str]:
-    """Settings with every key in KEYS present; missing ones are generated and appended
-    (never rewriting what the person wrote)."""
+    """Settings with every key in KEYS present; missing ones are appended (never rewriting
+    what the person wrote). A key already in the environment is the one written down — a
+    1.x install set LOCI_HOOK_TOKEN in .env for its bridge, and a fresh one would lock that
+    bridge out — otherwise one is generated."""
     have = read_settings(path)
     missing = [k for k in KEYS if not have.get(k)]
     if missing:
@@ -128,7 +130,7 @@ def ensure_keys(path: str = SETTINGS) -> dict[str, str]:
                         "# Add LOCI_* lines here to change a setting (LOCI_PORT, LOCI_GATEWAY_PORT, LOCI_TZ ...),\n"
                         "# then close the window and start again.\n")
             for k in missing:
-                v = secrets.token_urlsafe(32)
+                v = os.environ.get(k, "").strip() or secrets.token_urlsafe(32)
                 f.write(f"{k}={v}\n")
                 have[k] = v
     return have
