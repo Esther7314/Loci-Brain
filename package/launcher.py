@@ -31,6 +31,9 @@ Package layout (package/windows/build.py makes it):
         buckets/          the library; config.yaml lives here, as under Docker
         gateway/          the gateway's private state
 
+Run from a clone with the machine's own Python and Node (python package/launcher.py),
+the repository is the root: data/ is made inside it, and node is whatever is on PATH.
+
 First run: generates three keys and the gateway's passphrase into data/settings.env and
 writes config.yaml from config.default.yaml plus a `hosts:` table pairing Loci with the
 gateway (the same table gateway/README.md section 二·2 has people write by hand). Loci
@@ -58,7 +61,18 @@ import urllib.request
 import webbrowser
 
 APP = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ROOT = os.environ.get("LOCI_PACKAGE_ROOT") or os.path.dirname(APP)
+
+
+def _package_root() -> str:
+    """The folder the person opened: the portable package's root when this runs from its
+    app/ beside the bundled python/, otherwise (a clone run with its own Python) the
+    repository itself, so data/ lands inside it and not in whatever folder holds it."""
+    parent = os.path.dirname(APP)
+    packaged = os.path.basename(APP) == "app" and os.path.isdir(os.path.join(parent, "python"))
+    return parent if packaged else APP
+
+
+ROOT = os.environ.get("LOCI_PACKAGE_ROOT") or _package_root()
 # The Docker image keeps the library on its own volume (/app/buckets, as before the
 # gateway joined it) and the rest on another (/app/data): the environment says where.
 DATA = os.environ.get("LOCI_DATA_DIR") or os.path.join(ROOT, "data")

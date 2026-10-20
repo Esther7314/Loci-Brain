@@ -34,6 +34,16 @@ def _free_port():
         return s.getsockname()[1]
 
 
+def test_run_from_a_clone_the_repository_is_the_root_and_from_the_package_its_parent(tmp_path, monkeypatch):
+    monkeypatch.delenv("LOCI_PACKAGE_ROOT", raising=False)
+    L = _launcher()
+    assert L.ROOT == ROOT                        # this checkout: data/ inside it
+    package = tmp_path / "Loci-2.0.0-windows-x64"
+    (package / "python").mkdir(parents=True)
+    monkeypatch.setattr(L, "APP", str(package / "app"))
+    assert L._package_root() == str(package)
+
+
 def test_a_port_someone_listens_on_is_taken_and_a_free_one_is_not():
     L = _launcher()
     with _listening() as s:
