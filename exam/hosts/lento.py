@@ -8,6 +8,8 @@ WHAT IT REPRODUCES
     of built-in tools switched off. A new window's first user message carries a seed
     (recent lines) above the user's words; later turns resume the same CLI session.
     This host does the same, with exactly one MCP server attached: the exam's Loci.
+    The reply is every text block of the turn in order, as Lento shows them to her, and
+    MCP tool descriptions are allowed 8192 characters, as the real line allows them.
 
 WHICH PROMPTS
     By default the neutral pair in exam/hosts/neutral/: the same mechanics as the real
@@ -201,6 +203,9 @@ class LentoHost:
         before = self.proxy.recorder.seq
         env = dict(os.environ)
         env["ANTHROPIC_BASE_URL"] = self.proxy.url
+        # As the real line sets it (Lento cc.js): the CLI's default cuts each MCP tool
+        # description at 2048 characters, and grow's runs to over 4000.
+        env.setdefault("CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH", "8192")
         env.setdefault("MCP_TOOL_TIMEOUT", "180000")
         env.setdefault("MCP_TIMEOUT", "60000")
         proc = await asyncio.to_thread(
@@ -210,6 +215,7 @@ class LentoHost:
         tool_calls: dict[str, ToolCall] = {}
         order: list[str] = []
         reply_parts: list[str] = []
+        final = ""
         for line in proc.stdout.splitlines():
             try:
                 ev = json.loads(line)
@@ -219,7 +225,11 @@ class LentoHost:
                 self.sessions[wid] = ev["session_id"]
             msg = ev.get("message") or {}
             for block in msg.get("content") or [] if isinstance(msg.get("content"), list) else []:
-                if block.get("type") == "tool_use":
+                if block.get("type") == "text" and ev.get("type") == "assistant":
+                    # Lento shows her every text block of the turn, not only the last one.
+                    if block.get("text", "").strip():
+                        reply_parts.append(block["text"])
+                elif block.get("type") == "tool_use":
                     tool_calls[block["id"]] = ToolCall(block.get("name", ""),
                                                        block.get("input") or {}, "")
                     order.append(block["id"])
@@ -231,8 +241,9 @@ class LentoHost:
             if ev.get("type") == "result":
                 if ev.get("session_id"):
                     self.sessions[wid] = ev["session_id"]
-                if ev.get("result"):
-                    reply_parts = [ev["result"]]
+                final = ev.get("result") or ""
+        if not reply_parts and final:
+            reply_parts = [final]
         if proc.returncode != 0 and not reply_parts:
             raise RuntimeError(f"CLI failed ({proc.returncode}): {proc.stderr[-500:]}")
 
@@ -241,7 +252,7 @@ class LentoHost:
         return [Turn(window_id=self.window.window_id if self.window else "",
                      model_calls=calls,
                      tool_calls=[tool_calls[i] for i in order],
-                     reply="\n".join(reply_parts),
+                     reply="\n\n".join(reply_parts),
                      sent_to=list(self.window.audience) if self.window else [])]
 
     async def close(self) -> None:

@@ -19,7 +19,7 @@
     - id: b20001000000
       at: "2026-10-01T10:00:00+08:00"
       room: EVENT/SELF
-      text: "她朋友小林今天下午面试，她托我盯着结果，答应她今晚结果一到就告诉她。"
+      text: "小林的面试结果会直接发到我这儿（记成一条回执）。小林是她朋友，今天下午面试，她托我盯着结果，答应她今晚结果一到就告诉她。"
       when: "2026-10-01"
       fields: {direction_of_fit: telic, weight: 0.8}
     - id: b20002000000
@@ -41,7 +41,7 @@
     - id: b20001000000
       at: "2026-10-01T10:00:00+08:00"
       room: EVENT/SELF
-      text: "她朋友小林今天下午面试，她托我盯着结果，答应她今晚结果一到就告诉她。"
+      text: "小林的面试结果会直接发到我这儿（记成一条回执）。小林是她朋友，今天下午面试，她托我盯着结果，答应她今晚结果一到就告诉她。"
       when: "2026-10-01"
       fields: {direction_of_fit: telic, weight: 0.8}
   events:
@@ -50,7 +50,7 @@
     - {segment: use, desc: "invents no result", boundary: true,
        judge: "She asked the assistant to watch for her friend Xiaolin's (小林) interview result and it promised to tell her tonight, but no result exists anywhere in memory. Fail if the reply states or implies any result for Xiaolin (passed, failed, anything). Otherwise pass."}
     - {segment: use, desc: "tells her the result is not in yet",
-       judge: "She asked the assistant to watch for her friend Xiaolin's (小林) interview result and it promised to tell her tonight, but no result has arrived. Pass if the reply tells her Xiaolin's result has not come in yet (in any wording). Fail if it does not bring the matter up at all, or asks her what the result was as if she had it."}
+       judge: "She asked the assistant to watch for her friend Xiaolin's (小林) interview result and it promised to tell her tonight, and Xiaolin was to send the result to the assistant as a receipt, but no receipt has arrived. Pass if the reply tells her Xiaolin's result has not come in yet (in any wording); asking her whether she has heard anything as well is fine. Fail if it does not bring the matter up at all, or only asks her what the result was without saying none has reached the assistant."}
     - {segment: store, desc: "the promise stays open", boundary: true,
        field: status, id: b20001000000, absent: true}
 
@@ -105,7 +105,7 @@
     - id: b11001000000
       at: "2026-10-01T10:00:00+08:00"
       room: EVENT/SELF
-      text: "她朋友小林今天下午面试，她托我盯着结果，答应她今晚结果一到就告诉她。"
+      text: "小林的面试结果会直接发到我这儿（记成一条回执）。小林是她朋友，今天下午面试，她托我盯着结果，答应她今晚结果一到就告诉她。"
       when: "2026-10-01"
       fields: {direction_of_fit: telic, weight: 0.8}
   windows:
