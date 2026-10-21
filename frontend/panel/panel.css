@@ -658,6 +658,11 @@ select.btn, .btn.sel { appearance: none; -webkit-appearance: none; padding-right
 .frow > .fn, .kv > .fn { font-size: 16px; color: var(--small); }
 .frow > .fv { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; min-width: 0; }
 .frow .inp { width: 366px; max-width: 100%; }
+/* An address to copy: wide enough for the gateway's LAN URL with its passphrase. */
+.frow .fv.addrv { flex-wrap: nowrap; }
+.frow .inp.addr { flex: 0 1 620px; width: auto; min-width: 0; }
+.frow .fv.addrv > .btn { margin-left: auto; flex: none; }
+.frow > .fn .tipw { margin-left: 4px; vertical-align: top; }
 .frow .fixed { font-size: 16px; color: var(--small); }
 .frow .btn.sel { min-width: 156px; height: 32px; border: 0; border-bottom: 1px solid var(--edge); border-radius: 0; padding-left: 2px; background-color: transparent; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
 .lnk.small { font-size: 13px; }
@@ -740,6 +745,7 @@ button.inp { cursor: pointer; }
   .frow { grid-template-columns: minmax(0, 1fr); padding: 6px 0; }
   .frow > .fn { font-size: 14px; }
   .frow .inp { width: 100%; height: 40px; }
+  .frow .inp.addr { flex: 1 1 auto; }
   .tabs { gap: 4px 22px; }
   .duo { grid-template-columns: minmax(0, 1fr); }
   main > .duo { row-gap: var(--s-5); }

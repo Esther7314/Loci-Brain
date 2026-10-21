@@ -40,8 +40,8 @@
                and the block numbers close up) · POST {on} from 总开关. Off: this
                computer's own 127.0.0.1 addresses (`here`). On: the launcher restarts Loci
                and the gateway on the network, then the home network's. Either way three
-               read-only fields (API Base URL, mcp Base URL, mcp head), a click copies one;
-               what each is for is in the ⓘ. In the Docker image (`fixed`) the block is
+               read-only fields (API Base URL, mcp Base URL, mcp head), each with its own ⓘ
+               and 复制; the switch and the Wi-Fi note are in the block's ⓘ. In the Docker image (`fixed`) the block is
                连接地址: no switch, the same three with the server's address left to fill in
      导入      聊天记录: POST /api/import/preflight, then POST /api/import/upload; 已导入的
                GET /api/import/batches, 暂停 POST /api/import/pause, 继续 upload with
@@ -58,7 +58,7 @@
    ========================================================== */
 
 import * as api from "../api.js";
-import { h, fill, pagehead, setBlock, row, btn as plainBtn, sw, inp, num, errorLine, pagedList, clickable, pick, glassWindow } from "../ui.js";
+import { h, fill, pagehead, setBlock, row, btn as plainBtn, sw, inp, num, errorLine, pagedList, clickable, pick, glassWindow, tip } from "../ui.js";
 import { openDetail } from "../detail.js";
 import { NOT_WIRED, PRESENT, ask } from "../presentform.js";
 
@@ -1264,29 +1264,33 @@ async function versionBlock() {
 const PHONE_POLL_MS = 3000;
 
 const ADDR_TIP = "打开总开关，同一个 Wi-Fi 里的手机就能连这台电脑上的 Loci 和网关；关着的时候，下面是这台电脑自己用的地址。" +
-  "API Base URL：客户端里服务商的 API base URL 填这个。mcp Base URL：MCP 选 Streamable HTTP，地址填这个。" +
-  "mcp head：MCP 加一个自定义请求头，名字 Authorization，值填这个。点一下就复制。" +
   "只在同一个 Wi-Fi 里能连。第一次打开时 Windows 可能弹窗问要不要让 python 和 node 连网络：勾「专用网络」，点允许。";
 
-const FIXED_TIP = "API Base URL：客户端里服务商的 API base URL 填这个。mcp Base URL：MCP 选 Streamable HTTP，地址填这个。" +
-  "mcp head：MCP 加一个自定义请求头，名字 Authorization，值填这个。点一下就复制。";
+const ROW_TIP = {
+  gateway: "聊天客户端里，服务商的 API base URL 填这个。",
+  mcp: "MCP 选 Streamable HTTP，地址填这个。",
+  head: "MCP 加一个自定义请求头：名字填 Authorization，值填这个。不带它，MCP 会被拒。",
+};
 
-/** The three things a client copies, as read-only fields; a click copies the field. */
+/** The three things a client copies: a read-only field each, its own ⓘ, and 复制. */
 function addressRows(gateway, mcp, key) {
   const s = sayer();
-  const field = (label, value) => {
-    const el = inp({ "aria-label": label, value, readonly: true });
-    el.addEventListener("click", async () => {
+  const field = (label, value, tipText) => {
+    const el = inp({ class: "inp addr", "aria-label": label, value, readonly: true });
+    const copy = btn("复制");
+    copy.addEventListener("click", () => busy(copy, async () => {
       el.select();
       try { await navigator.clipboard.writeText(value); s.ok(`${label} 复制好了`); } catch (e) { s.err(e); }
-    });
-    return frow(label, el);
+    }));
+    return h("div", { class: "frow" },
+      h("span", { class: "fn" }, label, tip(tipText)),
+      h("div", { class: "fv addrv" }, el, copy));
   };
   return h("div", null,
     h("div", { class: "fgrid" },
-      field("API Base URL", gateway),
-      field("mcp Base URL", mcp),
-      field("mcp head", `Bearer ${key}`)),
+      field("API Base URL", gateway, ROW_TIP.gateway),
+      field("mcp Base URL", mcp, ROW_TIP.mcp),
+      field("mcp head", `Bearer ${key}`, ROW_TIP.head)),
     s.el);
 }
 
@@ -1381,7 +1385,7 @@ export default {
       block("副模型", TIP.aux, later(async () => auxModel(await cfgP, findOllama, snapP))),
       block("向量模型", TIP.emb, [later(async () => embModel(await cfgP, findOllama)), later(vectorRows)]),
       phone && phone.available
-        ? (phone.fixed ? block("连接地址", FIXED_TIP, fixedAddressBlock(phone)) : block("同一局域网mcp连接地址", ADDR_TIP, phoneBlock(phone)))
+        ? (phone.fixed ? block("连接地址", null, fixedAddressBlock(phone)) : block("同一局域网mcp连接地址", ADDR_TIP, phoneBlock(phone)))
         : null,
       block("导入", null, importRows()),
       block("导出", null, exportRows()),
