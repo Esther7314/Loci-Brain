@@ -23,7 +23,8 @@
      允许手机连  only under the package launcher: GET /api/loci/phone (absent elsewhere,
                and the block numbers close up) · POST {on}. The launcher restarts Loci and
                the gateway on the network; once both listen there, the gateway URL, the MCP
-               URL and its header, each with 复制. In the Docker image (`fixed`) the block is
+               URL and its header, each with 复制. Off, the same three at this computer's
+               own 127.0.0.1 addresses (`here`), for a client on it. In the Docker image (`fixed`) the block is
                连接地址: no switch, the same three with the server's address left to fill in
      副模型    GET/POST /api/config `dehydration` (its key masked, sent only when typed) ·
                测试 POST /api/test/dehydration · 拉取列表 POST /api/models. API format
@@ -1291,7 +1292,7 @@ function phoneBlock(first) {
         // No answer at all (status 0): the launcher restarted Loci before this request's
         // reply got out. The switch was written; wait for the restart like any other.
         if (e && e.status === 0) {
-          show({ on: want, live: !want, addresses: [], key: "" });
+          show({ on: want, live: !want, addresses: [], here: {}, key: "" });
         } else {
           toggle.setAttribute("aria-checked", String(!want));
           s.err(e);
@@ -1311,7 +1312,14 @@ function phoneBlock(first) {
       }, PHONE_POLL_MS);
       return;
     }
-    if (!p.on) { fill(box); return; }
+    if (!p.on) {
+      // Off: only this computer reaches them, at its own loopback addresses.
+      fill(box,
+        copyRow("网关地址", p.here.gateway, "这台电脑上的客户端，服务商的 API base URL 填这个"),
+        copyRow("MCP 地址", p.here.mcp, "这台电脑上的客户端，MCP 选 Streamable HTTP，地址填这个"),
+        copyRow("MCP 请求头", `Bearer ${p.key}`, "MCP 加一个自定义请求头：名字 Authorization，值填这个"));
+      return;
+    }
     if (!p.addresses.length) {
       fill(box, h("p", { class: "err", text: "这台电脑现在没连在局域网上（没找到家里网络的地址）。连上 Wi-Fi 或网线再来看。" }));
       return;

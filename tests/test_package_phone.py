@@ -61,6 +61,9 @@ def test_the_switch_is_saved_and_the_addresses_carry_the_passphrase_and_key(tmp_
     assert a == {"ip": "192.168.1.20", "gateway": f"http://192.168.1.20:3100/{'p' * 20}/v1",
                  "mcp": "http://192.168.1.20:18002/mcp"}
     assert out.json["key"] == "legacy-key"
+    # A client on this computer: loopback, no passphrase, the same key — switch on or off.
+    assert out.json["here"] == {"gateway": "http://127.0.0.1:3100/v1",
+                                "mcp": "http://127.0.0.1:18002/mcp"}
     monkeypatch.setenv("LOCI_BIND_HOST", "0.0.0.0")
     assert call("GET", "/api/loci/phone").json["live"] is True
     assert call("POST", "/api/loci/phone", body={"on": "yes"}).status == 400

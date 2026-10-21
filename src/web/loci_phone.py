@@ -2,7 +2,7 @@
 ========================================
 web/loci_phone.py — 「允许手机连」: this computer's Loci and gateway on the home network
 ========================================
-    GET  /api/loci/phone   -> {available, on, live, addresses, key}
+    GET  /api/loci/phone   -> {available, on, live, addresses, here, key}
     POST /api/loci/phone   -> {on}: writes `phone_access` in config.yaml
 
 Only under the portable package: package/launcher.py runs Loci with LOCI_LAUNCHER=1 and
@@ -25,6 +25,8 @@ What a phone needs, per address of this machine on a private network:
   · MCP       http://<ip>:<loci port>/mcp, with the header `Authorization: Bearer <key>`;
               the key is the legacy host's (LOCI_HOOK_TOKEN), which MCP admits in either
               auth mode (server_app.identify_host)
+`here` is the same pair for a client on this computer, switch on or off: loopback needs
+no passphrase (gateway/door.js), and MCP needs the same key.
 These are secrets and this is a panel route: behind the panel's lock, and never readable
 with a host's credential (panel_auth.panel_refusal).
 ========================================
@@ -122,6 +124,10 @@ def view(config) -> dict:
         "on": True if fixed() else switch_on(config),
         "live": live(),
         "addresses": addresses,
+        "here": {
+            "gateway": f"http://127.0.0.1:{gateway_port}/v1",
+            "mcp": f"http://127.0.0.1:{loci_port}/mcp",
+        },
         "key": os.environ.get("LOCI_HOOK_TOKEN", "").strip(),
     }
 
