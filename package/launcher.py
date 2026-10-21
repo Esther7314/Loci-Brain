@@ -526,7 +526,7 @@ def run() -> int:
         say(f"MCP：http://127.0.0.1:{loci_port}/mcp")
         say("这个窗口开着它们就开着；关掉窗口，两个一起停。")
         if phone:
-            say("同一局域网连接：开着（地址在面板 setting 页）")
+            say("局域网连接：开着（地址在面板 setting 页）")
     if first_run and not FIXED_BIND and wait_until_up(panel):
         webbrowser.open(panel)
 
@@ -554,7 +554,7 @@ def run() -> int:
             elif now - seen_change >= SWITCH_GRACE_S:
                 seen_change = None
                 phone = want
-                say("同一局域网连接：" + ("打开了，两个重启一下" if phone else "关上了，两个重启一下"))
+                say("局域网连接：" + ("打开了，两个重启一下" if phone else "关上了，两个重启一下"))
                 for c, env in zip(children, child_envs(settings, zone, phone)):
                     c.restart_with(env)
             time.sleep(1)

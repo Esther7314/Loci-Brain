@@ -35,9 +35,8 @@
                model installed, a test through); pulling a model has no route, so 下载 is
                off. Under it the memories with no vector: GET /api/loci/embedding/missing
                (paged) · 现在补 POST /api/loci/embedding/backfill
-     同一局域网mcp连接地址
-               only under the package launcher: GET /api/loci/phone (absent elsewhere,
-               and the block numbers close up) · POST {on} from 总开关. Off: this
+     连接地址  only under the package launcher: GET /api/loci/phone (absent elsewhere,
+               and the block numbers close up) · POST {on} from 局域网连接. Off: this
                computer's own 127.0.0.1 addresses (`here`). On: the launcher restarts Loci
                and the gateway on the network, then the home network's. Either way three
                read-only fields (API Base URL, mcp Base URL, mcp head), each with its own ⓘ
@@ -1259,11 +1258,11 @@ async function versionBlock() {
     second, s.el);
 }
 
-// ---------------------------------------------------------------- 同一局域网mcp连接地址
+// ---------------------------------------------------------------- 连接地址
 
 const PHONE_POLL_MS = 3000;
 
-const ADDR_TIP = "打开总开关，同一个 Wi-Fi 里的手机就能连这台电脑上的 Loci 和网关；关着的时候，下面是这台电脑自己用的地址。" +
+const ADDR_TIP = "打开局域网连接，同一个 Wi-Fi 里的手机、别的电脑就能连这台电脑上的 Loci 和网关，下面换成它们用的地址；关着的时候只有这台电脑自己能连，下面是它自己用的地址。" +
   "只在同一个 Wi-Fi 里能连。第一次打开时 Windows 可能弹窗问要不要让 python 和 node 连网络：勾「专用网络」，点允许。";
 
 const ROW_TIP = {
@@ -1304,7 +1303,7 @@ function phoneBlock(first) {
   let timer = null;
   const toggle = sw({
     checked: first.on,
-    label: "总开关",
+    label: "局域网连接",
     onChange: async (want) => {
       s.clear();
       toggle.disabled = true;
@@ -1349,7 +1348,7 @@ function phoneBlock(first) {
   }
 
   show(first);
-  return h("div", null, setRow({ text: "总开关", right: acts(toggle) }), box, s.el);
+  return h("div", null, setRow({ text: "局域网连接", right: acts(toggle) }), box, s.el);
 }
 
 /** The Docker image: always open, no switch; the server's own address is not known from
@@ -1369,7 +1368,7 @@ export default {
     const authP = api.get("/api/loci/auth/state");
     const snapP = ask(PRESENT);
     for (const p of [cfgP, authP, snapP]) p.catch(() => {});
-    // 同一局域网mcp连接地址 exists only under the package launcher (web/loci_phone.py); elsewhere the
+    // 连接地址 exists only under the package launcher (web/loci_phone.py); elsewhere the
     // block is left out and the numbers close up.
     const phone = await api.get("/api/loci/phone").catch(() => null);
     const findOllama = ollamaFinder();
@@ -1385,7 +1384,7 @@ export default {
       block("副模型", TIP.aux, later(async () => auxModel(await cfgP, findOllama, snapP))),
       block("向量模型", TIP.emb, [later(async () => embModel(await cfgP, findOllama)), later(vectorRows)]),
       phone && phone.available
-        ? (phone.fixed ? block("连接地址", null, fixedAddressBlock(phone)) : block("同一局域网mcp连接地址", ADDR_TIP, phoneBlock(phone)))
+        ? (phone.fixed ? block("连接地址", null, fixedAddressBlock(phone)) : block("连接地址", ADDR_TIP, phoneBlock(phone)))
         : null,
       block("导入", null, importRows()),
       block("导出", null, exportRows()),
