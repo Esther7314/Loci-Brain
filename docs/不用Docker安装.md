@@ -63,7 +63,7 @@ python package/launcher.py
 不要本地模型的，在面板 setting 页「向量模型」填云端的就行。要本地的：
 
 1. 装 [Ollama](https://ollama.com)，然后 `ollama pull bge-m3`
-2. 面板 setting 页「向量模型」选「本地模型」，地址会自己填成 `http://127.0.0.1:11434/v1`，模型选 `bge-m3`
+2. 面板 setting 页「向量模型」选「本地模型」，地址会自己填好，模型选 `bge-m3`
 
 ## 开机自动起
 
