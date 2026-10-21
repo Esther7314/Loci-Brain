@@ -20,12 +20,6 @@
                /api/loci/present `settings.upstream`, POST {patch: {upstream}}): base_url
                ("" = the one the gateway was started with), key (write-only; "" clears it)
                · 测试 POST /api/loci/present/upstream-test
-     允许手机连  only under the package launcher: GET /api/loci/phone (absent elsewhere,
-               and the block numbers close up) · POST {on}. The launcher restarts Loci and
-               the gateway on the network; once both listen there, the gateway URL, the MCP
-               URL and its header, each with 复制. Off, the same three at this computer's
-               own 127.0.0.1 addresses (`here`), for a client on it. In the Docker image (`fixed`) the block is
-               连接地址: no switch, the same three with the server's address left to fill in
      副模型    GET/POST /api/config `dehydration` (its key masked, sent only when typed) ·
                测试 POST /api/test/dehydration · 拉取列表 POST /api/models. API format
                =Gateway is `api_format: "gateway"`: the gateway's upstream and key, only the
@@ -41,6 +35,14 @@
                model installed, a test through); pulling a model has no route, so 下载 is
                off. Under it the memories with no vector: GET /api/loci/embedding/missing
                (paged) · 现在补 POST /api/loci/embedding/backfill
+     同一局域网mcp连接地址
+               only under the package launcher: GET /api/loci/phone (absent elsewhere,
+               and the block numbers close up) · POST {on} from 总开关. Off: this
+               computer's own 127.0.0.1 addresses (`here`). On: the launcher restarts Loci
+               and the gateway on the network, then the home network's. Either way three
+               read-only fields (API Base URL, mcp Base URL, mcp head), a click copies one;
+               what each is for is in the ⓘ. In the Docker image (`fixed`) the block is
+               连接地址: no switch, the same three with the server's address left to fill in
      导入      聊天记录: POST /api/import/preflight, then POST /api/import/upload; 已导入的
                GET /api/import/batches, 暂停 POST /api/import/pause, 继续 upload with
                resume, 撤回这一批 POST /api/import/withdraw. 记忆包: POST
@@ -1257,32 +1259,48 @@ async function versionBlock() {
     second, s.el);
 }
 
-// ---------------------------------------------------------------- 允许手机连
+// ---------------------------------------------------------------- 同一局域网mcp连接地址
 
 const PHONE_POLL_MS = 3000;
 
-/** A value to copy into the phone: the value itself, and 复制. */
-function copyRow(label, value, why) {
-  const done = sayer();
-  const copy = btn("复制");
-  copy.addEventListener("click", () => busy(copy, async () => {
-    try { await navigator.clipboard.writeText(value); done.ok("复制好了"); } catch (e) { done.err(e); }
-  }));
+const ADDR_TIP = "打开总开关，同一个 Wi-Fi 里的手机就能连这台电脑上的 Loci 和网关；关着的时候，下面是这台电脑自己用的地址。" +
+  "API Base URL：客户端里服务商的 API base URL 填这个。mcp Base URL：MCP 选 Streamable HTTP，地址填这个。" +
+  "mcp head：MCP 加一个自定义请求头，名字 Authorization，值填这个。点一下就复制。" +
+  "只在同一个 Wi-Fi 里能连。第一次打开时 Windows 可能弹窗问要不要让 python 和 node 连网络：勾「专用网络」，点允许。";
+
+const FIXED_TIP = "API Base URL：客户端里服务商的 API base URL 填这个。mcp Base URL：MCP 选 Streamable HTTP，地址填这个。" +
+  "mcp head：MCP 加一个自定义请求头，名字 Authorization，值填这个。点一下就复制。";
+
+/** The three things a client copies, as read-only fields; a click copies the field. */
+function addressRows(gateway, mcp, key) {
+  const s = sayer();
+  const field = (label, value) => {
+    const el = inp({ "aria-label": label, value, readonly: true });
+    el.addEventListener("click", async () => {
+      el.select();
+      try { await navigator.clipboard.writeText(value); s.ok(`${label} 复制好了`); } catch (e) { s.err(e); }
+    });
+    return frow(label, el);
+  };
   return h("div", null,
-    setRow({ text: label, why: [h("code", { text: value, style: { wordBreak: "break-all" } }), why], right: acts(copy), stack: true }),
-    done.el);
+    h("div", { class: "fgrid" },
+      field("API Base URL", gateway),
+      field("mcp Base URL", mcp),
+      field("mcp head", `Bearer ${key}`)),
+    s.el);
 }
 
-/** The switch, then — once both processes listen on the network — what the phone needs. While
- *  the launcher restarts them (the switch and `live` disagree) the page asks again every
- *  few seconds; the restart drops this page's own requests for a moment too. */
+/** The switch, then the addresses: this computer's own while it is off, the home network's
+ *  once both processes listen there. While the launcher restarts them (the switch and
+ *  `live` disagree) the page asks again every few seconds; the restart drops this page's
+ *  own requests for a moment too. */
 function phoneBlock(first) {
   const box = h("div");
   const s = sayer();
   let timer = null;
   const toggle = sw({
     checked: first.on,
-    label: "允许手机连",
+    label: "总开关",
     onChange: async (want) => {
       s.clear();
       toggle.disabled = true;
@@ -1313,11 +1331,7 @@ function phoneBlock(first) {
       return;
     }
     if (!p.on) {
-      // Off: only this computer reaches them, at its own loopback addresses.
-      fill(box,
-        copyRow("网关地址", p.here.gateway, "这台电脑上的客户端，服务商的 API base URL 填这个"),
-        copyRow("MCP 地址", p.here.mcp, "这台电脑上的客户端，MCP 选 Streamable HTTP，地址填这个"),
-        copyRow("MCP 请求头", `Bearer ${p.key}`, "MCP 加一个自定义请求头：名字 Authorization，值填这个"));
+      fill(box, addressRows(p.here.gateway, p.here.mcp, p.key));
       return;
     }
     if (!p.addresses.length) {
@@ -1327,17 +1341,11 @@ function phoneBlock(first) {
     // The first address is the one the default route uses; the others are mostly virtual
     // adapters (WSL, Hyper-V) a phone cannot reach, so they are not offered.
     const [main_ip] = p.addresses;
-    fill(box,
-      copyRow("网关地址", main_ip.gateway, "手机上的客户端，服务商的 API base URL 填这个"),
-      copyRow("MCP 地址", main_ip.mcp, "手机上的客户端，MCP 选 Streamable HTTP，地址填这个"),
-      copyRow("MCP 请求头", `Bearer ${p.key}`, "MCP 加一个自定义请求头：名字 Authorization，值填这个"),
-      h("p", { class: "why", text: "只在同一个 Wi-Fi 里能连。第一次打开时 Windows 可能弹窗问要不要让 python 和 node 连网络：勾「专用网络」，点允许。" }));
+    fill(box, addressRows(main_ip.gateway, main_ip.mcp, p.key));
   }
 
   show(first);
-  return h("div", null,
-    setRow({ text: "允许手机连", why: "打开后，同一个 Wi-Fi 里的手机能连这台电脑上的 Loci 和网关。", right: acts(toggle) }),
-    box, s.el);
+  return h("div", null, setRow({ text: "总开关", right: acts(toggle) }), box, s.el);
 }
 
 /** The Docker image: always open, no switch; the server's own address is not known from
@@ -1345,10 +1353,8 @@ function phoneBlock(first) {
 function fixedAddressBlock(p) {
   const [a] = p.addresses;
   return h("div", null,
-    copyRow("网关地址", a.gateway, "客户端里服务商的 API base URL 填这个"),
-    copyRow("MCP 地址", a.mcp, "客户端里 MCP 选 Streamable HTTP，地址填这个"),
-    copyRow("MCP 请求头", `Bearer ${p.key}`, "MCP 加一个自定义请求头：名字 Authorization，值填这个"),
-    h("p", { class: "why", text: `把 ${a.ip} 换成你服务器的 IP 或域名；从这台服务器本机连，换成 127.0.0.1。地址里的端口是容器里面的：docker-compose.yml 的 ports 里改过冒号左边那个数的，换成你改的那个。` }));
+    addressRows(a.gateway, a.mcp, p.key),
+    small(`把 ${a.ip} 换成你服务器的 IP 或域名；从这台服务器本机连，换成 127.0.0.1。地址里的端口是容器里面的：docker-compose.yml 的 ports 里改过冒号左边那个数的，换成你改的那个。`));
 }
 
 // ---------------------------------------------------------------- the page
@@ -1359,7 +1365,7 @@ export default {
     const authP = api.get("/api/loci/auth/state");
     const snapP = ask(PRESENT);
     for (const p of [cfgP, authP, snapP]) p.catch(() => {});
-    // 允许手机连 exists only under the package launcher (web/loci_phone.py); elsewhere the
+    // 同一局域网mcp连接地址 exists only under the package launcher (web/loci_phone.py); elsewhere the
     // block is left out and the numbers close up.
     const phone = await api.get("/api/loci/phone").catch(() => null);
     const findOllama = ollamaFinder();
@@ -1372,11 +1378,11 @@ export default {
         block("账号安全", null, later(() => accountBlock(authP))),
         block("安全问题", TIP.question, later(() => questionBlock(authP)))),
       block("网关上游", TIP.upstream, later(() => upstreamBlock(snapP))),
-      phone && phone.available
-        ? (phone.fixed ? block("连接地址", null, fixedAddressBlock(phone)) : block("允许手机连", null, phoneBlock(phone)))
-        : null,
       block("副模型", TIP.aux, later(async () => auxModel(await cfgP, findOllama, snapP))),
       block("向量模型", TIP.emb, [later(async () => embModel(await cfgP, findOllama)), later(vectorRows)]),
+      phone && phone.available
+        ? (phone.fixed ? block("连接地址", FIXED_TIP, fixedAddressBlock(phone)) : block("同一局域网mcp连接地址", ADDR_TIP, phoneBlock(phone)))
+        : null,
       block("导入", null, importRows()),
       block("导出", null, exportRows()),
       block("阈值", TIP.thresholds, later(() => thresholdsBlock(cfgP))),
