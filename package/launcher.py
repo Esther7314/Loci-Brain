@@ -87,6 +87,8 @@ LOCK = os.path.join(DATA, "launcher.lock")
 FIXED_BIND = os.environ.get("LOCI_LAUNCHER_BIND", "").strip()
 
 GATEWAY_NAME = "gateway"
+DOCKER_OLLAMA = "http://ollama:11434/v1"      # config.default.yaml's embedding base_url
+LOCAL_OLLAMA = "http://127.0.0.1:11434/v1"
 LOCI_DEFAULT_TZ = "Asia/Shanghai"   # core/_when._DEFAULT_TZ
 DEFAULT_LOCI_PORT = 18002
 DEFAULT_GATEWAY_PORT = 3100
@@ -203,11 +205,16 @@ def hosts_block(gateway_port: int, passphrase: str) -> str:
 
 
 def ensure_config(gateway_port: int, passphrase: str) -> bool:
-    """Write config.yaml when there is none. True when it was written now (first run)."""
+    """Write config.yaml when there is none. True when it was written now (first run).
+
+    config.default.yaml names the embedding's Ollama by its Docker service name; outside
+    the Docker image Ollama runs on this computer, so the address written is loopback."""
     if os.path.exists(CONFIG):
         return False
     with open(os.path.join(APP, "config.default.yaml"), encoding="utf-8") as f:
         default = f.read()
+    if not FIXED_BIND:
+        default = default.replace(DOCKER_OLLAMA, LOCAL_OLLAMA)
     tmp = CONFIG + ".tmp"
     with open(tmp, "w", encoding="utf-8", newline="\n") as f:
         f.write(default.rstrip("\n") + "\n" + hosts_block(gateway_port, passphrase))

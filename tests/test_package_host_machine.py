@@ -112,3 +112,13 @@ def test_moving_the_gateway_port_after_the_first_run_moves_the_hosts_table_with_
     before = cfg.read_text(encoding="utf-8")
     L.follow_gateway_port(3101, passphrase)
     assert cfg.read_text(encoding="utf-8") == before
+
+
+def test_outside_docker_the_embedding_points_at_this_computers_ollama(tmp_path, monkeypatch):
+    L = _launcher()
+    for bind, want in (("", "http://127.0.0.1:11434/v1"), ("0.0.0.0", "http://ollama:11434/v1")):
+        cfg = tmp_path / f"config-{bind or 'here'}.yaml"
+        monkeypatch.setattr(L, "CONFIG", str(cfg))
+        monkeypatch.setattr(L, "FIXED_BIND", bind)
+        assert L.ensure_config(3100, SETTINGS["LOCI_GATEWAY_PASSPHRASE"]) is True
+        assert yaml.safe_load(cfg.read_text(encoding="utf-8"))["embedding"]["base_url"] == want
