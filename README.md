@@ -14,7 +14,7 @@
 如果要在自己电脑上部署的话，点下面对应的链接下载。
 
 - **Windows x64**：[下载](https://github.com/Esther7314/Loci-Brain/releases/latest)
-- **macOS**：暂时没有，先用 Docker
+- **macOS**：暂时没有安装包，用 Docker，或者照[不用 Docker 安装](docs/不用Docker安装.md)直接装
 
 在云端或者 VPS 上部署，用 Docker：
 
@@ -25,11 +25,13 @@ docker compose up -d
 ```
 
 一个容器里同时跑着 Loci 和网关，哪个挂了会自己拉起来。起了之后，面板在 `http://127.0.0.1:18002/loci`，接下来跟第二部分一样，只有一处不同：
-网关地址和 MCP 的钥匙去面板 setting 页「连接地址」那一块抄（Docker 里网关地址带一段口令）。
+网关地址、MCP 地址和钥匙都去面板 setting 页「连接地址」那一块抄（Docker 里网关地址带一段口令）。
 
 要用本地向量模型（ollama）：`docker compose --profile ollama up -d`。时区不在东八区的，先 `cp .env.example .env` 改一下 `LOCI_TZ`。
 
 ⚠️ 放在云端的话：先在面板上设密码，端口别直接开到公网。不然够得着这个端口的人都能读走全部记忆。
+
+**从 1.x 升级**：库要迁一次，配置也变了，照 [CHANGELOG](CHANGELOG.md) 最上面那段一步步来。
 
 ---
 
@@ -46,7 +48,8 @@ docker compose up -d
    - e. **向量模型**：可选云端或者本地（本地要装 [Ollama](https://ollama.com/download)）。
 5. **改客户端**：在你平常聊天的客户端里找到常用的服务商，API base URL 改成 `http://127.0.0.1:3100/v1`。
    上下文长度调到不限、关掉客户端自己的压缩 —— 换窗口、压缩这些网关会管。剩下的不用改。
-6. **配置 MCP**：MCP 地址填 `http://127.0.0.1:18002/mcp`，再把[系统提示模板](docs/系统提示-中文.md)贴进系统提示。
+6. **配置 MCP**：MCP 地址填 `http://127.0.0.1:18002/mcp`，再加一个请求头：名字 `Authorization`，值是 `Bearer ` 加上钥匙
+   （钥匙在面板 setting 页抄）。不带钥匙会被拒。最后把[系统提示模板](docs/系统提示-中文.md)贴进系统提示。
 
 **在手机上用、电脑上部署**：在面板上打开「允许手机连」，照着面板上显示的两个地址抄进手机。
 
