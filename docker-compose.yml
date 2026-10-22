@@ -15,15 +15,20 @@ services:
     #    公开 registry 上没有 —— 别人照 README 跑 `docker compose up -d`
     #    只会得到一句「找不到镜像」，然后就没有然后了。
     #    有了这行：本地没有就现 build，build 完照样 tag 成 loci-brain:latest。
-    build: .
+    build:
+      context: .
+      args:
+        # 国内服务器 pip 慢：在 .env 里写 LOCI_PIP_INDEX=<镜像地址>，见 .env.example
+        LOCI_PIP_INDEX: ${LOCI_PIP_INDEX:-}
     container_name: loci-brain
     restart: unless-stopped
     ports:
-      # 🔴 默认只开在本机。要让外面够得到，去掉前面的 127.0.0.1: ——
+      # 🔴 默认只开在本机（LOCI_PUBLISH 缺省 127.0.0.1）。云服务器上要让手机够得到，
+      #    在 .env 里写 LOCI_PUBLISH=0.0.0.0，别改这个文件 —— 改了它，以后 git pull 会卡住。
       #    先在面板上设好密码。网关的每条路径都要带口令，MCP 要带钥匙（面板 setting 页
       #    「连接地址」那一块抄），但面板本身只靠那个密码挡着。
-      - "127.0.0.1:18002:18002"   # Loci：面板 /loci、MCP /mcp
-      - "127.0.0.1:3100:3100"     # 网关：/<口令>/v1
+      - "${LOCI_PUBLISH:-127.0.0.1}:18002:18002"   # Loci：面板 /loci、MCP /mcp
+      - "${LOCI_PUBLISH:-127.0.0.1}:3100:3100"     # 网关：/<口令>/v1
     env_file:
       - path: .env        # 选填：时区、名字这些，见 .env.example
         required: false

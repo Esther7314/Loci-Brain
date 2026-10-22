@@ -31,15 +31,33 @@ docker compose up -d
 
 ⚠️ 放在云端的话：先在面板上设密码，端口别直接开到公网。不然够得着这个端口的人都能读走全部记忆。
 
-**放在云端，手机怎么连**：compose 默认把两个口只开在服务器本机（端口前面那段 `127.0.0.1:`），手机够不着。挑一种：
+**国内的服务器 build 很慢、卡住**：拉 Python、Node 的基础镜像，去云服务商那儿找「Docker 镜像加速」照着配；
+装 Python 包，在 `.env` 里写一行 `LOCI_PIP_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple`，再 `docker compose up -d --build`。
 
-- **省事**：`docker-compose.yml` 里两行端口去掉前面的 `127.0.0.1:`，`docker compose up -d` 重起；再到云服务商控制台的安全组（防火墙）放行 18002，要用网关再放 3100。
+**放在云端，先在自己电脑上打开面板**：compose 默认把两个口只开在服务器本机，自己电脑的浏览器也够不着。
+在自己电脑上开一个终端，跑 `ssh -L 18002:127.0.0.1:18002 用户名@服务器公网IP`，别关，
+浏览器打开 `http://127.0.0.1:18002/loci`，先把密码设了。
+
+**放在云端，手机怎么连**：挑一种：
+
+- **省事**：`cp .env.example .env`，打开 `.env`，去掉 `LOCI_PUBLISH=0.0.0.0` 前面的 `#`，`docker compose up -d` 重起；
+  再到云服务商控制台的安全组（防火墙）放行 18002，要用网关再放 3100。别直接改 `docker-compose.yml`，改了以后 `git pull` 会卡住。
   客户端里的地址，把「08 连接地址」里的 `<服务器地址>` 换成服务器的公网 IP。这样走的是明文 HTTP，钥匙在路上看得见，面板也只靠密码挡着。
 - **稳妥**：有域名的话，用 Caddy、Nginx 这类反代套一层 HTTPS。端口还是只开在本机，对外只开 443。
 
-MCP 只要一个请求头：名字 `Authorization`，值是「08 连接地址」里 `mcp head` 那一行（已经带着 `Bearer `）。
+MCP 的连接类型选 **Streamable HTTP**（不是 SSE）。请求头只要一个：名字 `Authorization`，值是「08 连接地址」里 `mcp head` 那一行（已经带着 `Bearer `）。
 **别加 `x-loci-hook-token`**：那是给网关用的，填错了 MCP 直接拒，后面的 Authorization 对了也不看。
 手机不用在哪儿「注册」，`hosts:` 也不用改。
+
+**Docker 升级**：
+
+```bash
+cd Loci-Brain
+git pull
+docker compose up -d --build
+```
+
+记忆在 `buckets/`、钥匙在 `data/`，都在服务器的盘上，重新 build 不会丢。升级前看一眼 [CHANGELOG](CHANGELOG.md) 最上面，写了要迁移的照着做。
 
 **从 1.x 升级**：库要迁一次，配置也变了，照 [CHANGELOG](CHANGELOG.md) 最上面那段一步步来。
 
@@ -78,7 +96,7 @@ MCP 只要一个请求头：名字 `Authorization`，值是「08 连接地址」
 
 5. **改客户端**：在你平常聊天的客户端里找到常用的服务商，API base URL 改成 `http://127.0.0.1:3100/v1`。
    上下文长度调到不限、关掉客户端自己的压缩 —— 换窗口、压缩这些网关会管。剩下的不用改。如果客户端在手机上，5、6 都不看，直接看下面 01。
-6. **配置 MCP**：MCP 地址填 `http://127.0.0.1:18002/mcp`，再加一个请求头：名字 `Authorization`，值是 `Bearer ` 加上钥匙
+6. **配置 MCP**：连接类型选 Streamable HTTP，MCP 地址填 `http://127.0.0.1:18002/mcp`，再加一个请求头：名字 `Authorization`，值是 `Bearer ` 加上钥匙
    （setting 页「08 连接地址」那一块，开关关着也有，点「复制」）。不带钥匙会被拒。最后把[系统提示模板](docs/系统提示-中文.md)贴进系统提示。
 
 **01 要在手机上用客户端**：在面板「08 连接地址」打开「局域网连接」，照着下面换好的三行粘贴进手机。

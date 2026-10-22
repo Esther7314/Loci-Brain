@@ -31,7 +31,14 @@ RUN apt-get update \
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
 
 COPY requirements.txt requirements.lock.txt ./
-RUN pip install --no-cache-dir -r requirements.lock.txt
+# LOCI_PIP_INDEX: a PyPI mirror for servers where pypi.org is slow (set in .env, passed
+# by docker-compose.yml). The lock file pins hashes, so a mirror serving altered files fails.
+ARG LOCI_PIP_INDEX=""
+RUN if [ -n "$LOCI_PIP_INDEX" ]; then \
+        pip install --no-cache-dir -i "$LOCI_PIP_INDEX" -r requirements.lock.txt; \
+    else \
+        pip install --no-cache-dir -r requirements.lock.txt; \
+    fi
 
 COPY src/ ./src/
 COPY frontend/ ./frontend/
