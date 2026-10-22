@@ -1,5 +1,23 @@
 # CHANGELOG
 
+## 2.0.1 · 2026-10-22
+
+> 修补版，记忆库不用迁移。
+
+- **Claude 官方 App 能连了**：之前 Loci 少接了登录授权那几个口，Claude 的自定义连接器一直连不上。
+  要一个 https 地址，照 README「用 Claude 官方 App 连」。
+- **连不上的时候，报错会说怎么改**：手机这类客户端只要 `Authorization` 一个请求头，值抄面板「连接地址」里的 `mcp head`。
+  多带一个填错的 `x-loci-hook-token` 会被拒，报错现在直接说删掉它。
+- **云服务器上的 Docker**：要让手机连，在 `.env` 里写 `LOCI_PUBLISH=0.0.0.0`，不用再改 `docker-compose.yml`；
+  国内装包慢，写 `LOCI_PIP_INDEX`。MCP 鉴权默认打开，手机和网关照旧能连。
+- README 补了：云上怎么先打开面板、MCP 选 Streamable HTTP、Docker 怎么升级。
+
+**怎么升**
+
+- Windows 包：关掉窗口，新包解压到一个新文件夹，把旧文件夹里的 `data` 整个拷过去，再双击「启动」。
+- Docker：`git pull`，再 `docker compose up -d --build`。以前为开端口改过 `docker-compose.yml` 的，
+  `git pull` 会报本地有改动：先 `git checkout -- docker-compose.yml`，再照上面写进 `.env`。
+
 ## 2.0.0 · 2026-10-21
 
 > 为什么是「主」：**记忆库的文件格式变了，要迁移一次**；网关搬进了同一个容器，端口和
