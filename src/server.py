@@ -249,6 +249,13 @@ _wsh.init_runtime(
 # Register every web/ route module; see web/__init__.register_all.
 _web.register_all(mcp)
 
+# OAuth discovery, client registration, authorize and token routes for /mcp. Registered
+# straight on mcp, not through the panel gate: a remote client (Claude's custom connector)
+# reaches them before it holds any credential. Each route 404s unless OAuth is the
+# configured MCP auth mode (bridge/oauth._oauth_required_from_config).
+from bridge import oauth as _oauth  # noqa: E402
+_oauth.register(mcp)
+
 
 # =============================================================
 # The panel page and its assets (/loci, /loci/panel/*) are served by web/loci.py.
