@@ -154,7 +154,8 @@ Loci ──LOCI_GATEWAY_TOKEN───────► 网关      Loci 拿：hos
 1. **写了这一节就只认表上的。** 原来不带钥匙就能进的（直连 Loci 的 MCP 客户端、没上锁的面板）
    都是 `legacy`；要留着就像上面那样自己写进来。
 2. **面板必须先设密码。** 写了表、面板没上锁，面板的路由一律 401。
-3. **MCP 鉴权关着（Docker 缺省 `LOCI_MCP_REQUIRE_AUTH=false`）时，不带宿主钥匙的 MCP 请求一律拒。**
+3. **MCP 鉴权关着（`LOCI_MCP_REQUIRE_AUTH=false`）时，不带宿主钥匙的 MCP 请求一律拒。**
+   鉴权开着（缺省）时，不带钥匙的会被领去 OAuth 登录。
    你直连 Loci 的 MCP 客户端（Claude Code 等）要在请求头带上 legacy 那把：
    `x-loci-hook-token: <LOCI_HOOK_TOKEN 的值>`，或者 `Authorization: Bearer <同一串>`。
 

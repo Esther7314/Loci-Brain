@@ -32,8 +32,8 @@ services:
     env_file:
       - path: .env        # 选填：时区、名字这些，见 .env.example
         required: false
-    environment:
-      - LOCI_MCP_REQUIRE_AUTH=false
+    # MCP 鉴权开着（缺省）：手机这类客户端带「连接地址」里的钥匙直接进；
+    # Claude 官方 App 的连接器走 OAuth，要一个 https 地址，见 README「用 Claude 官方 App 连」。
     volumes:
       - ./buckets:/app/buckets
       - ./data:/app/data

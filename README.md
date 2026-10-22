@@ -49,6 +49,15 @@ MCP 的连接类型选 **Streamable HTTP**（不是 SSE）。请求头只要一�
 **别加 `x-loci-hook-token`**：那是给网关用的，填错了 MCP 直接拒，后面的 Authorization 对了也不看。
 手机不用在哪儿「注册」，`hosts:` 也不用改。
 
+**用 Claude 官方 App 连**（网页版、桌面版、手机版都是这样）：Claude 的自定义连接器加不了请求头，走的是登录授权，要满足两件事：
+
+1. Loci 得有一个 **https** 地址：域名加反代（上面「稳妥」那种），或者 Cloudflare Tunnel 这类隧道。光是 `http://公网IP` 不行。
+2. 把这个地址告诉 Loci：打开 `buckets/config.yaml`（Windows 包在 `data/buckets/` 里），`deployment` 下面的 `public_url` 填上它，
+   比如 `"https://loci.你的域名.com"`，然后重启 Loci（Docker 是 `docker compose restart loci-brain`）。不填的话 Loci 报出去的是 http 地址，Claude 不认。
+
+然后在 Claude 里：设置 → 连接器 → 添加自定义连接器，地址填 `https://你的地址/mcp`，Client ID 和 Secret 空着。
+点连接会弹出 Loci 的授权页，输面板密码就好。
+
 **Docker 升级**：
 
 ```bash
