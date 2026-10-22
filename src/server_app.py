@@ -245,9 +245,17 @@ class MCPAuthMiddleware:
         self.host_resolver = host_resolver
 
     async def _refuse_unknown_host(self, send: Any) -> None:
+        # Two kinds of caller land here: a host (the gateway) whose key is stale, and a
+        # directly connected client (a phone app) that added this header by mistake. The
+        # second must hear that the header is the problem, since a correct Bearer behind it
+        # is never looked at.
         await self._refuse(send, "Unknown host credential",
-                           "x-loci-hook-token matches no host in the hosts: table "
-                           "(check that host's token_env on the Loci side)")
+                           "x-loci-hook-token matches no host in the hosts: table. "
+                           "A directly connected MCP client (a phone app, Claude Code ...) "
+                           "does not need this header: remove it and send only the header "
+                           "'Authorization' with the value of 'mcp head' in the panel's "
+                           "setting page, block 「连接地址」 (it already starts with 'Bearer '). "
+                           "A host such as the gateway: check its token_env on the Loci side")
 
     def _ceiling_refusal(self, hosts: Any, host: Any) -> str:
         """Why a host with a ceiling is refused here, or "": its promise of seeing only its
@@ -294,8 +302,14 @@ class MCPAuthMiddleware:
                 # With a table, presenting nothing makes nobody anybody: MCP auth off
                 # leaves no other way to say who this is.
                 await self._refuse(send, "No host credential",
-                                   "a hosts: table is written and MCP auth is off: present a "
-                                   "host's credential (x-loci-hook-token)")
+                                   "no key this Loci knows was sent. A directly connected MCP "
+                                   "client (a phone app, Claude Code ...) sends the header "
+                                   "'Authorization' with the value of 'mcp head' in the panel's "
+                                   "setting page, block 「连接地址」 (it already starts with "
+                                   "'Bearer ') — check it was copied whole. Nothing needs "
+                                   "registering for a new device. (A "
+                                   "hosts: table is written and MCP auth is off, so a caller "
+                                   "is let in only by a host's key.)")
                 return
             if hosts is not None:
                 if host is None:
